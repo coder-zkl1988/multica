@@ -103,6 +103,6 @@ This project is indexed by GitNexus as **multica** (46487 symbols, 139820 relati
 
 ## 当前任务状态（会话交接 - 每次会话结束更新）
 
-- **做了什么**: Task 8 仓库分析阻塞修复已提交到 `7ccf8c6ec`（API/原生工作区/完成生命周期 `10acc4aef..8a300be70`，sidecar no-follow 与 manifest 所有权加固 `de2c8033b..7ccf8c6ec`）；未运行 Open Design Worker/Runtime
-- **做到哪**: 安全 checkpoint clean；`8a300be70` Spec PASS，Quality review 的 3 项已关闭，最后 cloud Reuse symlink 修复 `7ccf8c6ec` 仅跑 5 项 focused GREEN，尚未 scoped re-review/完整两包复验；backend `18460`、web `13380` 保留，Task 8 daemon 已停；staffrnapp 只剩用户原有 `.vscode/settings.json`（SHA256 `d65f8b33...15764a`）
-- **下一步**: 先读 `.codex-handoff/HANDOFF-2026-08-10-TASK-8.md` 与配套 `PROMPT-2026-08-10-TASK-8.md`；scoped re-review `de2c8033b..7ccf8c6ec` 并跑完整 daemon 两包，再收敛 orphan task；任何新 CRM Agent 前先让用户选择 token 档位，勿动主仓库/旧 daemon/`codex/open-design-native-slots`
+- **做了什么**: `feature/fengchen` 已集成 Native Design Engine Phase 1 Task 1-7、合并最新 `origin/main`（`a130466b7`），并补交 main merge 后 Native runtime brief 修复（`5ded35414`）；未 push
+- **做到哪**: Task 8 仍未完成；当前只做到安全停止与交接，已跑 `pnpm typecheck`、core/views 定向 Vitest、`execenv` 包测试、daemon 编译；handler DB 测试被迁移基线阻塞
+- **下一步**: 先读 `.codex-handoff/HANDOFF-2026-08-10-TASK-8.md` 和 `PROMPT-2026-08-10-TASK-8.md`；恢复前确认 `git status` clean、服务/DB/source repo 现状，并在任何新 CRM Agent 运行前让用户选择 token 路径
