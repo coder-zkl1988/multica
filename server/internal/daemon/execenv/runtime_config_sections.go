@@ -493,6 +493,13 @@ func writeWorkflowDesignSystemProfileAnalyze(b *strings.Builder) {
 	b.WriteString("- Do not output markdown fences or prose outside the JSON object.\n\n")
 }
 
+func writeWorkflowProjectDesignSystem(b *strings.Builder) {
+	b.WriteString("**This is a server-managed native project design system task.** The task contract and bounded inputs are already materialized under `.agent_context/project_design_system/task.json`; do not fall back to the issue workflow.\n\n")
+	b.WriteString("- Follow the exact operation and package contract in the user message and task context.\n")
+	b.WriteString("- Do NOT call `multica issue get`, `multica issue comment add`, or `multica issue status`; the server captures and validates the package directly.\n")
+	b.WriteString("- Write only the requested package output to `MULTICA_OUTPUT_DIR`; do not modify source repositories or input sidecars.\n\n")
+}
+
 // writeWorkflowIssue emits the single issue workflow used by BOTH
 // assignment-triggered and comment-triggered runs.
 //
@@ -709,7 +716,7 @@ func writeOutput(b *strings.Builder, kind taskKind, ctx TaskContextForEnv) {
 		} else {
 			b.WriteString("**Delivering files here:** run `multica attachment upload <local-path>` — it binds the file to your reply and it renders as an attachment card. That command is the ONLY way a file reaches the user; a path written into your reply text is not.\n")
 		}
-	case kindUIDraftCreate, kindDesignRestore, kindDesignSystemProfileAnalyze:
+	case kindUIDraftCreate, kindDesignRestore, kindDesignSystemProfileAnalyze, kindProjectDesignSystem:
 		b.WriteString("This is a server-managed design task. Your final assistant output is captured automatically and processed by the server; do not post an issue comment. Follow the exact output schema in the user message.\n\n")
 		b.WriteString("**Delivering files here:** the captured result is text-only. Keep generated artifacts in the target repository when the task requires them, and reference repository paths as inline code rather than local links.\n")
 	default:
@@ -805,6 +812,8 @@ func buildMetaSkillContentSlim(provider string, ctx TaskContextForEnv) string {
 		writeWorkflowDesignRestore(&b)
 	case kindDesignSystemProfileAnalyze:
 		writeWorkflowDesignSystemProfileAnalyze(&b)
+	case kindProjectDesignSystem:
+		writeWorkflowProjectDesignSystem(&b)
 	case kindIssue:
 		writeWorkflowIssue(&b, ctx)
 	}

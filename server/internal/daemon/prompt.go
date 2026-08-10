@@ -242,7 +242,7 @@ func buildDesignSystemProfileAnalyzePrompt(task Task) string {
 	b.WriteString("- Do not create files, edit repositories, upload designs, call Figma, or call Multica write commands. The server will store your JSON output.\n")
 	b.WriteString("- Do not output markdown fences, prose outside JSON, comments, or trailing text.\n\n")
 	b.WriteString("Design system profile analysis context JSON:\n")
-	b.WriteString(task.DesignSystemProfileAnalyzeContext)
+	b.WriteString(string(task.DesignSystemProfileAnalyzeContext))
 	b.WriteString("\n")
 	return b.String()
 }
@@ -286,7 +286,7 @@ func buildDesignRestorePrompt(task Task) string {
 	b.WriteString("- Final response must summarize changed files, checks run, blockers, restore mapping, exact layer text/asset IDs used, Visual QA evidence, and explicitly state `usedFullFramePreview: false` unless blocked.\n")
 	b.WriteString("- End your final response with a machine-readable JSON block prefixed by exactly `RESTORE_RESULT_JSON:`. Shape: {\"status\":\"completed|blocked|failed\",\"summary\":string,\"files\":string[],\"checks\":string[],\"blockers\":string[],\"restoreMapping\":array,\"usedLayerIds\":string[],\"usedAssetIds\":string[],\"usedFullFramePreview\":boolean,\"policyViolation\":string,\"artifactDocPath\":string,\"visualFidelityScore\":number,\"visualReview\":{\"implementedRoute\":string,\"designScreenshot\":string,\"implementationScreenshot\":string,\"comparisonScreenshot\":string,\"remainingDiffs\":string[],\"notes\":string}}.\n\n")
 	b.WriteString("Design restore context JSON:\n")
-	b.WriteString(task.DesignRestoreContext)
+	b.WriteString(string(task.DesignRestoreContext))
 	b.WriteString("\n")
 	return b.String()
 }
@@ -316,7 +316,7 @@ func buildUIDraftCreatePrompt(task Task) string {
 	b.WriteString("- Match every required slot in slot_schema and respect primitive types.\n")
 	b.WriteString("- Do not output markdown fences, prose, comments, or extra text.\n\n")
 	b.WriteString("UI draft context JSON:\n")
-	b.WriteString(task.UIDraftCreateContext)
+	b.WriteString(string(task.UIDraftCreateContext))
 	b.WriteString("\n")
 	return b.String()
 }
