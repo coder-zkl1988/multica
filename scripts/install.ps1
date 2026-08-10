@@ -14,8 +14,8 @@ $ErrorActionPreference = "Stop"
 # ---------------------------------------------------------------------------
 $RepoUrl       = "https://github.com/coder-zkl1988/multica.git"
 $RepoWebUrl    = "https://github.com/coder-zkl1988/multica"
-$CliReleaseTag = "v0.4.16-sso.1"
-$CliVersion    = "0.4.16-sso.1"
+$CliReleaseTag = "v0.4.18-sso.1"
+$CliVersion    = "0.4.18-sso.1"
 $DefaultInstallDir = Join-Path $env:USERPROFILE ".multica\server"
 $InstallDir    = if ($env:MULTICA_INSTALL_DIR) { $env:MULTICA_INSTALL_DIR } else { $DefaultInstallDir }
 

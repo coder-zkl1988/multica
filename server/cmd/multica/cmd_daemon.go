@@ -186,6 +186,122 @@ func daemonPIDPathForProfile(profile string) string {
 	return filepath.Join(daemonDirForProfile(profile), "daemon.pid")
 }
 
+type daemonPIDRecord struct {
+	PID      int    `json:"pid"`
+	DaemonID string `json:"daemon_id"`
+}
+
+func writeDaemonPIDFile(profile string, record daemonPIDRecord) error {
+	if record.PID <= 0 || strings.TrimSpace(record.DaemonID) == "" {
+		return fmt.Errorf("invalid daemon PID record")
+	}
+	dir := daemonDirForProfile(profile)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create daemon directory: %w", err)
+	}
+	tmp, err := os.CreateTemp(dir, ".daemon-*.pid.tmp")
+	if err != nil {
+		return fmt.Errorf("create temporary PID file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if err := json.NewEncoder(tmp).Encode(record); err != nil {
+		tmp.Close()
+		return fmt.Errorf("write temporary PID file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temporary PID file: %w", err)
+	}
+	if err := os.Chmod(tmpPath, 0o600); err != nil {
+		return fmt.Errorf("chmod temporary PID file: %w", err)
+	}
+	if err := replaceDaemonPIDFile(tmpPath, daemonPIDPathForProfile(profile)); err != nil {
+		return fmt.Errorf("replace PID file: %w", err)
+	}
+	return nil
+}
+
+func readDaemonPIDFile(profile string) (daemonPIDRecord, error) {
+	data, err := os.ReadFile(daemonPIDPathForProfile(profile))
+	if err != nil {
+		return daemonPIDRecord{}, err
+	}
+	var record daemonPIDRecord
+	if err := json.Unmarshal(data, &record); err == nil && record.PID > 0 && strings.TrimSpace(record.DaemonID) != "" {
+		return record, nil
+	}
+	// Numeric PID files were written by CLI versions before the record also
+	// carried daemon_id. Migrate them after /health confirms the identity.
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil || pid <= 0 {
+		return daemonPIDRecord{}, fmt.Errorf("invalid daemon PID file")
+	}
+	return daemonPIDRecord{PID: pid}, nil
+}
+
+func removeDaemonPIDFile(profile string, owner daemonPIDRecord) error {
+	current, err := readDaemonPIDFile(profile)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if current != owner {
+		return nil
+	}
+	return os.Remove(daemonPIDPathForProfile(profile))
+}
+
+func daemonHealthIdentity(health map[string]any) (int, string, bool) {
+	rawPID, ok := health["pid"].(float64)
+	if !ok || rawPID <= 0 || float64(int(rawPID)) != rawPID {
+		return 0, "", false
+	}
+	daemonID, ok := health["daemon_id"].(string)
+	if !ok || strings.TrimSpace(daemonID) == "" {
+		return 0, "", false
+	}
+	return int(rawPID), strings.TrimSpace(daemonID), true
+}
+
+func daemonStateForProfile(ctx context.Context, profile string) map[string]any {
+	health := checkDaemonHealthOnPort(ctx, healthPortForProfile(profile))
+	healthPID, healthDaemonID, validHealth := daemonHealthIdentity(health)
+	record, err := readDaemonPIDFile(profile)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			_ = os.Remove(daemonPIDPathForProfile(profile))
+		}
+		if !validHealth || !daemonAlive(health) || !daemonProcessExists(healthPID) {
+			return map[string]any{"status": "stopped"}
+		}
+		persistedID, readErr := os.ReadFile(filepath.Join(daemonDirForProfile(""), "daemon.id"))
+		if readErr != nil || strings.TrimSpace(string(persistedID)) != healthDaemonID {
+			return map[string]any{"status": "stopped"}
+		}
+		if err := writeDaemonPIDFile(profile, daemonPIDRecord{PID: healthPID, DaemonID: healthDaemonID}); err != nil {
+			return map[string]any{"status": "stopped"}
+		}
+		return health
+	}
+
+	if validHealth && (record.PID != healthPID || (record.DaemonID != "" && record.DaemonID != healthDaemonID)) {
+		_ = removeDaemonPIDFile(profile, record)
+		return map[string]any{"status": "stopped"}
+	}
+	if !validHealth || !daemonAlive(health) {
+		if !daemonProcessExists(record.PID) {
+			_ = removeDaemonPIDFile(profile, record)
+		}
+		return map[string]any{"status": "stopped"}
+	}
+	if record.DaemonID == "" {
+		_ = writeDaemonPIDFile(profile, daemonPIDRecord{PID: record.PID, DaemonID: healthDaemonID})
+	}
+	return health
+}
+
 func daemonLogPathForProfile(profile string) string {
 	return filepath.Join(daemonDirForProfile(profile), "daemon.log")
 }
@@ -316,12 +432,11 @@ func runDaemonStart(cmd *cobra.Command, _ []string) error {
 
 func runDaemonBackground(cmd *cobra.Command) error {
 	profile := resolveProfile(cmd)
-	healthPort := healthPortForProfile(profile)
 
 	// Check if daemon is already running.
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	health := checkDaemonHealthOnPort(ctx, healthPort)
+	health := daemonStateForProfile(ctx, profile)
 	if daemonAlive(health) {
 		label := "daemon"
 		if profile != "" {
@@ -415,12 +530,6 @@ func runDaemonBackground(cmd *cobra.Command) error {
 	waitCh := make(chan error, 1)
 	go func() { waitCh <- child.Wait() }()
 
-	// Write PID file.
-	pidPath := daemonPIDPathForProfile(profile)
-	if err := os.WriteFile(pidPath, []byte(strconv.Itoa(pid)), 0o644); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: could not write PID file: %v\n", err)
-	}
-
 	// Poll the health endpoint until the daemon reports ready ("running") or we
 	// time out. The daemon binds the health port almost immediately but reports
 	// status:"starting" until preflight finishes (PAT renew + initial workspace
@@ -443,7 +552,7 @@ func runDaemonBackground(cmd *cobra.Command) error {
 		case <-time.After(500 * time.Millisecond):
 		}
 		hctx, hcancel := context.WithTimeout(context.Background(), 2*time.Second)
-		health = checkDaemonHealthOnPort(hctx, healthPort)
+		health = daemonStateForProfile(hctx, profile)
 		hcancel()
 		lastStatus, _ = health["status"].(string)
 		if lastStatus == "running" {
@@ -458,6 +567,9 @@ func runDaemonBackground(cmd *cobra.Command) error {
 			fmt.Fprintf(os.Stderr, "Daemon may not have started successfully. Check logs:\n  %s\n  %s (crash output)\n", logPath, errLogPath)
 		}
 		return nil
+	}
+	if healthPID, _, ok := daemonHealthIdentity(health); ok {
+		pid = healthPID
 	}
 
 	if profile != "" {
@@ -806,12 +918,15 @@ func runDaemonForeground(cmd *cobra.Command) error {
 
 	d := daemon.New(cfg, logger)
 
-	// Write PID file so "daemon stop" can find us.
-	if dir := daemonDirForProfile(profile); dir != "" {
-		os.MkdirAll(dir, 0o755)
-		os.WriteFile(daemonPIDPathForProfile(profile), []byte(strconv.Itoa(os.Getpid())), 0o644)
+	pidRecord := daemonPIDRecord{PID: os.Getpid(), DaemonID: cfg.DaemonID}
+	if err := writeDaemonPIDFile(profile, pidRecord); err != nil {
+		return fmt.Errorf("write daemon PID file: %w", err)
 	}
-	defer os.Remove(daemonPIDPathForProfile(profile))
+	defer func() {
+		if err := removeDaemonPIDFile(profile, pidRecord); err != nil {
+			logger.Warn("failed to remove daemon PID file", "error", err)
+		}
+	}()
 
 	if err := d.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		return err
@@ -876,10 +991,6 @@ func runDaemonForeground(cmd *cobra.Command) error {
 		logFile.Close()
 		child.Process.Release()
 
-		// Write new PID file.
-		pidPath := daemonPIDPathForProfile(profile)
-		os.WriteFile(pidPath, []byte(strconv.Itoa(child.Process.Pid)), 0o644)
-
 		logger.Info("new daemon started", "pid", child.Process.Pid)
 	}
 
@@ -940,7 +1051,7 @@ func runDaemonRestart(cmd *cobra.Command, args []string) error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	health := checkDaemonHealthOnPort(ctx, healthPort)
+	health := daemonStateForProfile(ctx, profile)
 	if daemonAlive(health) {
 		// Validate the restart can succeed BEFORE the stop phase, not just
 		// inside the start phase: a missing/revoked token or an unreachable
@@ -952,11 +1063,11 @@ func runDaemonRestart(cmd *cobra.Command, args []string) error {
 		if err := requireDaemonRestartPreflight(cmd, profile); err != nil {
 			return err
 		}
-		pid, _ := health["pid"].(float64)
-		if pid > 0 {
-			fmt.Fprintf(os.Stderr, "Stopping daemon (pid %d)...\n", int(pid))
+		pid, _, ok := daemonHealthIdentity(health)
+		if ok {
+			fmt.Fprintf(os.Stderr, "Stopping daemon (pid %d)...\n", pid)
 			if err := requestDaemonShutdown(healthPort); err != nil {
-				if p, perr := os.FindProcess(int(pid)); perr == nil {
+				if p, perr := os.FindProcess(pid); perr == nil {
 					_ = p.Kill()
 				}
 			}
@@ -965,7 +1076,7 @@ func runDaemonRestart(cmd *cobra.Command, args []string) error {
 			for i := 0; i < 10; i++ {
 				time.Sleep(500 * time.Millisecond)
 				sctx, scancel := context.WithTimeout(context.Background(), 1*time.Second)
-				h := checkDaemonHealthOnPort(sctx, healthPort)
+				h := daemonStateForProfile(sctx, profile)
 				scancel()
 				if !daemonAlive(h) {
 					break
@@ -987,7 +1098,7 @@ func runDaemonStop(cmd *cobra.Command, _ []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	health := checkDaemonHealthOnPort(ctx, healthPort)
+	health := daemonStateForProfile(ctx, profile)
 	if !daemonAlive(health) {
 		label := "Daemon"
 		if profile != "" {
@@ -997,14 +1108,14 @@ func runDaemonStop(cmd *cobra.Command, _ []string) error {
 		return nil
 	}
 
-	pid, ok := health["pid"].(float64)
-	if !ok || pid == 0 {
+	pid, daemonID, ok := daemonHealthIdentity(health)
+	if !ok {
 		return fmt.Errorf("could not determine daemon PID from health endpoint")
 	}
 
-	process, err := os.FindProcess(int(pid))
+	process, err := os.FindProcess(pid)
 	if err != nil {
-		return fmt.Errorf("find process %d: %w", int(pid), err)
+		return fmt.Errorf("find process %d: %w", pid, err)
 	}
 
 	// Request graceful shutdown via the daemon's HTTP /shutdown endpoint
@@ -1016,20 +1127,20 @@ func runDaemonStop(cmd *cobra.Command, _ []string) error {
 	if err := requestDaemonShutdown(healthPort); err != nil {
 		fmt.Fprintf(os.Stderr, "Graceful shutdown request failed: %v — falling back to forced kill.\n", err)
 		if kerr := process.Kill(); kerr != nil {
-			return fmt.Errorf("kill daemon (pid %d): %w", int(pid), kerr)
+			return fmt.Errorf("kill daemon (pid %d): %w", pid, kerr)
 		}
 	}
 
-	fmt.Fprintf(os.Stderr, "Stopping daemon (pid %d)...\n", int(pid))
+	fmt.Fprintf(os.Stderr, "Stopping daemon (pid %d)...\n", pid)
 
 	// Poll health endpoint until daemon is gone.
 	for i := 0; i < 10; i++ {
 		time.Sleep(500 * time.Millisecond)
 		ctx2, cancel2 := context.WithTimeout(context.Background(), 1*time.Second)
-		h := checkDaemonHealthOnPort(ctx2, healthPort)
+		h := daemonStateForProfile(ctx2, profile)
 		cancel2()
 		if !daemonAlive(h) {
-			os.Remove(daemonPIDPathForProfile(profile))
+			_ = removeDaemonPIDFile(profile, daemonPIDRecord{PID: pid, DaemonID: daemonID})
 			fmt.Fprintln(os.Stderr, "Daemon stopped.")
 			return nil
 		}
@@ -1064,12 +1175,10 @@ func requestDaemonShutdown(healthPort int) error {
 
 func runDaemonStatus(cmd *cobra.Command, _ []string) error {
 	profile := resolveProfile(cmd)
-	healthPort := healthPortForProfile(profile)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	health := checkDaemonHealthOnPort(ctx, healthPort)
+	health := daemonStateForProfile(ctx, profile)
 
 	output, _ := cmd.Flags().GetString("output")
 	if output == "json" {
@@ -1168,6 +1277,9 @@ func checkDaemonHealthOnPort(ctx context.Context, port int) map[string]any {
 		return map[string]any{"status": "stopped"}
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return map[string]any{"status": "stopped"}
+	}
 
 	var result map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {

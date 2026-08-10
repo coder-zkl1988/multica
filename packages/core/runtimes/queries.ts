@@ -56,7 +56,7 @@ export function runtimeListOptions(wsId: string, owner?: "me") {
 }
 
 const GITHUB_RELEASES_URL =
-  "https://api.github.com/repos/multica-ai/multica/releases/latest";
+  "https://api.github.com/repos/coder-zkl1988/multica/releases/tags/v0.4.18-sso.1";
 const LATEST_VERSION_TIMEOUT_MS = 2500;
 
 export function latestCliVersionOptions() {
