@@ -4,9 +4,35 @@ import {
   checkQuickCreateCliVersion,
   checkQuickCreateFieldsCliVersion,
   handoffSupported,
+  isCliReleaseVersion,
+  isNewerCliReleaseVersion,
   MIN_CHAT_PROJECT_CONTEXT_CLI_VERSION,
   MIN_HANDOFF_CLI_VERSION,
 } from "./cli-version";
+
+describe("fork CLI release versions", () => {
+  it("accepts stable and SSO release tags but rejects dev or other prereleases", () => {
+    expect(isCliReleaseVersion("v0.4.18")).toBe(true);
+    expect(isCliReleaseVersion("0.4.18-sso.1")).toBe(true);
+    expect(isCliReleaseVersion("v0.4.18-2-gabcdef0")).toBe(false);
+    expect(isCliReleaseVersion("v0.4.18-rc.1")).toBe(false);
+  });
+
+  it("compares the base version and then the SSO build number", () => {
+    expect(
+      isNewerCliReleaseVersion("v0.4.18-sso.1", "v0.4.17-sso.9"),
+    ).toBe(true);
+    expect(
+      isNewerCliReleaseVersion("v0.4.18-sso.2", "v0.4.18-sso.1"),
+    ).toBe(true);
+    expect(
+      isNewerCliReleaseVersion("v0.4.18-sso.1", "v0.4.18-sso.1"),
+    ).toBe(false);
+    expect(
+      isNewerCliReleaseVersion("v0.4.18-sso.1", "v0.4.18-2-gabcdef0"),
+    ).toBe(false);
+  });
+});
 
 describe("checkQuickCreateCliVersion", () => {
   it("returns ok for a tagged release at or above the minimum", () => {

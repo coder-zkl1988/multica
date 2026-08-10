@@ -389,6 +389,10 @@ func TestDaemonRestartUnauthenticatedFailsBeforeStopping(t *testing.T) {
 // /health is our own so a kill-fallback would be visible as a test crash too.
 func fakeRunningDaemon(t *testing.T, profile string) <-chan struct{} {
 	t.Helper()
+	daemonID := "fake-daemon-" + profile
+	if err := writeDaemonPIDFile(profile, daemonPIDRecord{PID: os.Getpid(), DaemonID: daemonID}); err != nil {
+		t.Fatalf("write fake daemon PID file: %v", err)
+	}
 	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", healthPortForProfile(profile)))
 	if err != nil {
 		t.Skipf("health port for profile %s unavailable: %v", profile, err)
@@ -397,7 +401,7 @@ func fakeRunningDaemon(t *testing.T, profile string) <-chan struct{} {
 	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/health":
-			_, _ = w.Write([]byte(fmt.Sprintf(`{"status":"running","pid":%d}`, os.Getpid())))
+			_, _ = w.Write([]byte(fmt.Sprintf(`{"status":"running","pid":%d,"daemon_id":%q}`, os.Getpid(), daemonID)))
 		case "/shutdown":
 			select {
 			case stopped <- struct{}{}:

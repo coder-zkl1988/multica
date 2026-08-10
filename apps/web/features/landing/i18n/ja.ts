@@ -118,7 +118,7 @@ export function createJaDict(allowSignup: boolean): LandingDict {
           {
             title: "初回起動時に自動検出",
             description:
-              "Multica は Antigravity、Claude Code、CodeBuddy、Codex、Cursor、Copilot、Hermes、Kimi、Kiro CLI、OpenCode、OpenClaw、Pi、Qoder、Trae CLI という14種類の対応ツールをスキャンし、見つかったものをそれぞれランタイムとして登録します。",
+              "Multica は Antigravity、Claude Code、CodeBuddy、Codex、Cursor、Copilot、Hermes、Kimi、Reasonix、Kiro CLI、OpenCode、OpenClaw、Pi、Qoder、Trae CLI という15種類の対応ツールをスキャンし、見つかったものをそれぞれランタイムとして登録します。",
           },
         ],
       },
@@ -139,7 +139,7 @@ export function createJaDict(allowSignup: boolean): LandingDict {
         {
           title: "CLI をインストールしてマシンを接続",
           description:
-            "multica setup を実行すると、OAuth の手順を案内し、デーモンを起動し、14種類の対応コーディングツール(Antigravity、Claude Code、CodeBuddy、Codex、Cursor、Copilot、Hermes、Kimi、Kiro CLI、OpenCode、OpenClaw、Pi、Qoder、Trae CLI)をスキャンします。すでにインストール済みのものは、自動的にランタイムとして登録されます。",
+            "multica setup を実行すると、OAuth の手順を案内し、デーモンを起動し、15種類の対応コーディングツール(Antigravity、Claude Code、CodeBuddy、Codex、Cursor、Copilot、Hermes、Kimi、Reasonix、Kiro CLI、OpenCode、OpenClaw、Pi、Qoder、Trae CLI)をスキャンします。すでにインストール済みのものは、自動的にランタイムとして登録されます。",
         },
         {
           title: "最初のエージェントを作成",
@@ -193,7 +193,7 @@ export function createJaDict(allowSignup: boolean): LandingDict {
         {
           question: "Multica はどのコーディングエージェントに対応していますか?",
           answer:
-            "Multica は、Antigravity、Claude Code、CodeBuddy、Codex、Cursor、Copilot、Hermes、Kimi、Kiro CLI、OpenCode、OpenClaw、Pi、Qoder、Trae CLI の14種類のコーディングツールに標準対応しています。デーモンが、すでにインストール済みの CLI を自動検出し、それぞれをランタイムとして登録します。オープンソースなので、独自のバックエンドを追加することもできます。",
+            "Multica は、Antigravity、Claude Code、CodeBuddy、Codex、Cursor、Copilot、Hermes、Kimi、Reasonix、Kiro CLI、OpenCode、OpenClaw、Pi、Qoder、Trae CLI の15種類のコーディングツールに標準対応しています。デーモンが、すでにインストール済みの CLI を自動検出し、それぞれをランタイムとして登録します。オープンソースなので、独自のバックエンドを追加することもできます。",
         },
         {
           question: "セルフホストが必須ですか、それともクラウド版もありますか?",
@@ -266,6 +266,41 @@ export function createJaDict(allowSignup: boolean): LandingDict {
         fixes: "バグ修正",
       },
       entries: [
+        {
+          version: "0.4.18",
+          date: "2026-08-04",
+          title: "エージェントへの指示を軽量化、多数の不具合を修正",
+          changes: [],
+          features: [
+            "担当の確認ダイアログを送信ショートカットで確定でき、マウスを使わずに済みます。",
+            "エージェントを設計した会話がそのまま残り、後から読み返せます。",
+          ],
+          improvements: [
+            "エージェント作成の画面を開いたままでも、ワークスペース全体が重くなりません。",
+            "エージェント作成中に入力した内容が保存され、ページを移動しても残ります。",
+            "スキルのファイルを、行メニューからそのまま編集できます。",
+            "チャットの候補が、入力している言語に合わせて返ります。",
+            "エージェントが毎回読み込む指示が短くなり、その分を作業に使えます。",
+            "ローカル ビルドのランタイムはその旨が表示され、存在しない更新を案内しません。",
+            "ランタイムの詳細ページのタイトルで、マシン名が重複しなくなりました。",
+          ],
+          fixes: [
+            "返信を止めてから次のメッセージを送っても、エージェントは会話を覚えています。",
+            "エージェント作成の入力欄が送信後に空になり、続けて入力した内容も失われません。",
+            "スキル内のファイルをクリックすると開くようになり、メニューだけが出ることはありません。",
+            "Issue の「購読解除」が正しく反映されるようになりました。",
+            "返信欄で / を入力すると、ワークスペースのクイック アクションも表示されます。",
+            "Issue のヘッダーから実行中のログを開いても、すぐに閉じなくなりました。",
+            "OpenClaw の返信が、生成し終わった時点ですぐ届くようになりました。",
+            "Slack や Feishu で /new だけを送っても、空のメッセージと空の実行が残りません。",
+            "新しく追加したチャット チャネルで、エージェントが添付ファイルの送信を誤って伝えなくなりました。",
+            "長いプロジェクト名やラベル名が、ピルを一行いっぱいに広げなくなりました。",
+            "各項目を空にする操作が、どのピッカーでも一番上の行に統一されました。",
+            "オートパイロットのランブックが広くても、設定パネルが押し出されなくなりました。",
+            "中国語のサイドバーの Discord リンクが、途中で切れなくなりました。",
+            "Issue をスクワッドに割り当てても、エラーが発生しなくなりました。",
+          ],
+        },
         {
           version: "0.4.17",
           date: "2026-08-03",

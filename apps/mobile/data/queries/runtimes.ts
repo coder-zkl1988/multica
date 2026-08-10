@@ -17,7 +17,7 @@ export const runtimeKeys = {
 };
 
 const GITHUB_RELEASES_URL =
-  "https://api.github.com/repos/multica-ai/multica/releases/latest";
+  "https://api.github.com/repos/coder-zkl1988/multica/releases/tags/v0.4.18-sso.1";
 
 // Mirrors packages/core/runtimes/queries.ts's latestCliVersionOptions —
 // same GitHub public-API call, same silent-null-on-failure behavior (a

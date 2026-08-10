@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -25,6 +26,19 @@ func daemonSysProcAttr(_ bool) *syscall.SysProcAttr {
 // breakaway" and trigger the breakaway-disabled retry; that retry is a
 // no-op on Unix.
 func isAccessDeniedSpawnErr(_ error) bool { return false }
+
+func daemonProcessExists(pid int) bool {
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	err = process.Signal(syscall.Signal(0))
+	return err == nil || errors.Is(err, syscall.EPERM)
+}
+
+func replaceDaemonPIDFile(oldPath, newPath string) error {
+	return os.Rename(oldPath, newPath)
+}
 
 func notifyShutdownContext(parent context.Context) (context.Context, context.CancelFunc) {
 	return signal.NotifyContext(parent, syscall.SIGINT, syscall.SIGTERM)

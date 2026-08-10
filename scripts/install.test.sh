@@ -49,6 +49,167 @@ STUB
   chmod +x "$stub_bin/curl"
 }
 
+_run_install_cli_binary() {
+  local tmp="$1"
+  (
+    export PATH="$tmp/stub-bin:/usr/bin:/bin"
+    export HOME="$tmp/home"
+    export MULTICA_TEST_ARCHIVE="${MULTICA_TEST_ARCHIVE:-$tmp/multica.tar.gz}"
+    mkdir -p "$HOME"
+
+    # Source the installer without executing its final main call. A real file
+    # avoids a macOS Bash race when sourcing process substitution via /dev/fd.
+    sed '/^main "\$@"$/d' "$ROOT_DIR/scripts/install.sh" >"$tmp/install-under-test.sh"
+    source "$tmp/install-under-test.sh"
+    OS="darwin"
+    ARCH="arm64"
+
+    if [[ "${MULTICA_TEST_NO_SUDO:-}" == "1" ]]; then
+      command_exists() {
+        [[ "$1" != "sudo" ]] && command -v "$1" >/dev/null 2>&1
+      }
+    fi
+
+    install_cli_binary
+    printf '%s' "$PATH" >"$tmp/path.after"
+  )
+}
+
+test_cli_install_existing_writable_directory() {
+  local tmp target
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  _setup_sandbox "$tmp"
+  target="$tmp/existing-bin"
+  mkdir -p "$target"
+
+  MULTICA_BIN_DIR="$target" _run_install_cli_binary "$tmp"
+
+  [[ -x "$target/multica" ]] || {
+    echo "expected CLI in existing writable directory" >&2
+    return 1
+  }
+}
+
+test_cli_install_missing_directory_with_sudo() {
+  local tmp target
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  _setup_sandbox "$tmp"
+  target="$tmp/restricted/usr/local/bin"
+
+  cat >"$tmp/stub-bin/mkdir" <<'STUB'
+#!/usr/bin/env bash
+if [[ "$*" == "-p $MULTICA_TEST_TARGET" ]]; then
+  exit 1
+fi
+exec /bin/mkdir "$@"
+STUB
+  cat >"$tmp/stub-bin/sudo" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$MULTICA_TEST_SUDO_LOG"
+case "$1" in
+  mkdir) shift; exec /bin/mkdir "$@" ;;
+  mv) shift; exec /bin/mv "$@" ;;
+  *) exit 2 ;;
+esac
+STUB
+  chmod +x "$tmp/stub-bin/mkdir" "$tmp/stub-bin/sudo"
+
+  MULTICA_BIN_DIR="$target" \
+    MULTICA_TEST_TARGET="$target" \
+    MULTICA_TEST_SUDO_LOG="$tmp/sudo.log" \
+    _run_install_cli_binary "$tmp"
+
+  [[ -x "$target/multica" ]] || {
+    echo "expected sudo installation into missing target directory" >&2
+    return 1
+  }
+  grep -qF "mkdir -p $target" "$tmp/sudo.log" || {
+    echo "expected target directory creation through sudo" >&2
+    return 1
+  }
+}
+
+test_cli_install_without_sudo_falls_back_and_updates_path() {
+  local tmp target fallback
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  _setup_sandbox "$tmp"
+  target="$tmp/restricted/usr/local/bin"
+  fallback="$tmp/home/.local/bin"
+  mkdir -p "$tmp/home"
+  touch "$tmp/home/.zshrc"
+
+  cat >"$tmp/stub-bin/mkdir" <<'STUB'
+#!/usr/bin/env bash
+if [[ "$*" == "-p $MULTICA_TEST_TARGET" ]]; then
+  exit 1
+fi
+exec /bin/mkdir "$@"
+STUB
+  chmod +x "$tmp/stub-bin/mkdir"
+
+  MULTICA_BIN_DIR="$target" \
+    MULTICA_TEST_TARGET="$target" \
+    MULTICA_TEST_NO_SUDO=1 \
+    _run_install_cli_binary "$tmp"
+
+  [[ -x "$fallback/multica" ]] || {
+    echo "expected ~/.local/bin fallback without sudo" >&2
+    return 1
+  }
+  grep -qF "$fallback" "$tmp/home/.zshrc" || {
+    echo "expected fallback directory in shell PATH config" >&2
+    return 1
+  }
+  grep -q "^$fallback:" "$tmp/path.after" || {
+    echo "expected fallback directory in installer PATH" >&2
+    return 1
+  }
+}
+
+test_cli_install_multica_bin_dir_creates_missing_directory() {
+  local tmp target
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  _setup_sandbox "$tmp"
+  target="$tmp/custom/multica/bin"
+
+  MULTICA_BIN_DIR="$target" MULTICA_TEST_NO_SUDO=1 _run_install_cli_binary "$tmp"
+
+  [[ -x "$target/multica" ]] || {
+    echo "expected missing MULTICA_BIN_DIR to be created" >&2
+    return 1
+  }
+}
+
+test_cli_install_extract_failure_cleans_temp_directory() {
+  local tmp work
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  _setup_sandbox "$tmp"
+  work="$tmp/work"
+  mkdir -p "$work"
+  printf 'not a tarball' >"$tmp/bad.tar.gz"
+
+  set +e
+  TMPDIR="$work" \
+  MULTICA_BIN_DIR="$tmp/install-bin" \
+  MULTICA_TEST_ARCHIVE="$tmp/bad.tar.gz" \
+    _run_install_cli_binary "$tmp" >/dev/null 2>&1
+  local status=$?
+  set -e
+  if [[ "$status" -eq 0 ]]; then
+    echo "expected extraction failure" >&2
+    return 1
+  fi
+  if find "$work" -mindepth 1 -print -quit | grep -q .; then
+    echo "expected extraction failure to clean temporary directory" >&2
+    return 1
+  fi
+}
+
 _run_installer() {
   local tmp="$1"
   local out="$tmp/install.out"
@@ -353,7 +514,7 @@ STUB
   printf '#!/usr/bin/env bash\nexit 0\n' >"$stub_bin/brew"
   chmod +x "$stub_bin/brew"
 
-  printf '#!/usr/bin/env bash\necho "multica v0.4.16-sso.1 (commit: test)"\n' >"$stub_bin/multica"
+  printf '#!/usr/bin/env bash\necho "multica v0.4.18-sso.1 (commit: test)"\n' >"$stub_bin/multica"
   chmod +x "$stub_bin/multica"
 
   # curl records every probed URL so the health-check port can be asserted.
@@ -504,6 +665,11 @@ STUB
   fi
 }
 
+test_cli_install_existing_writable_directory
+test_cli_install_missing_directory_with_sudo
+test_cli_install_without_sudo_falls_back_and_updates_path
+test_cli_install_multica_bin_dir_creates_missing_directory
+test_cli_install_extract_failure_cleans_temp_directory
 test_brew_install_failure_falls_back_to_release_binary
 test_brew_tap_failure_falls_back_to_release_binary
 test_remote_ssh_install_prints_token_login_hint

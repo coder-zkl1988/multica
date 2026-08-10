@@ -109,12 +109,15 @@ func TestIsReleaseVersion(t *testing.T) {
 	}{
 		{"bare release", "0.1.13", true},
 		{"v-prefixed release", "v0.1.13", true},
+		{"SSO fork release", "v0.4.18-sso.1", true},
 		{"surrounding whitespace", "  v0.1.13  ", true},
 		{"dev describe", "v0.2.15-235-gdaf0e935", false},
 		{"dirty dev describe", "v0.2.15-235-gdaf0e935-dirty", false},
 		{"empty", "", false},
 		{"two components", "0.1", false},
 		{"four components", "0.1.2.3", false},
+		{"other prerelease", "v0.4.18-rc.1", false},
+		{"invalid SSO build", "v0.4.18-sso.next", false},
 		{"non-numeric", "1.0.x", false},
 	}
 	for _, tt := range tests {
@@ -138,6 +141,10 @@ func TestIsNewerVersion(t *testing.T) {
 		{"same version", "v0.1.13", "v0.1.13", false},
 		{"older latest", "v0.1.12", "v0.1.13", false},
 		{"mixed v prefix", "0.1.14", "v0.1.13", true},
+		{"SSO base bump", "v0.4.18-sso.1", "v0.4.17-sso.9", true},
+		{"SSO build bump", "v0.4.18-sso.2", "v0.4.18-sso.1", true},
+		{"same SSO build", "v0.4.18-sso.1", "v0.4.18-sso.1", false},
+		{"SSO build replaces same official base", "v0.4.18-sso.1", "v0.4.18", true},
 		{"current is dev describe → unparseable → false", "v0.1.14", "v0.1.13-5-gabcdef0", false},
 		{"latest is dev describe → unparseable → false", "v0.1.14-1-gabcdef0", "v0.1.13", false},
 		{"latest unparseable → false", "garbage", "v0.1.13", false},

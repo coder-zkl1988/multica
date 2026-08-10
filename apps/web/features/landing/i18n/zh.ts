@@ -116,7 +116,7 @@ export function createZhDict(allowSignup: boolean): LandingDict {
         {
           title: "\u9996\u6b21\u542f\u52a8\u81ea\u52a8\u6ce8\u518c",
           description:
-            "Multica \u626b\u63cf\u672c\u673a\u7684 14 \u6b3e\u652f\u6301\u7684 AI \u7f16\u7a0b\u5de5\u5177\u2014\u2014Antigravity\u3001Claude Code\u3001CodeBuddy\u3001Codex\u3001Cursor\u3001Copilot\u3001Hermes\u3001Kimi\u3001Kiro CLI\u3001OpenCode\u3001OpenClaw\u3001Pi\u3001Qoder\u3001Trae CLI\u2014\u2014\u5e76\u4e3a\u6bcf\u6b3e\u5df2\u5b89\u88c5\u7684\u5de5\u5177\u6ce8\u518c\u4e00\u4e2a\u8fd0\u884c\u65f6\u3002",
+            "Multica \u626b\u63cf\u672c\u673a\u7684 15 \u6b3e\u652f\u6301\u7684 AI \u7f16\u7a0b\u5de5\u5177\u2014\u2014Antigravity\u3001Claude Code\u3001CodeBuddy\u3001Codex\u3001Cursor\u3001Copilot\u3001Hermes\u3001Kimi\u3001Reasonix\u3001Kiro CLI\u3001OpenCode\u3001OpenClaw\u3001Pi\u3001Qoder\u3001Trae CLI\u2014\u2014\u5e76\u4e3a\u6bcf\u6b3e\u5df2\u5b89\u88c5\u7684\u5de5\u5177\u6ce8\u518c\u4e00\u4e2a\u8fd0\u884c\u65f6\u3002",
         },
       ],
     },
@@ -136,7 +136,7 @@ export function createZhDict(allowSignup: boolean): LandingDict {
       {
         title: "\u5b89\u88c5 CLI \u5e76\u8fde\u63a5\u4f60\u7684\u673a\u5668",
         description:
-          "运行 multica setup——它会引导你完成 OAuth 登录、启动守护进程、并扫描 14 款支持的 AI 编程工具（Antigravity、Claude Code、CodeBuddy、Codex、Cursor、Copilot、Hermes、Kimi、Kiro CLI、OpenCode、OpenClaw、Pi、Qoder、Trae CLI）。本机已安装的工具会被自动注册成运行时。",
+          "运行 multica setup——它会引导你完成 OAuth 登录、启动守护进程、并扫描 15 款支持的 AI 编程工具（Antigravity、Claude Code、CodeBuddy、Codex、Cursor、Copilot、Hermes、Kimi、Reasonix、Kiro CLI、OpenCode、OpenClaw、Pi、Qoder、Trae CLI）。本机已安装的工具会被自动注册成运行时。",
       },
       {
         title: "\u521b\u5efa\u4f60\u7684\u7b2c\u4e00\u4e2a 智能体",
@@ -192,7 +192,7 @@ export function createZhDict(allowSignup: boolean): LandingDict {
       {
         question: "Multica \u652f\u6301\u54ea\u4e9b\u7f16\u7801 智能体\uff1f",
         answer:
-          "Multica \u5f00\u7bb1\u5373\u7528\u652f\u6301 14 \u6b3e AI \u7f16\u7a0b\u5de5\u5177\uff1aAntigravity\u3001Claude Code\u3001CodeBuddy\u3001Codex\u3001Cursor\u3001Copilot\u3001Hermes\u3001Kimi\u3001Kiro CLI\u3001OpenCode\u3001OpenClaw\u3001Pi\u3001Qoder\u3001Trae CLI\u3002\u5b88\u62a4\u8fdb\u7a0b\u4f1a\u81ea\u52a8\u68c0\u6d4b\u672c\u673a\u5df2\u5b89\u88c5\u7684 CLI \u5e76\u4e3a\u6bcf\u6b3e\u6ce8\u518c\u4e00\u4e2a\u8fd0\u884c\u65f6\u3002\u56e0\u4e3a\u5f00\u6e90\uff0c\u4f60\u4e5f\u53ef\u4ee5\u81ea\u5df1\u6dfb\u52a0\u540e\u7aef\u3002",
+          "Multica \u5f00\u7bb1\u5373\u7528\u652f\u6301 15 \u6b3e AI \u7f16\u7a0b\u5de5\u5177\uff1aAntigravity\u3001Claude Code\u3001CodeBuddy\u3001Codex\u3001Cursor\u3001Copilot\u3001Hermes\u3001Kimi\u3001Reasonix\u3001Kiro CLI\u3001OpenCode\u3001OpenClaw\u3001Pi\u3001Qoder\u3001Trae CLI\u3002\u5b88\u62a4\u8fdb\u7a0b\u4f1a\u81ea\u52a8\u68c0\u6d4b\u672c\u673a\u5df2\u5b89\u88c5\u7684 CLI \u5e76\u4e3a\u6bcf\u6b3e\u6ce8\u518c\u4e00\u4e2a\u8fd0\u884c\u65f6\u3002\u56e0\u4e3a\u5f00\u6e90\uff0c\u4f60\u4e5f\u53ef\u4ee5\u81ea\u5df1\u6dfb\u52a0\u540e\u7aef\u3002",
       },
       {
         question: "\u9700\u8981\u81ea\u6258\u7ba1\u5417\uff0c\u8fd8\u662f\u6709\u4e91\u7248\u672c\uff1f",
@@ -290,6 +290,41 @@ export function createZhDict(allowSignup: boolean): LandingDict {
       fixes: "问题修复",
     },
     entries: [
+      {
+        version: "0.4.18",
+        date: "2026-08-04",
+        title: "智能体指令更精简，大量问题修复",
+        changes: [],
+        features: [
+          "指派确认弹窗支持用发送快捷键确认，不必再切到鼠标。",
+          "创建智能体时的对话会保留下来，之后可以随时回看。",
+        ],
+        improvements: [
+          "创建智能体的页面开着时，不再拖慢整个工作区。",
+          "创建智能体时填写的内容会自动保存，切换页面后依然保留。",
+          "Skill 的文件行菜单里可以直接进入编辑。",
+          "聊天中的快捷建议会跟随你正在使用的语言。",
+          "智能体每次运行读取的说明更精简，占用的上下文更少。",
+          "本地构建的运行时会明确标注，不再提示并不存在的更新。",
+          "运行时详情页的标题不再重复显示机器名。",
+        ],
+        fixes: [
+          "中断回复后继续发送消息，智能体仍然记得之前的对话。",
+          "创建智能体的输入框在发送后清空，紧接着输入的内容也不会丢失。",
+          "点击 Skill 中的文件可以正常打开，不再只弹出菜单。",
+          "Issue 里的「取消订阅」现在能够正常生效。",
+          "在回复框中输入 / 同样能看到工作区的快捷操作。",
+          "从 Issue 头部打开运行中的执行日志，窗口不再立刻关闭。",
+          "OpenClaw 的回复在生成完成后立即送达，不再长时间等待。",
+          "在 Slack、飞书中单独发送 /new，不再产生空消息和空运行。",
+          "在新接入的聊天渠道里，智能体不再误报附件已发送。",
+          "过长的项目名或标签名不再让属性标签占满一整行。",
+          "清空属性的入口，现在统一位于选择弹层的第一行。",
+          "Autopilot 的 Runbook 过宽时，不再把设置面板挤出弹窗。",
+          "中文侧栏中的 Discord 入口不再显示不全。",
+          "把 Issue 指派给小队不再出错。",
+        ],
+      },
       {
         version: "0.4.17",
         date: "2026-08-03",

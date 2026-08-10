@@ -9,11 +9,15 @@ import {
 } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
 import { api } from "@multica/core/api";
+import {
+  isCliReleaseVersion,
+  isNewerCliReleaseVersion,
+} from "@multica/core/runtimes";
 import type { RuntimeUpdateStatus } from "@multica/core/types";
 import { useT } from "../../i18n";
 
 const GITHUB_RELEASES_URL =
-  "https://api.github.com/repos/coder-zkl1988/multica/releases/tags/v0.4.16-sso.1";
+  "https://api.github.com/repos/coder-zkl1988/multica/releases/tags/v0.4.18-sso.1";
 const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
 let cachedLatestVersion: string | null = null;
@@ -35,22 +39,6 @@ async function fetchLatestVersion(): Promise<string | null> {
   } catch {
     return null;
   }
-}
-
-function stripV(v: string): string {
-  return v.replace(/^v/, "");
-}
-
-function isNewer(latest: string, current: string): boolean {
-  const l = stripV(latest).split(".").map(Number);
-  const c = stripV(current).split(".").map(Number);
-  for (let i = 0; i < Math.max(l.length, c.length); i++) {
-    const lv = l[i] ?? 0;
-    const cv = c[i] ?? 0;
-    if (lv > cv) return true;
-    if (lv < cv) return false;
-  }
-  return false;
 }
 
 const statusConfig: Record<
@@ -124,7 +112,7 @@ export function UpdateSection({
 
   useEffect(() => {
     if (!updating || !targetVersion || !currentVersion) return;
-    if (!isNewer(targetVersion, currentVersion)) {
+    if (!isNewerCliReleaseVersion(targetVersion, currentVersion)) {
       markCompleted(`Updated to ${targetVersion}`);
     }
   }, [currentVersion, markCompleted, targetVersion, updating]);
@@ -174,7 +162,14 @@ export function UpdateSection({
   const hasUpdate =
     currentVersion &&
     latestVersion &&
-    isNewer(latestVersion, currentVersion);
+    isNewerCliReleaseVersion(latestVersion, currentVersion);
+
+  // A source build cannot be ordered against a release tag, so neither
+  // "update available" nor "Latest" is a claim we can make. Say that, rather
+  // than defaulting to "Latest" and telling the operator their local binary is
+  // up to date when we never parsed its version.
+  const isLocalBuild =
+    !!currentVersion && !isCliReleaseVersion(currentVersion);
 
   const config = status ? statusConfig[status] : null;
   const Icon = config?.icon;
@@ -197,12 +192,25 @@ export function UpdateSection({
           </span>
         ) : (
           <>
-            {!hasUpdate && currentVersion && latestVersion && !status && (
-              <span className="inline-flex items-center gap-1 text-caption text-success">
-                <Check className="h-3 w-3" />
-                {t(($) => $.update.latest)}
+            {isLocalBuild && !status && (
+              <span
+                className="inline-flex items-center gap-1 text-caption text-muted-foreground"
+                title={t(($) => $.update.local_build_title)}
+              >
+                {t(($) => $.update.local_build)}
               </span>
             )}
+
+            {!isLocalBuild &&
+              !hasUpdate &&
+              currentVersion &&
+              latestVersion &&
+              !status && (
+                <span className="inline-flex items-center gap-1 text-caption text-success">
+                  <Check className="h-3 w-3" />
+                  {t(($) => $.update.latest)}
+                </span>
+              )}
 
             {hasUpdate && !status && (
               <>

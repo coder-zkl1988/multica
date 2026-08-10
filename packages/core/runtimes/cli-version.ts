@@ -32,6 +32,39 @@ const SEMVER_RE = /v?(\d+)\.(\d+)\.(\d+)/;
 // is what keeps `pnpm dev:desktop` + `make daemon` unblocked without weakening
 // the gate for staging or production users running stale stable releases.
 const DEV_DESCRIBE_RE = /^v?\d+\.\d+\.\d+-\d+-g[0-9a-fA-F]+/;
+const CLI_RELEASE_RE = /^v?(\d+)\.(\d+)\.(\d+)(?:-sso\.(\d+))?$/;
+
+function parseCliReleaseVersion(
+  raw: string,
+): [number, number, number, number] | null {
+  const match = raw.trim().match(CLI_RELEASE_RE);
+  if (!match) return null;
+  return [
+    Number(match[1]),
+    Number(match[2]),
+    Number(match[3]),
+    Number(match[4] ?? 0),
+  ];
+}
+
+export function isCliReleaseVersion(raw: string): boolean {
+  return parseCliReleaseVersion(raw) !== null;
+}
+
+export function isNewerCliReleaseVersion(
+  latest: string,
+  current: string,
+): boolean {
+  const latestParts = parseCliReleaseVersion(latest);
+  const currentParts = parseCliReleaseVersion(current);
+  if (!latestParts || !currentParts) return false;
+  for (const [index, latestPart] of latestParts.entries()) {
+    const currentPart = currentParts[index] ?? 0;
+    if (latestPart > currentPart) return true;
+    if (latestPart < currentPart) return false;
+  }
+  return false;
+}
 
 function parseSemver(raw: string): [number, number, number] | null {
   const m = SEMVER_RE.exec(raw.trim());

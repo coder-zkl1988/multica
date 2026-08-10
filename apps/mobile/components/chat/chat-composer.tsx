@@ -37,7 +37,6 @@
 import { useCallback } from "react";
 import { Pressable, View } from "react-native";
 import Animated, { FadeIn, FadeOut } from "react-native-reanimated";
-import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useTranslation } from "react-i18next";
 import { MessageComposer } from "@/components/composer/message-composer";
@@ -59,6 +58,8 @@ interface Props {
   /** True while an agent task is running for the active session. The
    *  composer swaps Send for Stop. */
   sending: boolean;
+  /** Queued tasks remain busy, but do not expose Stop without draft restore. */
+  allowStop?: boolean;
   /** Hard-disable typing + send. Used when there's no usable agent in the
    *  workspace or the session is archived (legacy). */
   disabled?: boolean;
@@ -74,6 +75,7 @@ export function ChatComposer({
   onSend,
   onStop,
   sending,
+  allowStop = true,
   disabled = false,
   disabledReason,
 }: Props) {
@@ -125,7 +127,7 @@ export function ChatComposer({
       disabled={disabled}
       disabledReason={disabledReason}
       isSending={sending}
-      renderStop={() => <StopButton onPress={handleStop} />}
+      renderStop={allowStop ? () => <StopButton onPress={handleStop} /> : undefined}
       alwaysExpanded
     />
   );

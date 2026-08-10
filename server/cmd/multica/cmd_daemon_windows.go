@@ -66,6 +66,19 @@ func isAccessDeniedSpawnErr(err error) bool {
 	return errors.Is(err, syscall.ERROR_ACCESS_DENIED)
 }
 
+func daemonProcessExists(pid int) bool {
+	h, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
+	if err != nil {
+		return errors.Is(err, windows.ERROR_ACCESS_DENIED)
+	}
+	windows.CloseHandle(h)
+	return true
+}
+
+func replaceDaemonPIDFile(oldPath, newPath string) error {
+	return windows.Rename(oldPath, newPath)
+}
+
 func notifyShutdownContext(parent context.Context) (context.Context, context.CancelFunc) {
 	return signal.NotifyContext(parent, os.Interrupt, sigBreak)
 }
