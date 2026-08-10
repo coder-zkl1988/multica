@@ -45,22 +45,11 @@ export function AuthInitializer({
     // reads this cookie, so it has to be present before the user hits submit.
     captureSignupSource();
 
-    // Fetch app config (CDN domain, PostHog key, …) in the background — non-blocking.
-    api
-      .getConfig()
+    const configRequest = configStore
+      .getState()
+      .loadConfig(() => api.getConfig());
+    configRequest
       .then((cfg) => {
-        if (cfg.cdn_domain) configStore.getState().setCdnDomain(cfg.cdn_domain);
-        configStore.getState().setAuthConfig({
-          allowSignup: cfg.allow_signup,
-          googleClientId: cfg.google_client_id,
-          // Old servers omit this field — treat that as "creation allowed"
-          // (the managed-cloud default) rather than blocking the UI.
-          workspaceCreationDisabled: cfg.workspace_creation_disabled === true,
-        });
-        configStore.getState().setDaemonConfig({
-          daemonServerUrl: cfg.daemon_server_url,
-          daemonAppUrl: cfg.daemon_app_url,
-        });
         if (cfg.posthog_key) {
           initAnalytics({
             key: cfg.posthog_key,
@@ -70,8 +59,8 @@ export function AuthInitializer({
           });
         }
       })
-      .catch(() => {
-        /* config is optional — legacy file card matching degrades gracefully */
+      .catch((err) => {
+        logger.error("app config init failed", err);
       });
 
     const onAuthSuccess = (user: User) => {
@@ -106,29 +95,35 @@ export function AuthInitializer({
       return;
     }
 
-    // Token mode: read from localStorage (Electron / legacy).
-    const token = storage.getItem("multica_token");
-    if (!token) {
-      onLogout?.();
-      useAuthStore.setState({ isLoading: false });
-      return;
-    }
+    // Token mode is used by Desktop and legacy clients. Do not read a token
+    // until the server has declared which authentication mode is active.
+    configRequest
+      .then(() => {
+        const token = storage.getItem("multica_token");
+        if (!token) {
+          onLogout?.();
+          useAuthStore.setState({ isLoading: false });
+          return;
+        }
 
-    api.setToken(token);
-
-    Promise.all([api.getMe(), api.listWorkspaces()])
-      .then(([user, wsList]) => {
-        onAuthSuccess(user);
-        // Seed React Query cache so the URL-driven layout can resolve the
-        // slug without a second fetch.
-        qc.setQueryData(workspaceKeys.list(), wsList);
+        api.setToken(token);
+        Promise.all([api.getMe(), api.listWorkspaces()])
+          .then(([user, wsList]) => {
+            onAuthSuccess(user);
+            qc.setQueryData(workspaceKeys.list(), wsList);
+          })
+          .catch((err) => {
+            logger.error("auth init failed", err);
+            api.setToken(null);
+            setCurrentWorkspace(null, null);
+            storage.removeItem("multica_token");
+            onAuthFailure();
+          });
       })
-      .catch((err) => {
-        logger.error("auth init failed", err);
-        api.setToken(null);
-        setCurrentWorkspace(null, null);
-        storage.removeItem("multica_token");
-        onAuthFailure();
+      .catch(() => {
+        if (!useAuthStore.getState().user) {
+          useAuthStore.setState({ isLoading: false });
+        }
       });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

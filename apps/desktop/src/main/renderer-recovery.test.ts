@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { installRendererRecoveryHandlers } from "./renderer-recovery";
+import { createElectronReloadPrompt, installRendererRecoveryHandlers } from "./renderer-recovery";
 
 type Handler = (...args: unknown[]) => void;
 
@@ -83,10 +83,50 @@ describe("installRendererRecoveryHandlers", () => {
     vi.useFakeTimers();
     const fixture = makeWindow();
     const showReloadPrompt = vi.fn(async () => "dismiss" as const);
+    const desktopRoute = {
+      surface: "tab",
+      path: "/acme/issues/MUL-3239",
+      workspaceSlug: "acme",
+      tabId: "tab-1",
+      reportedAt: "2026-06-15T00:00:00.000Z",
+    };
 
     installRendererRecoveryHandlers(fixture.window, {
       isDev: false,
       showReloadPrompt,
+      getDiagnosticContext: () => ({
+        windowUrl:
+          "file:///Applications/Multica.app/Contents/Resources/app.asar/index.html",
+        desktopRoute,
+      }),
+      unresponsivePromptDelayMs: 100,
+    });
+
+    fixture.windowHandlers.get("unresponsive")?.();
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(showReloadPrompt).toHaveBeenCalledWith({
+      kind: "unresponsive",
+      context: {
+        windowUrl:
+          "file:///Applications/Multica.app/Contents/Resources/app.asar/index.html",
+        desktopRoute,
+      },
+    });
+    expect(fixture.reload).not.toHaveBeenCalled();
+  });
+
+  it("keeps prompting when diagnostic context collection fails", async () => {
+    vi.useFakeTimers();
+    const fixture = makeWindow();
+    const showReloadPrompt = vi.fn(async () => "dismiss" as const);
+
+    installRendererRecoveryHandlers(fixture.window, {
+      isDev: false,
+      showReloadPrompt,
+      getDiagnosticContext: () => {
+        throw new Error("diagnostics unavailable");
+      },
       unresponsivePromptDelayMs: 100,
     });
 
@@ -94,7 +134,6 @@ describe("installRendererRecoveryHandlers", () => {
     await vi.advanceTimersByTimeAsync(100);
 
     expect(showReloadPrompt).toHaveBeenCalledWith({ kind: "unresponsive", context: {} });
-    expect(fixture.reload).not.toHaveBeenCalled();
   });
 
   it("keeps dev diagnostics non-prompting", async () => {
@@ -108,5 +147,211 @@ describe("installRendererRecoveryHandlers", () => {
 
     expect(showReloadPrompt).not.toHaveBeenCalled();
     expect(fixture.reload).not.toHaveBeenCalled();
+  });
+
+  it("shows actionable recovery guidance before diagnostic details", async () => {
+    let detail = "";
+    const showMessageBox = vi.fn(
+      async (options: { title: string; message: string; detail: string }) => {
+        detail = options.detail;
+        return { response: 1 };
+      },
+    );
+    const showReloadPrompt = createElectronReloadPrompt(showMessageBox);
+
+    await showReloadPrompt({ kind: "unresponsive", context: {} });
+
+    expect(showMessageBox).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Multica needs to reload",
+        message: "The desktop window has been stuck for a few seconds.",
+        detail: expect.stringContaining(
+          "Click Reload to refresh this window and keep using Multica.",
+        ),
+      }),
+    );
+    expect(detail).toContain("what you were doing right before this message appeared");
+    expect(detail).toContain("Activity Monitor sample");
+    expect(detail).toContain("Diagnostic details:\nkind: unresponsive\ncontext: {}");
+  });
+});
+
+describe("freeze/crash breadcrumb state machine", () => {
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.useRealTimers());
+
+  function install(fixture: ReturnType<typeof makeWindow>) {
+    const persistBreadcrumb = vi.fn();
+    const clearBreadcrumb = vi.fn();
+    installRendererRecoveryHandlers(fixture.window, {
+      isDev: false,
+      showReloadPrompt: vi.fn(async () => "dismiss" as const),
+      persistBreadcrumb,
+      clearBreadcrumb,
+      unresponsivePromptDelayMs: 100,
+    });
+    return { persistBreadcrumb, clearBreadcrumb };
+  }
+
+  it("a sustained hang writes exactly one unresponsive breadcrumb", async () => {
+    vi.useFakeTimers();
+    const fixture = makeWindow();
+    const { persistBreadcrumb, clearBreadcrumb } = install(fixture);
+
+    fixture.windowHandlers.get("unresponsive")?.();
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(persistBreadcrumb).toHaveBeenCalledTimes(1);
+    expect(persistBreadcrumb).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "unresponsive" }),
+    );
+    expect(clearBreadcrumb).not.toHaveBeenCalled();
+  });
+
+  it("recovering after a written breadcrumb clears it (no double-count, no false recovered:false)", async () => {
+    vi.useFakeTimers();
+    const fixture = makeWindow();
+    const { persistBreadcrumb, clearBreadcrumb } = install(fixture);
+
+    fixture.windowHandlers.get("unresponsive")?.();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(persistBreadcrumb).toHaveBeenCalledTimes(1);
+
+    fixture.windowHandlers.get("responsive")?.();
+    expect(clearBreadcrumb).toHaveBeenCalledTimes(1);
+  });
+
+  it("recovering before the delay never writes a breadcrumb, so nothing to clear", async () => {
+    vi.useFakeTimers();
+    const fixture = makeWindow();
+    const { persistBreadcrumb, clearBreadcrumb } = install(fixture);
+
+    fixture.windowHandlers.get("unresponsive")?.();
+    fixture.windowHandlers.get("responsive")?.();
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(persistBreadcrumb).not.toHaveBeenCalled();
+    expect(clearBreadcrumb).not.toHaveBeenCalled();
+  });
+
+  it("a hang that never recovers (force-quit) keeps its breadcrumb for next-boot reporting", async () => {
+    vi.useFakeTimers();
+    const fixture = makeWindow();
+    const { persistBreadcrumb, clearBreadcrumb } = install(fixture);
+
+    fixture.windowHandlers.get("unresponsive")?.();
+    await vi.advanceTimersByTimeAsync(100);
+
+    // No "responsive" ever fires — the breadcrumb must survive uncleared.
+    expect(persistBreadcrumb).toHaveBeenCalledTimes(1);
+    expect(clearBreadcrumb).not.toHaveBeenCalled();
+  });
+
+  it("a recoverable crash writes a breadcrumb and never clears it (a dead process never recovers)", () => {
+    const fixture = makeWindow();
+    const { persistBreadcrumb, clearBreadcrumb } = install(fixture);
+
+    fixture.webContentsHandlers.get("render-process-gone")?.({}, { reason: "crashed" });
+
+    expect(persistBreadcrumb).toHaveBeenCalledTimes(1);
+    expect(persistBreadcrumb).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "render-process-gone" }),
+    );
+    expect(clearBreadcrumb).not.toHaveBeenCalled();
+  });
+
+  it("a clean (non-crash) renderer exit writes no breadcrumb", () => {
+    const fixture = makeWindow();
+    const { persistBreadcrumb } = install(fixture);
+
+    fixture.webContentsHandlers.get("render-process-gone")?.({}, { reason: "clean-exit" });
+
+    expect(persistBreadcrumb).not.toHaveBeenCalled();
+  });
+});
+
+// The stack is the only field that names the code that blocked the thread, and
+// it can only be read while the thread is still stuck — so it is captured
+// before the breadcrumb is written, and a capture that fails must still leave
+// a reportable hang behind.
+describe("hang stack capture", () => {
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.useRealTimers());
+
+  function installWithCapture(
+    fixture: ReturnType<typeof makeWindow>,
+    captureStack: () => Promise<unknown>,
+  ) {
+    const persistBreadcrumb = vi.fn();
+    installRendererRecoveryHandlers(fixture.window, {
+      isDev: false,
+      showReloadPrompt: vi.fn(async () => "dismiss" as const),
+      persistBreadcrumb,
+      captureStack,
+      unresponsivePromptDelayMs: 100,
+    });
+    return { persistBreadcrumb };
+  }
+
+  const stack = [
+    { functionName: "parseMarkdownChunked", url: "assets/index-abc.js", lineNumber: 412, columnNumber: 17 },
+  ];
+
+  it("folds the captured stack into the hang report", async () => {
+    vi.useFakeTimers();
+    const fixture = makeWindow();
+    const { persistBreadcrumb } = installWithCapture(fixture, async () => stack);
+
+    fixture.windowHandlers.get("unresponsive")?.();
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(persistBreadcrumb).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "unresponsive",
+        context: expect.objectContaining({ stack }),
+      }),
+    );
+  });
+
+  it("still reports the hang when no stack could be captured", async () => {
+    vi.useFakeTimers();
+    const fixture = makeWindow();
+    const { persistBreadcrumb } = installWithCapture(fixture, async () => null);
+
+    fixture.windowHandlers.get("unresponsive")?.();
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(persistBreadcrumb).toHaveBeenCalledTimes(1);
+    const payload = persistBreadcrumb.mock.calls[0]?.[0] as {
+      context: Record<string, unknown>;
+    };
+    expect(payload.context).not.toHaveProperty("stack");
+  });
+
+  it("still reports the hang when the capture throws", async () => {
+    vi.useFakeTimers();
+    const fixture = makeWindow();
+    const { persistBreadcrumb } = installWithCapture(fixture, async () => {
+      throw new Error("debugger detached");
+    });
+
+    fixture.windowHandlers.get("unresponsive")?.();
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(persistBreadcrumb).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not capture when the window recovers before the prompt delay", async () => {
+    vi.useFakeTimers();
+    const fixture = makeWindow();
+    const captureStack = vi.fn(async () => stack);
+    installWithCapture(fixture, captureStack);
+
+    fixture.windowHandlers.get("unresponsive")?.();
+    await vi.advanceTimersByTimeAsync(50);
+    fixture.windowHandlers.get("responsive")?.();
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(captureStack).not.toHaveBeenCalled();
   });
 });

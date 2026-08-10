@@ -15,7 +15,7 @@ import { selectPlatformReleaseAssetName } from "./cli-release-asset";
 // userData on first launch when the bundled binary is missing or unusable.
 
 const GITHUB_LATEST_BASE =
-  "https://github.com/multica-ai/multica/releases/latest/download";
+  "https://github.com/coder-zkl1988/multica/releases/download/v0.4.18-sso.1";
 
 function binaryName(): string {
   return process.platform === "win32" ? "multica.exe" : "multica";

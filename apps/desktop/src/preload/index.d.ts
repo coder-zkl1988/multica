@@ -1,6 +1,22 @@
 import { ElectronAPI } from "@electron-toolkit/preload";
 import type { RuntimeConfigResult } from "../shared/runtime-config";
 import type { NavigationGesture } from "../shared/navigation-gestures";
+import type { RendererRouteContextInput } from "../shared/renderer-route-context";
+import type { DiagnosticsControl } from "../shared/diagnostics-control";
+import type { FreezeBreadcrumb } from "../shared/freeze-breadcrumb";
+import type {
+  DesktopWindowContext,
+  IssueWindowRequest,
+} from "../shared/issue-window";
+import type {
+  ManualUpdateCheckResult,
+  UpdaterPreferences,
+} from "../shared/updater-types";
+import type {
+  DaemonStatus,
+  DaemonPrefs,
+  LocalRuntimeProbe,
+} from "../shared/daemon-types";
 
 interface DesktopAPI {
   /** App version + normalized OS, captured synchronously at preload time. */
@@ -14,8 +30,26 @@ interface DesktopAPI {
   onSystemLocaleChanged: (callback: (locale: string) => void) => () => void;
   /** Validated runtime endpoint config, or a blocking config error. */
   runtimeConfig: RuntimeConfigResult;
+  /** Main tabbed window or a dedicated issue-only window. */
+  windowContext: DesktopWindowContext;
+  /** Read any freeze/crash breadcrumb from a previous session, so the renderer
+   *  can flush it to telemetry on boot. Null when nothing's pending. Reading
+   *  does not consume it — acknowledge with `ackFreeze`. */
+  getLastFreeze: () => FreezeBreadcrumb | null;
+  /** Retire the breadcrumb with this exact timestamp once its event has been
+   *  handed to analytics. Unacknowledged breadcrumbs are retried next boot. */
+  ackFreeze: (ts: number) => void;
+  /** Report the resolved account identity so stale issue windows can close. */
+  reportAuthSession: (userId: string | null) => void;
   /** Listen for auth token delivered via deep link. Returns an unsubscribe function. */
+  /** Decrypt the persisted SSO credential into renderer memory. */
+  getAuthToken: () => string | null;
+  /** Listen for a legacy bearer token delivered via deep link. */
   onAuthToken: (callback: (token: string) => void) => () => void;
+  startSSO: () => Promise<void>;
+  clearAuthToken: () => Promise<void>;
+  onAuthChanged: (callback: () => void) => () => void;
+  onAuthError: (callback: (message: string) => void) => () => void;
   /** Listen for invitation IDs delivered via deep link. Returns an unsubscribe function. */
   onInviteOpen: (callback: (invitationId: string) => void) => () => void;
   /** Open a URL in the default browser. */
@@ -45,6 +79,10 @@ interface DesktopAPI {
   ) => () => void;
   /** Listen for native macOS back/forward swipe gestures. Returns an unsubscribe function. */
   onNavigationGesture: (callback: (gesture: NavigationGesture) => void) => () => void;
+  /** Report the renderer's memory-router path for recovery diagnostics. */
+  setRendererRouteContext: (context: RendererRouteContextInput) => void;
+  /** Publish server-driven diagnostics flags; main stays fail-closed until then. */
+  setDiagnosticsControl: (control: DiagnosticsControl) => void;
   /** Open the OS folder picker and return the chosen absolute path.
    *  Used by the Project settings "Add local directory" flow. */
   pickDirectory: (
@@ -71,35 +109,38 @@ interface DesktopAPI {
       | "error";
     error?: string;
   }>;
+  /** Listen for Cmd/Ctrl+W tab-close requests from the main process.
+   *  Returns an unsubscribe function. */
+  onCloseActiveTab: (callback: () => void) => () => void;
+  /** Ask the main process to close the window. */
+  closeWindow: () => void;
+  /** Open an issue-detail tab in a dedicated native window. */
+  openIssueWindow: (
+    request: IssueWindowRequest,
+  ) => Promise<{ ok: true } | { ok: false; reason: "invalid_request" }>;
 }
 
-interface DaemonStatus {
-  state: "running" | "stopped" | "starting" | "stopping" | "installing_cli" | "cli_not_found";
-  pid?: number;
-  uptime?: string;
-  daemonId?: string;
-  deviceName?: string;
-  agents?: string[];
-  workspaceCount?: number;
-  profile?: string;
-  serverUrl?: string;
-}
-
-interface DaemonPrefs {
-  autoStart: boolean;
-  autoStop: boolean;
-}
+type DaemonReauthResult =
+  | { ok: true }
+  | { ok: false; reason: "session_invalid" }
+  | { ok: false; reason: "transient"; message: string };
 
 interface DaemonAPI {
   start: () => Promise<{ success: boolean; error?: string }>;
   stop: () => Promise<{ success: boolean; error?: string }>;
   restart: () => Promise<{ success: boolean; error?: string }>;
   getStatus: () => Promise<DaemonStatus>;
+  probeRuntimes: () => Promise<LocalRuntimeProbe>;
   getHostName: () => Promise<string>;
   onStatusChange: (callback: (status: DaemonStatus) => void) => () => void;
   setTargetApiUrl: (url: string) => Promise<void>;
-  syncToken: (token: string, userId: string) => Promise<void>;
+  syncToken: (token: string, userId: string, useSySso: boolean) => Promise<void>;
   clearToken: () => Promise<void>;
+  reauthenticate: (
+    token: string,
+    userId: string,
+    useSySso: boolean,
+  ) => Promise<DaemonReauthResult>;
   isCliInstalled: () => Promise<boolean>;
   getPrefs: () => Promise<DaemonPrefs>;
   setPrefs: (prefs: Partial<DaemonPrefs>) => Promise<DaemonPrefs>;
@@ -119,10 +160,9 @@ interface UpdaterAPI {
   ) => () => void;
   downloadUpdate: () => Promise<void>;
   installUpdate: () => Promise<void>;
-  checkForUpdates: () => Promise<
-    | { ok: true; currentVersion: string; latestVersion: string; available: boolean }
-    | { ok: false; error: string }
-  >;
+  getPreferences: () => Promise<UpdaterPreferences>;
+  setAutomaticUpdates: (enabled: boolean) => Promise<UpdaterPreferences>;
+  checkForUpdates: () => Promise<ManualUpdateCheckResult>;
 }
 
 declare global {

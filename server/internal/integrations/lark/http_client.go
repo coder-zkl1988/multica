@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"mime"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -32,11 +34,19 @@ import (
 // honoring Lark's `expire` field minus a safety margin so callers
 // never present a token that's about to lapse mid-flight.
 
+// DefaultResourceDownloadTimeout is the default cap on one message-resource
+// download. Exported so the channel-media settle invariant test can assert
+// the reconciler's settle delay dwarfs every pipeline budget.
+const DefaultResourceDownloadTimeout = 45 * time.Second
+
 const (
-	// defaultLarkBaseURL is the production 飞书 (mainland) open-platform
-	// host. Operators on the Lark international tenant set
-	// MULTICA_LARK_HTTP_BASE_URL to https://open.larksuite.com; tests
-	// substitute an httptest.Server URL.
+	// defaultLarkBaseURL is the mainland 飞书 open-platform host. It is the
+	// fallback host for an installation whose region is feishu (or unset);
+	// Region.OpenPlatformBaseURL maps region=lark to open.larksuite.com.
+	// Operators do NOT set MULTICA_LARK_HTTP_BASE_URL to pick a cloud
+	// anymore — the per-installation region does that automatically. The
+	// env var remains only as a deployment-wide override (proxy / mock /
+	// single-cloud staging); tests substitute an httptest.Server URL.
 	defaultLarkBaseURL = "https://open.feishu.cn"
 
 	// tokenSafetyMargin is subtracted from Lark's `expire` so we
@@ -49,6 +59,18 @@ const (
 	// latency from a self-hosted Multica deployment to feishu.cn.
 	defaultRequestTimeout = 10 * time.Second
 
+	// defaultResourceDownloadTimeout is intentionally longer than normal
+	// OpenAPI calls because message videos are binary transfers, not JSON
+	// RPCs. Keep it below the inbound dedup stale-claim window (60s), so a
+	// slow download does not invite a second replica to reclaim the same
+	// message before this one can append and mark it processed.
+	defaultResourceDownloadTimeout = DefaultResourceDownloadTimeout
+
+	// Feishu caps message resources at 100 MiB. Keep the local transport guard
+	// aligned with that contract; detached media processing keeps large
+	// transfers off the connector ACK path.
+	maxMessageResourceBytes = 100 << 20
+
 	// Lark's "invalid tenant_access_token" / "tenant_access_token
 	// expired" error codes. When we see either, drop the cached token
 	// so the next call refreshes from /tenant_access_token/internal.
@@ -60,9 +82,14 @@ const (
 
 // HTTPClientConfig configures the production Lark HTTP APIClient.
 type HTTPClientConfig struct {
-	// BaseURL is the Lark open-platform root, e.g.
-	// "https://open.feishu.cn" or "https://open.larksuite.com". Empty
-	// defaults to defaultLarkBaseURL. Trailing "/" is stripped.
+	// BaseURL is an optional deployment-wide override for the Lark
+	// open-platform root, e.g. "https://open.feishu.cn" or
+	// "https://open.larksuite.com". When set it forces every call —
+	// regardless of the installation's region — to that host; tests set
+	// it to an httptest.Server URL. When EMPTY (the production default),
+	// each call resolves its host from InstallationCredentials.Region so
+	// a single deployment serves both Feishu and Lark. Trailing "/" is
+	// stripped.
 	BaseURL string
 
 	// HTTPClient is the transport used for every outbound call. Tests
@@ -70,6 +97,15 @@ type HTTPClientConfig struct {
 	// httptest.Server. Empty defaults to a fresh http.Client with
 	// defaultRequestTimeout.
 	HTTPClient *http.Client
+
+	// ResourceHTTPClient is used only for message resource downloads. It
+	// deliberately does not share HTTPClient's shorter timeout: image/video
+	// resource transfers are bounded by ResourceDownloadTimeout instead.
+	ResourceHTTPClient *http.Client
+
+	// ResourceDownloadTimeout caps a single message resource download. Zero
+	// defaults to defaultResourceDownloadTimeout.
+	ResourceDownloadTimeout time.Duration
 
 	// Now is overridable for deterministic token-expiry tests.
 	Now func() time.Time
@@ -80,12 +116,21 @@ type HTTPClientConfig struct {
 }
 
 func (c HTTPClientConfig) withDefaults() HTTPClientConfig {
-	if c.BaseURL == "" {
-		c.BaseURL = defaultLarkBaseURL
-	}
+	// BaseURL is intentionally NOT defaulted to defaultLarkBaseURL here.
+	// An empty BaseURL means "no deployment-wide override" — each call
+	// then resolves its host from InstallationCredentials.Region (see
+	// resolveBaseURL), so one client serves both Feishu and Lark. A
+	// non-empty BaseURL (MULTICA_LARK_HTTP_BASE_URL, or an httptest URL
+	// in tests) forces every region to that host.
 	c.BaseURL = strings.TrimRight(c.BaseURL, "/")
 	if c.HTTPClient == nil {
 		c.HTTPClient = &http.Client{Timeout: defaultRequestTimeout}
+	}
+	if c.ResourceDownloadTimeout == 0 {
+		c.ResourceDownloadTimeout = defaultResourceDownloadTimeout
+	}
+	if c.ResourceHTTPClient == nil {
+		c.ResourceHTTPClient = &http.Client{Timeout: c.ResourceDownloadTimeout}
 	}
 	if c.Now == nil {
 		c.Now = time.Now
@@ -109,7 +154,14 @@ func NewHTTPAPIClient(cfg HTTPClientConfig) APIClient {
 type httpAPIClient struct {
 	cfg HTTPClientConfig
 
-	mu     sync.Mutex
+	mu sync.Mutex
+	// tokens caches tenant_access_token keyed by app_id only — NOT by
+	// (app_id, region). This is safe because a Lark/飞书 app_id (the
+	// "cli_..." credential) is globally unique across both clouds and an
+	// app exists on exactly one of them, so an app_id never maps to two
+	// regions. The DB enforces the same assumption with UNIQUE(app_id) on
+	// lark_installation. If Lark ever reused an app_id across clouds, both
+	// this cache key and that constraint would need region added.
 	tokens map[string]*cachedToken
 }
 
@@ -165,7 +217,7 @@ func (c *httpAPIClient) tenantAccessToken(ctx context.Context, creds Installatio
 		TenantAccessToken string `json:"tenant_access_token"`
 		Expire            int64  `json:"expire"`
 	}
-	if err := c.doJSON(ctx, http.MethodPost, "/open-apis/auth/v3/tenant_access_token/internal", "", body, &resp); err != nil {
+	if err := c.doJSON(ctx, c.resolveBaseURL(creds), http.MethodPost, "/open-apis/auth/v3/tenant_access_token/internal", "", body, &resp); err != nil {
 		return "", fmt.Errorf("lark http client: tenant_access_token: %w", err)
 	}
 	if resp.Code != 0 || resp.TenantAccessToken == "" {
@@ -188,6 +240,18 @@ func (c *httpAPIClient) tenantAccessToken(ctx context.Context, creds Installatio
 	return resp.TenantAccessToken, nil
 }
 
+// resolveBaseURL picks the open-platform host for one call. An explicit
+// cfg.BaseURL (MULTICA_LARK_HTTP_BASE_URL, or an httptest URL in tests)
+// overrides every region and routes all traffic there. With no override,
+// the host comes from the installation's region, so Feishu and Lark
+// installations served by the same process each reach their own cloud.
+func (c *httpAPIClient) resolveBaseURL(creds InstallationCredentials) string {
+	if c.cfg.BaseURL != "" {
+		return c.cfg.BaseURL
+	}
+	return creds.Region.OpenPlatformBaseURL()
+}
+
 // invalidateToken drops the cached token for an app_id. Called when
 // Lark surfaces an expired / invalid token error code so the next
 // call refreshes instead of looping on a stale entry.
@@ -195,6 +259,32 @@ func (c *httpAPIClient) invalidateToken(appID string) {
 	c.mu.Lock()
 	delete(c.tokens, appID)
 	c.mu.Unlock()
+}
+
+// outboundMessageRequest builds the (path, body) the three send methods
+// share. When target.IsSet() the message is routed through Lark's reply
+// endpoint (POST /im/v1/messages/{message_id}/reply) so it threads back
+// into the originating 话题 — reply_in_thread carries the target's
+// InThread flag (Lark also keeps the reply in-thread automatically when
+// the parent message already belongs to a thread). Otherwise the message
+// goes to the chat-level send endpoint keyed by receive_id=chat_id, the
+// historical behavior. Body is map[string]any (not map[string]string)
+// because reply_in_thread is a bool.
+func outboundMessageRequest(chatID ChatID, msgType, content string, target ReplyTarget) (string, map[string]any) {
+	if target.IsSet() {
+		return "/open-apis/im/v1/messages/" + url.PathEscape(target.MessageID) + "/reply", map[string]any{
+			"msg_type":        msgType,
+			"content":         content,
+			"reply_in_thread": target.InThread,
+		}
+	}
+	q := url.Values{}
+	q.Set("receive_id_type", "chat_id")
+	return "/open-apis/im/v1/messages?" + q.Encode(), map[string]any{
+		"receive_id": string(chatID),
+		"msg_type":   msgType,
+		"content":    content,
+	}
 }
 
 // SendInteractiveCard posts a fresh interactive card into a chat and
@@ -211,13 +301,7 @@ func (c *httpAPIClient) SendInteractiveCard(ctx context.Context, p SendCardParam
 	if err != nil {
 		return "", err
 	}
-	q := url.Values{}
-	q.Set("receive_id_type", "chat_id")
-	body := map[string]string{
-		"receive_id": string(p.ChatID),
-		"msg_type":   "interactive",
-		"content":    p.CardJSON,
-	}
+	path, body := outboundMessageRequest(p.ChatID, "interactive", p.CardJSON, p.ReplyTarget)
 	var resp struct {
 		Code int    `json:"code"`
 		Msg  string `json:"msg"`
@@ -225,15 +309,14 @@ func (c *httpAPIClient) SendInteractiveCard(ctx context.Context, p SendCardParam
 			MessageID string `json:"message_id"`
 		} `json:"data"`
 	}
-	path := "/open-apis/im/v1/messages?" + q.Encode()
-	if err := c.doJSON(ctx, http.MethodPost, path, token, body, &resp); err != nil {
+	if err := c.doJSON(ctx, c.resolveBaseURL(p.InstallationID), http.MethodPost, path, token, body, &resp); err != nil {
 		return "", fmt.Errorf("lark http client: send interactive card: %w", err)
 	}
 	if resp.Code != 0 || resp.Data.MessageID == "" {
 		if isTokenError(resp.Code) {
 			c.invalidateToken(p.InstallationID.AppID)
 		}
-		return "", fmt.Errorf("lark http client: send interactive card: code=%d msg=%q", resp.Code, resp.Msg)
+		return "", &APIError{Op: "send interactive card", Code: resp.Code, Msg: resp.Msg}
 	}
 	return resp.Data.MessageID, nil
 }
@@ -262,13 +345,7 @@ func (c *httpAPIClient) SendTextMessage(ctx context.Context, p SendTextParams) (
 	if err != nil {
 		return "", fmt.Errorf("lark http client: encode text content: %w", err)
 	}
-	q := url.Values{}
-	q.Set("receive_id_type", "chat_id")
-	body := map[string]string{
-		"receive_id": string(p.ChatID),
-		"msg_type":   "text",
-		"content":    string(contentBytes),
-	}
+	path, body := outboundMessageRequest(p.ChatID, "text", string(contentBytes), p.ReplyTarget)
 	var resp struct {
 		Code int    `json:"code"`
 		Msg  string `json:"msg"`
@@ -276,15 +353,14 @@ func (c *httpAPIClient) SendTextMessage(ctx context.Context, p SendTextParams) (
 			MessageID string `json:"message_id"`
 		} `json:"data"`
 	}
-	path := "/open-apis/im/v1/messages?" + q.Encode()
-	if err := c.doJSON(ctx, http.MethodPost, path, token, body, &resp); err != nil {
+	if err := c.doJSON(ctx, c.resolveBaseURL(p.InstallationID), http.MethodPost, path, token, body, &resp); err != nil {
 		return "", fmt.Errorf("lark http client: send text message: %w", err)
 	}
 	if resp.Code != 0 || resp.Data.MessageID == "" {
 		if isTokenError(resp.Code) {
 			c.invalidateToken(p.InstallationID.AppID)
 		}
-		return "", fmt.Errorf("lark http client: send text message: code=%d msg=%q", resp.Code, resp.Msg)
+		return "", &APIError{Op: "send text message", Code: resp.Code, Msg: resp.Msg}
 	}
 	return resp.Data.MessageID, nil
 }
@@ -332,13 +408,7 @@ func (c *httpAPIClient) SendMarkdownCard(ctx context.Context, p SendMarkdownCard
 	if err != nil {
 		return "", fmt.Errorf("lark http client: encode markdown card: %w", err)
 	}
-	q := url.Values{}
-	q.Set("receive_id_type", "chat_id")
-	body := map[string]string{
-		"receive_id": string(p.ChatID),
-		"msg_type":   "interactive",
-		"content":    string(cardBytes),
-	}
+	path, body := outboundMessageRequest(p.ChatID, "interactive", string(cardBytes), p.ReplyTarget)
 	var resp struct {
 		Code int    `json:"code"`
 		Msg  string `json:"msg"`
@@ -346,15 +416,14 @@ func (c *httpAPIClient) SendMarkdownCard(ctx context.Context, p SendMarkdownCard
 			MessageID string `json:"message_id"`
 		} `json:"data"`
 	}
-	path := "/open-apis/im/v1/messages?" + q.Encode()
-	if err := c.doJSON(ctx, http.MethodPost, path, token, body, &resp); err != nil {
+	if err := c.doJSON(ctx, c.resolveBaseURL(p.InstallationID), http.MethodPost, path, token, body, &resp); err != nil {
 		return "", fmt.Errorf("lark http client: send markdown card: %w", err)
 	}
 	if resp.Code != 0 || resp.Data.MessageID == "" {
 		if isTokenError(resp.Code) {
 			c.invalidateToken(p.InstallationID.AppID)
 		}
-		return "", fmt.Errorf("lark http client: send markdown card: code=%d msg=%q", resp.Code, resp.Msg)
+		return "", &APIError{Op: "send markdown card", Code: resp.Code, Msg: resp.Msg}
 	}
 	return resp.Data.MessageID, nil
 }
@@ -379,7 +448,7 @@ func (c *httpAPIClient) PatchInteractiveCard(ctx context.Context, p PatchCardPar
 		Msg  string `json:"msg"`
 	}
 	path := "/open-apis/im/v1/messages/" + url.PathEscape(p.LarkCardMessageID)
-	if err := c.doJSON(ctx, http.MethodPatch, path, token, body, &resp); err != nil {
+	if err := c.doJSON(ctx, c.resolveBaseURL(p.InstallationID), http.MethodPatch, path, token, body, &resp); err != nil {
 		return fmt.Errorf("lark http client: patch interactive card: %w", err)
 	}
 	if resp.Code != 0 {
@@ -422,7 +491,7 @@ func (c *httpAPIClient) SendBindingPromptCard(ctx context.Context, p BindingProm
 		Msg  string `json:"msg"`
 	}
 	path := "/open-apis/im/v1/messages?" + q.Encode()
-	if err := c.doJSON(ctx, http.MethodPost, path, token, body, &resp); err != nil {
+	if err := c.doJSON(ctx, c.resolveBaseURL(p.InstallationID), http.MethodPost, path, token, body, &resp); err != nil {
 		return fmt.Errorf("lark http client: send binding prompt: %w", err)
 	}
 	if resp.Code != 0 {
@@ -478,7 +547,7 @@ func (c *httpAPIClient) GetBotInfo(ctx context.Context, creds InstallationCreden
 			OpenID string `json:"open_id"`
 		} `json:"bot"`
 	}
-	if err := c.doJSON(ctx, http.MethodGet, "/open-apis/bot/v3/info", token, nil, &botResp); err != nil {
+	if err := c.doJSON(ctx, c.resolveBaseURL(creds), http.MethodGet, "/open-apis/bot/v3/info", token, nil, &botResp); err != nil {
 		return BotInfo{}, fmt.Errorf("lark http client: bot info: %w", err)
 	}
 	if botResp.Code != 0 {
@@ -495,7 +564,7 @@ func (c *httpAPIClient) GetBotInfo(ctx context.Context, creds InstallationCreden
 	// return the BotInfo with empty UnionID. Callers (Registration-
 	// Service.finishSuccess) accept the gap and persist what they
 	// have.
-	unionID, lookupErr := c.fetchBotUnionID(ctx, creds.AppID, token, botResp.Bot.OpenID)
+	unionID, lookupErr := c.fetchBotUnionID(ctx, c.resolveBaseURL(creds), creds.AppID, token, botResp.Bot.OpenID)
 	if lookupErr != nil {
 		c.cfg.Logger.Warn("lark http client: bot union_id lookup failed; continuing without it",
 			"app_id", creds.AppID,
@@ -503,6 +572,497 @@ func (c *httpAPIClient) GetBotInfo(ctx context.Context, creds InstallationCreden
 			"err", lookupErr)
 	}
 	return BotInfo{OpenID: OpenID(botResp.Bot.OpenID), UnionID: unionID}, nil
+}
+
+// GetMessage retrieves a message by id via
+// GET /open-apis/im/v1/messages/{message_id}. The endpoint always wraps
+// the result in data.items[] — one element for a normal message, and a
+// forward sentinel followed by the bundled child messages for a
+// `merge_forward`. We pass user_id_type=open_id so sender.id and
+// mentions[].id come back as open_ids, matching the identifiers the
+// rest of the package keys on.
+//
+// body.content is forwarded verbatim (the raw, JSON-encoded, msg_type-
+// specific string Lark double-encodes); the enricher's flattener owns
+// interpreting it. A deleted / out-of-scope message surfaces as a Lark
+// error code, which we turn into a normal Go error so the enricher can
+// degrade to its "[unable to fetch]" placeholder without aborting the
+// inbound pipeline.
+func (c *httpAPIClient) GetMessage(ctx context.Context, creds InstallationCredentials, messageID string) ([]LarkMessage, error) {
+	if messageID == "" {
+		return nil, errors.New("lark http client: missing message_id")
+	}
+	token, err := c.tenantAccessToken(ctx, creds)
+	if err != nil {
+		return nil, err
+	}
+	q := url.Values{}
+	q.Set("user_id_type", "open_id")
+	path := "/open-apis/im/v1/messages/" + url.PathEscape(messageID) + "?" + q.Encode()
+
+	var resp struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+		Data struct {
+			Items []larkRESTMessageItem `json:"items"`
+		} `json:"data"`
+	}
+	if err := c.doJSON(ctx, c.resolveBaseURL(creds), http.MethodGet, path, token, nil, &resp); err != nil {
+		return nil, fmt.Errorf("lark http client: get message: %w", err)
+	}
+	if resp.Code != 0 {
+		if isTokenError(resp.Code) {
+			c.invalidateToken(creds.AppID)
+		}
+		return nil, fmt.Errorf("lark http client: get message: code=%d msg=%q", resp.Code, resp.Msg)
+	}
+
+	out := make([]LarkMessage, 0, len(resp.Data.Items))
+	for _, it := range resp.Data.Items {
+		out = append(out, it.normalize())
+	}
+	return out, nil
+}
+
+// larkListMessagesMaxPageSize is Lark's hard cap on a single
+// im/v1/messages page. We clamp to it so a caller asking for more
+// silently gets the max rather than a 400 from Lark.
+const larkListMessagesMaxPageSize = 50
+
+// ListChatMessages retrieves a bounded, recent window of messages via
+// GET /open-apis/im/v1/messages. Where GetMessage fetches a single message
+// by id, this lists a conversation; it backs the enricher's group-context
+// prefetch. The container is chat (container_id_type=chat) by default, or a
+// single Lark topic (container_id_type=thread) when p.ThreadID is set — the
+// thread container keeps a topic @-mention from seeing sibling topics that
+// share the chat_id (#5835). We pass sort_type=ByCreateTimeDesc so the
+// newest messages come first and a small page_size captures "the last N"
+// without paginating, keeping the inbound ACK path's fan-out to a single
+// round-trip. user_id_type=open_id matches the identifiers the rest of the
+// package keys on; body.content is forwarded verbatim for the enricher's
+// flattener to interpret.
+func (c *httpAPIClient) ListChatMessages(ctx context.Context, creds InstallationCredentials, p ListMessagesParams) ([]LarkMessage, error) {
+	if p.ChatID == "" {
+		return nil, errors.New("lark http client: missing chat_id")
+	}
+	size := p.PageSize
+	if size <= 0 {
+		size = 1
+	} else if size > larkListMessagesMaxPageSize {
+		size = larkListMessagesMaxPageSize
+	}
+	token, err := c.tenantAccessToken(ctx, creds)
+	if err != nil {
+		return nil, err
+	}
+	q := url.Values{}
+	if p.ThreadID != "" {
+		// Topic-scoped window: only this 话题's messages, so a @-mention
+		// inside a topic never pulls sibling topics that share the chat_id
+		// (#5835). The thread container rejects end_time, so it is omitted
+		// here; the caller anchors the window to the trigger time
+		// client-side instead.
+		q.Set("container_id_type", "thread")
+		q.Set("container_id", p.ThreadID)
+	} else {
+		q.Set("container_id_type", "chat")
+		q.Set("container_id", string(p.ChatID))
+		if p.EndTime > 0 {
+			q.Set("end_time", strconv.FormatInt(p.EndTime, 10))
+		}
+	}
+	q.Set("sort_type", "ByCreateTimeDesc")
+	q.Set("page_size", strconv.Itoa(size))
+	q.Set("user_id_type", "open_id")
+	path := "/open-apis/im/v1/messages?" + q.Encode()
+
+	var resp struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+		Data struct {
+			Items []larkRESTMessageItem `json:"items"`
+		} `json:"data"`
+	}
+	if err := c.doJSON(ctx, c.resolveBaseURL(creds), http.MethodGet, path, token, nil, &resp); err != nil {
+		return nil, fmt.Errorf("lark http client: list chat messages: %w", err)
+	}
+	if resp.Code != 0 {
+		if isTokenError(resp.Code) {
+			c.invalidateToken(creds.AppID)
+		}
+		return nil, fmt.Errorf("lark http client: list chat messages: code=%d msg=%q", resp.Code, resp.Msg)
+	}
+
+	out := make([]LarkMessage, 0, len(resp.Data.Items))
+	for _, it := range resp.Data.Items {
+		out = append(out, it.normalize())
+	}
+	return out, nil
+}
+
+// DownloadMessageResource obtains a binary message resource (image, video,
+// file, audio) from Lark/Feishu. Business errors are still represented as
+// JSON with a code/msg body on some failures, so JSON-looking responses are
+// checked before being treated as resource bytes.
+func (c *httpAPIClient) DownloadMessageResource(ctx context.Context, creds InstallationCredentials, p DownloadResourceParams) (DownloadedResource, error) {
+	stream, err := c.DownloadMessageResourceStream(ctx, creds, p)
+	if err != nil {
+		return DownloadedResource{}, err
+	}
+	defer stream.Body.Close()
+	rawBody, err := io.ReadAll(stream.Body)
+	if err != nil {
+		return DownloadedResource{}, fmt.Errorf("lark http client: download resource: read body: %w", err)
+	}
+	sizeBytes := stream.SizeBytes
+	if sizeBytes == 0 {
+		sizeBytes = int64(len(rawBody))
+	}
+	return DownloadedResource{
+		Data:        rawBody,
+		ContentType: stream.ContentType,
+		Filename:    stream.Filename,
+		SizeBytes:   sizeBytes,
+	}, nil
+}
+
+func (c *httpAPIClient) DownloadMessageResourceStream(ctx context.Context, creds InstallationCredentials, p DownloadResourceParams) (DownloadedResourceStream, error) {
+	if p.MessageID == "" {
+		return DownloadedResourceStream{}, errors.New("lark http client: missing message_id")
+	}
+	if p.FileKey == "" {
+		return DownloadedResourceStream{}, errors.New("lark http client: missing file_key")
+	}
+	token, err := c.tenantAccessToken(ctx, creds)
+	if err != nil {
+		return DownloadedResourceStream{}, err
+	}
+	q := url.Values{}
+	if p.Type != "" {
+		q.Set("type", p.Type)
+	}
+	path := "/open-apis/im/v1/messages/" + url.PathEscape(p.MessageID) + "/resources/" + url.PathEscape(p.FileKey)
+	if encoded := q.Encode(); encoded != "" {
+		path += "?" + encoded
+	}
+
+	downloadCtx := ctx
+	var cancel context.CancelFunc
+	if c.cfg.ResourceDownloadTimeout > 0 {
+		downloadCtx, cancel = context.WithTimeout(ctx, c.cfg.ResourceDownloadTimeout)
+	}
+	req, err := http.NewRequestWithContext(downloadCtx, http.MethodGet, c.resolveBaseURL(creds)+path, nil)
+	if err != nil {
+		if cancel != nil {
+			cancel()
+		}
+		return DownloadedResourceStream{}, fmt.Errorf("lark http client: download resource: new request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := c.cfg.ResourceHTTPClient.Do(req)
+	if err != nil {
+		if cancel != nil {
+			cancel()
+		}
+		return DownloadedResourceStream{}, fmt.Errorf("lark http client: download resource: http do: %w", err)
+	}
+	closeWithCancel := func() {
+		resp.Body.Close()
+		if cancel != nil {
+			cancel()
+		}
+	}
+	if resp.ContentLength > maxMessageResourceBytes {
+		closeWithCancel()
+		return DownloadedResourceStream{}, fmt.Errorf("lark http client: download resource: resource exceeds %d bytes", maxMessageResourceBytes)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		rawBody, readErr := readMessageResourceErrorBody(resp.Body)
+		closeWithCancel()
+		if readErr != nil {
+			return DownloadedResourceStream{}, readErr
+		}
+		return DownloadedResourceStream{}, fmt.Errorf("lark http client: download resource: http %d: %s", resp.StatusCode, truncate(string(rawBody), 512))
+	}
+	contentType := resp.Header.Get("Content-Type")
+	if strings.Contains(strings.ToLower(contentType), "json") {
+		rawBody, readErr := readMessageResourceErrorBody(resp.Body)
+		closeWithCancel()
+		if readErr != nil {
+			return DownloadedResourceStream{}, readErr
+		}
+		var apiResp struct {
+			Code int    `json:"code"`
+			Msg  string `json:"msg"`
+		}
+		if err := json.Unmarshal(rawBody, &apiResp); err == nil && apiResp.Code != 0 {
+			if isTokenError(apiResp.Code) {
+				c.invalidateToken(creds.AppID)
+			}
+			return DownloadedResourceStream{}, &APIError{Op: "download resource", Code: apiResp.Code, Msg: apiResp.Msg}
+		}
+		return DownloadedResourceStream{
+			Body:        cancelOnClose(io.NopCloser(bytes.NewReader(rawBody)), cancel),
+			ContentType: contentType,
+			Filename:    filenameFromContentDisposition(resp.Header.Get("Content-Disposition")),
+			SizeBytes:   int64(len(rawBody)),
+		}, nil
+	}
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	sizeBytes := resp.ContentLength
+	if sizeBytes < 0 {
+		sizeBytes = 0
+	}
+	return DownloadedResourceStream{
+		Body:        cancelOnClose(&maxBytesReadCloser{r: resp.Body, remaining: maxMessageResourceBytes}, cancel),
+		ContentType: contentType,
+		Filename:    filenameFromContentDisposition(resp.Header.Get("Content-Disposition")),
+		SizeBytes:   sizeBytes,
+	}, nil
+}
+
+func readMessageResourceErrorBody(body io.Reader) ([]byte, error) {
+	rawBody, err := io.ReadAll(io.LimitReader(body, maxMessageResourceBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("lark http client: download resource: read body: %w", err)
+	}
+	if len(rawBody) > maxMessageResourceBytes {
+		return nil, fmt.Errorf("lark http client: download resource: resource exceeds %d bytes", maxMessageResourceBytes)
+	}
+	return rawBody, nil
+}
+
+type maxBytesReadCloser struct {
+	r         io.ReadCloser
+	remaining int64
+}
+
+func (r *maxBytesReadCloser) Read(p []byte) (int, error) {
+	if r.remaining > 0 {
+		if int64(len(p)) > r.remaining {
+			p = p[:r.remaining]
+		}
+		n, err := r.r.Read(p)
+		r.remaining -= int64(n)
+		return n, err
+	}
+	var one [1]byte
+	n, err := r.r.Read(one[:])
+	if n > 0 {
+		return 0, fmt.Errorf("lark http client: download resource: resource exceeds %d bytes", maxMessageResourceBytes)
+	}
+	return 0, err
+}
+
+func (r *maxBytesReadCloser) Close() error {
+	return r.r.Close()
+}
+
+type cancelReadCloser struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func cancelOnClose(body io.ReadCloser, cancel context.CancelFunc) io.ReadCloser {
+	if cancel == nil {
+		return body
+	}
+	return &cancelReadCloser{ReadCloser: body, cancel: cancel}
+}
+
+func (r *cancelReadCloser) Close() error {
+	err := r.ReadCloser.Close()
+	r.cancel()
+	return err
+}
+
+func filenameFromContentDisposition(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	_, params, err := mime.ParseMediaType(raw)
+	if err != nil {
+		return ""
+	}
+	return params["filename"]
+}
+
+// larkBatchGetUsersMaxIDs is Lark's hard cap on user_ids per
+// contact/v3/users/batch call. We drop the overflow rather than error so
+// a caller asking for more still gets the first 50 resolved.
+const larkBatchGetUsersMaxIDs = 50
+
+// AddMessageReaction adds an emoji reaction to a message via
+// POST /open-apis/im/v1/messages/{message_id}/reactions.
+// Returns the reaction_id so it can be deleted later.
+func (c *httpAPIClient) AddMessageReaction(ctx context.Context, p AddReactionParams) (string, error) {
+	if p.MessageID == "" {
+		return "", errors.New("lark http client: missing message_id")
+	}
+	if p.EmojiType == "" {
+		return "", errors.New("lark http client: missing emoji_type")
+	}
+	token, err := c.tenantAccessToken(ctx, p.InstallationID)
+	if err != nil {
+		return "", err
+	}
+	body := map[string]any{
+		"reaction_type": map[string]string{"emoji_type": p.EmojiType},
+	}
+	path := "/open-apis/im/v1/messages/" + url.PathEscape(p.MessageID) + "/reactions"
+	var resp struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+		Data struct {
+			ReactionID string `json:"reaction_id"`
+		} `json:"data"`
+	}
+	if err := c.doJSON(ctx, c.resolveBaseURL(p.InstallationID), http.MethodPost, path, token, body, &resp); err != nil {
+		return "", fmt.Errorf("lark http client: add message reaction: %w", err)
+	}
+	if resp.Code != 0 || resp.Data.ReactionID == "" {
+		if isTokenError(resp.Code) {
+			c.invalidateToken(p.InstallationID.AppID)
+		}
+		return "", fmt.Errorf("lark http client: add message reaction: code=%d msg=%q", resp.Code, resp.Msg)
+	}
+	return resp.Data.ReactionID, nil
+}
+
+// DeleteMessageReaction removes a reaction from a message via
+// DELETE /open-apis/im/v1/messages/{message_id}/reactions/{reaction_id}.
+func (c *httpAPIClient) DeleteMessageReaction(ctx context.Context, p DeleteReactionParams) error {
+	if p.MessageID == "" {
+		return errors.New("lark http client: missing message_id")
+	}
+	if p.ReactionID == "" {
+		return errors.New("lark http client: missing reaction_id")
+	}
+	token, err := c.tenantAccessToken(ctx, p.InstallationID)
+	if err != nil {
+		return err
+	}
+	path := "/open-apis/im/v1/messages/" + url.PathEscape(p.MessageID) + "/reactions/" + url.PathEscape(p.ReactionID)
+	var resp struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+	}
+	if err := c.doJSON(ctx, c.resolveBaseURL(p.InstallationID), http.MethodDelete, path, token, nil, &resp); err != nil {
+		return fmt.Errorf("lark http client: delete message reaction: %w", err)
+	}
+	if resp.Code != 0 {
+		if isTokenError(resp.Code) {
+			c.invalidateToken(p.InstallationID.AppID)
+		}
+		return fmt.Errorf("lark http client: delete message reaction: code=%d msg=%q", resp.Code, resp.Msg)
+	}
+	return nil
+}
+
+// BatchGetUsers resolves user open_ids to display names via
+// GET /open-apis/contact/v3/users/batch?user_ids=…&user_id_type=open_id.
+// It mirrors fetchBotUnionID's single-user contact lookup, batched. Only
+// id->name pairs the API actually returns are included; a restricted
+// contact scope or an unknown id simply yields a smaller map (code==0
+// with fewer items), never an error, so the enricher degrades to
+// positional speaker labels. Ids past Lark's 50-per-call cap are dropped.
+func (c *httpAPIClient) BatchGetUsers(ctx context.Context, creds InstallationCredentials, openIDs []string) (map[string]string, error) {
+	if len(openIDs) == 0 {
+		return map[string]string{}, nil
+	}
+	if len(openIDs) > larkBatchGetUsersMaxIDs {
+		openIDs = openIDs[:larkBatchGetUsersMaxIDs]
+	}
+	token, err := c.tenantAccessToken(ctx, creds)
+	if err != nil {
+		return nil, err
+	}
+	q := url.Values{}
+	q.Set("user_id_type", "open_id")
+	for _, id := range openIDs {
+		if id != "" {
+			q.Add("user_ids", id)
+		}
+	}
+	path := "/open-apis/contact/v3/users/batch?" + q.Encode()
+
+	var resp struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+		Data struct {
+			Items []struct {
+				OpenID string `json:"open_id"`
+				Name   string `json:"name"`
+			} `json:"items"`
+		} `json:"data"`
+	}
+	if err := c.doJSON(ctx, c.resolveBaseURL(creds), http.MethodGet, path, token, nil, &resp); err != nil {
+		return nil, fmt.Errorf("lark http client: batch get users: %w", err)
+	}
+	if resp.Code != 0 {
+		if isTokenError(resp.Code) {
+			c.invalidateToken(creds.AppID)
+		}
+		return nil, fmt.Errorf("lark http client: batch get users: code=%d msg=%q", resp.Code, resp.Msg)
+	}
+
+	out := make(map[string]string, len(resp.Data.Items))
+	for _, it := range resp.Data.Items {
+		if it.OpenID != "" && it.Name != "" {
+			out[it.OpenID] = it.Name
+		}
+	}
+	return out, nil
+}
+
+// larkRESTMessageItem is the IM v1 message item shape returned by the
+// get / list endpoints. It differs from the WS receive event in two
+// ways the enricher cares about: msg_type (not message_type), and a
+// flat `sender.id` / `mentions[].id` string (not a nested id object).
+type larkRESTMessageItem struct {
+	MessageID      string `json:"message_id"`
+	RootID         string `json:"root_id"`
+	ParentID       string `json:"parent_id"`
+	ThreadID       string `json:"thread_id"`
+	UpperMessageID string `json:"upper_message_id"`
+	MsgType        string `json:"msg_type"`
+	CreateTime     string `json:"create_time"`
+	Deleted        bool   `json:"deleted"`
+	Sender         struct {
+		ID         string `json:"id"`
+		IDType     string `json:"id_type"`
+		SenderType string `json:"sender_type"`
+	} `json:"sender"`
+	Body struct {
+		Content string `json:"content"`
+	} `json:"body"`
+	Mentions []struct {
+		Key  string `json:"key"`
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	} `json:"mentions"`
+}
+
+func (it larkRESTMessageItem) normalize() LarkMessage {
+	m := LarkMessage{
+		MessageID:      it.MessageID,
+		MessageType:    it.MsgType,
+		Content:        it.Body.Content,
+		SenderID:       it.Sender.ID,
+		SenderType:     it.Sender.SenderType,
+		CreateTime:     it.CreateTime,
+		ParentID:       it.ParentID,
+		RootID:         it.RootID,
+		ThreadID:       it.ThreadID,
+		UpperMessageID: it.UpperMessageID,
+		Deleted:        it.Deleted,
+	}
+	for _, mn := range it.Mentions {
+		m.Mentions = append(m.Mentions, LarkMessageMention{Key: mn.Key, ID: mn.ID, Name: mn.Name})
+	}
+	return m
 }
 
 // fetchBotUnionID resolves a Bot's `union_id` from its `open_id` via
@@ -515,7 +1075,7 @@ func (c *httpAPIClient) GetBotInfo(ctx context.Context, creds InstallationCreden
 // scope is restricted. Caller logs and continues; the decoder still
 // works in single-bot deployments where open_id-based matching is
 // unambiguous.
-func (c *httpAPIClient) fetchBotUnionID(ctx context.Context, appID, token, openID string) (string, error) {
+func (c *httpAPIClient) fetchBotUnionID(ctx context.Context, baseURL, appID, token, openID string) (string, error) {
 	if openID == "" {
 		return "", errors.New("empty open_id")
 	}
@@ -531,7 +1091,7 @@ func (c *httpAPIClient) fetchBotUnionID(ctx context.Context, appID, token, openI
 			} `json:"user"`
 		} `json:"data"`
 	}
-	if err := c.doJSON(ctx, http.MethodGet, path, token, nil, &resp); err != nil {
+	if err := c.doJSON(ctx, baseURL, http.MethodGet, path, token, nil, &resp); err != nil {
 		return "", fmt.Errorf("contact users: %w", err)
 	}
 	if resp.Code != 0 {
@@ -549,9 +1109,11 @@ func (c *httpAPIClient) fetchBotUnionID(ctx context.Context, appID, token, openI
 
 // doJSON encapsulates the verb + URL + auth-header + JSON
 // encode/decode dance so each public method stays a thin shape-only
-// adapter. token == "" skips the Authorization header (only the
-// tenant_access_token endpoint takes that path).
-func (c *httpAPIClient) doJSON(ctx context.Context, method, path, token string, body, out any) error {
+// adapter. baseURL is the per-call open-platform host the caller
+// resolved via resolveBaseURL (region-aware). token == "" skips the
+// Authorization header (only the tenant_access_token endpoint takes
+// that path).
+func (c *httpAPIClient) doJSON(ctx context.Context, baseURL, method, path, token string, body, out any) error {
 	var rdr io.Reader
 	if body != nil {
 		buf, err := json.Marshal(body)
@@ -560,7 +1122,7 @@ func (c *httpAPIClient) doJSON(ctx context.Context, method, path, token string, 
 		}
 		rdr = bytes.NewReader(buf)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, c.cfg.BaseURL+path, rdr)
+	req, err := http.NewRequestWithContext(ctx, method, baseURL+path, rdr)
 	if err != nil {
 		return fmt.Errorf("new request: %w", err)
 	}
@@ -592,6 +1154,57 @@ func (c *httpAPIClient) doJSON(ctx context.Context, method, path, token string, 
 
 func isTokenError(code int) bool {
 	return code == codeTokenExpired || code == codeTokenInvalid
+}
+
+// APIError is a structured Lark business error: the request reached
+// Lark, returned HTTP 200, but Lark rejected it with a non-zero
+// `code`. This is distinct from the transport-level errors doJSON
+// surfaces (network failure, 5xx, timeout), which are returned as
+// plain wrapped errors. The distinction matters for the threaded-reply
+// fallback: a business code is definitive ("nothing was sent, and here
+// is exactly why"), whereas a transport error is ambiguous ("the
+// message may or may not have been delivered") and must NOT trigger a
+// chat-level retry that could duplicate or leak the reply.
+type APIError struct {
+	Op   string
+	Code int
+	Msg  string
+}
+
+func (e *APIError) Error() string {
+	return fmt.Sprintf("lark http client: %s: code=%d msg=%q", e.Op, e.Code, e.Msg)
+}
+
+// threadReplyUnsupportedCodes are the reply-endpoint business codes
+// that definitively mean "this specific trigger message / topic cannot
+// receive a threaded reply" AND nothing was sent, while a plain
+// chat-level send to the same chat is unaffected. Only these justify
+// the chat-level fallback. Rate limits (230020), "message is being
+// sent" (230049, ambiguous), permission/content errors (which would
+// also fail at chat level), and all transport/5xx/timeout failures are
+// deliberately excluded: those stay failures so we never duplicate a
+// reply or leak a thread-only reply into the main group chat.
+// Codes are from the IM reply-message endpoint error table.
+var threadReplyUnsupportedCodes = map[int]struct{}{
+	230011: {}, // the trigger message has been recalled
+	230019: {}, // the topic does not exist
+	230050: {}, // the trigger message is invisible to the operator
+	230071: {}, // the group does not support reply in thread
+	230072: {}, // aggregated messages do not support reply in thread
+	230111: {}, // cannot reply to a self-destructing message
+}
+
+// isThreadReplyUnsupported reports whether err is a Lark APIError whose
+// code means the threaded reply cannot land on this target. Only such
+// errors are safe to retry at the chat level. Transport errors and
+// other business codes return false.
+func isThreadReplyUnsupported(err error) bool {
+	var apiErr *APIError
+	if errors.As(err, &apiErr) {
+		_, ok := threadReplyUnsupportedCodes[apiErr.Code]
+		return ok
+	}
+	return false
 }
 
 func truncate(s string, n int) string {

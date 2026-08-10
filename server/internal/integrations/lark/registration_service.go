@@ -11,9 +11,17 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/events"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
+
+// pgUniqueViolation is the Postgres SQLSTATE for a unique-constraint violation.
+// A rebind upsert that trips the (channel_type, config->>'app_id') index after
+// the dead-owner reclaim ran means a LIVE owner still holds the slot.
+const pgUniqueViolation = "23505"
 
 // RegistrationSessionStatus is the discriminated state a `begin`
 // session lives in. The HTTP status endpoint serializes the underlying
@@ -101,14 +109,21 @@ func (c RegistrationServiceConfig) withDefaults() RegistrationServiceConfig {
 // into Postgres would add a migration + GC sweep without delivering any
 // product capability the user can re-use across server restarts.
 type RegistrationService struct {
-	cfg       RegistrationServiceConfig
-	client    *RegistrationClient
-	api       APIClient
-	queries   *db.Queries
-	tx        TxStarter
-	installs  *InstallationService
-	binder    InstallerBinder
+	cfg         RegistrationServiceConfig
+	client      *RegistrationClient
+	api         APIClient
+	queries     *ChannelStore
+	tx          TxStarter
+	installs    *InstallationService
+	binder      InstallerBinder
 	authQueries authQueriesAdapter
+
+	// bus is optional. When wired (SetEventBus), a successful install
+	// publishes lark_installation:created the moment the row commits, so
+	// every workspace client refreshes its connection badge without
+	// waiting for a browser to poll the status endpoint to success. Nil
+	// is valid — install still works, it just won't push the WS frame.
+	bus *events.Bus
 
 	mu       sync.Mutex
 	sessions map[string]*registrationSession
@@ -158,13 +173,44 @@ func NewRegistrationService(
 		cfg:         cfg.withDefaults(),
 		client:      client,
 		api:         api,
-		queries:     queries,
+		queries:     NewChannelStore(queries),
 		tx:          tx,
 		installs:    installs,
 		binder:      binder,
 		authQueries: queries,
 		sessions:    make(map[string]*registrationSession),
 	}, nil
+}
+
+// SetEventBus wires the optional event bus AFTER construction so the
+// six positional constructor-validation cases stay untouched and the
+// bus remains nil-safe. With it set, finishSuccess publishes
+// lark_installation:created at the row-commit point — the authoritative
+// moment of truth — instead of relying on the HTTP status-poll handler
+// to emit it only when a browser happens to poll to success.
+func (s *RegistrationService) SetEventBus(bus *events.Bus) {
+	s.bus = bus
+}
+
+// publishInstalled emits lark_installation:created on the optional bus.
+// Mirrors the revoke path (RevokeLarkInstallation publishes
+// lark_installation:revoked from its handler): both events broadcast to
+// the whole workspace via the SubscribeAll fanout, and the frontend
+// invalidates larkKeys.installations on the lark_installation prefix, so
+// every mounted surface (agent Integrations tab, inspector, Settings)
+// refreshes its connection badge with no page reload. Covers fresh
+// installs and revoked→active re-installs alike — both ride the same
+// UpsertLarkInstallation write. Nil-safe.
+func (s *RegistrationService) publishInstalled(workspaceID, installationID pgtype.UUID) {
+	if s.bus == nil {
+		return
+	}
+	s.bus.Publish(events.Event{
+		Type:        protocol.EventLarkInstallationCreated,
+		WorkspaceID: uuidString(workspaceID),
+		ActorType:   "system",
+		Payload:     map[string]any{"installation_id": uuidString(installationID)},
+	})
 }
 
 // registrationSession is the in-memory state for one in-flight install.
@@ -179,6 +225,13 @@ type registrationSession struct {
 	qrCodeURL  string
 	interval   time.Duration
 	expiresAt  time.Time
+	// region is the cloud the install was started against. The polling
+	// loop reads it as the initial value of its `region` local; if the
+	// poll stream surfaces a tenant_brand mid-flow, the local flips to
+	// RegionLark, but the session field stays at what the user picked
+	// (it is informational — the authoritative cloud flows back through
+	// finishSuccess via the loop's local).
+	region Region
 
 	mu             sync.Mutex
 	status         RegistrationSessionStatus
@@ -197,6 +250,10 @@ func (s *registrationSession) snapshot() RegistrationSessionState {
 		InstallationID: s.installationID,
 		ErrorReason:    s.errorReason,
 		ErrorMessage:   s.errorMessage,
+		// InitiatorID is immutable after BeginInstall, so it is safe to
+		// read outside the mutex too — it is included here so the status
+		// handler can scope reads to the session's initiator.
+		InitiatorID: s.initiatorID,
 	}
 }
 
@@ -225,22 +282,36 @@ func (s *registrationSession) markError(reason, msg string, gcAfter time.Time) {
 
 // RegistrationSessionState is the read-only snapshot the handler
 // serializes to the frontend. Internal mutex is hidden by construction.
+// InitiatorID is not serialized to the client — the handler uses it only
+// to authorize the status read (session initiator or workspace admin).
 type RegistrationSessionState struct {
 	ID             string
 	Status         RegistrationSessionStatus
 	InstallationID pgtype.UUID
 	ErrorReason    string
 	ErrorMessage   string
+	InitiatorID    pgtype.UUID
 }
 
 // BeginInstallParams is the trusted input from the handler — the
 // workspace, agent, and initiating user have already been authenticated
-// and authorized at the router (admin role on the workspace; agent
-// belongs to the workspace).
+// and authorized by the handler (canManageAgent: the agent's owner OR a
+// workspace owner/admin; agent belongs to the workspace). The service
+// re-checks agent↔workspace membership below as defense-in-depth.
 type BeginInstallParams struct {
 	WorkspaceID pgtype.UUID
 	AgentID     pgtype.UUID
 	InitiatorID pgtype.UUID
+	// Region picks which cloud's accounts host the device-flow begins
+	// against — Feishu (mainland, accounts.feishu.cn) or Lark
+	// (international, accounts.larksuite.com). The user picks this
+	// explicitly in the UI ("Bind to Feishu" vs "Bind to Lark") so the
+	// QR rendered up front already targets the right cloud and Lark
+	// users do not have to hit a Feishu URL first and rely on the
+	// tenant-brand auto-switch. Empty / unknown values fall back to
+	// Feishu, matching RegionOrDefault, so existing callers without
+	// the new field keep working.
+	Region Region
 }
 
 // BeginInstallResult is the public payload the handler echoes to the
@@ -248,9 +319,9 @@ type BeginInstallParams struct {
 // poll status; we deliberately do NOT echo the device_code or the
 // polling interval (which is internal scheduling state).
 type BeginInstallResult struct {
-	SessionID         string
-	QRCodeURL         string
-	ExpiresInSeconds  int
+	SessionID           string
+	QRCodeURL           string
+	ExpiresInSeconds    int
 	PollIntervalSeconds int
 }
 
@@ -266,11 +337,11 @@ func (s *RegistrationService) BeginInstall(ctx context.Context, p BeginInstallPa
 	if !p.WorkspaceID.Valid || !p.AgentID.Valid || !p.InitiatorID.Valid {
 		return BeginInstallResult{}, errors.New("lark registration: workspace, agent, and initiator are required")
 	}
-	// Agent ownership pre-check — without this, a workspace admin
-	// could open an install session against another workspace's agent
-	// by guessing the UUID, and the device_code minted against Lark
-	// would still produce credentials. The handler does the same
-	// check; doing it here too keeps the service self-defending.
+	// Agent↔workspace pre-check — without this, a caller could open an
+	// install session against another workspace's agent by guessing the
+	// UUID, and the device_code minted against Lark would still produce
+	// credentials. The handler already loads this agent to run
+	// canManageAgent; re-checking here keeps the service self-defending.
 	//
 	// We keep the agent: its name pre-fills the bot name on Lark's
 	// PersonalAgent creation form (see botNamePreset) so the installed
@@ -283,7 +354,14 @@ func (s *RegistrationService) BeginInstall(ctx context.Context, p BeginInstallPa
 		return BeginInstallResult{}, fmt.Errorf("lark registration: agent not in workspace: %w", err)
 	}
 
-	begin, err := s.client.Begin(ctx, botNamePreset(agent.Name))
+	// Normalize the requested region: empty / unknown → Feishu, the same
+	// back-compat invariant the storage layer uses (RegionOrDefault).
+	// This both protects the device-flow client from a bogus value
+	// from the handler AND means a pre-region caller (omitting the
+	// field) keeps getting the historical mainland-first behaviour.
+	region := RegionOrDefault(string(p.Region))
+
+	begin, err := s.client.Begin(ctx, botNamePreset(agent.Name), region)
 	if err != nil {
 		return BeginInstallResult{}, fmt.Errorf("lark registration: begin: %w", err)
 	}
@@ -303,6 +381,7 @@ func (s *RegistrationService) BeginInstall(ctx context.Context, p BeginInstallPa
 		qrCodeURL:   begin.QRCodeURL,
 		interval:    begin.Interval,
 		expiresAt:   now.Add(begin.ExpiresIn),
+		region:      region,
 		status:      RegistrationStatusPending,
 	}
 	s.mu.Lock()
@@ -367,6 +446,22 @@ func (s *RegistrationService) runPolling(sess *registrationSession) {
 	}
 	domain := sess.domain
 	deviceCode := sess.deviceCode
+	// region tracks which cloud this install belongs to. It starts at
+	// whatever the user picked at begin-time (Feishu by default; the
+	// frontend now exposes an explicit Lark CTA that begins on
+	// accounts.larksuite.com directly). The SwitchedDomain branch
+	// below is still honored as a safety net — if a user clicks the
+	// Feishu CTA but actually authorizes with a Lark-international
+	// account, the poll stream surfaces tenant_brand="lark" and we
+	// flip the local accordingly. So at finishSuccess time `region`
+	// is the authoritative per-install cloud, derived first from the
+	// user's UI choice and then from the protocol's role-based switch
+	// — never by string-matching accounts hostnames (so staging/mock
+	// domains classify correctly too).
+	region := sess.region
+	if region == "" {
+		region = RegionFeishu
+	}
 
 	for {
 		select {
@@ -403,12 +498,21 @@ func (s *RegistrationService) runPolling(sess *registrationSession) {
 			// behavior. Lark emits the brand hint exactly once on the
 			// transition poll and the credential-bearing response
 			// lands on the next call to the new domain.
+			//
+			// Both directions are honored (feishu→lark and lark→feishu)
+			// so the split-CTA UI's "wrong entry" path recovers
+			// regardless of which CTA the user picked. The new region
+			// rides on the same PollResult so we never have to
+			// re-derive it from the host string here — staging / mock
+			// accounts hosts then classify correctly without
+			// hostname-prefix matching.
 			domain = res.SwitchedDomain
-			s.cfg.Logger.Info("lark registration: switched to lark-international domain",
-				"session_id", sess.id, "domain", domain)
+			region = res.SwitchedRegion
+			s.cfg.Logger.Info("lark registration: switched cloud after tenant-brand mismatch",
+				"session_id", sess.id, "domain", domain, "region", string(region))
 			continue
 		case res.ClientID != "" && res.ClientSecret != "":
-			s.finishSuccess(ctx, sess, res)
+			s.finishSuccess(ctx, sess, res, region)
 			return
 		case res.Err != nil:
 			reason := RegistrationReasonProtocol
@@ -433,8 +537,11 @@ func (s *RegistrationService) runPolling(sess *registrationSession) {
 // finishSuccess runs the post-poll finalization: bot info lookup +
 // installation insert + installer binding, all in a single DB
 // transaction.
-func (s *RegistrationService) finishSuccess(ctx context.Context, sess *registrationSession, res *PollResult) {
-	creds := InstallationCredentials{AppID: res.ClientID, AppSecret: res.ClientSecret}
+func (s *RegistrationService) finishSuccess(ctx context.Context, sess *registrationSession, res *PollResult, region Region) {
+	// Carry the detected region onto the credentials so the GetBotInfo
+	// call below hits the right open-platform host: a Lark-international
+	// install must reach open.larksuite.com, not the Feishu default.
+	creds := InstallationCredentials{AppID: res.ClientID, AppSecret: res.ClientSecret, Region: region}
 	info, err := s.api.GetBotInfo(ctx, creds)
 	if err != nil {
 		s.cfg.Logger.Warn("lark registration: bot info failed",
@@ -470,7 +577,23 @@ func (s *RegistrationService) finishSuccess(ctx context.Context, sess *registrat
 	defer tx.Rollback(ctx)
 	qtx := s.queries.WithTx(tx)
 
-	inst, err := qtx.UpsertLarkInstallation(ctx, db.UpsertLarkInstallationParams{
+	// If the same Feishu app (app_id) is held by a DEAD prior owner — a revoked
+	// placeholder left by a DIFFERENT agent in this workspace, or an orphan whose
+	// workspace/agent was deleted (#4810) — that row still occupies the
+	// (channel_type, config->>'app_id') unique slot and blocks the
+	// UpsertChannelInstallation INSERT below. Reclaim it first — the transaction
+	// wraps both the delete and the upsert so a failure between them rolls back
+	// cleanly. A live owner is left in place (the SAME agent's own revoked row is
+	// reactivated in place by the upsert; an active/archived agent stays owned),
+	// so the upsert surfaces the conflict below instead of stealing the bot.
+	if err := qtx.ReclaimDeadInstallationByAppID(ctx, sess.workspaceID, sess.agentID, res.ClientID); err != nil {
+		s.cfg.Logger.Warn("lark registration: reclaim dead installation",
+			"session_id", sess.id, "err", err)
+		sess.markError(RegistrationReasonInternalError, err.Error(), s.gcDeadline())
+		return
+	}
+
+	inst, err := qtx.UpsertLarkInstallation(ctx, UpsertInstallationParams{
 		WorkspaceID:        sess.workspaceID,
 		AgentID:            sess.agentID,
 		AppID:              res.ClientID,
@@ -478,11 +601,21 @@ func (s *RegistrationService) finishSuccess(ctx context.Context, sess *registrat
 		BotOpenID:          string(info.OpenID),
 		BotUnionID:         textOrNull(info.UnionID),
 		InstallerUserID:    sess.initiatorID,
+		Region:             string(region),
 	})
 	if err != nil {
 		s.cfg.Logger.Warn("lark registration: upsert installation",
 			"session_id", sess.id, "err", err)
-		sess.markError(RegistrationReasonInstallationConflict, err.Error(), s.gcDeadline())
+		// A unique violation here means the app_id slot is held by a LIVE owner
+		// (the reclaim above already cleared every dead one). Surface who holds
+		// it — another agent in this workspace, an archived agent, or a different
+		// workspace — instead of leaking the raw Postgres error.
+		msg := err.Error()
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
+			msg = s.liveOwnerConflictMessage(ctx, sess.workspaceID, res.ClientID)
+		}
+		sess.markError(RegistrationReasonInstallationConflict, msg, s.gcDeadline())
 		return
 	}
 
@@ -505,11 +638,37 @@ func (s *RegistrationService) finishSuccess(ctx context.Context, sess *registrat
 		return
 	}
 	sess.markSuccess(inst.ID, s.gcDeadline())
+	// Publish at the commit point so the connection badge updates on every
+	// workspace client without a page refresh — not only on the tab that
+	// happens to poll the status endpoint to success.
+	s.publishInstalled(sess.workspaceID, inst.ID)
 	s.cfg.Logger.Info("lark registration: install complete",
 		"session_id", sess.id,
 		"workspace_id", uuidString(sess.workspaceID),
 		"agent_id", uuidString(sess.agentID),
 		"installation_id", uuidString(inst.ID))
+}
+
+// liveOwnerConflictMessage builds the user-facing copy for a rebind refused
+// because the Feishu app's routing slot is held by a LIVE owner. It names which
+// kind of owner so the user knows how to recover, instead of the old catch-all
+// "connected to a different Multica workspace" that lied when the real owner sat
+// in the SAME workspace (#4810). Looked up on the base pool, not the aborted
+// upsert tx. If the slot turns out free (a concurrent disconnect between the
+// upsert and this read), a generic message is enough — the user can just retry.
+func (s *RegistrationService) liveOwnerConflictMessage(ctx context.Context, requestingWorkspaceID pgtype.UUID, appID string) string {
+	owner, err := s.queries.InstallationOwnerByAppID(ctx, appID)
+	if err != nil {
+		return "This Feishu app is already connected to another agent. Disconnect it there first, then connect it here."
+	}
+	switch {
+	case owner.WorkspaceID != requestingWorkspaceID:
+		return "This Feishu app is already connected to a different Multica workspace. Disconnect it there before connecting it here."
+	case owner.AgentArchivedAt.Valid:
+		return "This Feishu app is connected to an archived agent in this workspace. Restore that agent, or disconnect its bot, before connecting it here."
+	default:
+		return "This Feishu app is already connected to another agent in this workspace. Disconnect it there first, then connect it here."
+	}
 }
 
 func (s *RegistrationService) gcDeadline() time.Time {

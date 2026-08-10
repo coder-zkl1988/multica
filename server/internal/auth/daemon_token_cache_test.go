@@ -2,9 +2,37 @@ package auth
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
+
+	"github.com/redis/go-redis/v9"
 )
+
+func newRedisTestClient(t *testing.T) *redis.Client {
+	t.Helper()
+	url := os.Getenv("REDIS_TEST_URL")
+	if url == "" {
+		t.Skip("REDIS_TEST_URL not set")
+	}
+	opts, err := redis.ParseURL(url)
+	if err != nil {
+		t.Fatalf("parse REDIS_TEST_URL: %v", err)
+	}
+	rdb := redis.NewClient(opts)
+	ctx := context.Background()
+	if err := rdb.Ping(ctx).Err(); err != nil {
+		t.Skipf("REDIS_TEST_URL unreachable: %v", err)
+	}
+	if err := rdb.FlushDB(ctx).Err(); err != nil {
+		t.Fatalf("flushdb: %v", err)
+	}
+	t.Cleanup(func() {
+		rdb.FlushDB(context.Background())
+		rdb.Close()
+	})
+	return rdb
+}
 
 func TestDaemonTokenCache_NilSafe(t *testing.T) {
 	var c *DaemonTokenCache // nil
@@ -62,6 +90,27 @@ func TestDaemonTokenCache_TTL(t *testing.T) {
 	}
 	if ttl <= 0 || ttl > AuthCacheTTL+time.Second {
 		t.Fatalf("unexpected TTL %v (want ~%v)", ttl, AuthCacheTTL)
+	}
+}
+
+func TestTTLForExpiry(t *testing.T) {
+	now := time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC)
+
+	for name, tc := range map[string]struct {
+		expiresAt time.Time
+		want      time.Duration
+	}{
+		"no expiry":  {want: AuthCacheTTL},
+		"far future": {expiresAt: now.Add(24 * time.Hour), want: AuthCacheTTL},
+		"soon":       {expiresAt: now.Add(10 * time.Second), want: 10 * time.Second},
+		"now":        {expiresAt: now, want: 0},
+		"past":       {expiresAt: now.Add(-time.Second), want: 0},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := TTLForExpiry(now, tc.expiresAt); got != tc.want {
+				t.Fatalf("TTLForExpiry() = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 

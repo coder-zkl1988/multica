@@ -3,8 +3,11 @@ package realtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"strings"
@@ -12,7 +15,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/websocket"
 	"github.com/multica-ai/multica/server/internal/auth"
 )
@@ -25,7 +27,6 @@ type MembershipChecker interface {
 // SlugResolver translates a workspace slug to its UUID.
 type SlugResolver func(ctx context.Context, slug string) (workspaceID string, err error)
 
-// PATResolver resolves a Personal Access Token to a user ID.
 type PATResolver interface {
 	ResolveToken(ctx context.Context, token string) (userID string, ok bool)
 }
@@ -40,9 +41,11 @@ type ScopeAuthorizer interface {
 }
 
 var allowedWSOrigins atomic.Value // holds []string
+var trustedProxies atomic.Value   // holds []netip.Prefix
 
 func init() {
 	allowedWSOrigins.Store(loadAllowedOrigins())
+	trustedProxies.Store(loadTrustedProxies())
 }
 
 func loadAllowedOrigins() []string {
@@ -72,9 +75,83 @@ func loadAllowedOrigins() []string {
 	return origins
 }
 
+// loadTrustedProxies reads the same MULTICA_TRUSTED_PROXIES env var the rest of
+// the server uses (see cmd/server/router.go and handler.Config.TrustedProxies),
+// parsing it as a comma-separated list of CIDR prefixes. Invalid entries are
+// dropped with a warn-line rather than crashing. Empty input returns nil, which
+// means "trust no proxy" — X-Forwarded-Host is then never honored. The router
+// overrides this at startup via SetTrustedProxies so both share one config.
+func loadTrustedProxies() []netip.Prefix {
+	raw := strings.TrimSpace(os.Getenv("MULTICA_TRUSTED_PROXIES"))
+	if raw == "" {
+		return nil
+	}
+	var prefixes []netip.Prefix
+	for _, part := range strings.Split(raw, ",") {
+		s := strings.TrimSpace(part)
+		if s == "" {
+			continue
+		}
+		p, err := netip.ParsePrefix(s)
+		if err != nil {
+			slog.Warn("ws: ignoring invalid trusted proxy CIDR", "value", s, "error", err)
+			continue
+		}
+		prefixes = append(prefixes, p)
+	}
+	return prefixes
+}
+
 // SetAllowedOrigins overrides the WebSocket origin whitelist.
 func SetAllowedOrigins(origins []string) {
 	allowedWSOrigins.Store(origins)
+}
+
+// SetTrustedProxies overrides the trusted proxy CIDR list. The server wires the
+// shared MULTICA_TRUSTED_PROXIES value in here at startup.
+func SetTrustedProxies(proxies []netip.Prefix) {
+	trustedProxies.Store(proxies)
+}
+
+// isTrustedProxy reports whether the request's remote address falls within one
+// of the configured trusted proxy CIDRs.
+func isTrustedProxy(remoteAddr string) bool {
+	proxies := trustedProxies.Load().([]netip.Prefix)
+	if len(proxies) == 0 {
+		return false
+	}
+	addr, err := netip.ParseAddr(remoteHost(remoteAddr))
+	if err != nil {
+		return false
+	}
+	addr = addr.Unmap()
+	for _, p := range proxies {
+		if p.Contains(addr) {
+			return true
+		}
+	}
+	return false
+}
+
+// remoteHost extracts the host/IP from an http.Request.RemoteAddr, which is
+// normally "host:port". It handles bracketed IPv6 ("[::1]:443") via
+// net.SplitHostPort and falls back to the raw value (sans brackets) when no
+// port is present.
+func remoteHost(remoteAddr string) string {
+	if host, _, err := net.SplitHostPort(remoteAddr); err == nil {
+		return host
+	}
+	return strings.Trim(remoteAddr, "[]")
+}
+
+// firstForwardedHost returns the first host from a (possibly comma-separated)
+// X-Forwarded-Host header. Proxy chains append values left-to-right, so the
+// first entry is the original client-facing host we compare against Origin.
+func firstForwardedHost(h string) string {
+	if i := strings.IndexByte(h, ','); i >= 0 {
+		h = h[:i]
+	}
+	return strings.TrimSpace(h)
 }
 
 func checkOrigin(r *http.Request) bool {
@@ -92,13 +169,23 @@ func checkOrigin(r *http.Request) bool {
 	if u, err := url.Parse(origin); err == nil && strings.EqualFold(u.Host, r.Host) {
 		return true
 	}
+	// Reverse-proxy support: when sitting behind a proxy the Host header
+	// contains the internal address. X-Forwarded-Host carries the original
+	// public host seen by the client, so we treat a matching origin as
+	// same-origin in that case too. SECURITY: Only trust X-Forwarded-Host
+	// if the request comes from a trusted proxy to prevent header spoofing.
+	if fwdHost := firstForwardedHost(r.Header.Get("X-Forwarded-Host")); fwdHost != "" && isTrustedProxy(r.RemoteAddr) {
+		if u, err := url.Parse(origin); err == nil && strings.EqualFold(u.Host, fwdHost) {
+			return true
+		}
+	}
 	origins := allowedWSOrigins.Load().([]string)
 	for _, allowed := range origins {
 		if origin == allowed {
 			return true
 		}
 	}
-	slog.Warn("ws: rejected origin", "origin", origin)
+	slog.Warn("ws: rejected origin", "origin", origin, "remote_addr", r.RemoteAddr)
 	return false
 }
 
@@ -106,6 +193,15 @@ const (
 	writeWait  = 10 * time.Second
 	pongWait   = 60 * time.Second
 	pingPeriod = (pongWait * 9) / 10
+
+	// inboundReadLimit caps a single inbound message. Every frame a client
+	// legitimately sends is tiny — the largest is the token auth frame, well
+	// under 1 KiB — but gorilla buffers a whole message in memory before
+	// handing it over, and a fragmented message keeps the read deadline alive
+	// through interleaved pongs. Without a limit one connection can therefore
+	// grow that buffer without bound and OOM the process. Matches the daemon
+	// hub limit so both WebSocket surfaces answer this question the same way.
+	inboundReadLimit = 64 * 1024
 )
 
 var upgrader = websocket.Upgrader{
@@ -123,11 +219,12 @@ func sk(t, id string) scopeKey { return scopeKey{Type: t, ID: id} }
 // Client represents a single WebSocket connection with identity and the set
 // of scopes it is currently subscribed to.
 type Client struct {
-	hub         *Hub
-	conn        *websocket.Conn
-	send        chan []byte
-	userID      string
-	workspaceID string
+	hub           *Hub
+	conn          *websocket.Conn
+	send          chan []byte
+	userID        string
+	workspaceID   string
+	authExpiresAt time.Time
 
 	// subscriptions is guarded by hub.mu. Tracks the scopes this client is
 	// currently in. Used to clean up rooms on disconnect.
@@ -577,49 +674,51 @@ func (h *Hub) Snapshot() map[string]any {
 	}
 }
 
-// authenticateToken validates a JWT or PAT string and returns the user ID.
-func authenticateToken(tokenStr string, pr PATResolver, ctx context.Context) (string, string) {
-	if strings.HasPrefix(tokenStr, "mul_") {
-		if pr == nil {
-			return "", `{"error":"invalid token"}`
+func authenticateToken(tokenStr string, resolver PATResolver, ctx context.Context, useSySSO bool) (string, time.Time, string) {
+	if !useSySSO && strings.HasPrefix(tokenStr, "mul_") {
+		if resolver == nil {
+			return "", time.Time{}, `{"error":"invalid token"}`
 		}
-		uid, ok := pr.ResolveToken(ctx, tokenStr)
+		userID, ok := resolver.ResolveToken(ctx, tokenStr)
 		if !ok {
-			return "", `{"error":"invalid token"}`
+			return "", time.Time{}, `{"error":"invalid token"}`
 		}
-		return uid, ""
+		return userID, time.Time{}, ""
 	}
-
-	token, err := jwt.Parse(tokenStr, func(token *jwt.Token) (any, error) {
-		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, jwt.ErrSignatureInvalid
+	if useSySSO {
+		identity, err := auth.ParseInternalToken(tokenStr)
+		if err != nil {
+			return "", time.Time{}, `{"error":"invalid token"}`
 		}
-		return auth.JWTSecret(), nil
-	})
-	if err != nil || !token.Valid {
-		return "", `{"error":"invalid token"}`
+		return identity.UserID, identity.ExpiresAt, ""
 	}
-
-	claims, ok := token.Claims.(jwt.MapClaims)
-	if !ok {
-		return "", `{"error":"invalid claims"}`
+	identity, err := auth.ParseLegacyJWT(tokenStr)
+	if err != nil {
+		return "", time.Time{}, `{"error":"invalid token"}`
 	}
-
-	uid, ok := claims["sub"].(string)
-	if !ok || strings.TrimSpace(uid) == "" {
-		return "", `{"error":"invalid claims"}`
-	}
-	return uid, ""
+	return identity.UserID, time.Time{}, ""
 }
 
 // firstMessageAuth reads the first WebSocket message expecting an auth payload.
-func firstMessageAuth(conn *websocket.Conn) (string, string) {
+// A non-empty errMsg is for the caller to write back before closing the
+// connection. closed=true means the connection is already torn down and the
+// caller must return without writing anything further.
+func firstMessageAuth(conn *websocket.Conn) (token, errMsg string, closed bool) {
 	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 	defer conn.SetReadDeadline(time.Time{})
 
 	_, raw, err := conn.ReadMessage()
 	if err != nil {
-		return "", `{"error":"auth timeout or read error"}`
+		if errors.Is(err, websocket.ErrReadLimit) {
+			// gorilla has already replied CloseMessageTooBig (1009), so an
+			// auth_error frame here would be data sent after a close frame.
+			// Counted separately to keep the breach out of ordinary churn.
+			M.InboundTooLargeTotal.Add(1)
+			slog.Warn("ws: pre-auth frame exceeded read limit", "limit_bytes", inboundReadLimit)
+			conn.Close()
+			return "", "", true
+		}
+		return "", `{"error":"auth timeout or read error"}`, false
 	}
 
 	var msg struct {
@@ -629,10 +728,10 @@ func firstMessageAuth(conn *websocket.Conn) (string, string) {
 		} `json:"payload"`
 	}
 	if err := json.Unmarshal(raw, &msg); err != nil || msg.Type != "auth" || msg.Payload.Token == "" {
-		return "", `{"error":"expected auth message as first frame"}`
+		return "", `{"error":"expected auth message as first frame"}`, false
 	}
 
-	return msg.Payload.Token, ""
+	return msg.Payload.Token, "", false
 }
 
 type wsMessageWriter interface {
@@ -655,7 +754,7 @@ func writeWSAuthErrorAndClose(conn *websocket.Conn, payload []byte, attrs ...any
 
 // HandleWebSocket upgrades an HTTP connection to WebSocket with cookie or
 // first-message auth.
-func HandleWebSocket(hub *Hub, mc MembershipChecker, pr PATResolver, resolveSlug SlugResolver, w http.ResponseWriter, r *http.Request) {
+func HandleWebSocket(hub *Hub, mc MembershipChecker, resolver PATResolver, resolveSlug SlugResolver, useSySSO bool, w http.ResponseWriter, r *http.Request) {
 	workspaceID := r.URL.Query().Get("workspace_id")
 	if workspaceID == "" {
 		if slug := r.URL.Query().Get("workspace_slug"); slug != "" && resolveSlug != nil {
@@ -673,8 +772,9 @@ func HandleWebSocket(hub *Hub, mc MembershipChecker, pr PATResolver, resolveSlug
 	}
 
 	var userID string
+	var authExpiresAt time.Time
 	if cookie, err := r.Cookie(auth.AuthCookieName); err == nil && cookie.Value != "" {
-		uid, errMsg := authenticateToken(cookie.Value, pr, r.Context())
+		uid, expiresAt, errMsg := authenticateToken(cookie.Value, resolver, r.Context(), useSySSO)
 		if errMsg != "" {
 			http.Error(w, errMsg, http.StatusUnauthorized)
 			return
@@ -684,6 +784,7 @@ func HandleWebSocket(hub *Hub, mc MembershipChecker, pr PATResolver, resolveSlug
 			return
 		}
 		userID = uid
+		authExpiresAt = expiresAt
 	}
 
 	conn, err := upgrader.Upgrade(w, r, nil)
@@ -692,13 +793,21 @@ func HandleWebSocket(hub *Hub, mc MembershipChecker, pr PATResolver, resolveSlug
 		return
 	}
 
+	// Bound inbound messages here rather than in readPump: the token auth
+	// path below reads its first frame before the caller is authenticated, so
+	// a limit installed any later leaves that read unbounded.
+	conn.SetReadLimit(inboundReadLimit)
+
 	if userID == "" {
-		tokenStr, errMsg := firstMessageAuth(conn)
+		tokenStr, errMsg, closed := firstMessageAuth(conn)
+		if closed {
+			return
+		}
 		if errMsg != "" {
 			writeWSAuthErrorAndClose(conn, []byte(errMsg), "workspace_id", workspaceID)
 			return
 		}
-		uid, errMsg := authenticateToken(tokenStr, pr, r.Context())
+		uid, expiresAt, errMsg := authenticateToken(tokenStr, resolver, r.Context(), useSySSO)
 		if errMsg != "" {
 			writeWSAuthErrorAndClose(conn, []byte(errMsg), "workspace_id", workspaceID)
 			return
@@ -713,6 +822,7 @@ func HandleWebSocket(hub *Hub, mc MembershipChecker, pr PATResolver, resolveSlug
 			return
 		}
 		userID = uid
+		authExpiresAt = expiresAt
 
 		if !writeWSAuthFrame(
 			conn,
@@ -742,11 +852,12 @@ func HandleWebSocket(hub *Hub, mc MembershipChecker, pr PATResolver, resolveSlug
 	)
 
 	client := &Client{
-		hub:         hub,
-		conn:        conn,
-		send:        make(chan []byte, 256),
-		userID:      userID,
-		workspaceID: workspaceID,
+		hub:           hub,
+		conn:          conn,
+		send:          make(chan []byte, 256),
+		userID:        userID,
+		workspaceID:   workspaceID,
+		authExpiresAt: authExpiresAt,
 	}
 	hub.register <- client
 
@@ -767,6 +878,22 @@ type subPayload struct {
 }
 
 func (c *Client) readPump() {
+	var expiryTimer *time.Timer
+	if !c.authExpiresAt.IsZero() {
+		delay := time.Until(c.authExpiresAt)
+		if delay < 0 {
+			delay = 0
+		}
+		expiryTimer = time.AfterFunc(delay, func() {
+			_ = c.conn.WriteControl(
+				websocket.CloseMessage,
+				websocket.FormatCloseMessage(4001, "authentication expired"),
+				time.Now().Add(writeWait),
+			)
+			c.conn.Close()
+		})
+		defer expiryTimer.Stop()
+	}
 	defer func() {
 		c.hub.unregister <- c
 		c.conn.Close()
@@ -781,7 +908,17 @@ func (c *Client) readPump() {
 	for {
 		_, raw, err := c.conn.ReadMessage()
 		if err != nil {
-			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
+			switch {
+			case errors.Is(err, websocket.ErrReadLimit):
+				// Counted separately so an over-limit close stays visible
+				// instead of blending into ordinary connection churn.
+				M.InboundTooLargeTotal.Add(1)
+				slog.Warn("ws: inbound frame exceeded read limit",
+					"limit_bytes", inboundReadLimit,
+					"user_id", c.userID,
+					"workspace_id", c.workspaceID,
+				)
+			case websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure):
 				slog.Debug("websocket read error", "error", err, "user_id", c.userID, "workspace_id", c.workspaceID)
 			}
 			break

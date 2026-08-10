@@ -1,0 +1,1 @@
+ALTER TABLE sso_authorization_code ADD CONSTRAINT sso_authorization_code_pkey PRIMARY KEY USING INDEX sso_authorization_code_id_idx;

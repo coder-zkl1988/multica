@@ -26,8 +26,8 @@ var (
 var autoUpdateInitialDelay = 2 * time.Minute
 
 // autoUpdateLoop periodically polls GitHub for a newer CLI release and, when
-// one is available and the daemon is idle, runs the same brew-or-download
-// upgrade path as the server-triggered update. On success it triggers a
+// one is available and the daemon is idle, runs the same fork-release upgrade
+// path as the server-triggered update. On success it triggers a
 // graceful restart into the new binary.
 //
 // Disabled when:

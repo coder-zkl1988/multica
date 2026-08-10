@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX CONCURRENTLY service_account_token_token_hash_idx ON service_account_token (token_hash);

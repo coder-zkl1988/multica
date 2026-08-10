@@ -23,10 +23,8 @@ import (
 // binding.
 const CloudPATPrefix = "mcn_"
 
-// cloudPATCachePrefix namespaces cloud-PAT cache keys away from
-// mul_/mdt_ caches so the three token kinds can't accidentally share
-// keys. The trailing slash mirrors the existing patCachePrefix /
-// daemonTokenCachePrefix conventions.
+// cloudPATCachePrefix namespaces cloud-PAT cache keys away from local
+// daemon-token cache keys.
 const cloudPATCachePrefix = "mul:auth:mcn:"
 
 // cloudPATCacheTTL bounds how long a verified mcn_ token stays cached
@@ -38,7 +36,7 @@ const cloudPATCachePrefix = "mul:auth:mcn:"
 // CLI on a node collapses to one verify call per minute per token.
 //
 // We deliberately do NOT reuse AuthCacheTTL (10m) — that's tuned for
-// our own DB-backed PAT/daemon-token paths where revocation
+// our own DB-backed daemon-token path where revocation
 // invalidates the cache key directly. We have no way to invalidate
 // when Cloud revokes a PAT, so the TTL itself IS the revocation
 // latency bound.

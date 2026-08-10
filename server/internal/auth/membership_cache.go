@@ -25,9 +25,7 @@ const MembershipCacheTTL = 5 * time.Minute
 // the database directly.
 //
 // Revocation latency: a removed member may retain cached access for up to
-// MembershipCacheTTL (5 min). Combined with PATCache (10 min), the
-// worst-case revocation delay is max(10m, 5m) = 10 min — consistent with
-// the original PATCache design decision.
+// MembershipCacheTTL (5 min).
 //
 // A nil *MembershipCache is safe to use — every method becomes a no-op or
 // reports a cache miss, and the caller degrades to direct DB lookups.

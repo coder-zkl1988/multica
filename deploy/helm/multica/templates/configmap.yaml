@@ -13,18 +13,31 @@ data:
   CORS_ALLOWED_ORIGINS: {{ .Values.backend.config.corsAllowedOrigins | quote }}
   COOKIE_DOMAIN: {{ .Values.backend.config.cookieDomain | quote }}
   RESEND_FROM_EMAIL: {{ .Values.backend.config.resendFromEmail | quote }}
+  USE_SY_SSO: {{ .Values.backend.config.useSySso | quote }}
+  SSO_PUBLIC_KEY_PATH: "/run/secrets/company-sso-public.pem"
+  SSO_EXPECTED_SUB: {{ .Values.backend.config.ssoExpectedSub | quote }}
+  SSO_DESKTOP_REDIRECT_URI: {{ .Values.backend.config.ssoDesktopRedirectUri | quote }}
+  SSO_MOBILE_REDIRECT_URI: {{ .Values.backend.config.ssoMobileRedirectUri | quote }}
   ALLOW_SIGNUP: {{ .Values.backend.config.allowSignup | quote }}
   ALLOWED_EMAILS: {{ .Values.backend.config.allowedEmails | quote }}
   ALLOWED_EMAIL_DOMAINS: {{ .Values.backend.config.allowedEmailDomains | quote }}
   DISABLE_WORKSPACE_CREATION: {{ .Values.backend.config.disableWorkspaceCreation | quote }}
+  MULTICA_VCS_INTEGRATION_ENABLED: {{ .Values.backend.config.vcsIntegrationEnabled | quote }}
   GOOGLE_CLIENT_ID: {{ .Values.backend.config.googleClientId | quote }}
   GOOGLE_REDIRECT_URI: {{ .Values.backend.config.googleRedirectUri | quote }}
+  AUTH_TOKEN_TTL: {{ .Values.backend.config.authTokenTtl | quote }}
+  RATE_LIMIT_AUTH: {{ .Values.backend.config.rateLimitAuth | quote }}
+  RATE_LIMIT_AUTH_VERIFY: {{ .Values.backend.config.rateLimitAuthVerify | quote }}
+  RATE_LIMIT_TRUSTED_PROXIES: {{ .Values.backend.config.rateLimitTrustedProxies | quote }}
+  DISABLE_WORKSPACE_CREATION: {{ .Values.backend.config.disableWorkspaceCreation | quote }}
   S3_BUCKET: {{ .Values.backend.config.s3Bucket | quote }}
   S3_REGION: {{ .Values.backend.config.s3Region | quote }}
   CLOUDFRONT_DOMAIN: {{ .Values.backend.config.cloudfrontDomain | quote }}
   CLOUDFRONT_KEY_PAIR_ID: {{ .Values.backend.config.cloudfrontKeyPairId | quote }}
   LOCAL_UPLOAD_BASE_URL: {{ .Values.backend.config.localUploadBaseUrl | quote }}
 
-  # --- PostgreSQL (also consumed by the backend to build DATABASE_URL) ---
+  {{- if not .Values.postgres.external.enabled }}
+  # --- PostgreSQL (consumed by the backend to build DATABASE_URL) ---
   POSTGRES_DB: {{ .Values.postgres.database | quote }}
   POSTGRES_USER: {{ .Values.postgres.user | quote }}
+  {{- end }}

@@ -2,23 +2,8 @@ import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useAuthStore } from "../auth";
 import type { AgentRuntime } from "../types";
+import { isNewerCliReleaseVersion } from "./cli-version";
 import { runtimeListOptions, latestCliVersionOptions } from "./queries";
-
-function stripV(v: string): string {
-  return v.replace(/^v/, "");
-}
-
-function isNewer(latest: string, current: string): boolean {
-  const l = stripV(latest).split(".").map(Number);
-  const c = stripV(current).split(".").map(Number);
-  for (let i = 0; i < Math.max(l.length, c.length); i++) {
-    const lv = l[i] ?? 0;
-    const cv = c[i] ?? 0;
-    if (lv > cv) return true;
-    if (lv < cv) return false;
-  }
-  return false;
-}
 
 function runtimeNeedsUpdate(
   rt: AgentRuntime,
@@ -31,7 +16,7 @@ function runtimeNeedsUpdate(
       ? rt.metadata.cli_version
       : null;
   if (!cliVersion) return false;
-  return isNewer(latestVersion, cliVersion);
+  return isNewerCliReleaseVersion(latestVersion, cliVersion);
 }
 
 function shouldCheckRuntimeUpdate(rt: AgentRuntime, userId: string | undefined): boolean {

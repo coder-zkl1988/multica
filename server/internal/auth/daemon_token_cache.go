@@ -10,9 +10,11 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// daemonTokenCachePrefix namespaces daemon-token cache keys separately
-// from PAT (mul:auth:pat:*) so the two key spaces can't collide and an
-// invalidation on one kind of token doesn't accidentally hit the other.
+// AuthCacheTTL bounds how long a daemon-token lookup stays cached before
+// auth goes back to Postgres.
+const AuthCacheTTL = 10 * time.Minute
+
+// daemonTokenCachePrefix namespaces daemon-token cache keys.
 const daemonTokenCachePrefix = "mul:auth:daemon:"
 
 // DaemonTokenIdentity is what DaemonAuth needs from the cached lookup —
@@ -43,6 +45,21 @@ func NewDaemonTokenCache(rdb *redis.Client) *DaemonTokenCache {
 }
 
 func daemonTokenCacheKey(hash string) string { return daemonTokenCachePrefix + hash }
+
+// TTLForExpiry prevents a cache entry from outliving its token.
+func TTLForExpiry(now, expiresAt time.Time) time.Duration {
+	if expiresAt.IsZero() {
+		return AuthCacheTTL
+	}
+	remaining := expiresAt.Sub(now)
+	if remaining <= 0 {
+		return 0
+	}
+	if remaining < AuthCacheTTL {
+		return remaining
+	}
+	return AuthCacheTTL
+}
 
 // Get returns the cached identity for a token hash. ok=false on cache
 // miss or any Redis / decode error — a dead Redis must not take down

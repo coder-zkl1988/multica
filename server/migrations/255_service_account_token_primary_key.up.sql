@@ -1,0 +1,1 @@
+ALTER TABLE service_account_token ADD CONSTRAINT service_account_token_pkey PRIMARY KEY USING INDEX service_account_token_id_idx;

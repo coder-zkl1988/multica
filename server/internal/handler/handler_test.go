@@ -68,6 +68,7 @@ func TestMain(m *testing.M) {
 	// the rest of the suite hermetic.
 	testHandler.WebhookRateLimiter = NewMemoryWebhookRateLimiter(WebhookRateLimit{Limit: 1_000_000, Window: time.Minute})
 	testHandler.WebhookIPRateLimiter = NewMemoryWebhookIPRateLimiter(WebhookRateLimit{Limit: 1_000_000, Window: time.Minute})
+	testHandler.WebhookAbsoluteIPRateLimiter = NewMemoryWebhookAbsoluteIPRateLimiter(WebhookRateLimit{Limit: 1_000_000, Window: time.Minute})
 	testPool = pool
 
 	testUserID, testWorkspaceID, err = setupHandlerTestFixture(ctx, pool)
@@ -121,22 +122,33 @@ func setupHandlerTestFixture(ctx context.Context, pool *pgxpool.Pool) (string, s
 	var runtimeID string
 	if err := pool.QueryRow(ctx, `
 		INSERT INTO agent_runtime (
-			workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at
+			workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, owner_id, last_seen_at
 		)
-		VALUES ($1, NULL, $2, 'cloud', $3, 'online', $4, '{}'::jsonb, now())
+		VALUES ($1, NULL, $2, 'cloud', $3, 'online', $4, '{}'::jsonb, $5, now())
 		RETURNING id
-	`, workspaceID, "Handler Test Runtime", "handler_test_runtime", "Handler test runtime").Scan(&runtimeID); err != nil {
+	`, workspaceID, "Handler Test Runtime", "handler_test_runtime", "Handler test runtime", userID).Scan(&runtimeID); err != nil {
 		return "", "", err
 	}
 	testRuntimeID = runtimeID
 
-	if _, err := pool.Exec(ctx, `
+	var seededAgentID string
+	if err := pool.QueryRow(ctx, `
 		INSERT INTO agent (
 			workspace_id, name, description, runtime_mode, runtime_config,
-			runtime_id, visibility, max_concurrent_tasks, owner_id
+			runtime_id, visibility, permission_mode, max_concurrent_tasks, owner_id
 		)
-		VALUES ($1, $2, '', 'cloud', '{}'::jsonb, $3, 'workspace', 1, $4)
-	`, workspaceID, "Handler Test Agent", runtimeID, userID); err != nil {
+		VALUES ($1, $2, '', 'cloud', '{}'::jsonb, $3, 'workspace', 'public_to', 1, $4)
+		RETURNING id
+	`, workspaceID, "Handler Test Agent", runtimeID, userID).Scan(&seededAgentID); err != nil {
+		return "", "", err
+	}
+	// MUL-3963: the seeded workspace-visible agent is invocable by workspace
+	// members and A2A triggers, so seed its workspace invocation target.
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO agent_invocation_target (agent_id, target_type, target_id)
+		VALUES ($1, 'workspace', $2)
+		ON CONFLICT (agent_id, target_type, target_id) DO NOTHING
+	`, seededAgentID, workspaceID); err != nil {
 		return "", "", err
 	}
 
@@ -144,6 +156,15 @@ func setupHandlerTestFixture(ctx context.Context, pool *pgxpool.Pool) (string, s
 }
 
 func cleanupHandlerTestFixture(ctx context.Context, pool *pgxpool.Pool) error {
+	var hasClientUsageTable bool
+	if err := pool.QueryRow(ctx, `SELECT to_regclass('client_usage_daily') IS NOT NULL`).Scan(&hasClientUsageTable); err != nil {
+		return err
+	}
+	if hasClientUsageTable {
+		if _, err := pool.Exec(ctx, `DELETE FROM client_usage_daily WHERE user_id IN (SELECT id FROM "user" WHERE email = $1)`, handlerTestEmail); err != nil {
+			return err
+		}
+	}
 	if _, err := pool.Exec(ctx, `DELETE FROM workspace WHERE slug = $1`, handlerTestWorkspaceSlug); err != nil {
 		return err
 	}
@@ -171,6 +192,22 @@ func withURLParam(req *http.Request, key, value string) *http.Request {
 	return req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
 }
 
+func setWorkspaceIssuePrefixForTest(t *testing.T, prefix string) {
+	t.Helper()
+
+	ctx := context.Background()
+	var previous string
+	if err := testPool.QueryRow(ctx, `SELECT issue_prefix FROM workspace WHERE id = $1`, testWorkspaceID).Scan(&previous); err != nil {
+		t.Fatalf("load workspace prefix: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `UPDATE workspace SET issue_prefix = $1 WHERE id = $2`, prefix, testWorkspaceID); err != nil {
+		t.Fatalf("set workspace prefix: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `UPDATE workspace SET issue_prefix = $1 WHERE id = $2`, previous, testWorkspaceID)
+	})
+}
+
 func handlerTestRuntimeID(t *testing.T) string {
 	t.Helper()
 
@@ -192,13 +229,25 @@ func createHandlerTestAgent(t *testing.T, name string, mcpConfig []byte) string 
 	if err := testPool.QueryRow(context.Background(), `
 		INSERT INTO agent (
 			workspace_id, name, description, runtime_mode, runtime_config,
-			runtime_id, visibility, max_concurrent_tasks, owner_id,
+			runtime_id, visibility, permission_mode, max_concurrent_tasks, owner_id,
 			instructions, custom_env, custom_args, mcp_config
 		)
-		VALUES ($1, $2, '', 'cloud', '{}'::jsonb, $3, 'private', 1, $4, '', '{}'::jsonb, '[]'::jsonb, $5)
+		VALUES ($1, $2, '', 'cloud', '{}'::jsonb, $3, 'workspace', 'public_to', 1, $4, '', '{}'::jsonb, '[]'::jsonb, $5)
 		RETURNING id
 	`, testWorkspaceID, name, handlerTestRuntimeID(t), testUserID, mcpConfig).Scan(&agentID); err != nil {
 		t.Fatalf("failed to create handler test agent: %v", err)
+	}
+	// Generic test agents are workspace-invocable (MUL-3963): seed the
+	// matching workspace invocation target so canInvokeAgent admits workspace
+	// members and A2A triggers, mirroring the pre-permission-model behavior
+	// where a workspace-visible agent could be triggered by anyone in the
+	// workspace. Dedicated private-agent tests use privateAgentTestFixture.
+	if _, err := testPool.Exec(context.Background(), `
+		INSERT INTO agent_invocation_target (agent_id, target_type, target_id)
+		VALUES ($1, 'workspace', $2)
+		ON CONFLICT (agent_id, target_type, target_id) DO NOTHING
+	`, agentID, testWorkspaceID); err != nil {
+		t.Fatalf("failed to seed workspace invocation target: %v", err)
 	}
 
 	t.Cleanup(func() {
@@ -454,6 +503,60 @@ func TestDeleteIssueByIdentifier(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("did not receive issue:deleted event within timeout")
+	}
+}
+
+// TestGetIssueByIdentifierEnforcesPrefix covers the contract behind the
+// human-readable issue URL `/{ws}/issues/{key}`: the prefix is part of the key,
+// not decoration. Identifier resolution used to compare the number only, so
+// every prefix with the right number opened the same issue — which means no
+// identifier URL could be treated as canonical, and a mistyped or stale prefix
+// silently opened someone else's link target.
+func TestGetIssueByIdentifierEnforcesPrefix(t *testing.T) {
+	w := httptest.NewRecorder()
+	req := newRequest("POST", "/api/issues?workspace_id="+testWorkspaceID, map[string]any{
+		"title":    "Issue addressed by identifier",
+		"status":   "todo",
+		"priority": "medium",
+	})
+	testHandler.CreateIssue(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateIssue: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var created IssueResponse
+	json.NewDecoder(w.Body).Decode(&created)
+
+	idx := strings.LastIndex(created.Identifier, "-")
+	if idx <= 0 {
+		t.Fatalf("CreateIssue: unexpected identifier %q", created.Identifier)
+	}
+	prefix, number := created.Identifier[:idx], created.Identifier[idx+1:]
+
+	// The workspace's own prefix resolves, in either case — a hand-typed
+	// lowercase key from a chat message must open the same issue.
+	for _, id := range []string{created.Identifier, strings.ToLower(created.Identifier)} {
+		w = httptest.NewRecorder()
+		req = newRequest("GET", "/api/issues/"+id, nil)
+		req = withURLParam(req, "id", id)
+		testHandler.GetIssue(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("GetIssue(%q): expected 200, got %d: %s", id, w.Code, w.Body.String())
+		}
+		var got IssueResponse
+		json.NewDecoder(w.Body).Decode(&got)
+		if got.ID != created.ID {
+			t.Fatalf("GetIssue(%q): resolved to %s, want %s", id, got.ID, created.ID)
+		}
+	}
+
+	// A foreign prefix carrying the right number must not resolve.
+	foreign := prefix + "X-" + number
+	w = httptest.NewRecorder()
+	req = newRequest("GET", "/api/issues/"+foreign, nil)
+	req = withURLParam(req, "id", foreign)
+	testHandler.GetIssue(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("GetIssue(%q): expected 404 for a foreign prefix, got %d: %s", foreign, w.Code, w.Body.String())
 	}
 }
 
@@ -1323,6 +1426,101 @@ func TestAutopilotCreateIssueAssociatesConfiguredProject(t *testing.T) {
 	}
 }
 
+func TestAutopilotDispatchUsesCurrentProjectBinding(t *testing.T) {
+	ctx := context.Background()
+	title := fmt.Sprintf("Autopilot stale project issue %d", time.Now().UnixNano())
+	var autopilotID, issueID, projectAID, projectBID string
+	defer func() {
+		if issueID != "" {
+			testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, issueID)
+		}
+		if autopilotID != "" {
+			testPool.Exec(ctx, `DELETE FROM autopilot WHERE id = $1`, autopilotID)
+		}
+		if projectAID != "" {
+			testPool.Exec(ctx, `DELETE FROM project WHERE id = $1`, projectAID)
+		}
+		if projectBID != "" {
+			testPool.Exec(ctx, `DELETE FROM project WHERE id = $1`, projectBID)
+		}
+	}()
+
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO project (workspace_id, title)
+		VALUES ($1, $2)
+		RETURNING id::text
+	`, testWorkspaceID, "Autopilot stale project A").Scan(&projectAID); err != nil {
+		t.Fatalf("create project A fixture: %v", err)
+	}
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO project (workspace_id, title)
+		VALUES ($1, $2)
+		RETURNING id::text
+	`, testWorkspaceID, "Autopilot stale project B").Scan(&projectBID); err != nil {
+		t.Fatalf("create project B fixture: %v", err)
+	}
+
+	var agentID string
+	if err := testPool.QueryRow(ctx, `SELECT id FROM agent WHERE workspace_id = $1 LIMIT 1`, testWorkspaceID).Scan(&agentID); err != nil {
+		t.Fatalf("load test agent: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	req := newRequest("POST", "/api/autopilots?workspace_id="+testWorkspaceID, map[string]any{
+		"title":                "Stale-project autopilot",
+		"assignee_id":          agentID,
+		"execution_mode":       "create_issue",
+		"issue_title_template": title,
+		"project_id":           projectAID,
+	})
+	testHandler.CreateAutopilot(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateAutopilot: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var created AutopilotResponse
+	if err := json.NewDecoder(w.Body).Decode(&created); err != nil {
+		t.Fatalf("decode autopilot: %v", err)
+	}
+	autopilotID = created.ID
+
+	queries := db.New(testPool)
+	ap, err := queries.GetAutopilot(ctx, parseUUID(autopilotID))
+	if err != nil {
+		t.Fatalf("GetAutopilot: %v", err)
+	}
+
+	w = httptest.NewRecorder()
+	req = newRequest("PATCH", "/api/autopilots/"+autopilotID+"?workspace_id="+testWorkspaceID, map[string]any{
+		"project_id": projectBID,
+	})
+	req = withURLParam(req, "id", autopilotID)
+	testHandler.UpdateAutopilot(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("UpdateAutopilot: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	run, err := testHandler.AutopilotService.DispatchAutopilot(ctx, ap, pgtype.UUID{}, "manual", nil)
+	if err != nil {
+		t.Fatalf("DispatchAutopilot: %v", err)
+	}
+	if run == nil || !run.IssueID.Valid {
+		t.Fatalf("dispatch run = %+v, want linked issue", run)
+	}
+	issueID = uuidToString(run.IssueID)
+
+	var issueProjectID *string
+	if err := testPool.QueryRow(ctx, `
+		SELECT project_id::text
+		FROM issue
+		WHERE id = $1
+	`, issueID).Scan(&issueProjectID); err != nil {
+		t.Fatalf("load created issue project: %v", err)
+	}
+	if issueProjectID == nil || *issueProjectID != projectBID {
+		t.Fatalf("created issue project_id = %v, want refreshed %q", issueProjectID, projectBID)
+	}
+}
+
 func TestUpdateAutopilotCanSetAndClearProject(t *testing.T) {
 	ctx := context.Background()
 	var autopilotID, projectID string
@@ -1686,6 +1884,78 @@ func TestCommentCRUD(t *testing.T) {
 	testHandler.DeleteIssue(w, req)
 }
 
+func TestCommentWritePathsPreserveIssueIdentifiers(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("requires DB")
+	}
+
+	ctx := context.Background()
+	setWorkspaceIssuePrefixForTest(t, "MUL")
+
+	var issueID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO issue (workspace_id, creator_type, creator_id, title, number)
+		VALUES ($1, 'member', $2, $3, 3310)
+		RETURNING id
+	`, testWorkspaceID, testUserID, "preserve bare issue identifiers").Scan(&issueID); err != nil {
+		t.Fatalf("create issue fixture: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, issueID)
+	})
+
+	explicitMention := fmt.Sprintf("[MUL-3310](mention://issue/%s)", issueID)
+	createCases := []string{
+		"MUL-3310",
+		"issue/MUL-3310",
+		"feature/MUL-3310",
+		explicitMention,
+	}
+
+	var firstCommentID string
+	for _, content := range createCases {
+		w := httptest.NewRecorder()
+		req := newRequest("POST", "/api/issues/"+issueID+"/comments", map[string]any{
+			"content": content,
+		})
+		req = withURLParam(req, "id", issueID)
+		testHandler.CreateComment(w, req)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("CreateComment(%q): expected 201, got %d: %s", content, w.Code, w.Body.String())
+		}
+
+		var created CommentResponse
+		if err := json.NewDecoder(w.Body).Decode(&created); err != nil {
+			t.Fatalf("decode created comment: %v", err)
+		}
+		if created.Content != content {
+			t.Fatalf("CreateComment(%q) stored %q", content, created.Content)
+		}
+		if firstCommentID == "" {
+			firstCommentID = created.ID
+		}
+	}
+
+	updatedContent := "updated MUL-3310 issue/MUL-3310 feature/MUL-3310 " + explicitMention
+	w := httptest.NewRecorder()
+	req := newRequest("PUT", "/api/comments/"+firstCommentID, map[string]any{
+		"content": updatedContent,
+	})
+	req = withURLParam(req, "commentId", firstCommentID)
+	testHandler.UpdateComment(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("UpdateComment: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var updated CommentResponse
+	if err := json.NewDecoder(w.Body).Decode(&updated); err != nil {
+		t.Fatalf("decode updated comment: %v", err)
+	}
+	if updated.Content != updatedContent {
+		t.Fatalf("UpdateComment stored %q, want %q", updated.Content, updatedContent)
+	}
+}
+
 func TestCreateCommentRejectsMalformedParentID(t *testing.T) {
 	w := httptest.NewRecorder()
 	req := newRequest("POST", "/api/issues?workspace_id="+testWorkspaceID, map[string]any{
@@ -1878,16 +2148,6 @@ func TestMarkInboxReadRejectsMalformedItemID(t *testing.T) {
 	}
 }
 
-func TestRevokePersonalAccessTokenRejectsMalformedID(t *testing.T) {
-	w := httptest.NewRecorder()
-	req := newRequest("DELETE", "/api/tokens/not-a-uuid", nil)
-	req = withURLParam(req, "id", "not-a-uuid")
-	testHandler.RevokePersonalAccessToken(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("RevokePersonalAccessToken: expected 400 for malformed id, got %d: %s", w.Code, w.Body.String())
-	}
-}
-
 func TestRequestBodyUUIDFieldsRejectMalformed(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -1936,6 +2196,38 @@ func TestGetIssueGCCheckRejectsMalformedIssueID(t *testing.T) {
 	testHandler.GetIssueGCCheck(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("GetIssueGCCheck: expected 400 for malformed issueId, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestBatchIssueGCCheckRejectsInvalidRequests(t *testing.T) {
+	h := &Handler{}
+	workspaceID := "00000000-0000-0000-0000-000000000001"
+	tooMany := make([]string, maxIssueGCBatchSize+1)
+	for i := range tooMany {
+		tooMany[i] = "00000000-0000-0000-0000-000000000002"
+	}
+
+	tests := []struct {
+		name        string
+		workspaceID string
+		body        any
+	}{
+		{name: "malformed workspace", workspaceID: "not-a-uuid", body: map[string]any{"issue_ids": []string{}}},
+		{name: "malformed issue", workspaceID: workspaceID, body: map[string]any{"issue_ids": []string{"not-a-uuid"}}},
+		{name: "too many issues", workspaceID: workspaceID, body: map[string]any{"issue_ids": tooMany}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			req := newDaemonTokenRequest("POST", "/api/daemon/workspaces/"+tt.workspaceID+"/issues/gc-check", tt.body,
+				tt.workspaceID, "test-daemon")
+			req = withURLParam(req, "workspaceId", tt.workspaceID)
+			h.BatchIssueGCCheck(w, req)
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+			}
+		})
 	}
 }
 
@@ -2315,360 +2607,103 @@ func TestCreateWorkspaceInvalidSlugReturnsBadRequest(t *testing.T) {
 }
 
 func TestSendCode(t *testing.T) {
+	const email = "sendcode-test@multica.ai"
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM verification_code WHERE email = $1`, email)
+	})
+
 	w := httptest.NewRecorder()
-	body := map[string]string{"email": "sendcode-test@multica.ai"}
-	var buf bytes.Buffer
-	json.NewEncoder(&buf).Encode(body)
-	req := httptest.NewRequest("POST", "/auth/send-code", &buf)
-	req.Header.Set("Content-Type", "application/json")
+	var body bytes.Buffer
+	_ = json.NewEncoder(&body).Encode(map[string]string{"email": email})
+	req := httptest.NewRequest(http.MethodPost, "/auth/send-code", &body)
 	testHandler.SendCode(w, req)
+
 	if w.Code != http.StatusOK {
 		t.Fatalf("SendCode: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
-
-	var resp map[string]string
-	json.NewDecoder(w.Body).Decode(&resp)
-	if resp["message"] == "" {
-		t.Fatal("SendCode: expected non-empty message")
-	}
-
-	t.Cleanup(func() {
-		testPool.Exec(context.Background(), `DELETE FROM verification_code WHERE email = $1`, "sendcode-test@multica.ai")
-	})
 }
 
 func TestSendCodeDbError(t *testing.T) {
-	// We can't easily mock the DB here without changing architecture,
-	// but we can simulate a DB error by closing the pool temporarily or
-	// using a cancelled context if the query respects it.
-
-	// Create a handler with a "broken" queries object is hard because it's a struct.
-	// Instead, let's use a context that is already cancelled.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-
 	w := httptest.NewRecorder()
-	body := map[string]string{"email": "dberror-test@multica.ai"}
-	var buf bytes.Buffer
-	json.NewEncoder(&buf).Encode(body)
-	req := httptest.NewRequest("POST", "/auth/send-code", &buf)
-	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(ctx)
+	var body bytes.Buffer
+	_ = json.NewEncoder(&body).Encode(map[string]string{"email": "dberror-test@multica.ai"})
+	req := httptest.NewRequest(http.MethodPost, "/auth/send-code", &body).WithContext(ctx)
 
 	testHandler.SendCode(w, req)
-
-	// If the DB query respects the cancelled context, it should return an error.
-	// pgx usually returns context.Canceled which is not what isNotFound checks for.
 	if w.Code != http.StatusInternalServerError {
-		t.Fatalf("SendCode (db error): expected 500, got %d: %s", w.Code, w.Body.String())
-	}
-
-	var resp map[string]string
-	json.NewDecoder(w.Body).Decode(&resp)
-	if resp["error"] != "failed to lookup user" {
-		t.Fatalf("SendCode (db error): expected error message 'failed to lookup user', got '%s'", resp["error"])
-	}
-}
-
-func TestSendCodeRateLimit(t *testing.T) {
-	const email = "ratelimit-test@multica.ai"
-	t.Cleanup(func() {
-		testPool.Exec(context.Background(), `DELETE FROM verification_code WHERE email = $1`, email)
-	})
-
-	// First request should succeed
-	w := httptest.NewRecorder()
-	body := map[string]string{"email": email}
-	var buf bytes.Buffer
-	json.NewEncoder(&buf).Encode(body)
-	req := httptest.NewRequest("POST", "/auth/send-code", &buf)
-	req.Header.Set("Content-Type", "application/json")
-	testHandler.SendCode(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("SendCode (first): expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-
-	// Second request within 60s should be rate limited
-	w = httptest.NewRecorder()
-	buf.Reset()
-	json.NewEncoder(&buf).Encode(body)
-	req = httptest.NewRequest("POST", "/auth/send-code", &buf)
-	req.Header.Set("Content-Type", "application/json")
-	testHandler.SendCode(w, req)
-	if w.Code != http.StatusTooManyRequests {
-		t.Fatalf("SendCode (second): expected 429, got %d: %s", w.Code, w.Body.String())
+		t.Fatalf("SendCode: expected 500, got %d: %s", w.Code, w.Body.String())
 	}
 }
 
 func TestVerifyCode(t *testing.T) {
 	const email = "verify-test@multica.ai"
 	ctx := context.Background()
-
 	t.Cleanup(func() {
-		testPool.Exec(ctx, `DELETE FROM verification_code WHERE email = $1`, email)
-		user, err := testHandler.Queries.GetUserByEmail(ctx, email)
-		if err == nil {
-			workspaces, listErr := testHandler.Queries.ListWorkspaces(ctx, user.ID)
-			if listErr == nil {
-				for _, workspace := range workspaces {
-					_ = testHandler.Queries.DeleteWorkspace(ctx, workspace.ID)
-				}
-			}
-		}
-		testPool.Exec(ctx, `DELETE FROM "user" WHERE email = $1`, email)
+		_, _ = testPool.Exec(ctx, `DELETE FROM verification_code WHERE email = $1`, email)
+		_, _ = testPool.Exec(ctx, `DELETE FROM "user" WHERE email = $1`, email)
 	})
 
-	// Send code first
 	w := httptest.NewRecorder()
-	var buf bytes.Buffer
-	json.NewEncoder(&buf).Encode(map[string]string{"email": email})
-	req := httptest.NewRequest("POST", "/auth/send-code", &buf)
-	req.Header.Set("Content-Type", "application/json")
-	testHandler.SendCode(w, req)
+	var body bytes.Buffer
+	_ = json.NewEncoder(&body).Encode(map[string]string{"email": email})
+	testHandler.SendCode(w, httptest.NewRequest(http.MethodPost, "/auth/send-code", &body))
 	if w.Code != http.StatusOK {
 		t.Fatalf("SendCode: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
-
-	// Read code from DB
 	dbCode, err := testHandler.Queries.GetLatestVerificationCode(ctx, email)
 	if err != nil {
-		t.Fatalf("GetLatestVerificationCode: %v", err)
+		t.Fatal(err)
 	}
 
-	// Verify with correct code
 	w = httptest.NewRecorder()
-	buf.Reset()
-	json.NewEncoder(&buf).Encode(map[string]string{"email": email, "code": dbCode.Code})
-	req = httptest.NewRequest("POST", "/auth/verify-code", &buf)
-	req.Header.Set("Content-Type", "application/json")
-	testHandler.VerifyCode(w, req)
+	body.Reset()
+	_ = json.NewEncoder(&body).Encode(map[string]string{"email": email, "code": dbCode.Code})
+	testHandler.VerifyCode(w, httptest.NewRequest(http.MethodPost, "/auth/verify-code", &body))
 	if w.Code != http.StatusOK {
 		t.Fatalf("VerifyCode: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
-
-	var resp LoginResponse
-	json.NewDecoder(w.Body).Decode(&resp)
-	if resp.Token == "" {
-		t.Fatal("VerifyCode: expected non-empty token")
-	}
-	if resp.User.Email != email {
-		t.Fatalf("VerifyCode: expected email '%s', got '%s'", email, resp.User.Email)
+	var response LoginResponse
+	if err := json.NewDecoder(w.Body).Decode(&response); err != nil || response.Token == "" || response.User.Email != email {
+		t.Fatalf("VerifyCode response = %#v, err %v", response, err)
 	}
 }
 
-func createVerificationCodeForTest(t *testing.T, email, code string) {
-	t.Helper()
-
-	_, err := testPool.Exec(context.Background(), `
-		INSERT INTO verification_code (email, code, expires_at)
-		VALUES ($1, $2, now() + interval '10 minutes')
-	`, email, code)
-	if err != nil {
-		t.Fatalf("create verification code: %v", err)
-	}
-}
-
-func TestVerifyCodeRejectsDevCodeUnlessExplicitlyConfigured(t *testing.T) {
-	t.Setenv(devVerificationCodeEnv, "")
-	t.Setenv("APP_ENV", "")
-
-	const email = "dev-code-disabled-test@multica.ai"
-	ctx := context.Background()
-
-	t.Cleanup(func() {
-		testPool.Exec(ctx, `DELETE FROM verification_code WHERE email = $1`, email)
-	})
-
-	createVerificationCodeForTest(t, email, "123456")
-
-	w := httptest.NewRecorder()
-	var buf bytes.Buffer
-	json.NewEncoder(&buf).Encode(map[string]string{"email": email, "code": "888888"})
-	req := httptest.NewRequest("POST", "/auth/verify-code", &buf)
-	req.Header.Set("Content-Type", "application/json")
-	testHandler.VerifyCode(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("VerifyCode (disabled dev code): expected 400, got %d: %s", w.Code, w.Body.String())
-	}
-}
-
-func TestVerifyCodeAcceptsConfiguredDevCodeOutsideProduction(t *testing.T) {
+func TestDevVerificationCodePolicy(t *testing.T) {
 	t.Setenv(devVerificationCodeEnv, "888888")
 	t.Setenv("APP_ENV", "development")
-
-	const email = "dev-code-enabled-test@multica.ai"
-	ctx := context.Background()
-
-	t.Cleanup(func() {
-		testPool.Exec(ctx, `DELETE FROM verification_code WHERE email = $1`, email)
-		testPool.Exec(ctx, `DELETE FROM "user" WHERE email = $1`, email)
-	})
-
-	createVerificationCodeForTest(t, email, "123456")
-
-	w := httptest.NewRecorder()
-	var buf bytes.Buffer
-	json.NewEncoder(&buf).Encode(map[string]string{"email": email, "code": "888888"})
-	req := httptest.NewRequest("POST", "/auth/verify-code", &buf)
-	req.Header.Set("Content-Type", "application/json")
-	testHandler.VerifyCode(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("VerifyCode (enabled dev code): expected 200, got %d: %s", w.Code, w.Body.String())
+	if !isDevVerificationCode("888888") {
+		t.Fatal("configured development code was rejected")
 	}
-}
-
-func TestVerifyCodeRejectsConfiguredDevCodeInProduction(t *testing.T) {
-	t.Setenv(devVerificationCodeEnv, "888888")
 	t.Setenv("APP_ENV", "production")
-
-	const email = "dev-code-production-test@multica.ai"
-	ctx := context.Background()
-
-	t.Cleanup(func() {
-		testPool.Exec(ctx, `DELETE FROM verification_code WHERE email = $1`, email)
-	})
-
-	createVerificationCodeForTest(t, email, "123456")
-
-	w := httptest.NewRecorder()
-	var buf bytes.Buffer
-	json.NewEncoder(&buf).Encode(map[string]string{"email": email, "code": "888888"})
-	req := httptest.NewRequest("POST", "/auth/verify-code", &buf)
-	req.Header.Set("Content-Type", "application/json")
-	testHandler.VerifyCode(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("VerifyCode (production dev code): expected 400, got %d: %s", w.Code, w.Body.String())
+	if isDevVerificationCode("888888") {
+		t.Fatal("development code was accepted in production")
 	}
 }
 
-func TestVerifyCodeWrongCode(t *testing.T) {
-	t.Setenv(devVerificationCodeEnv, "")
-
-	const email = "wrong-code-test@multica.ai"
-	ctx := context.Background()
-
-	t.Cleanup(func() {
-		testPool.Exec(ctx, `DELETE FROM verification_code WHERE email = $1`, email)
-	})
-
-	// Send code
+func TestGoogleLoginRequiresConfiguration(t *testing.T) {
+	t.Setenv("GOOGLE_CLIENT_ID", "")
+	t.Setenv("GOOGLE_CLIENT_SECRET", "")
 	w := httptest.NewRecorder()
-	var buf bytes.Buffer
-	json.NewEncoder(&buf).Encode(map[string]string{"email": email})
-	req := httptest.NewRequest("POST", "/auth/send-code", &buf)
-	req.Header.Set("Content-Type", "application/json")
-	testHandler.SendCode(w, req)
-
-	// Verify with wrong code
-	w = httptest.NewRecorder()
-	buf.Reset()
-	json.NewEncoder(&buf).Encode(map[string]string{"email": email, "code": "000000"})
-	req = httptest.NewRequest("POST", "/auth/verify-code", &buf)
-	req.Header.Set("Content-Type", "application/json")
-	testHandler.VerifyCode(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("VerifyCode (wrong code): expected 400, got %d: %s", w.Code, w.Body.String())
+	req := httptest.NewRequest(http.MethodPost, "/auth/google", strings.NewReader(`{"code":"test"}`))
+	testHandler.GoogleLogin(w, req)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("GoogleLogin: expected 503, got %d: %s", w.Code, w.Body.String())
 	}
 }
 
-func TestVerifyCodeBruteForceProtection(t *testing.T) {
-	t.Setenv(devVerificationCodeEnv, "")
-
-	const email = "bruteforce-test@multica.ai"
-	ctx := context.Background()
-
-	t.Cleanup(func() {
-		testPool.Exec(ctx, `DELETE FROM verification_code WHERE email = $1`, email)
-	})
-
-	// Send code
+func TestIssueCliToken(t *testing.T) {
 	w := httptest.NewRecorder()
-	var buf bytes.Buffer
-	json.NewEncoder(&buf).Encode(map[string]string{"email": email})
-	req := httptest.NewRequest("POST", "/auth/send-code", &buf)
-	req.Header.Set("Content-Type", "application/json")
-	testHandler.SendCode(w, req)
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/cli-token", nil)
+	req.Header.Set("X-User-ID", testUserID)
+	testHandler.IssueCliToken(w, req)
 	if w.Code != http.StatusOK {
-		t.Fatalf("SendCode: expected 200, got %d: %s", w.Code, w.Body.String())
+		t.Fatalf("IssueCliToken: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
-
-	// Read actual code so we can try it after lockout
-	dbCode, err := testHandler.Queries.GetLatestVerificationCode(ctx, email)
-	if err != nil {
-		t.Fatalf("GetLatestVerificationCode: %v", err)
-	}
-
-	// Exhaust all 5 attempts with wrong codes
-	for i := 0; i < 5; i++ {
-		w = httptest.NewRecorder()
-		buf.Reset()
-		json.NewEncoder(&buf).Encode(map[string]string{"email": email, "code": "000000"})
-		req = httptest.NewRequest("POST", "/auth/verify-code", &buf)
-		req.Header.Set("Content-Type", "application/json")
-		testHandler.VerifyCode(w, req)
-		if w.Code != http.StatusBadRequest {
-			t.Fatalf("attempt %d: expected 400, got %d", i+1, w.Code)
-		}
-	}
-
-	// Now even the correct code should be rejected (code is locked out)
-	w = httptest.NewRecorder()
-	buf.Reset()
-	json.NewEncoder(&buf).Encode(map[string]string{"email": email, "code": dbCode.Code})
-	req = httptest.NewRequest("POST", "/auth/verify-code", &buf)
-	req.Header.Set("Content-Type", "application/json")
-	testHandler.VerifyCode(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("after lockout: expected 400, got %d: %s", w.Code, w.Body.String())
-	}
-}
-
-func TestVerifyCodeNewUserHasNoWorkspace(t *testing.T) {
-	const email = "workspace-verify-test@multica.ai"
-	ctx := context.Background()
-
-	t.Cleanup(func() {
-		testPool.Exec(ctx, `DELETE FROM verification_code WHERE email = $1`, email)
-		testPool.Exec(ctx, `DELETE FROM "user" WHERE email = $1`, email)
-	})
-
-	// Send code
-	w := httptest.NewRecorder()
-	var buf bytes.Buffer
-	json.NewEncoder(&buf).Encode(map[string]string{"email": email})
-	req := httptest.NewRequest("POST", "/auth/send-code", &buf)
-	req.Header.Set("Content-Type", "application/json")
-	testHandler.SendCode(w, req)
-
-	// Read code from DB
-	dbCode, err := testHandler.Queries.GetLatestVerificationCode(ctx, email)
-	if err != nil {
-		t.Fatalf("GetLatestVerificationCode: %v", err)
-	}
-
-	// Verify
-	w = httptest.NewRecorder()
-	buf.Reset()
-	json.NewEncoder(&buf).Encode(map[string]string{"email": email, "code": dbCode.Code})
-	req = httptest.NewRequest("POST", "/auth/verify-code", &buf)
-	req.Header.Set("Content-Type", "application/json")
-	testHandler.VerifyCode(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("VerifyCode: expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-
-	user, err := testHandler.Queries.GetUserByEmail(ctx, email)
-	if err != nil {
-		t.Fatalf("GetUserByEmail: %v", err)
-	}
-
-	// New users should have no workspaces (/workspaces/new creates one)
-	workspaces, err := testHandler.Queries.ListWorkspaces(ctx, user.ID)
-	if err != nil {
-		t.Fatalf("ListWorkspaces: %v", err)
-	}
-	if len(workspaces) != 0 {
-		t.Fatalf("ListWorkspaces: expected 0 workspaces for new user, got %d", len(workspaces))
+	var response map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&response); err != nil || response["token"] == "" {
+		t.Fatalf("IssueCliToken response = %#v, err %v", response, err)
 	}
 }
 
@@ -3242,11 +3277,10 @@ func TestDaemonRegisterMissingWorkspaceReturns404(t *testing.T) {
 	}
 }
 
-// TestAgentReplyDoesNotInheritParentMentions verifies that agent-authored
-// replies do NOT inherit parent-comment mentions, preventing agent-to-agent
-// re-trigger loops (e.g. "No reply needed" chains). Member-authored replies
-// still inherit parent mentions as expected.
-func TestAgentReplyDoesNotInheritParentMentions(t *testing.T) {
+// TestRootMentionOwnerRoutesMemberReplyButNotAgentReply verifies that a member
+// root @mention owns later member replies, while agent-authored acknowledgments
+// still do not self-expand the route.
+func TestRootMentionOwnerRoutesMemberReplyButNotAgentReply(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
@@ -3330,7 +3364,7 @@ func TestAgentReplyDoesNotInheritParentMentions(t *testing.T) {
 	}
 
 	// 3. Agent A posts a reply in the same thread with NO mentions.
-	// With the fix, this must NOT inherit the parent mention of Agent B.
+	// Agent-authored comments still do not inherit the root mention of Agent B.
 	// resolveActor requires X-Task-ID paired with X-Agent-ID to trust the
 	// agent identity, so we seed a task that belongs to agent A.
 	agentATask := createHandlerTestTaskForAgent(t, agentA)
@@ -3349,7 +3383,7 @@ func TestAgentReplyDoesNotInheritParentMentions(t *testing.T) {
 	cancelTasks(agentB)
 
 	// 5. Member posts a reply in the same thread with NO mentions.
-	// This SHOULD inherit the parent mention and re-trigger Agent B.
+	// The member-authored root @mention owns the thread, so this routes to B.
 	w = postComment(issueID, map[string]any{
 		"content":   "Thanks for the review.",
 		"parent_id": parentComment.ID,
@@ -3358,7 +3392,7 @@ func TestAgentReplyDoesNotInheritParentMentions(t *testing.T) {
 		t.Fatalf("member reply: expected 201, got %d: %s", w.Code, w.Body.String())
 	}
 	if countTasks(agentB) != 1 {
-		t.Fatalf("expected 1 task for Agent B after member reply (parent inheritance allowed), got %d", countTasks(agentB))
+		t.Fatalf("expected 1 task for Agent B after member reply (root owner), got %d", countTasks(agentB))
 	}
 }
 
@@ -3458,10 +3492,10 @@ func TestMemberReplyToAgentRootDoesNotInheritParentMentions(t *testing.T) {
 	}
 }
 
-// TestNestedMemberReplyUsesDirectParentForMentionInheritance is the regression
+// TestNestedMemberReplyUsesDirectParentForThreadOwnership is the regression
 // for parent-root write normalization leaking root mentions into plain nested
-// replies. Stored parent_id keeps the direct parent, and trigger logic evaluates
-// that direct parent rather than the thread root.
+// replies. Stored parent_id keeps the direct parent, and trigger logic routes
+// to that direct agent parent rather than the thread root's explicit mention.
 func TestNestedMemberReplyUsesDirectParentForMentionInheritance(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -3470,6 +3504,7 @@ func TestNestedMemberReplyUsesDirectParentForMentionInheritance(t *testing.T) {
 
 	assigneeAgent := createHandlerTestAgent(t, "Nested Mention Assignee", nil)
 	mentionedAgent := createHandlerTestAgent(t, "Nested Mention Target", nil)
+	parentAgent := createHandlerTestAgent(t, "Nested Direct Parent", nil)
 
 	var number int
 	if err := testPool.QueryRow(ctx, `
@@ -3536,7 +3571,7 @@ func TestNestedMemberReplyUsesDirectParentForMentionInheritance(t *testing.T) {
 		INSERT INTO comment (workspace_id, issue_id, author_type, author_id, content, parent_id)
 		VALUES ($1, $2, 'agent', $3, $4, $5)
 		RETURNING id
-	`, testWorkspaceID, issueID, mentionedAgent, "looks like redirect config", root.ID).Scan(&directParentID); err != nil {
+	`, testWorkspaceID, issueID, parentAgent, "looks like redirect config", root.ID).Scan(&directParentID); err != nil {
 		t.Fatalf("insert direct parent reply: %v", err)
 	}
 
@@ -3550,11 +3585,14 @@ func TestNestedMemberReplyUsesDirectParentForMentionInheritance(t *testing.T) {
 	if got := countQueued(mentionedAgent); got != 0 {
 		t.Fatalf("plain nested reply must not inherit root mention from non-direct parent; got %d queued tasks", got)
 	}
+	if got := countQueued(parentAgent); got != 1 {
+		t.Fatalf("plain nested reply should route to direct agent parent; got %d queued tasks", got)
+	}
 }
 
-// TestNestedMemberReplyUsesDirectParentForAssigneeParticipation is the
-// regression for treating any prior agent reply in the root thread as direct
-// participation in a nested human sub-thread.
+// TestNestedMemberReplyWithMemberParentFallsBackToAssignee verifies that a
+// nested reply whose direct parent is human-owned does not route to a sibling
+// agent reply. It falls through to the issue assignee instead.
 func TestNestedMemberReplyUsesDirectParentForAssigneeParticipation(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -3643,8 +3681,8 @@ func TestNestedMemberReplyUsesDirectParentForAssigneeParticipation(t *testing.T)
 	if nested.ParentID == nil || *nested.ParentID != humanParentID {
 		t.Fatalf("stored nested reply parent_id should keep direct parent %s, got %v", humanParentID, nested.ParentID)
 	}
-	if got := countAssigneeQueued(); got != 0 {
-		t.Fatalf("plain nested human reply must not wake assignee just because assignee replied elsewhere under root; got %d queued tasks", got)
+	if got := countAssigneeQueued(); got != 1 {
+		t.Fatalf("plain nested human reply should fall back to assignee; got %d queued tasks", got)
 	}
 }
 

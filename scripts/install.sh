@@ -2,10 +2,10 @@
 # Multica installer — installs the CLI and optionally provisions a self-host server.
 #
 # Install / upgrade CLI only:
-#   curl -fsSL https://raw.githubusercontent.com/multica-ai/multica/main/scripts/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/coder-zkl1988/multica/main/scripts/install.sh | bash
 #
 # Install CLI + provision self-host server:
-#   curl -fsSL https://raw.githubusercontent.com/multica-ai/multica/main/scripts/install.sh | bash -s -- --with-server
+#   curl -fsSL https://raw.githubusercontent.com/coder-zkl1988/multica/main/scripts/install.sh | bash -s -- --with-server
 #
 # After installation, run `multica setup` to configure your environment.
 #
@@ -14,10 +14,16 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-REPO_URL="https://github.com/multica-ai/multica.git"
-REPO_WEB_URL="https://github.com/multica-ai/multica"  # without .git, for GitHub web APIs
+REPO_URL="https://github.com/coder-zkl1988/multica.git"
+REPO_WEB_URL="https://github.com/coder-zkl1988/multica"  # without .git, for GitHub web APIs
+CLI_RELEASE_TAG="v0.4.18-sso.1"
+CLI_VERSION="0.4.18-sso.1"
 INSTALL_DIR="${MULTICA_INSTALL_DIR:-$HOME/.multica/server}"
-BREW_PACKAGE="multica-ai/tap/multica"
+
+# Host ports Compose reported after `up -d`; set by setup_server and reused by
+# the summary so the health check and the printed URLs cannot diverge.
+SELFHOST_BACKEND_PORT=""
+SELFHOST_FRONTEND_PORT=""
 
 # Colors (disabled when not a terminal)
 if [ -t 1 ] || [ -t 2 ]; then
@@ -41,44 +47,45 @@ fail()  { printf "${BOLD}${RED}✗ %s${RESET}\n" "$*" >&2; exit 1; }
 
 command_exists() { command -v "$1" >/dev/null 2>&1; }
 
-env_file_value() {
-  local file="$1"
-  local key="$2"
-  local default="$3"
-  local line value
-  line="$(grep -E "^${key}=" "$file" 2>/dev/null | tail -n 1 || true)"
-  if [ -z "$line" ]; then
-    printf "%s" "$default"
+running_in_ssh_session() {
+  [ -n "${SSH_CONNECTION:-}" ] || [ -n "${SSH_CLIENT:-}" ] || [ -n "${SSH_TTY:-}" ]
+}
+
+print_remote_server_token_hint() {
+  if ! running_in_ssh_session; then
     return
   fi
-  value="${line#*=}"
-  value="${value%$'\r'}"
-  value="${value%\"}"
-  value="${value#\"}"
-  value="${value%\'}"
-  value="${value#\'}"
-  if [ -z "$value" ]; then
-    printf "%s" "$default"
-  else
-    printf "%s" "$value"
-  fi
+
+  printf "  ${BOLD}Looks like a remote/SSH session.${RESET} Browser login may not be able to call back to this machine's localhost.\n"
+  printf "  Token login is usually simpler here:\n"
+  printf "     1. On your local computer, open ${CYAN}https://multica.ai/settings?tab=tokens${RESET}\n"
+  printf "        and create a token under ${BOLD}Settings > API Tokens${RESET}.\n"
+  printf "     2. On this server, run:\n"
+  printf "        ${CYAN}multica login --token <YOUR_TOKEN>${RESET}\n"
+  printf "        ${CYAN}multica daemon start${RESET}\n"
+  printf "\n"
 }
 
-selfhost_backend_port() {
-  local file="${1:-.env}"
-  local value
-  for key in BACKEND_PORT API_PORT SERVER_PORT PORT; do
-    value="$(env_file_value "$file" "$key" "")"
-    if [ -n "$value" ]; then
-      printf "%s" "$value"
-      return
-    fi
-  done
-  printf "8080"
-}
+# Host port Docker Compose actually published for a service.
+#
+# This is the only authority. Compose's interpolation gives the calling process
+# environment precedence over .env, so an ambient PORT / BACKEND_PORT / API_PORT
+# / SERVER_PORT / FRONTEND_PORT moves the published port without touching the
+# file. Re-deriving the port from .env alone made the installer probe and print
+# a port the stack was never published on (#6145). Must be called from the
+# installation directory, after `up -d`.
+compose_published_port() {
+  local service=$1 container_port=$2 published
 
-selfhost_frontend_port() {
-  env_file_value "${1:-.env}" "FRONTEND_PORT" "3000"
+  published="$(docker compose -f docker-compose.selfhost.yml port "$service" "$container_port" 2>/dev/null | tail -n 1)"
+  published="${published##*:}"
+  published="${published%$'\r'}"
+
+  case "$published" in
+    "" | *[!0-9]*) return 1 ;;
+  esac
+
+  printf "%s" "$published"
 }
 
 detect_os() {
@@ -87,7 +94,7 @@ detect_os() {
     Linux)  OS="linux" ;;
     MINGW*|MSYS*|CYGWIN*)
             fail "This script does not support Windows. Use the PowerShell installer instead:
-  irm https://raw.githubusercontent.com/multica-ai/multica/main/scripts/install.ps1 | iex" ;;
+  irm https://raw.githubusercontent.com/coder-zkl1988/multica/main/scripts/install.ps1 | iex" ;;
     *)      fail "Unsupported operating system: $(uname -s). Multica supports macOS, Linux, and Windows." ;;
   esac
 
@@ -103,59 +110,16 @@ detect_os() {
 # ---------------------------------------------------------------------------
 # CLI Installation
 # ---------------------------------------------------------------------------
-_dump_brew_log() {
-  local log="$1"
-  if [ -s "$log" ]; then
-    warn "Homebrew output (last 80 lines):"
-    tail -n 80 "$log" | sed 's/^/  /' >&2
-  fi
-}
-
-install_cli_brew() {
-  info "Installing Multica CLI via Homebrew..."
-  local brew_log
-  brew_log=$(mktemp)
-  if ! brew tap multica-ai/tap >"$brew_log" 2>&1; then
-    warn "Failed to add Homebrew tap. Falling back to GitHub Releases binary install."
-    _dump_brew_log "$brew_log"
-    rm -f "$brew_log"
-    return 1
-  fi
-  # brew install exits non-zero if already installed on older Homebrew versions
-  if ! brew install "$BREW_PACKAGE" >"$brew_log" 2>&1; then
-    if brew list "$BREW_PACKAGE" >/dev/null 2>&1; then
-      rm -f "$brew_log"
-      ok "Multica CLI already installed via Homebrew"
-    else
-      warn "Failed to install multica via Homebrew. Falling back to GitHub Releases binary install."
-      _dump_brew_log "$brew_log"
-      rm -f "$brew_log"
-      return 1
-    fi
-  else
-    rm -f "$brew_log"
-    ok "Multica CLI installed via Homebrew"
-  fi
-}
-
 install_cli_binary() {
   info "Installing Multica CLI from GitHub Releases..."
 
-  # Get latest release tag
-  local latest
-  latest=$(curl -sI "$REPO_WEB_URL/releases/latest" 2>/dev/null | grep -i '^location:' | sed 's/.*tag\///' | tr -d '\r\n' || true)
-  if [ -z "$latest" ]; then
-    fail "Could not determine latest release. Check your network connection."
-  fi
-
-  local version="${latest#v}"
-  local url="https://github.com/multica-ai/multica/releases/download/${latest}/multica-cli-${version}-${OS}-${ARCH}.tar.gz"
+  local url="${REPO_WEB_URL}/releases/download/${CLI_RELEASE_TAG}/multica-cli-${CLI_VERSION}-${OS}-${ARCH}.tar.gz"
   local tmp_dir
   tmp_dir=$(mktemp -d)
+  trap 'rm -rf "$tmp_dir"' EXIT
 
   info "Downloading $url ..."
   if ! curl -fsSL "$url" -o "$tmp_dir/multica.tar.gz"; then
-    rm -rf "$tmp_dir"
     fail "Failed to download CLI binary."
   fi
 
@@ -164,9 +128,13 @@ install_cli_binary() {
   # Try /usr/local/bin first, fall back to ~/.local/bin. Tests and scripted
   # installs can override the first choice with MULTICA_BIN_DIR.
   local bin_dir="${MULTICA_BIN_DIR:-/usr/local/bin}"
+  if [ ! -d "$bin_dir" ]; then
+    mkdir -p "$bin_dir" 2>/dev/null || true
+  fi
   if [ -w "$bin_dir" ]; then
     mv "$tmp_dir/multica" "$bin_dir/multica"
   elif command_exists sudo; then
+    sudo mkdir -p "$bin_dir"
     sudo mv "$tmp_dir/multica" "$bin_dir/multica"
   else
     bin_dir="$HOME/.local/bin"
@@ -181,6 +149,7 @@ install_cli_binary() {
   fi
 
   rm -rf "$tmp_dir"
+  trap - EXIT
   ok "Multica CLI installed to $bin_dir/multica"
 }
 
@@ -195,8 +164,7 @@ add_to_path() {
 }
 
 get_latest_version() {
-  # grep exits 1 when no match; use `|| true` to avoid triggering pipefail
-  curl -sI "$REPO_WEB_URL/releases/latest" 2>/dev/null | grep -i '^location:' | sed 's/.*tag\///' | tr -d '\r\n' || true
+  printf '%s' "$CLI_RELEASE_TAG"
 }
 
 get_selfhost_ref() {
@@ -248,22 +216,11 @@ pull_official_selfhost_images() {
   exit 1
 }
 
-upgrade_cli_brew() {
-  info "Upgrading Multica CLI via Homebrew..."
-  brew update 2>/dev/null || true
-  if brew upgrade "$BREW_PACKAGE" 2>/dev/null; then
-    ok "Multica CLI upgraded via Homebrew"
-  else
-    # brew upgrade exits non-zero if already up to date
-    ok "Multica CLI is already the latest version"
-  fi
-}
-
 install_cli() {
   if command_exists multica; then
     local current_ver
-    # `multica version` outputs "multica v0.1.13 (commit: abc1234)" — extract just the version
-    current_ver=$(multica version 2>/dev/null | awk '{print $2}' || echo "unknown")
+    # `multica version` outputs "multica 0.3.23 (commit: f46b929eb, built: 2026-06-16T10:11:56Z)" — extract just the version
+    current_ver=$(multica version 2>/dev/null | awk 'NR==1{print $2}' || echo "unknown")
 
     local latest_ver
     latest_ver=$(get_latest_version)
@@ -278,23 +235,15 @@ install_cli() {
     fi
 
     info "Multica CLI $current_ver installed, latest is $latest_ver — upgrading..."
-    if command_exists brew && brew list "$BREW_PACKAGE" >/dev/null 2>&1; then
-      upgrade_cli_brew
-    else
-      install_cli_binary
-    fi
+    install_cli_binary
 
     local new_ver
-    new_ver=$(multica version 2>/dev/null | awk '{print $2}' || echo "unknown")
+    new_ver=$(multica version 2>/dev/null | awk 'NR==1{print $2}' || echo "unknown")
     ok "Multica CLI upgraded ($current_ver → $new_ver)"
     return 0
   fi
 
-  if command_exists brew; then
-    install_cli_brew || install_cli_binary
-  else
-    install_cli_binary
-  fi
+  install_cli_binary
 
   # Verify
   if ! command_exists multica; then
@@ -357,16 +306,21 @@ setup_server() {
 
   # Generate .env if needed
   if [ ! -f .env ]; then
-    info "Creating .env with random JWT_SECRET..."
+    info "Creating .env with random secrets..."
     cp .env.example .env
-    local jwt
+    local jwt pgpass
     jwt=$(openssl rand -hex 32)
+    pgpass=$(openssl rand -hex 24)
     if [ "$(uname -s)" = "Darwin" ]; then
       sed -i '' "s/^JWT_SECRET=.*/JWT_SECRET=$jwt/" .env
+      sed -i '' "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$pgpass/" .env
+      sed -i '' -E "s#^(DATABASE_URL=postgres://[^:]+:)[^@]*(@.*)#\1$pgpass\2#" .env
     else
       sed -i "s/^JWT_SECRET=.*/JWT_SECRET=$jwt/" .env
+      sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$pgpass/" .env
+      sed -i -E "s#^(DATABASE_URL=postgres://[^:]+:)[^@]*(@.*)#\1$pgpass\2#" .env
     fi
-    ok "Generated .env with random JWT_SECRET"
+    ok "Generated .env with random JWT_SECRET and POSTGRES_PASSWORD"
   else
     ok "Using existing .env"
   fi
@@ -377,13 +331,22 @@ setup_server() {
   info "Starting Multica services (this may take a few minutes on first run)..."
   docker compose -f docker-compose.selfhost.yml up -d
 
+  # Read the ports Compose actually published, once, and reuse them for both the
+  # health check and the summary so the two can never disagree.
+  if ! SELFHOST_BACKEND_PORT="$(compose_published_port backend 8080)"; then
+    fail "Started the stack but could not read the backend host port from Docker Compose.
+  Check it with: cd $INSTALL_DIR && docker compose -f docker-compose.selfhost.yml ps"
+  fi
+  if ! SELFHOST_FRONTEND_PORT="$(compose_published_port frontend 3000)"; then
+    fail "Started the stack but could not read the frontend host port from Docker Compose.
+  Check it with: cd $INSTALL_DIR && docker compose -f docker-compose.selfhost.yml ps"
+  fi
+
   # Wait for health check
   info "Waiting for backend to be ready..."
-  local backend_port
-  backend_port="$(selfhost_backend_port .env)"
   local ready=false
   for i in $(seq 1 45); do
-    if curl -sf "http://localhost:${backend_port}/health" >/dev/null 2>&1; then
+    if curl -sf "http://localhost:${SELFHOST_BACKEND_PORT}/health" >/dev/null 2>&1; then
       ready=true
       break
     fi
@@ -421,8 +384,9 @@ run_default() {
   printf "     ${CYAN}multica setup${RESET}                # Connect to Multica Cloud (multica.ai)\n"
   printf "     ${CYAN}multica setup self-host${RESET}       # Connect to a self-hosted server\n"
   printf "\n"
+  print_remote_server_token_hint
   printf "  ${BOLD}Self-hosting?${RESET} Install the server first:\n"
-  printf "     curl -fsSL https://raw.githubusercontent.com/multica-ai/multica/main/scripts/install.sh | bash -s -- --with-server\n"
+  printf "     curl -fsSL https://raw.githubusercontent.com/coder-zkl1988/multica/main/scripts/install.sh | bash -s -- --with-server\n"
   printf "\n"
 }
 
@@ -445,22 +409,18 @@ run_with_server() {
   printf "${BOLD}${GREEN}  ✓ Multica server is running and CLI is ready!${RESET}\n"
   printf "${BOLD}${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}\n"
   printf "\n"
-  local frontend_port backend_port
-  frontend_port="$(selfhost_frontend_port "$INSTALL_DIR/.env")"
-  backend_port="$(selfhost_backend_port "$INSTALL_DIR/.env")"
-  printf "  ${BOLD}Frontend:${RESET}  http://localhost:%s\n" "$frontend_port"
-  printf "  ${BOLD}Backend:${RESET}   http://localhost:%s\n" "$backend_port"
+  printf "  ${BOLD}Frontend:${RESET}  http://localhost:%s\n" "$SELFHOST_FRONTEND_PORT"
+  printf "  ${BOLD}Backend:${RESET}   http://localhost:%s\n" "$SELFHOST_BACKEND_PORT"
   printf "  ${BOLD}Server at:${RESET} %s\n" "$INSTALL_DIR"
   printf "\n"
   printf "  ${BOLD}Next: configure your CLI to connect${RESET}\n"
   printf "\n"
   printf "     ${CYAN}multica setup self-host${RESET}   # Configure + authenticate + start daemon\n"
   printf "\n"
-  printf "  ${BOLD}Login:${RESET} configure ${CYAN}RESEND_API_KEY${RESET} in .env for email codes,\n"
-  printf "  or read the generated code from backend logs when Resend is unset.\n"
+  printf "  ${BOLD}Login:${RESET} use the authentication mode configured in .env (legacy by default).\n"
   printf "\n"
   printf "  ${BOLD}To stop all services:${RESET}\n"
-  printf "     curl -fsSL https://raw.githubusercontent.com/multica-ai/multica/main/scripts/install.sh | bash -s -- --stop\n"
+  printf "     curl -fsSL https://raw.githubusercontent.com/coder-zkl1988/multica/main/scripts/install.sh | bash -s -- --stop\n"
   printf "\n"
 }
 

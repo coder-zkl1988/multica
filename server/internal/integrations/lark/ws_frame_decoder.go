@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-
-	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 // LarkJSONFrameDecoder decodes the JSON event payload Lark nests
@@ -36,7 +34,7 @@ type LarkJSONFrameDecoder struct{}
 func NewLarkJSONFrameDecoder() *LarkJSONFrameDecoder { return &LarkJSONFrameDecoder{} }
 
 // Decode implements FrameDecoder.
-func (d *LarkJSONFrameDecoder) Decode(payload []byte, inst db.LarkInstallation) (InboundMessage, bool, error) {
+func (d *LarkJSONFrameDecoder) Decode(payload []byte, inst Installation) (InboundMessage, bool, error) {
 	if len(payload) == 0 {
 		return InboundMessage{}, false, nil
 	}
@@ -74,6 +72,19 @@ func (d *LarkJSONFrameDecoder) Decode(payload []byte, inst db.LarkInstallation) 
 		ChatType:     normalizeChatType(evt.Message.ChatType),
 		MessageID:    evt.Message.MessageID,
 		SenderOpenID: OpenID(evt.Sender.SenderID.OpenID),
+		MessageType:  evt.Message.MessageType,
+		Content:      evt.Message.Content,
+		CreateTime:   evt.Message.CreateTime,
+		// parent_id / root_id are populated by Lark only in reply
+		// scenarios. The enricher keys quoted-reply expansion off
+		// ParentID (the directly quoted message); RootID is carried for
+		// completeness / future thread handling.
+		ParentID: evt.Message.ParentID,
+		RootID:   evt.Message.RootID,
+		// thread_id is present only when the message lives inside a Lark
+		// topic (话题). The outbound patcher uses it to decide whether to
+		// reply back into that thread; empty means a normal chat message.
+		ThreadID: evt.Message.ThreadID,
 	}
 
 	botUnionID := ""
@@ -81,11 +92,25 @@ func (d *LarkJSONFrameDecoder) Decode(payload []byte, inst db.LarkInstallation) 
 		botUnionID = inst.BotUnionID.String
 	}
 
+	// text + post are flattened synchronously here (no external calls — the
+	// decoder must stay fast and dependency-free). merge_forward leaves Body
+	// empty: it needs an HTTP round-trip to expand and is handled downstream by
+	// the enricher, which keys off MessageType. Standalone media gets a short
+	// visible marker while the channel adapter separately downloads and binds
+	// the binary as a Multica attachment.
 	switch evt.Message.MessageType {
-	case "text":
-		msg.Body = resolveMentions(extractTextBody(evt.Message.Content),
+	case "text", "post":
+		msg.Body = resolveMentions(flattenContent(evt.Message.MessageType, evt.Message.Content),
 			evt.Message.Mentions, inst.BotOpenID, botUnionID)
+	case "image", "file", "audio", "media", "video":
+		msg.Body = flattenContent(evt.Message.MessageType, evt.Message.Content)
 	}
+
+	// Snapshot the user's own text as the command source BEFORE any
+	// enrichment runs. The enricher rewrites Body (prepending quoted /
+	// forwarded context) but never touches CommandBody, so `/issue …`
+	// is still parsed against what the user actually typed.
+	msg.CommandBody = msg.Body
 
 	if msg.ChatType == ChatTypeGroup {
 		msg.AddressedToBot = containsMention(evt.Message.Mentions, inst.BotOpenID, botUnionID)
@@ -130,6 +155,15 @@ type larkMessageReceiveEvent struct {
 		Content     string        `json:"content"`
 		Mentions    []larkMention `json:"mentions"`
 		CreateTime  string        `json:"create_time"`
+		// ParentID / RootID are only present when the message is a
+		// reply / quote. ParentID is the directly quoted message;
+		// RootID is the root of the reply tree.
+		ParentID string `json:"parent_id"`
+		RootID   string `json:"root_id"`
+		// ThreadID is present only for messages inside a Lark topic
+		// (话题). Lark omits it for plain chat messages, so its presence
+		// is the signal that an @-mention happened inside a thread.
+		ThreadID string `json:"thread_id"`
 	} `json:"message"`
 }
 

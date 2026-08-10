@@ -4,6 +4,7 @@ import { join } from "path";
 import {
   DEFAULT_RUNTIME_CONFIG,
   parseRuntimeConfig,
+  runtimeConfigFromBuildEnv,
   runtimeConfigFromDevEnv,
   type RuntimeConfig,
   type RuntimeConfigEnv,
@@ -29,7 +30,18 @@ export async function loadRuntimeConfig(options: {
     return { ok: true, config: parseRuntimeConfig(raw) };
   } catch (err) {
     if (isMissingFileError(err)) {
-      return { ok: true, config: { ...DEFAULT_RUNTIME_CONFIG } };
+      try {
+        const buildConfig = runtimeConfigFromBuildEnv(options.env);
+        return {
+          ok: true,
+          config: buildConfig ?? { ...DEFAULT_RUNTIME_CONFIG },
+        };
+      } catch (buildConfigError) {
+        return {
+          ok: false,
+          error: { message: errorMessage(buildConfigError) },
+        };
+      }
     }
     return {
       ok: false,

@@ -1,0 +1,277 @@
+name: Fork Desktop Release
+
+on:
+  push:
+    tags:
+      - "desktop-v*.*.*-sso.*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Desktop version without the leading v (for example 0.4.16-sso.1)
+        required: true
+        type: string
+      prerelease:
+        description: Publish as a prerelease
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fork-desktop-release-${{ github.event_name == 'push' && github.ref_name || inputs.version }}
+  cancel-in-progress: false
+
+env:
+  FORK_REPOSITORY: coder-zkl1988/multica
+  PERSONAL_APPLE_TEAM_ID: WCYBD629RJ
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      release_tag: ${{ steps.version.outputs.release_tag }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - name: Restrict publishing to the SSO fork
+        if: github.repository != env.FORK_REPOSITORY
+        run: |
+          echo "::error::This workflow may only publish from ${FORK_REPOSITORY}."
+          exit 1
+
+      - name: Validate version
+        id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_PRERELEASE: ${{ inputs.prerelease }}
+        shell: bash
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+            if [[ ! "$GITHUB_REF_NAME" =~ ^desktop-v[0-9]+\.[0-9]+\.[0-9]+-sso\.[0-9]+$ ]]; then
+              echo "::error::Tag must look like desktop-v0.4.17-sso.1; got '$GITHUB_REF_NAME'."
+              exit 1
+            fi
+            VERSION="${GITHUB_REF_NAME#desktop-v}"
+            RELEASE_TAG="$GITHUB_REF_NAME"
+            PRERELEASE="true"
+          else
+            VERSION="$INPUT_VERSION"
+            RELEASE_TAG="desktop-v$VERSION"
+            PRERELEASE="$INPUT_PRERELEASE"
+          fi
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Version must look like 0.4.16 or 0.4.16-sso.1; got '$VERSION'."
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            target: mac
+          - os: windows-latest
+            target: win
+          - os: ubuntu-latest
+            target: linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install rpmbuild (Linux)
+        if: matrix.target == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y rpm
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Create local version tag
+        shell: bash
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: git tag --force "v${VERSION}" HEAD
+
+      - name: Require macOS signing and notarization secrets
+        if: matrix.target == 'mac'
+        shell: bash
+        env:
+          CSC_LINK: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          CSC_KEY_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+        run: |
+          missing=0
+          for name in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::Required secret $name is not configured."
+              missing=1
+            fi
+          done
+          exit "$missing"
+
+      - name: Import macOS signing certificate
+        if: matrix.target == 'mac'
+        shell: bash
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          P12_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          certificate_path="$RUNNER_TEMP/multica-signing.p12"
+          keychain_path="$RUNNER_TEMP/multica-signing.keychain-db"
+          keychain_password="multica-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+
+          printf '%s' "$CERTIFICATE_BASE64" | tr -d '\r\n' | base64 --decode > "$certificate_path"
+          security create-keychain -p "$keychain_password" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$keychain_password" "$keychain_path"
+          security import "$certificate_path" \
+            -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k "$keychain_path"
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s -k "$keychain_password" "$keychain_path"
+          security list-keychains -d user -s "$keychain_path" login.keychain-db
+
+          identities=$(security find-identity -v -p codesigning "$keychain_path")
+          echo "$identities"
+          grep -Fq "Developer ID Application: kelong zong (WCYBD629RJ)" <<< "$identities"
+          rm -f "$certificate_path"
+
+      - name: Package Desktop installers (${{ matrix.target }})
+        working-directory: apps/desktop
+        shell: bash
+        env:
+          VITE_API_URL: https://iworker.soyoung.com
+          VITE_WS_URL: wss://iworker.soyoung.com/ws
+          VITE_APP_URL: https://iworker.soyoung.com
+          VITE_DESKTOP_RELEASE_REPOSITORY: ${{ github.repository }}
+          APPLE_ID: ${{ matrix.target == 'mac' && secrets.APPLE_ID || '' }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ matrix.target == 'mac' && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ matrix.target == 'mac' && env.PERSONAL_APPLE_TEAM_ID || '' }}
+          CSC_IDENTITY_AUTO_DISCOVERY: ${{ matrix.target == 'mac' && 'true' || 'false' }}
+        run: >-
+          pnpm exec node scripts/package.mjs
+          --${{ matrix.target }} --x64 --arm64 --publish never
+          -c.publish.owner=${{ github.repository_owner }}
+          -c.publish.repo=${{ github.event.repository.name }}
+          -c.publish.releaseType=release
+
+      - name: Verify personal signature and notarization (macOS)
+        if: matrix.target == 'mac'
+        working-directory: apps/desktop
+        shell: bash
+        run: |
+          app_count=0
+          while IFS= read -r -d '' app_path; do
+            app_count=$((app_count + 1))
+            codesign --verify --deep --strict --verbose=2 "$app_path"
+            signature=$(codesign -dvvv "$app_path" 2>&1)
+            echo "$signature"
+            grep -q "Authority=Developer ID Application: kelong zong (WCYBD629RJ)" <<< "$signature"
+            grep -q "TeamIdentifier=WCYBD629RJ" <<< "$signature"
+            spctl --assess --type execute --verbose=2 "$app_path"
+            xcrun stapler validate "$app_path"
+          done < <(find dist -type d -name 'Multica.app' -not -path '*/Contents/*' -print0)
+          if [[ "$app_count" -ne 2 ]]; then
+            echo "::error::Expected two signed app bundles, found $app_count."
+            exit 1
+          fi
+
+          dmg_count=0
+          while IFS= read -r -d '' dmg_path; do
+            dmg_count=$((dmg_count + 1))
+            hdiutil verify "$dmg_path"
+          done < <(find dist -type f -name '*.dmg' -print0)
+          if [[ "$dmg_count" -ne 2 ]]; then
+            echo "::error::Expected two notarized DMGs, found $dmg_count."
+            exit 1
+          fi
+
+      - name: Upload packaged artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.target }}
+          path: |
+            apps/desktop/dist/**/multica-desktop-*
+            apps/desktop/dist/**/latest*.yml
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: [validate, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download packaged artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Collect release assets
+        shell: bash
+        run: |
+          mkdir release-assets
+          while IFS= read -r -d '' asset; do
+            cp "$asset" release-assets/
+          done < <(
+            find artifacts -type f \( -name 'multica-desktop-*' -o -name 'latest*.yml' \) -print0
+          )
+          if [[ -z "$(find release-assets -type f -print -quit)" ]]; then
+            echo "::error::No release assets were collected."
+            exit 1
+          fi
+          ls -lh release-assets
+
+      - name: Publish fork Desktop release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.validate.outputs.release_tag }}
+          VERSION: ${{ needs.validate.outputs.version }}
+          PRERELEASE: ${{ needs.validate.outputs.prerelease }}
+        shell: bash
+        run: |
+          prerelease_flag=()
+          if [[ "$PRERELEASE" == "true" ]]; then
+            prerelease_flag+=(--prerelease)
+          fi
+
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" release-assets/* \
+              --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$RELEASE_TAG" release-assets/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "Multica Desktop ${VERSION} (SSO fork)" \
+              --notes "Desktop installers built from coder-zkl1988/multica with the fork's SSO support. macOS artifacts are signed and notarized with Apple Team WCYBD629RJ." \
+              "${prerelease_flag[@]}"
+          fi
+
+      - name: Verify published release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.validate.outputs.release_tag }}
+        run: gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json url,tagName,isDraft,isPrerelease,assets

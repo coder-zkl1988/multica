@@ -198,6 +198,23 @@ describe("LoginPage", () => {
     expect(screen.getByText(/test@example.com/)).toBeInTheDocument();
   });
 
+  it("autofocuses the OTP input when the code step opens", async () => {
+    mockSendCode.mockResolvedValueOnce(undefined);
+    renderWithI18n(<LoginPage onSuccess={onSuccess} />);
+
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText(/email/i), "test@example.com");
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/check your email/i)).toBeInTheDocument();
+    });
+
+    // The OTP field should be focused on mount so the user can type the code
+    // without clicking it first — important when repeatedly switching accounts.
+    expect(getOTPInput()).toHaveFocus();
+  });
+
   it("shows error when sendCode fails", async () => {
     mockSendCode.mockRejectedValueOnce(new Error("Rate limited"));
     renderWithI18n(<LoginPage onSuccess={onSuccess} />);
@@ -387,6 +404,15 @@ describe("LoginPage", () => {
     expect(
       screen.queryByRole("button", { name: /continue with google/i }),
     ).not.toBeInTheDocument();
+  });
+
+  it("renders Google OAuth button when a custom handler is provided", () => {
+    renderWithI18n(
+      <LoginPage onSuccess={onSuccess} onGoogleLogin={vi.fn()} />,
+    );
+    expect(
+      screen.getByRole("button", { name: /continue with google/i }),
+    ).toBeInTheDocument();
   });
 
   // -------------------------------------------------------------------------

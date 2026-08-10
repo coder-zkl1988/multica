@@ -2,7 +2,8 @@ package analytics
 
 import "strings"
 
-// Event names. Keep in sync with docs/analytics.md.
+// Event names. This file is the source-of-truth catalog; keep
+// packages/core/analytics in sync with it.
 const (
 	EventSignup                        = "signup"
 	EventWorkspaceCreated              = "workspace_created"
@@ -13,12 +14,6 @@ const (
 	EventIssueExecuted                 = "issue_executed"
 	EventIssueCreated                  = "issue_created"
 	EventChatMessageSent               = "chat_message_sent"
-	EventAgentTaskQueued               = "agent_task_queued"
-	EventAgentTaskDispatched           = "agent_task_dispatched"
-	EventAgentTaskStarted              = "agent_task_started"
-	EventAgentTaskCompleted            = "agent_task_completed"
-	EventAgentTaskFailed               = "agent_task_failed"
-	EventAgentTaskCancelled            = "agent_task_cancelled"
 	EventAutopilotRunStarted           = "autopilot_run_started"
 	EventAutopilotRunCompleted         = "autopilot_run_completed"
 	EventAutopilotRunFailed            = "autopilot_run_failed"
@@ -26,6 +21,7 @@ const (
 	EventTeamInviteAccepted            = "team_invite_accepted"
 	EventOnboardingStarted             = "onboarding_started"
 	EventOnboardingQuestionnaireSubmit = "onboarding_questionnaire_submitted"
+	EventOnboardingSourceSubmit        = "onboarding_source_submitted"
 	EventAgentCreated                  = "agent_created"
 	EventOnboardingCompleted           = "onboarding_completed"
 	EventCloudWaitlistJoined           = "cloud_waitlist_joined"
@@ -36,6 +32,63 @@ const (
 )
 
 const EventSchemaVersion = 2
+
+// metricsOnlyEvents lists every server-side event that is recorded to
+// Prometheus (via metrics.IncForEvent, for Grafana) but deliberately NOT
+// shipped to PostHog. metrics.RecordEvent consults this set and skips the
+// PostHog Capture for these names while still incrementing the counter.
+//
+// As of MUL-4127, PostHog is no longer used for server-side product analytics:
+// the acquisition / activation / expansion funnel is now read straight from the
+// operational database and from these Grafana counters, so the redundant
+// PostHog copy of every product event was retired. That makes ALL server-side
+// events metrics-only — both the product-behaviour group and the original
+// high-volume runtime/autopilot telemetry are Prometheus-only. PostHog now only
+// receives frontend error/crash telemetry ($exception, client_crash,
+// client_unresponsive); see packages/core/analytics.
+//
+// Note: agent_task_* lifecycle events are also Prometheus-only, but their
+// Prometheus side is handled by typed BusinessMetrics.RecordTask* methods, so
+// they never build an analytics.Event in the first place and don't need an
+// entry here.
+var metricsOnlyEvents = map[string]struct{}{
+	// Product-behaviour events — DB + Grafana are the source of truth
+	// (MUL-4127); the PostHog copy was redundant.
+	EventSignup:                        {},
+	EventWorkspaceCreated:              {},
+	EventIssueCreated:                  {},
+	EventIssueExecuted:                 {},
+	EventChatMessageSent:               {},
+	EventTeamInviteSent:                {},
+	EventTeamInviteAccepted:            {},
+	EventOnboardingStarted:             {},
+	EventOnboardingQuestionnaireSubmit: {},
+	EventOnboardingSourceSubmit:        {},
+	EventAgentCreated:                  {},
+	EventOnboardingCompleted:           {},
+	EventCloudWaitlistJoined:           {},
+	EventFeedbackSubmitted:             {},
+	EventContactSalesSubmitted:         {},
+	EventSquadCreated:                  {},
+	EventAutopilotCreated:              {},
+	// High-volume runtime / autopilot execution-lifecycle telemetry — always
+	// Prometheus-only (Grafana already carries the equivalent counters).
+	EventRuntimeRegistered:     {},
+	EventRuntimeReady:          {},
+	EventRuntimeFailed:         {},
+	EventRuntimeOffline:        {},
+	EventAutopilotRunStarted:   {},
+	EventAutopilotRunCompleted: {},
+	EventAutopilotRunFailed:    {},
+}
+
+// IsMetricsOnly reports whether an event name is recorded to Prometheus but must
+// not be sent to PostHog. As of MUL-4127 this is true for every server-side
+// event. See metricsOnlyEvents.
+func IsMetricsOnly(name string) bool {
+	_, ok := metricsOnlyEvents[name]
+	return ok
+}
 
 const (
 	SourceOnboarding = "onboarding"
@@ -65,7 +118,7 @@ type CoreProperties struct {
 
 type TaskContext = CoreProperties
 
-// Onboarding completion paths. Keep in sync with docs/analytics.md.
+// Onboarding completion paths. Keep in sync with packages/core/analytics.
 const (
 	OnboardingPathFull           = "full"            // reached first_issue end of flow
 	OnboardingPathRuntimeSkipped = "runtime_skipped" // completed without connecting a runtime
@@ -306,39 +359,6 @@ func ChatMessageSent(userID, workspaceID, chatSessionID, taskID, agentID, runtim
 	}
 }
 
-func AgentTaskQueued(ctx TaskContext) Event {
-	return agentTaskEvent(EventAgentTaskQueued, ctx, nil)
-}
-
-func AgentTaskDispatched(ctx TaskContext) Event {
-	return agentTaskEvent(EventAgentTaskDispatched, ctx, nil)
-}
-
-func AgentTaskStarted(ctx TaskContext) Event {
-	return agentTaskEvent(EventAgentTaskStarted, ctx, nil)
-}
-
-func AgentTaskCompleted(ctx TaskContext, durationMS int64) Event {
-	return agentTaskEvent(EventAgentTaskCompleted, ctx, map[string]any{
-		"duration_ms": durationMS,
-	})
-}
-
-func AgentTaskFailed(ctx TaskContext, durationMS int64, failureReason, errorType string, willRetry bool) Event {
-	return agentTaskEvent(EventAgentTaskFailed, ctx, map[string]any{
-		"duration_ms":    durationMS,
-		"failure_reason": failureReason,
-		"error_type":     errorType,
-		"will_retry":     willRetry,
-	})
-}
-
-func AgentTaskCancelled(ctx TaskContext, durationMS int64) Event {
-	return agentTaskEvent(EventAgentTaskCancelled, ctx, map[string]any{
-		"duration_ms": durationMS,
-	})
-}
-
 // AutopilotAssignee describes the autopilot's configured target. agent_id is
 // always the agent that will actually execute the work (the squad leader for
 // squad autopilots) so funnels grouping by agent stay consistent. assignee_*
@@ -478,6 +498,49 @@ func OnboardingQuestionnaireSubmitted(userID string, source []string, role strin
 			"use_case": useCase,
 		},
 	}
+}
+
+// OnboardingSourceSubmitted fires when the user's acquisition source
+// transitions from unresolved to resolved — answered or explicitly
+// declined. The source question is no longer part of the onboarding
+// flow (MUL-5159): it is asked by the workspace backfill prompt after
+// agents have completed work for the user, so this lands well after
+// `onboarding_questionnaire_submitted` (which now covers role +
+// use_case only). A dedicated event gives the backfill prompt its own
+// Grafana counter (answer/decline rate) without stalling the
+// questionnaire funnel step. Metrics-only like every server event
+// (MUL-4127); the per-user source value reaches analytics through the
+// client-side person-property mirror in saveQuestionnaire.
+//
+// `source` stays a slice for the same v2 back-compat reason as the
+// questionnaire event; the client commits a one-element array. $set
+// is only attached when the user actually answered — moot while the
+// event stays metrics-only, but kept accurate should it ever ship.
+func OnboardingSourceSubmitted(userID string, source []string, skipped, hasOther bool) Event {
+	if source == nil {
+		source = []string{}
+	}
+	// Property key is acquisition_source, not source — core properties
+	// stamp the event-source dimension into props["source"]
+	// (withCoreProperties), and the acquisition answer must not fight
+	// it for the slot. The $set person property below keeps the plain
+	// "source" name for cohort continuity with the client-side mirror.
+	ev := Event{
+		Name:       EventOnboardingSourceSubmit,
+		DistinctID: userID,
+		Properties: withCoreProperties(map[string]any{
+			"acquisition_source": source,
+			"source_skipped":     skipped,
+			"source_has_other":   hasOther,
+		}, CoreProperties{
+			UserID: userID,
+			Source: SourceOnboarding,
+		}),
+	}
+	if len(source) > 0 {
+		ev.Set = map[string]any{"source": source}
+	}
+	return ev
 }
 
 // AgentCreated fires whenever a new agent is added to a workspace — not
@@ -657,16 +720,6 @@ func AutopilotCreated(actorID, workspaceID, autopilotID, cadence, triggerKind st
 	}
 }
 
-func agentTaskEvent(name string, ctx TaskContext, extra map[string]any) Event {
-	props := withCoreProperties(extra, CoreProperties(ctx))
-	return Event{
-		Name:        name,
-		DistinctID:  distinctID(ctx.UserID, ctx.WorkspaceID, ctx.AgentID),
-		WorkspaceID: ctx.WorkspaceID,
-		Properties:  props,
-	}
-}
-
 func autopilotRunEvent(name, actorID, workspaceID, autopilotID, runID, cadence string, assignee AutopilotAssignee, triggerSource string, extra map[string]any) Event {
 	if extra == nil {
 		extra = map[string]any{}
@@ -731,20 +784,6 @@ func withCoreProperties(props map[string]any, core CoreProperties) map[string]an
 	}
 	props["is_demo"] = core.IsDemo
 	return props
-}
-
-func distinctID(userID, workspaceID, agentID string) string {
-	if userID != "" {
-		return userID
-	}
-	// Synthetic PostHog distinct IDs are namespace-prefixed; user UUIDs are not.
-	if agentID != "" {
-		return "agent:" + agentID
-	}
-	if workspaceID != "" {
-		return "workspace:" + workspaceID
-	}
-	return ""
 }
 
 func nonAgentUserID(distinct string) string {

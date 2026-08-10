@@ -18,10 +18,16 @@ describe("paths.workspace(slug)", () => {
     expect(ws.autopilots()).toBe("/acme/autopilots");
     expect(ws.autopilotDetail("a1")).toBe("/acme/autopilots/a1");
     expect(ws.agents()).toBe("/acme/agents");
+    expect(ws.newAgent()).toBe("/acme/agents/new");
+    expect(ws.newAgentAi()).toBe("/acme/agents/new/ai");
+    expect(ws.newAgentAiSession("sess_1")).toBe("/acme/agents/new/ai/sess_1");
     expect(ws.memberDetail("u1")).toBe("/acme/members/u1");
     expect(ws.inbox()).toBe("/acme/inbox");
     expect(ws.myIssues()).toBe("/acme/my-issues");
     expect(ws.runtimes()).toBe("/acme/runtimes");
+    expect(ws.runtimeSettings("machine/runtime", "runtime one")).toBe(
+      "/acme/runtimes/machine%2Fruntime/runtime/runtime%20one",
+    );
     expect(ws.skills()).toBe("/acme/skills");
     expect(ws.skillDetail("skl_123")).toBe("/acme/skills/skl_123");
     expect(ws.squads()).toBe("/acme/squads");
@@ -46,18 +52,18 @@ describe("paths.workspace(slug)", () => {
 describe("paths (global)", () => {
   it("builds global paths without slug", () => {
     expect(paths.login()).toBe("/login");
+    expect(paths.authCallback()).toBe("/auth/callback");
     expect(paths.newWorkspace()).toBe("/workspaces/new");
     expect(paths.invite("inv-1")).toBe("/invite/inv-1");
-    expect(paths.authCallback()).toBe("/auth/callback");
   });
 });
 
 describe("isGlobalPath", () => {
   it("returns true for pre-workspace routes", () => {
     expect(isGlobalPath("/login")).toBe(true);
+    expect(isGlobalPath("/auth/callback")).toBe(true);
     expect(isGlobalPath("/workspaces/new")).toBe(true);
     expect(isGlobalPath("/invite/abc")).toBe(true);
-    expect(isGlobalPath("/auth/callback")).toBe(true);
   });
 
   it("returns false for workspace-scoped paths", () => {

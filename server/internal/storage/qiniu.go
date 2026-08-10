@@ -191,6 +191,22 @@ func (s *QiniuStorage) Delete(ctx context.Context, key string) {
 	}
 }
 
+// DeleteObject is Delete with the error surfaced so callers can retry failed
+// cleanup instead of assuming the object was removed.
+func (s *QiniuStorage) DeleteObject(ctx context.Context, key string) error {
+	objectKey := s.objectKey(key)
+	if objectKey == "" {
+		return nil
+	}
+	if s.deleter == nil {
+		return fmt.Errorf("qiniu DeleteObject: deleter is not configured")
+	}
+	if err := s.deleter.Delete(ctx, s.bucket, objectKey); err != nil {
+		return fmt.Errorf("qiniu DeleteObject: %w", err)
+	}
+	return nil
+}
+
 func (s *QiniuStorage) DeleteKeys(ctx context.Context, keys []string) {
 	for _, key := range keys {
 		s.Delete(ctx, key)
@@ -206,6 +222,15 @@ func (s *QiniuStorage) KeyFromURL(rawURL string) string {
 		return strings.TrimPrefix(parsed.Path, "/")
 	}
 	return strings.TrimPrefix(strings.TrimSpace(rawURL), "/")
+}
+
+// ObjectURL returns the CDN URL that Upload would return for key.
+func (s *QiniuStorage) ObjectURL(key string) string {
+	objectKey := s.objectKey(key)
+	if objectKey == "" {
+		return ""
+	}
+	return s.objectURL(objectKey)
 }
 
 func (s *QiniuStorage) CdnDomain() string {

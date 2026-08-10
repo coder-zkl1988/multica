@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/auth"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -17,34 +16,28 @@ import (
 
 func uuidToString(u pgtype.UUID) string { return util.UUIDToString(u) }
 
-// Auth middleware validates JWT tokens or Personal Access Tokens.
+// Auth middleware validates internal, service-account, task, and cloud tokens.
 // Token sources (in priority order):
-//  1. Authorization: Bearer <token> header (PAT or JWT)
-//  2. multica_auth HttpOnly cookie (JWT) — requires valid CSRF token for state-changing requests
+//  1. Authorization: Bearer <token> header
+//  2. multica_auth HttpOnly cookie — requires valid CSRF token for state-changing requests
 //
 // Sets X-User-ID and X-User-Email headers on the request for downstream handlers.
 //
-// patCache is optional; when non-nil, PAT lookups are cached with a short
-// TTL (auth.AuthCacheTTL). On cache hit the middleware skips both the DB
-// SELECT and the last_used_at UPDATE — last_used_at is therefore refreshed
-// at most once per TTL window per token, not per request.
-//
 // cloudPAT is optional; when non-nil, tokens with the mcn_ prefix are
 // validated by calling the Multica Cloud Fleet service rather than the
-// local DB. When nil (Fleet URL unset) mcn_ tokens are rejected at the
-// prefix branch — we don't fall through to the mul_ / JWT paths, since
-// an mcn_ string is by construction not a valid mul_ PAT or JWT.
-func Auth(queries *db.Queries, patCache *auth.PATCache, cloudPAT *auth.CloudPATVerifier) func(http.Handler) http.Handler {
+// local DB. When nil (Fleet URL unset) mcn_ tokens are rejected.
+func Auth(queries *db.Queries, patCache *auth.PATCache, cloudPAT *auth.CloudPATVerifier, useSySSO bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// X-Actor-Source is server-set only — any value supplied by
 			// the client is untrusted and discarded before the auth
-			// branches run. Only the mat_ branch below re-sets it. This
-			// is what prevents a client from sending a normal mul_ PAT
-			// plus a forged `X-Actor-Source: member` (or anything else)
+			// branches run. Only trusted branches below re-set it. This
+			// prevents a client from forging an actor source
 			// to convince a downstream handler that its request came
 			// from a non-task-token path.
 			r.Header.Del("X-Actor-Source")
+			r.Header.Del("X-Service-Workspace-ID")
+			r.Header.Del("X-Auth-Expires-At")
 
 			tokenString, fromCookie := extractToken(r)
 			if tokenString == "" {
@@ -60,6 +53,28 @@ func Auth(queries *db.Queries, patCache *auth.PATCache, cloudPAT *auth.CloudPATV
 				return
 			}
 
+			if useSySSO && strings.HasPrefix(tokenString, auth.ServiceAccountTokenPrefix) {
+				if queries == nil {
+					http.Error(w, `{"error":"invalid token"}`, http.StatusUnauthorized)
+					return
+				}
+				serviceToken, err := queries.GetServiceAccountTokenByHash(r.Context(), auth.HashToken(tokenString))
+				if err != nil {
+					http.Error(w, `{"error":"invalid token"}`, http.StatusUnauthorized)
+					return
+				}
+				workspaceID := uuidToString(serviceToken.WorkspaceID)
+				r.Header.Set("X-User-ID", uuidToString(serviceToken.UserID))
+				r.Header.Set("X-Actor-Source", "service_account")
+				r.Header.Set("X-Service-Workspace-ID", workspaceID)
+				r.Header.Set("X-Workspace-ID", workspaceID)
+				r.Header.Set("X-Auth-Expires-At", serviceToken.ExpiresAt.Time.UTC().Format(time.RFC3339))
+				w.Header().Set("X-Auth-Expires-At", serviceToken.ExpiresAt.Time.UTC().Format(time.RFC3339))
+				go queries.UpdateServiceAccountTokenLastUsed(context.Background(), serviceToken.ID)
+				next.ServeHTTP(w, r)
+				return
+			}
+
 			// Agent task token: "mat_" prefix. Minted by the server at
 			// task-claim time and injected by the daemon into the agent
 			// process. Authoritative for actor identity — the bound
@@ -67,7 +82,7 @@ func Auth(queries *db.Queries, patCache *auth.PATCache, cloudPAT *auth.CloudPATV
 			// written into request headers here, OVERRIDING whatever the
 			// client sent, so a downstream actor-resolver cannot be
 			// tricked by a client that strips or forges X-Agent-ID /
-			// X-Task-ID. Owner-only endpoints (e.g. agent env
+			// X-Task-ID. Human-only endpoints (e.g. agent env
 			// management) reject requests authenticated this way; see
 			// `actorSourceFromRequest`. MUL-2600.
 			if strings.HasPrefix(tokenString, "mat_") {
@@ -100,9 +115,7 @@ func Auth(queries *db.Queries, patCache *auth.PATCache, cloudPAT *auth.CloudPATV
 			// Multica Cloud Fleet service — Cloud (not us) is the
 			// authoritative owner of the token's status and owner_id
 			// binding. We never look at the local
-			// personal_access_tokens table for this prefix; an mcn_
-			// string is not a valid mul_ value, so falling through
-			// would just be a redundant DB miss. When the verifier
+			// local database for this prefix. When the verifier
 			// is unconfigured (no MULTICA_CLOUD_FLEET_URL) we reject
 			// at this branch rather than treating the token as a
 			// JWT/PAT — failing closed avoids a misconfigured prod
@@ -153,20 +166,13 @@ func Auth(queries *db.Queries, patCache *auth.PATCache, cloudPAT *auth.CloudPATV
 				return
 			}
 
-			// PAT: tokens starting with "mul_"
-			if strings.HasPrefix(tokenString, "mul_") {
+			if !useSySSO && strings.HasPrefix(tokenString, "mul_") {
 				hash := auth.HashToken(tokenString)
-
-				// Cache hit: TTL has not expired, the token was valid the
-				// last time we looked, and nothing has invalidated the
-				// entry since. Skip the DB SELECT and the last_used_at
-				// UPDATE — last_used_at is bumped once per TTL window.
 				if userID, ok := patCache.Get(r.Context(), hash); ok {
 					r.Header.Set("X-User-ID", userID)
 					next.ServeHTTP(w, r)
 					return
 				}
-
 				if queries == nil {
 					http.Error(w, `{"error":"invalid token"}`, http.StatusUnauthorized)
 					return
@@ -177,57 +183,38 @@ func Auth(queries *db.Queries, patCache *auth.PATCache, cloudPAT *auth.CloudPATV
 					http.Error(w, `{"error":"invalid token"}`, http.StatusUnauthorized)
 					return
 				}
-
 				userID := uuidToString(pat.UserID)
 				r.Header.Set("X-User-ID", userID)
-
-				// Clamp cache TTL to the token's remaining lifetime so a
-				// PAT expiring in <AuthCacheTTL can't continue passing
-				// auth on a cache hit after expires_at.
 				var expiresAt time.Time
 				if pat.ExpiresAt.Valid {
 					expiresAt = pat.ExpiresAt.Time
 				}
 				patCache.Set(r.Context(), hash, userID, auth.TTLForExpiry(time.Now(), expiresAt))
-
-				// Cache miss = TTL expired (or first use after revoke /
-				// process restart). Refresh last_used_at; subsequent hits
-				// within the TTL window skip this write entirely.
 				go queries.UpdatePersonalAccessTokenLastUsed(context.Background(), pat.ID)
-
 				next.ServeHTTP(w, r)
 				return
 			}
 
-			// JWT
-			token, err := jwt.Parse(tokenString, func(token *jwt.Token) (any, error) {
-				if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-					return nil, jwt.ErrSignatureInvalid
-				}
-				return auth.JWTSecret(), nil
-			})
-			if err != nil || !token.Valid {
+			var identity auth.InternalTokenIdentity
+			var err error
+			if useSySSO {
+				identity, err = auth.ParseInternalToken(tokenString)
+			} else {
+				identity, err = auth.ParseLegacyJWT(tokenString)
+			}
+			if err != nil {
 				slog.Warn("auth: invalid token", "path", r.URL.Path, "error", err)
 				http.Error(w, `{"error":"invalid token"}`, http.StatusUnauthorized)
 				return
 			}
-
-			claims, ok := token.Claims.(jwt.MapClaims)
-			if !ok {
-				slog.Warn("auth: invalid claims", "path", r.URL.Path)
-				http.Error(w, `{"error":"invalid claims"}`, http.StatusUnauthorized)
-				return
+			r.Header.Set("X-User-ID", identity.UserID)
+			if identity.Source != "" {
+				r.Header.Set("X-Actor-Source", identity.Source)
 			}
-
-			sub, ok := claims["sub"].(string)
-			if !ok || strings.TrimSpace(sub) == "" {
-				slog.Warn("auth: invalid claims", "path", r.URL.Path)
-				http.Error(w, `{"error":"invalid claims"}`, http.StatusUnauthorized)
-				return
-			}
-			r.Header.Set("X-User-ID", sub)
-			if email, ok := claims["email"].(string); ok {
-				r.Header.Set("X-User-Email", email)
+			r.Header.Set("X-Auth-Expires-At", identity.ExpiresAt.UTC().Format(time.RFC3339))
+			w.Header().Set("X-Auth-Expires-At", identity.ExpiresAt.UTC().Format(time.RFC3339))
+			if identity.Email != "" {
+				r.Header.Set("X-User-Email", identity.Email)
 			}
 
 			next.ServeHTTP(w, r)

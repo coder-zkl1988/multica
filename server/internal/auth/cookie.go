@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"log/slog"
 	"math"
 	"net"
@@ -20,7 +21,7 @@ import (
 const (
 	AuthCookieName      = "multica_auth"
 	CSRFCookieName      = "multica_csrf"
-	defaultAuthTokenTTL = 30 * 24 * time.Hour // 30 days
+	defaultAuthTokenTTL = 30 * 24 * time.Hour
 )
 
 var (
@@ -29,48 +30,31 @@ var (
 	authTokenTTLCached     time.Duration
 )
 
-// parseAuthTokenTTL parses a raw AUTH_TOKEN_TTL value into a duration.
-// It first tries time.ParseDuration (e.g. "8760h", "720h30m"), then falls
-// back to parsing as integer seconds. Returns the parsed duration and true
-// on success; zero and false when the input is empty or invalid.
 func parseAuthTokenTTL(raw string) (time.Duration, bool) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return 0, false
 	}
-
-	// Try Go duration string first (e.g. "8760h", "720h30m").
-	if d, err := time.ParseDuration(raw); err == nil {
-		if d <= 0 {
+	if duration, err := time.ParseDuration(raw); err == nil {
+		if duration <= 0 {
 			return 0, false
 		}
-		if d > 10*365*24*time.Hour {
-			slog.Warn("AUTH_TOKEN_TTL exceeds 10 years; accepting but verify this is intentional",
-				"value", raw, "hours", d.Hours())
+		if duration > 10*365*24*time.Hour {
+			slog.Warn("AUTH_TOKEN_TTL exceeds 10 years; accepting but verify this is intentional", "value", raw, "hours", duration.Hours())
 		}
-		return d, true
+		return duration, true
 	}
-
-	// Fall back to plain integer seconds.
-	secs, err := strconv.ParseInt(raw, 10, 64)
-	if err != nil || secs <= 0 {
+	seconds, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || seconds <= 0 || seconds > int64(math.MaxInt64/int64(time.Second)) {
 		return 0, false
 	}
-	if secs > int64(math.MaxInt64/int64(time.Second)) {
-		return 0, false
+	duration := time.Duration(seconds) * time.Second
+	if duration > 10*365*24*time.Hour {
+		slog.Warn("AUTH_TOKEN_TTL exceeds 10 years; accepting but verify this is intentional", "value", raw, "hours", duration.Hours())
 	}
-	d := time.Duration(secs) * time.Second
-	if d > 10*365*24*time.Hour {
-		slog.Warn("AUTH_TOKEN_TTL exceeds 10 years; accepting but verify this is intentional",
-			"value", raw, "hours", d.Hours())
-	}
-	return d, true
+	return duration, true
 }
 
-// AuthTokenTTL returns the configured auth token lifetime. It reads the
-// AUTH_TOKEN_TTL environment variable (Go duration string or integer seconds) on first call and caches
-// the result. When the variable is unset or invalid the default of 30 days
-// is used.
 func AuthTokenTTL() time.Duration {
 	authTokenTTLOnce.Do(func() {
 		raw := os.Getenv("AUTH_TOKEN_TTL")
@@ -145,20 +129,27 @@ func generateCSRFToken(authToken string) (string, error) {
 	return nonceHex + "." + sig, nil
 }
 
-// SetAuthCookies sets the HttpOnly auth cookie and the readable CSRF cookie on the response.
 func SetAuthCookies(w http.ResponseWriter, token string) error {
+	return SetAuthCookiesUntil(w, token, time.Now().Add(AuthTokenTTL()))
+}
+
+// SetAuthCookiesUntil sets auth and CSRF cookies with an authoritative absolute expiry.
+func SetAuthCookiesUntil(w http.ResponseWriter, token string, expiresAt time.Time) error {
+	remaining := time.Until(expiresAt)
+	if remaining <= 0 {
+		return errors.New("auth cookie expiry must be in the future")
+	}
 	secure := isSecureCookie()
 	domain := cookieDomain()
-	ttl := AuthTokenTTL()
-	now := time.Now()
+	maxAge := int(math.Ceil(remaining.Seconds()))
 
 	http.SetCookie(w, &http.Cookie{
 		Name:     AuthCookieName,
 		Value:    token,
 		Path:     "/",
 		Domain:   domain,
-		MaxAge:   int(ttl.Seconds()),
-		Expires:  now.Add(ttl),
+		MaxAge:   maxAge,
+		Expires:  expiresAt,
 		HttpOnly: true,
 		Secure:   secure,
 		SameSite: http.SameSiteStrictMode,
@@ -174,8 +165,8 @@ func SetAuthCookies(w http.ResponseWriter, token string) error {
 		Value:    csrfToken,
 		Path:     "/",
 		Domain:   domain,
-		MaxAge:   int(ttl.Seconds()),
-		Expires:  now.Add(ttl),
+		MaxAge:   maxAge,
+		Expires:  expiresAt,
 		HttpOnly: false,
 		Secure:   secure,
 		SameSite: http.SameSiteStrictMode,

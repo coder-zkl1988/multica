@@ -265,7 +265,7 @@ function FloatingFrameTree({ frames, selectedFrameId, selectedGroupId, collapsed
   const selectedGroup = allGroups.find((group) => group.id === selectedGroupId);
   if (collapsed) {
     return (
-      <button type="button" onClick={onToggle} onPointerDown={(event) => event.stopPropagation()} className="absolute left-4 top-4 z-20 flex h-10 w-[142px] items-center justify-between rounded-xl border bg-background/95 px-3 text-sm font-medium shadow-lg backdrop-blur">
+      <button type="button" onClick={onToggle} onPointerDown={(event) => event.stopPropagation()} className="absolute left-4 top-4 z-20 flex h-10 w-[142px] items-center justify-between rounded-xl border bg-background/95 px-3 text-body font-medium shadow-lg backdrop-blur">
         <span className="truncate">{selectedGroup?.name ?? "全部"}</span><ChevronRight className="h-4 w-4 text-muted-foreground" />
       </button>
     );
@@ -280,7 +280,7 @@ function FloatingFrameTree({ frames, selectedFrameId, selectedGroupId, collapsed
       <div className="border-b p-3">
         <div className="flex items-center gap-2 rounded-lg border bg-background px-2 py-1.5">
           <Search className="h-3.5 w-3.5 text-muted-foreground" />
-          <input value={query} onChange={(event) => onQueryChange(event.target.value)} placeholder="搜索画板" className="min-w-0 flex-1 bg-transparent text-xs outline-none" />
+          <input value={query} onChange={(event) => onQueryChange(event.target.value)} placeholder="搜索画板" className="min-w-0 flex-1 bg-transparent text-caption outline-none" />
         </div>
       </div>
       <div className="min-h-0 flex-1 overflow-auto p-2">
@@ -288,7 +288,7 @@ function FloatingFrameTree({ frames, selectedFrameId, selectedGroupId, collapsed
           if (node.kind === "frame") {
             const active = node.frame.id === selectedFrameId;
             return (
-              <button key={node.frame.id} type="button" onClick={() => onSelectFrame(node.frame.id)} className={`flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-xs ${active ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent hover:text-foreground"}`}>
+              <button key={node.frame.id} type="button" onClick={() => onSelectFrame(node.frame.id)} className={`flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-caption ${active ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent hover:text-foreground"}`}>
                 <span className="min-w-0 flex-1 truncate">{node.frame.name}</span>
                 <span className="shrink-0 font-mono opacity-70">{Math.round(node.frame.width)}×{Math.round(node.frame.height)}</span>
               </button>
@@ -300,7 +300,7 @@ function FloatingFrameTree({ frames, selectedFrameId, selectedGroupId, collapsed
           return (
             <div key={node.id} className="mb-1">
               <div className={`flex items-center gap-1 rounded-lg ${activeGroup ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent hover:text-foreground"}`}>
-                <button type="button" onClick={() => onSelectGroup(fullGroup)} className="flex min-w-0 flex-1 items-center gap-2 px-2 py-2 text-left text-xs">
+                <button type="button" onClick={() => onSelectGroup(fullGroup)} className="flex min-w-0 flex-1 items-center gap-2 px-2 py-2 text-left text-caption">
                   <span className="min-w-0 flex-1 truncate font-medium">{node.name}</span>
                   <Badge variant="secondary" className="shrink-0">{fullGroup.frames.length}</Badge>
                 </button>
@@ -309,7 +309,7 @@ function FloatingFrameTree({ frames, selectedFrameId, selectedGroupId, collapsed
                 {node.frames.map((frame) => {
                   const active = frame.id === selectedFrameId;
                   return (
-                    <button key={frame.id} type="button" onClick={() => onSelectFrame(frame.id)} className={`mt-1 flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs ${active ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent hover:text-foreground"}`}>
+                    <button key={frame.id} type="button" onClick={() => onSelectFrame(frame.id)} className={`mt-1 flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-caption ${active ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent hover:text-foreground"}`}>
                       <span className="min-w-0 flex-1 truncate">{frame.name}</span>
                       <span className="shrink-0 font-mono opacity-70">{Math.round(frame.width)}×{Math.round(frame.height)}</span>
                     </button>
@@ -329,10 +329,10 @@ function FrameToolMenu({ state, onClose, onView, onCopyImage, onCopyPrompt, onDe
   return (
     <div className="fixed inset-0 z-50" onClick={onClose} onContextMenu={(event) => { event.preventDefault(); onClose(); }}>
       <div className="absolute min-w-40 overflow-hidden rounded-xl border bg-popover p-1 text-popover-foreground shadow-xl" style={{ left: state.x, top: state.y }} onClick={(event) => event.stopPropagation()}>
-        <button type="button" className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-accent" onClick={() => onView(state.frame)}><Eye className="h-4 w-4" />查看详情</button>
-        <button type="button" className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-accent" onClick={() => onCopyImage(state.frame)}><Copy className="h-4 w-4" />复制图片</button>
-        <button type="button" className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-accent" onClick={() => onCopyPrompt(state.frame)}><Code2 className="h-4 w-4" />复制 MCP 还原 Prompt</button>
-        <button type="button" className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-destructive hover:bg-destructive/10 disabled:opacity-50" disabled={!canDelete || deleting} onClick={() => onDelete(state.frame)}><Trash2 className="h-4 w-4" />{!canDelete ? "历史版本不可删除" : deleting ? "删除中…" : "删除"}</button>
+        <button type="button" className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-body hover:bg-accent" onClick={() => onView(state.frame)}><Eye className="h-4 w-4" />查看详情</button>
+        <button type="button" className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-body hover:bg-accent" onClick={() => onCopyImage(state.frame)}><Copy className="h-4 w-4" />复制图片</button>
+        <button type="button" className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-body hover:bg-accent" onClick={() => onCopyPrompt(state.frame)}><Code2 className="h-4 w-4" />复制 MCP 还原 Prompt</button>
+        <button type="button" className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-body text-destructive hover:bg-destructive/10 disabled:opacity-50" disabled={!canDelete || deleting} onClick={() => onDelete(state.frame)}><Trash2 className="h-4 w-4" />{!canDelete ? "历史版本不可删除" : deleting ? "删除中…" : "删除"}</button>
       </div>
     </div>
   );
@@ -432,7 +432,7 @@ function DesignBoard({ nativeJson, selectedFrameId, selectedGroupId, filePreview
     setPositions((prev) => ({ ...prev, [frame.id]: { x: snapped.x, y: snapped.y } }));
   };
 
-  if (!nativeJson || frames.length === 0) return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">暂无画板数据</div>;
+  if (!nativeJson || frames.length === 0) return <div className="flex h-full items-center justify-center text-body text-muted-foreground">暂无画板数据</div>;
 
   return (
     <div ref={hostRef} className="relative h-full min-h-[680px] overflow-hidden bg-[radial-gradient(circle_at_1px_1px,hsl(var(--muted-foreground)/0.18)_1px,transparent_0)] [background-size:24px_24px]" onWheel={handleWheel} onPointerDown={handlePanStart} onPointerMove={(event) => { handlePanMove(event); moveFrame(event); }} onPointerUp={clearDrag} onPointerCancel={clearDrag}>
@@ -447,11 +447,11 @@ function DesignBoard({ nativeJson, selectedFrameId, selectedGroupId, filePreview
       {guides.map((guide, index) => <div key={`${guide.orientation}-${guide.value}-${index}`} className="pointer-events-none absolute bg-primary/70" style={guide.orientation === "vertical" ? { left: camera.x + guide.value * camera.zoom, top: 0, width: 1, height: "100%" } : { top: camera.y + guide.value * camera.zoom, left: 0, height: 1, width: "100%" }} />)}
       <div className="absolute bottom-4 left-1/2 z-20 flex -translate-x-1/2 items-center gap-2 rounded-2xl border bg-background/95 px-3 py-2 shadow-xl backdrop-blur" onPointerDown={(event) => event.stopPropagation()}>
         <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => zoomBy(0.85)}><ZoomOut className="h-4 w-4" /></Button>
-        <div className="min-w-14 text-center text-xs tabular-nums text-muted-foreground">{Math.round(camera.zoom * 100)}%</div>
+        <div className="min-w-14 text-center text-caption tabular-nums text-muted-foreground">{Math.round(camera.zoom * 100)}%</div>
         <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => zoomBy(1.18)}><ZoomIn className="h-4 w-4" /></Button>
         <Button size="icon" variant="ghost" className="h-8 w-8" onClick={fitAll}><Maximize2 className="h-4 w-4" /></Button>
       </div>
-      <div className="pointer-events-none absolute bottom-4 right-4 rounded-lg border bg-background/90 px-3 py-2 text-xs text-muted-foreground shadow-sm backdrop-blur">拖动画布可平移 · 拖动画板可排列 · 双击画板查看详情</div>
+      <div className="pointer-events-none absolute bottom-4 right-4 rounded-lg border bg-background/90 px-3 py-2 text-caption text-muted-foreground shadow-sm backdrop-blur">拖动画布可平移 · 拖动画板可排列 · 双击画板查看详情</div>
     </div>
   );
 }
@@ -647,7 +647,7 @@ export function DesignFilePage({ designId }: { designId: string }) {
                 setSelectedRevisionId(nextRevisionId);
                 setSelectedFrameId(null);
                 navigation.replace(paths.designDetail(designId, { revisionId: nextRevisionId }));
-              }} className="h-8 rounded-md border bg-background px-2 text-xs">
+              }} className="h-8 rounded-md border bg-background px-2 text-caption">
                 {revisions.map((revision) => <option key={revision.id} value={revision.id}>版本 {revision.revision_number}{revision.id === data?.file.current_revision_id ? " · 当前" : ""}</option>)}
               </select>
             ) : null}
@@ -690,8 +690,8 @@ export function DesignFilePage({ designId }: { designId: string }) {
         <div className="p-4"><Skeleton className="h-[680px]" /></div>
       ) : error || selectedRevisionError ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
-          <p className="text-sm font-medium">无法加载此设计稿</p>
-          <p className="text-sm text-muted-foreground">它可能已被删除，或你没有访问权限。</p>
+          <p className="text-body font-medium">无法加载此设计稿</p>
+          <p className="text-body text-muted-foreground">它可能已被删除，或你没有访问权限。</p>
           <Button size="sm" variant="outline" onClick={() => void refetch()}>重试</Button>
         </div>
       ) : selectedRevisionLoading ? (

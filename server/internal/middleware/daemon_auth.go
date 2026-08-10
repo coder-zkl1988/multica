@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/multica-ai/multica/server/internal/auth"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -28,6 +27,7 @@ const (
 	DaemonAuthPathPAT         = "pat"
 	DaemonAuthPathCloudPAT    = "cloud_pat"
 	DaemonAuthPathJWT         = "jwt"
+	DaemonAuthPathService     = "service_account"
 )
 
 // DaemonWorkspaceIDFromContext returns the workspace ID set by DaemonAuth middleware.
@@ -43,7 +43,7 @@ func DaemonIDFromContext(ctx context.Context) string {
 }
 
 // DaemonAuthPathFromContext returns which token kind authenticated this
-// request — "daemon_token", "pat", "cloud_pat", or "jwt" — for telemetry.
+// request — "daemon_token", "cloud_pat", "jwt", or "service_account" — for telemetry.
 // Empty when the request did not pass through DaemonAuth.
 func DaemonAuthPathFromContext(ctx context.Context) string {
 	p, _ := ctx.Value(ctxKeyDaemonAuthPath).(string)
@@ -59,16 +59,10 @@ func WithDaemonContext(ctx context.Context, workspaceID, daemonID string) contex
 	return ctx
 }
 
-// DaemonAuth validates daemon auth tokens (mdt_ prefix) or falls back to
-// JWT/PAT validation for backward compatibility with daemons that
-// authenticate via user tokens.
+// DaemonAuth validates daemon, internal, service-account, and cloud tokens.
 //
 // Both caches are optional. When non-nil:
 //   - daemonCache short-circuits the daemon_token DB lookup on the mdt_ path
-//   - patCache short-circuits the PAT DB lookup AND the last_used_at update
-//     on the mul_ fallback path. This is the same cache shared with the
-//     regular Auth middleware, so a single hot PAT used by both human CLI
-//     and a daemon converges on one DB round-trip per AuthCacheTTL window.
 //
 // cloudPAT is optional; when non-nil, tokens with the mcn_ prefix are
 // validated by calling the Multica Cloud Fleet service (X-User-ID gets the
@@ -76,7 +70,7 @@ func WithDaemonContext(ctx context.Context, workspaceID, daemonID string) contex
 // branch — same fail-closed contract as the regular Auth middleware.
 //
 // Cache misses fall back to the original DB-backed behavior.
-func DaemonAuth(queries *db.Queries, patCache *auth.PATCache, daemonCache *auth.DaemonTokenCache, cloudPAT *auth.CloudPATVerifier) func(http.Handler) http.Handler {
+func DaemonAuth(queries *db.Queries, patCache *auth.PATCache, daemonCache *auth.DaemonTokenCache, cloudPAT *auth.CloudPATVerifier, useSySSO bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// X-Actor-Source is server-set only — strip any
@@ -88,6 +82,8 @@ func DaemonAuth(queries *db.Queries, patCache *auth.PATCache, daemonCache *auth.
 			// trust this header regardless of which auth path the
 			// request arrived on.
 			r.Header.Del("X-Actor-Source")
+			r.Header.Del("X-Service-Workspace-ID")
+			r.Header.Del("X-Auth-Expires-At")
 
 			authHeader := r.Header.Get("Authorization")
 			if authHeader == "" {
@@ -100,6 +96,30 @@ func DaemonAuth(queries *db.Queries, patCache *auth.PATCache, daemonCache *auth.
 			if tokenString == authHeader {
 				slog.Debug("daemon_auth: invalid format", "path", r.URL.Path)
 				writeError(w, http.StatusUnauthorized, "invalid authorization format")
+				return
+			}
+
+			if useSySSO && strings.HasPrefix(tokenString, auth.ServiceAccountTokenPrefix) {
+				if queries == nil {
+					writeError(w, http.StatusUnauthorized, "invalid token")
+					return
+				}
+				serviceToken, err := queries.GetServiceAccountTokenByHash(r.Context(), auth.HashToken(tokenString))
+				if err != nil {
+					writeError(w, http.StatusUnauthorized, "invalid token")
+					return
+				}
+				workspaceID := uuidToString(serviceToken.WorkspaceID)
+				r.Header.Set("X-User-ID", uuidToString(serviceToken.UserID))
+				r.Header.Set("X-Actor-Source", "service_account")
+				r.Header.Set("X-Service-Workspace-ID", workspaceID)
+				r.Header.Set("X-Workspace-ID", workspaceID)
+				r.Header.Set("X-Auth-Expires-At", serviceToken.ExpiresAt.Time.UTC().Format(time.RFC3339))
+				w.Header().Set("X-Auth-Expires-At", serviceToken.ExpiresAt.Time.UTC().Format(time.RFC3339))
+				go queries.UpdateServiceAccountTokenLastUsed(context.Background(), serviceToken.ID)
+				ctx := context.WithValue(r.Context(), ctxKeyDaemonWorkspaceID, workspaceID)
+				ctx = context.WithValue(ctx, ctxKeyDaemonAuthPath, DaemonAuthPathService)
+				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}
 
@@ -186,17 +206,14 @@ func DaemonAuth(queries *db.Queries, patCache *auth.PATCache, daemonCache *auth.
 				return
 			}
 
-			// Fallback: PAT tokens ("mul_" prefix).
-			if strings.HasPrefix(tokenString, "mul_") {
+			if !useSySSO && strings.HasPrefix(tokenString, "mul_") {
 				hash := auth.HashToken(tokenString)
-
 				if userID, ok := patCache.Get(r.Context(), hash); ok {
 					r.Header.Set("X-User-ID", userID)
 					ctx := context.WithValue(r.Context(), ctxKeyDaemonAuthPath, DaemonAuthPathPAT)
 					next.ServeHTTP(w, r.WithContext(ctx))
 					return
 				}
-
 				if queries == nil {
 					writeError(w, http.StatusUnauthorized, "invalid token")
 					return
@@ -207,49 +224,37 @@ func DaemonAuth(queries *db.Queries, patCache *auth.PATCache, daemonCache *auth.
 					writeError(w, http.StatusUnauthorized, "invalid token")
 					return
 				}
-
 				userID := uuidToString(pat.UserID)
 				r.Header.Set("X-User-ID", userID)
-
 				var expiresAt time.Time
 				if pat.ExpiresAt.Valid {
 					expiresAt = pat.ExpiresAt.Time
 				}
 				patCache.Set(r.Context(), hash, userID, auth.TTLForExpiry(time.Now(), expiresAt))
-
-				// Cache miss = first request in this TTL window. Refresh
-				// last_used_at; subsequent hits skip the write entirely.
 				go queries.UpdatePersonalAccessTokenLastUsed(context.Background(), pat.ID)
-
 				ctx := context.WithValue(r.Context(), ctxKeyDaemonAuthPath, DaemonAuthPathPAT)
 				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}
 
-			// Fallback: JWT tokens.
-			token, err := jwt.Parse(tokenString, func(token *jwt.Token) (any, error) {
-				if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-					return nil, jwt.ErrSignatureInvalid
-				}
-				return auth.JWTSecret(), nil
-			})
-			if err != nil || !token.Valid {
+			var identity auth.InternalTokenIdentity
+			var err error
+			if useSySSO {
+				identity, err = auth.ParseInternalToken(tokenString)
+			} else {
+				identity, err = auth.ParseLegacyJWT(tokenString)
+			}
+			if err != nil {
 				slog.Warn("daemon_auth: invalid token", "path", r.URL.Path, "error", err)
 				writeError(w, http.StatusUnauthorized, "invalid token")
 				return
 			}
-
-			claims, ok := token.Claims.(jwt.MapClaims)
-			if !ok {
-				writeError(w, http.StatusUnauthorized, "invalid claims")
-				return
+			r.Header.Set("X-User-ID", identity.UserID)
+			if identity.Source != "" {
+				r.Header.Set("X-Actor-Source", identity.Source)
 			}
-			sub, ok := claims["sub"].(string)
-			if !ok || strings.TrimSpace(sub) == "" {
-				writeError(w, http.StatusUnauthorized, "invalid claims")
-				return
-			}
-			r.Header.Set("X-User-ID", sub)
+			r.Header.Set("X-Auth-Expires-At", identity.ExpiresAt.UTC().Format(time.RFC3339))
+			w.Header().Set("X-Auth-Expires-At", identity.ExpiresAt.UTC().Format(time.RFC3339))
 			ctx := context.WithValue(r.Context(), ctxKeyDaemonAuthPath, DaemonAuthPathJWT)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})

@@ -131,6 +131,8 @@ function renderSection(issue: Issue) {
     runtime_config: {},
     custom_args: [],
     visibility: "workspace",
+    permission_mode: "public_to",
+    invocation_targets: [{ target_type: "workspace", target_id: null }],
     status: "idle",
     max_concurrent_tasks: 1,
     model: "",
@@ -173,6 +175,8 @@ function issue(overrides: Partial<Issue>): Issue {
     created_at: "2026-07-02T00:00:00Z",
     updated_at: "2026-07-02T00:00:00Z",
     ...overrides,
+    stage: overrides.stage ?? null,
+    properties: overrides.properties ?? {},
   };
 }
 

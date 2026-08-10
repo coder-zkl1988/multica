@@ -25,6 +25,7 @@
 import { useMemo } from "react";
 import { FlatList, Pressable, View } from "react-native";
 import { useQueries, useQuery } from "@tanstack/react-query";
+import { useTranslation } from "react-i18next";
 import type { Agent, Issue, MemberWithUser, Squad } from "@multica/core/types";
 import { canAssignAgentToIssue } from "@multica/core/permissions";
 import { Text } from "@/components/ui/text";
@@ -43,6 +44,7 @@ import {
 } from "@/data/viewed-issues-store";
 import type { MentionMarker } from "@/lib/mention-serialize";
 import { cn } from "@/lib/utils";
+import { isAgentRuntimeBound } from "@/lib/is-agent-runtime-bound";
 
 type Mode = "comment" | "chat";
 
@@ -73,6 +75,7 @@ export function MentionSuggestionBar({
   onSelect,
   mode = "comment",
 }: Props) {
+  const { t } = useTranslation("issues");
   const wsId = useWorkspaceStore((s) => s.currentWorkspaceId);
   const isChat = mode === "chat";
 
@@ -137,11 +140,14 @@ export function MentionSuggestionBar({
 
       const out: Row[] = [];
       if (matchedRecent.length > 0) {
-        out.push({ kind: "section", label: "Recent" });
+        out.push({ kind: "section", label: t("comment.mention.section_recent") });
         for (const i of matchedRecent) out.push({ kind: "issue", issue: i });
       }
       if (matchedMine.length > 0) {
-        out.push({ kind: "section", label: "My issues" });
+        out.push({
+          kind: "section",
+          label: t("comment.mention.section_my_issues"),
+        });
         for (const i of matchedMine) out.push({ kind: "issue", issue: i });
       }
       if (out.length === 0) out.push({ kind: "empty" });
@@ -159,10 +165,19 @@ export function MentionSuggestionBar({
     // assignee can never act on; web hides them, mobile must too.
     const myRole =
       members.find((m) => m.user_id === userId)?.role ?? null;
+    const runnableAgentIds = new Set(
+      agents
+        .filter(
+          (agent) =>
+            !agent.archived_at && isAgentRuntimeBound(agent),
+        )
+        .map((agent) => agent.id),
+    );
     const matchedAgents = [...agents]
       .filter(
         (a) =>
           !a.archived_at &&
+          isAgentRuntimeBound(a) &&
           (!q || a.name.toLowerCase().includes(q)) &&
           canAssignAgentToIssue(a, { userId, role: myRole }).allowed,
       )
@@ -171,27 +186,49 @@ export function MentionSuggestionBar({
     // A re-activated squad re-appears on the next list refetch.
     const matchedSquads = [...squads]
       .filter(
-        (s) => !s.archived_at && (!q || s.name.toLowerCase().includes(q)),
+        (s) =>
+          !s.archived_at &&
+          runnableAgentIds.has(s.leader_id) &&
+          (!q || s.name.toLowerCase().includes(q)),
       )
       .sort((a, b) => a.name.localeCompare(b.name));
 
     const out: Row[] = [];
     if (showAll) out.push({ kind: "all" });
     if (matchedMembers.length > 0) {
-      out.push({ kind: "section", label: "Members" });
+      out.push({
+        kind: "section",
+        label: t("picker_body.mention.section_people"),
+      });
       for (const m of matchedMembers) out.push({ kind: "member", member: m });
     }
     if (matchedAgents.length > 0) {
-      out.push({ kind: "section", label: "Agents" });
+      out.push({
+        kind: "section",
+        label: t("picker_body.mention.section_agents"),
+      });
       for (const a of matchedAgents) out.push({ kind: "agent", agent: a });
     }
     if (matchedSquads.length > 0) {
-      out.push({ kind: "section", label: "Squads" });
+      out.push({
+        kind: "section",
+        label: t("picker_body.mention.section_squads"),
+      });
       for (const s of matchedSquads) out.push({ kind: "squad", squad: s });
     }
     if (out.length === 0) out.push({ kind: "empty" });
     return out;
-  }, [isChat, query, recentIssues, myIssuesAll, members, agents, squads, userId]);
+  }, [
+    isChat,
+    query,
+    recentIssues,
+    myIssuesAll,
+    members,
+    agents,
+    squads,
+    userId,
+    t,
+  ]);
 
   if (!visible) return null;
 
@@ -241,7 +278,7 @@ export function MentionSuggestionBar({
             return (
               <View className="px-3 py-3">
                 <Text className="text-xs text-muted-foreground">
-                  No matches.
+                  {t("comment.mention.no_matches")}
                 </Text>
               </View>
             );
@@ -258,9 +295,9 @@ export function MentionSuggestionBar({
                   <Text className="text-xs font-medium text-brand">@</Text>
                 </View>
                 <Text className="flex-1 text-sm text-foreground">
-                  Everyone
+                  {t("comment.mention.everyone")}
                 </Text>
-                <Badge label="All" />
+                <Badge label={t("comment.mention.badge.all")} />
               </Pressable>
             );
           }
@@ -284,13 +321,15 @@ export function MentionSuggestionBar({
                 <Text className="flex-1 text-sm text-foreground">
                   {item.member.name}
                 </Text>
-                <Badge label="Member" />
+                <Badge label={t("comment.mention.badge.member")} />
               </Pressable>
             );
           }
           if (item.kind === "agent") {
+            const runtimeBound = isAgentRuntimeBound(item.agent);
             return (
               <Pressable
+                disabled={!runtimeBound}
                 onPress={() =>
                   onSelect({
                     type: "agent",
@@ -298,13 +337,23 @@ export function MentionSuggestionBar({
                     name: item.agent.name,
                   })
                 }
-                className="flex-row items-center gap-3 px-3 py-2 active:bg-secondary"
+                className={cn(
+                  "flex-row items-center gap-3 px-3 py-2 active:bg-secondary",
+                  !runtimeBound && "opacity-50",
+                )}
               >
                 <ActorAvatar type="agent" id={item.agent.id} size={28} showPresence />
                 <Text className="flex-1 text-sm text-foreground">
                   {item.agent.name}
                 </Text>
-                <Badge label="Agent" tone="brand" />
+                <Badge
+                  label={
+                    runtimeBound
+                      ? t("comment.mention.badge.agent")
+                      : t("picker_body.mention.needs_runtime")
+                  }
+                  tone={runtimeBound ? "brand" : "outline"}
+                />
               </Pressable>
             );
           }
@@ -324,7 +373,7 @@ export function MentionSuggestionBar({
                 <Text className="flex-1 text-sm text-foreground">
                   {item.squad.name}
                 </Text>
-                <Badge label="Squad" tone="outline" />
+                <Badge label={t("comment.mention.badge.squad")} tone="outline" />
               </Pressable>
             );
           }

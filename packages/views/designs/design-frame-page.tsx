@@ -366,7 +366,7 @@ function DistanceLines({ lines }: { lines: DistanceLine[] }) {
             className={`absolute bg-[#f33155] ${vertical ? "w-px" : "h-px"}`}
             style={{ left: line.x, top: line.y, width: vertical ? 1 : line.width, height: vertical ? line.height : 1 }}
           >
-            <span className={`absolute rounded bg-[#f33155] px-1.5 py-0.5 text-[11px] font-medium leading-3 text-white shadow-sm ${vertical ? "left-1.5 top-1/2 -translate-y-1/2" : "left-1/2 top-1.5 -translate-x-1/2"}`}>{line.label}</span>
+            <span className={`absolute rounded bg-[#f33155] px-1.5 py-0.5 text-micro font-medium leading-3 text-white shadow-sm ${vertical ? "left-1.5 top-1/2 -translate-y-1/2" : "left-1/2 top-1.5 -translate-x-1/2"}`}>{line.label}</span>
             <i className={`absolute bg-[#f33155] ${vertical ? "-left-0.5 top-0 h-px w-1.5" : "left-0 -top-0.5 h-1.5 w-px"}`} />
             <i className={`absolute bg-[#f33155] ${vertical ? "-left-0.5 bottom-0 h-px w-1.5" : "right-0 -top-0.5 h-1.5 w-px"}`} />
           </div>
@@ -398,9 +398,9 @@ function LayerOverlay({ frame, layers, selectedLayerId, selectedLayerIds, hovere
       <DistanceLines lines={lines} />
       {selectedLayer && selectedLayer.id !== frame.rootLayerId ? (
         <div className="absolute border border-[#f33155]" style={{ left: selectedLayer.x, top: selectedLayer.y, width: selectedLayer.width, height: selectedLayer.height }}>
-          {showSelectionSize ? <div className="absolute left-1/2 top-0 -translate-x-1/2 -translate-y-[calc(100%+6px)] rounded bg-[#f33155] px-1.5 py-0.5 text-[11px] font-medium text-white shadow-sm">{unitText(selectedLayer.width, "px")}</div> : null}
-          {showSelectionSize ? <div className="absolute right-0 top-1/2 translate-x-[calc(100%+6px)] -translate-y-1/2 rounded bg-[#f33155] px-1.5 py-0.5 text-[11px] font-medium text-white shadow-sm">{unitText(selectedLayer.height, "px")}</div> : null}
-          {showSelectionSize ? <div className="absolute left-0 bottom-0 translate-y-[calc(100%+6px)] rounded bg-background/95 px-1.5 py-0.5 text-[11px] font-medium text-foreground shadow-sm ring-1 ring-border">x {unitText(selectedLayer.x, "px")} · y {unitText(selectedLayer.y, "px")}</div> : null}
+          {showSelectionSize ? <div className="absolute left-1/2 top-0 -translate-x-1/2 -translate-y-[calc(100%+6px)] rounded bg-[#f33155] px-1.5 py-0.5 text-micro font-medium text-white shadow-sm">{unitText(selectedLayer.width, "px")}</div> : null}
+          {showSelectionSize ? <div className="absolute right-0 top-1/2 translate-x-[calc(100%+6px)] -translate-y-1/2 rounded bg-[#f33155] px-1.5 py-0.5 text-micro font-medium text-white shadow-sm">{unitText(selectedLayer.height, "px")}</div> : null}
+          {showSelectionSize ? <div className="absolute left-0 bottom-0 translate-y-[calc(100%+6px)] rounded bg-background/95 px-1.5 py-0.5 text-micro font-medium text-foreground shadow-sm ring-1 ring-border">x {unitText(selectedLayer.x, "px")} · y {unitText(selectedLayer.y, "px")}</div> : null}
           {[["-3px", "-3px"], ["calc(100% - 3px)", "-3px"], ["-3px", "calc(100% - 3px)"], ["calc(100% - 3px)", "calc(100% - 3px)"]].map(([left, top], index) => <i key={index} className="absolute h-1.5 w-1.5 rounded-full border border-[#f33155] bg-background" style={{ left, top }} />)}
         </div>
       ) : null}
@@ -410,7 +410,7 @@ function LayerOverlay({ frame, layers, selectedLayerId, selectedLayerIds, hovere
 
 function Field({ label, value }: { label: string; value: string | number | null | undefined }) {
   return (
-    <div className="flex items-start justify-between gap-3 border-b py-2 text-xs last:border-b-0">
+    <div className="flex items-start justify-between gap-3 border-b py-2 text-caption last:border-b-0">
       <span className="text-muted-foreground">{label}</span>
       <span className="min-w-0 truncate text-right font-medium">{value ?? "—"}</span>
     </div>
@@ -420,7 +420,7 @@ function Field({ label, value }: { label: string; value: string | number | null 
 function InspectorSection({ title, icon, children }: { title: string; icon?: ReactNode; children: ReactNode }) {
   return (
     <section className="rounded-xl border p-3">
-      <div className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">{icon}{title}</div>
+      <div className="mb-3 flex items-center gap-2 text-caption font-semibold uppercase tracking-wide text-muted-foreground">{icon}{title}</div>
       {children}
     </section>
   );
@@ -473,8 +473,8 @@ function FrameDetailToolMenu({ state, deleting, canDelete, onClose, onCopyImage,
   return (
     <div className="fixed inset-0 z-50" onClick={onClose} onContextMenu={(event) => { event.preventDefault(); onClose(); }}>
       <div className="absolute min-w-40 overflow-hidden rounded-xl border bg-popover p-1 text-popover-foreground shadow-xl" style={{ left: state.x, top: state.y }} onClick={(event) => event.stopPropagation()}>
-        <button type="button" className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-accent" onClick={onCopyImage}><Copy className="h-4 w-4" />复制图片</button>
-        <button type="button" className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-destructive hover:bg-destructive/10 disabled:opacity-50" disabled={!canDelete || deleting} onClick={onDelete}><Trash2 className="h-4 w-4" />{!canDelete ? "历史版本不可删除" : deleting ? "删除中…" : "删除"}</button>
+        <button type="button" className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-body hover:bg-accent" onClick={onCopyImage}><Copy className="h-4 w-4" />复制图片</button>
+        <button type="button" className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-body text-destructive hover:bg-destructive/10 disabled:opacity-50" disabled={!canDelete || deleting} onClick={onDelete}><Trash2 className="h-4 w-4" />{!canDelete ? "历史版本不可删除" : deleting ? "删除中…" : "删除"}</button>
       </div>
     </div>
   );
@@ -490,35 +490,35 @@ function SideDrawer({ drawer, nativeJson, revisions, colors, slices, selectedLay
         <Button size="icon" variant="ghost" className="h-8 w-8" onClick={onClose}><X className="h-4 w-4" /></Button>
       </div>
       <div className="min-h-0 flex-1 overflow-auto p-4">
-        {drawer === "history" ? <div className="space-y-3">{revisions.map((revision) => <button key={revision.id} type="button" className="w-full rounded-lg border bg-muted/40 p-3 text-left text-sm hover:bg-muted"><div className="font-medium">版本 {revision.revision_number}</div><div className="mt-1 text-xs text-muted-foreground">{new Date(revision.created_at).toLocaleString()} · {revision.status}</div></button>)}</div> : null}
-        {drawer === "colors" ? <div className="space-y-3">{colors.length ? colors.map((color, index) => <button key={`${color}-${index}`} type="button" className="flex w-full items-center gap-3 rounded-lg bg-muted p-3 text-left" onClick={() => copyWithToast(color)}><span className="h-8 w-8 rounded-full border shadow-inner" style={{ background: color }} /><span className="font-mono text-xs">{color}</span></button>) : <p className="text-sm text-muted-foreground">未找到颜色。</p>}</div> : null}
+        {drawer === "history" ? <div className="space-y-3">{revisions.map((revision) => <button key={revision.id} type="button" className="w-full rounded-lg border bg-muted/40 p-3 text-left text-body hover:bg-muted"><div className="font-medium">版本 {revision.revision_number}</div><div className="mt-1 text-caption text-muted-foreground">{new Date(revision.created_at).toLocaleString()} · {revision.status}</div></button>)}</div> : null}
+        {drawer === "colors" ? <div className="space-y-3">{colors.length ? colors.map((color, index) => <button key={`${color}-${index}`} type="button" className="flex w-full items-center gap-3 rounded-lg bg-muted p-3 text-left" onClick={() => copyWithToast(color)}><span className="h-8 w-8 rounded-full border shadow-inner" style={{ background: color }} /><span className="font-mono text-caption">{color}</span></button>) : <p className="text-body text-muted-foreground">未找到颜色。</p>}</div> : null}
         {drawer === "slices" ? <div className="space-y-3">{slices.length ? slices.map(({ layer, item }, index) => {
           const url = exportableUrl(nativeJson, item);
           return (
             <div key={`${layer.id}-${index}`} className={`rounded-lg border p-3 ${layer.id === selectedLayerId ? "border-primary bg-primary/5" : "bg-background"}`}>
               <button type="button" className="w-full text-left" onClick={() => onSelectLayer(layer.id)}>
                 <div className="font-medium">{layer.name}</div>
-                <div className="mt-1 text-xs text-muted-foreground">{unitText(layer.width, "px")} × {unitText(layer.height, "px")}</div>
+                <div className="mt-1 text-caption text-muted-foreground">{unitText(layer.width, "px")} × {unitText(layer.height, "px")}</div>
               </button>
-              {url ? <div className="mt-3 flex items-center gap-3"><div className="grid h-16 w-16 shrink-0 place-items-center rounded border bg-[linear-gradient(45deg,rgba(0,0,0,.08)_25%,transparent_25%,transparent_75%,rgba(0,0,0,.08)_75%),linear-gradient(45deg,rgba(0,0,0,.08)_25%,transparent_25%,transparent_75%,rgba(0,0,0,.08)_75%)] bg-[length:10px_10px] bg-[position:0_0,5px_5px]"><img src={url} alt={layer.name} className="max-h-14 max-w-14 object-contain" /></div><div className="min-w-0 flex-1"><div className="truncate font-mono text-xs text-muted-foreground">{url}</div><Button size="sm" variant="outline" className="mt-2 h-7" onClick={() => copyWithToast(url)}><Copy className="h-3.5 w-3.5" />复制链接</Button></div></div> : <p className="mt-2 text-xs text-muted-foreground">暂无 CDN URL。</p>}
+              {url ? <div className="mt-3 flex items-center gap-3"><div className="grid h-16 w-16 shrink-0 place-items-center rounded border bg-[linear-gradient(45deg,rgba(0,0,0,.08)_25%,transparent_25%,transparent_75%,rgba(0,0,0,.08)_75%),linear-gradient(45deg,rgba(0,0,0,.08)_25%,transparent_25%,transparent_75%,rgba(0,0,0,.08)_75%)] bg-[length:10px_10px] bg-[position:0_0,5px_5px]"><img src={url} alt={layer.name} className="max-h-14 max-w-14 object-contain" /></div><div className="min-w-0 flex-1"><div className="truncate font-mono text-caption text-muted-foreground">{url}</div><Button size="sm" variant="outline" className="mt-2 h-7" onClick={() => copyWithToast(url)}><Copy className="h-3.5 w-3.5" />复制链接</Button></div></div> : <p className="mt-2 text-caption text-muted-foreground">暂无 CDN URL。</p>}
             </div>
           );
-        }) : <p className="text-sm text-muted-foreground">该画板暂无切片，若有需要，请联系 UI</p>}</div> : null}
+        }) : <p className="text-body text-muted-foreground">该画板暂无切片，若有需要，请联系 UI</p>}</div> : null}
       </div>
     </aside>
   );
 }
 
 function ExportableRows({ nativeJson, exportables }: { nativeJson: GalleryNativeJson | undefined; exportables: Array<Record<string, unknown>> }) {
-  if (!exportables.length) return <p className="text-xs text-muted-foreground">此图层暂无可导出的切片元数据。</p>;
+  if (!exportables.length) return <p className="text-caption text-muted-foreground">此图层暂无可导出的切片元数据。</p>;
   return (
     <div className="space-y-3">
       {exportables.map((item, index) => {
         const url = exportableUrl(nativeJson, item);
         return (
           <div key={index} className="rounded-lg border p-2">
-            {url ? <div className="mb-2 flex items-center gap-3"><div className="grid h-14 w-14 shrink-0 place-items-center rounded border bg-muted"><img src={url} alt="slice" className="max-h-12 max-w-12 object-contain" /></div><div className="min-w-0 flex-1"><div className="truncate font-mono text-xs text-muted-foreground">{url}</div><Button size="sm" variant="outline" className="mt-2 h-7" onClick={() => copyWithToast(url)}><Copy className="h-3.5 w-3.5" />复制链接</Button></div></div> : null}
-            <pre className="max-h-28 overflow-auto rounded bg-muted p-2 text-xs">{JSON.stringify(item, null, 2)}</pre>
+            {url ? <div className="mb-2 flex items-center gap-3"><div className="grid h-14 w-14 shrink-0 place-items-center rounded border bg-muted"><img src={url} alt="slice" className="max-h-12 max-w-12 object-contain" /></div><div className="min-w-0 flex-1"><div className="truncate font-mono text-caption text-muted-foreground">{url}</div><Button size="sm" variant="outline" className="mt-2 h-7" onClick={() => copyWithToast(url)}><Copy className="h-3.5 w-3.5" />复制链接</Button></div></div> : null}
+            <pre className="max-h-28 overflow-auto rounded bg-muted p-2 text-caption">{JSON.stringify(item, null, 2)}</pre>
           </div>
         );
       })}
@@ -528,7 +528,7 @@ function ExportableRows({ nativeJson, exportables }: { nativeJson: GalleryNative
 
 function ColorRow({ label, color, extra }: { label: string; color: string | null; extra?: string }) {
   return (
-    <div className="flex items-center gap-2 rounded-lg bg-muted px-2 py-2 text-xs">
+    <div className="flex items-center gap-2 rounded-lg bg-muted px-2 py-2 text-caption">
       <span className="w-16 shrink-0 text-muted-foreground">{label}</span>
       <span className="h-5 w-5 shrink-0 rounded border shadow-inner" style={{ background: color ?? "transparent" }} />
       <span className="min-w-0 flex-1 truncate font-mono">{color ?? "—"}</span>
@@ -538,12 +538,12 @@ function ColorRow({ label, color, extra }: { label: string; color: string | null
 }
 
 function PaintRows({ paints }: { paints: Paint[] }) {
-  if (!paints.length) return <p className="text-xs text-muted-foreground">此图层暂无填充。</p>;
+  if (!paints.length) return <p className="text-caption text-muted-foreground">此图层暂无填充。</p>;
   return (
     <div className="space-y-2">
       {paints.map((paint, index) => {
         if (paint.type === "gradient") {
-          return <div key={index} className="space-y-1 rounded-lg bg-muted p-2 text-xs"><div className="font-medium">渐变</div>{(paint.stops ?? []).map((stop, stopIndex) => <ColorRow key={stopIndex} label={`${Math.round((stop.position ?? 0) * 100)}%`} color={cssColor(stop.color)} />)}</div>;
+          return <div key={index} className="space-y-1 rounded-lg bg-muted p-2 text-caption"><div className="font-medium">渐变</div>{(paint.stops ?? []).map((stop, stopIndex) => <ColorRow key={stopIndex} label={`${Math.round((stop.position ?? 0) * 100)}%`} color={cssColor(stop.color)} />)}</div>;
         }
         if (paint.type === "image") return <Field key={index} label="图片" value={paint.assetId ?? paint.imageHash ?? paint.scaleMode ?? "图片填充"} />;
         return <ColorRow key={index} label="颜色" color={cssColor(paint.color)} extra={paint.opacity !== undefined ? `${Math.round(paint.opacity * 100)}%` : undefined} />;
@@ -553,12 +553,12 @@ function PaintRows({ paints }: { paints: Paint[] }) {
 }
 
 function StrokeRows({ strokes }: { strokes: Stroke[] }) {
-  if (!strokes.length) return <p className="text-xs text-muted-foreground">此图层暂无描边。</p>;
+  if (!strokes.length) return <p className="text-caption text-muted-foreground">此图层暂无描边。</p>;
   return <div className="space-y-2">{strokes.map((stroke, index) => <div key={index} className="space-y-2 rounded-lg border p-2"><Field label="粗细" value={unitText(stroke.width, "px")} /><Field label="位置" value={stroke.position} /><ColorRow label="颜色" color={cssColor(stroke.color)} /></div>)}</div>;
 }
 
 function ShadowRows({ shadows }: { shadows: Shadow[] }) {
-  if (!shadows.length) return <p className="text-xs text-muted-foreground">此图层暂无阴影。</p>;
+  if (!shadows.length) return <p className="text-caption text-muted-foreground">此图层暂无阴影。</p>;
   return <div className="space-y-2">{shadows.map((shadow, index) => <div key={index} className="space-y-2 rounded-lg border p-2"><Field label="类型" value={shadow.type} /><Field label="偏移" value={`${unitText(shadow.offsetX, "px")} / ${unitText(shadow.offsetY, "px")}`} /><Field label="模糊" value={unitText(shadow.blur, "px")} /><Field label="扩展" value={unitText(shadow.spread, "px")} /><ColorRow label="颜色" color={cssColor(shadow.color)} /></div>)}</div>;
 }
 
@@ -593,7 +593,7 @@ function AutoLayoutSection({ layer }: { layer: DesignLayer | null }) {
       <Field label="交叉尺寸" value={info.counterAxisSizingMode !== undefined ? String(info.counterAxisSizingMode) : undefined} />
       <Field label="主轴对齐" value={info.primaryAxisAlignItems !== undefined ? String(info.primaryAxisAlignItems) : undefined} />
       <Field label="交叉对齐" value={info.counterAxisAlignItems !== undefined ? String(info.counterAxisAlignItems) : undefined} />
-      <p className="mt-2 text-xs text-muted-foreground">仅展示 Figma Auto Layout 元数据；当前不会修改布局。</p>
+      <p className="mt-2 text-caption text-muted-foreground">仅展示 Figma Auto Layout 元数据；当前不会修改布局。</p>
     </InspectorSection>
   );
 }
@@ -923,21 +923,21 @@ export function DesignFramePage({ designId, frameId }: { designId: string; frame
         <div className="grid flex-1 grid-cols-[1fr_360px] gap-4 p-4"><Skeleton className="h-full min-h-[720px]" /><Skeleton className="h-full min-h-[720px]" /></div>
       ) : error || selectedRevisionError ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
-          <p className="text-sm font-medium">无法加载此画板</p>
-          <p className="text-sm text-muted-foreground">它可能已被删除，或你没有访问权限。</p>
+          <p className="text-body font-medium">无法加载此画板</p>
+          <p className="text-body text-muted-foreground">它可能已被删除，或你没有访问权限。</p>
           <Button size="sm" variant="outline" onClick={() => void refetch()}>重试</Button>
         </div>
       ) : selectedRevisionLoading ? (
         <div className="grid flex-1 grid-cols-[1fr_360px] gap-4 p-4"><Skeleton className="h-full min-h-[720px]" /><Skeleton className="h-full min-h-[720px]" /></div>
       ) : !nativeJson || !frame ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
-          <p className="text-sm font-medium">未找到画板</p>
+          <p className="text-body font-medium">未找到画板</p>
           <Button size="sm" variant="outline" onClick={() => navigation.push(designDetailPath)}>返回设计文件</Button>
         </div>
       ) : (
         <main className="relative grid min-h-0 flex-1 grid-cols-[minmax(680px,1fr)_380px] gap-4 overflow-auto p-4">
           {layerPanelCollapsed ? (
-            <Button type="button" variant="secondary" className="absolute left-6 top-6 z-30 h-9 gap-2 rounded-full border bg-background/95 px-3 text-xs shadow-lg backdrop-blur" onClick={() => setLayerPanelCollapsed(false)}>
+            <Button type="button" variant="secondary" className="absolute left-6 top-6 z-30 h-9 gap-2 rounded-full border bg-background/95 px-3 text-caption shadow-lg backdrop-blur" onClick={() => setLayerPanelCollapsed(false)}>
               <Layers className="h-3.5 w-3.5" />图层
             </Button>
           ) : (
@@ -949,8 +949,8 @@ export function DesignFramePage({ designId, frameId }: { designId: string; frame
             <TopInspectBar revisionCount={revisions.length} unit="px" sliceCount={slices.length} colors={colors} onOpenDrawer={setActiveDrawer} />
             <div className="mb-4 flex items-center justify-between gap-3">
               <div className="min-w-0">
-                <h1 className="truncate text-lg font-semibold">{frame.name}</h1>
-                <p className="text-xs text-muted-foreground">{Math.round(frame.width)} × {Math.round(frame.height)} · 点击、Shift 点击或拖拽以选择元数据</p>
+                <h1 className="truncate text-body-lg font-semibold">{frame.name}</h1>
+                <p className="text-caption text-muted-foreground">{Math.round(frame.width)} × {Math.round(frame.height)} · 点击、Shift 点击或拖拽以选择元数据</p>
               </div>
               <div className="flex shrink-0 items-center gap-2">
                 <div className="flex rounded-md border bg-muted/40 p-0.5">
@@ -959,11 +959,11 @@ export function DesignFramePage({ designId, frameId }: { designId: string; frame
                     ["image", "原图"],
                     ["overlay", "叠加对照"],
                   ] satisfies Array<[FrameRenderMode, string]>).map(([mode, label]) => (
-                    <Button key={mode} type="button" size="sm" variant={renderMode === mode ? "secondary" : "ghost"} className="h-7 px-2.5 text-xs" onClick={() => setRenderMode(mode)}>{label}</Button>
+                    <Button key={mode} type="button" size="sm" variant={renderMode === mode ? "secondary" : "ghost"} className="h-7 px-2.5 text-caption" onClick={() => setRenderMode(mode)}>{label}</Button>
                   ))}
                 </div>
                 {renderMode === "overlay" ? (
-                  <label className="flex items-center gap-2 rounded-md border bg-background px-2 py-1 text-xs text-muted-foreground">
+                  <label className="flex items-center gap-2 rounded-md border bg-background px-2 py-1 text-caption text-muted-foreground">
                     <span>原图</span>
                     <input
                       type="range"
@@ -993,7 +993,7 @@ export function DesignFramePage({ designId, frameId }: { designId: string; frame
               </div>
             </div>
             {editSummary ? (
-              <div className="mb-4 rounded-xl border border-primary/20 bg-primary/5 p-3 text-xs">
+              <div className="mb-4 rounded-xl border border-primary/20 bg-primary/5 p-3 text-caption">
                 <div className="font-medium text-primary">最近一次轻量编辑</div>
                 <div className="mt-1 text-foreground">{editSummary.summary ?? "已更新设计元数据"}</div>
                 <div className="mt-1 text-muted-foreground">{editSummary.layerName ?? editSummary.layerId ?? "图层"}{editSummary.editedAt ? ` · ${new Date(editSummary.editedAt).toLocaleString()}` : ""}</div>
@@ -1036,7 +1036,7 @@ export function DesignFramePage({ designId, frameId }: { designId: string; frame
                 }}
               >
                 {renderMode === "native" ? <NativeFramePreview nativeJson={nativeJson} frame={frame} className="pointer-events-none absolute inset-0 overflow-hidden bg-background" /> : null}
-                {renderMode === "image" ? (previewUrl ? <img src={previewUrl} alt={frame.name} className="h-full w-full object-fill" draggable={false} /> : <div className="flex h-full items-center justify-center text-sm text-muted-foreground">暂无原图预览，请切换到真实图层查看。</div>) : null}
+                {renderMode === "image" ? (previewUrl ? <img src={previewUrl} alt={frame.name} className="h-full w-full object-fill" draggable={false} /> : <div className="flex h-full items-center justify-center text-body text-muted-foreground">暂无原图预览，请切换到真实图层查看。</div>) : null}
                 {renderMode === "overlay" ? (
                   <>
                     <NativeFramePreview nativeJson={nativeJson} frame={frame} className="pointer-events-none absolute inset-0 overflow-hidden bg-background" />
@@ -1055,8 +1055,8 @@ export function DesignFramePage({ designId, frameId }: { designId: string; frame
 
           <aside className="min-h-0 overflow-auto rounded-2xl border bg-background">
             <div className="sticky top-0 z-10 border-b bg-background/95 p-4 backdrop-blur">
-              <div className="flex items-center gap-2 text-sm font-semibold"><MousePointer2 className="h-4 w-4" />检查</div>
-              <p className="mt-1 truncate text-xs text-muted-foreground">{selectedLayer?.name ?? frame.name}</p>
+              <div className="flex items-center gap-2 text-body font-semibold"><MousePointer2 className="h-4 w-4" />检查</div>
+              <p className="mt-1 truncate text-caption text-muted-foreground">{selectedLayer?.name ?? frame.name}</p>
             </div>
             <div className="space-y-4 p-4">
               <InspectorSection title="属性" icon={<Layers className="h-3.5 w-3.5" />}>
@@ -1064,10 +1064,10 @@ export function DesignFramePage({ designId, frameId }: { designId: string; frame
                 <Field label="类型" value={selectedLayer?.type ?? "frame"} />
                 <Field label="来源节点" value={selectedLayer?.sourceNodeId ?? frame.sourceNodeId} />
                 <div className="mt-3 grid grid-cols-2 gap-2">
-                  <div className="rounded-lg bg-muted p-2"><div className="text-[11px] text-muted-foreground">X</div><div className="font-mono text-sm">{unitText(selectedLayer?.x ?? frame.x, "px")}</div></div>
-                  <div className="rounded-lg bg-muted p-2"><div className="text-[11px] text-muted-foreground">Y</div><div className="font-mono text-sm">{unitText(selectedLayer?.y ?? frame.y, "px")}</div></div>
-                  <div className="rounded-lg bg-muted p-2"><div className="text-[11px] text-muted-foreground">宽度</div><div className="font-mono text-sm">{unitText(selectedLayer?.width ?? frame.width, "px")}</div></div>
-                  <div className="rounded-lg bg-muted p-2"><div className="text-[11px] text-muted-foreground">高度</div><div className="font-mono text-sm">{unitText(selectedLayer?.height ?? frame.height, "px")}</div></div>
+                  <div className="rounded-lg bg-muted p-2"><div className="text-micro text-muted-foreground">X</div><div className="font-mono text-body">{unitText(selectedLayer?.x ?? frame.x, "px")}</div></div>
+                  <div className="rounded-lg bg-muted p-2"><div className="text-micro text-muted-foreground">Y</div><div className="font-mono text-body">{unitText(selectedLayer?.y ?? frame.y, "px")}</div></div>
+                  <div className="rounded-lg bg-muted p-2"><div className="text-micro text-muted-foreground">宽度</div><div className="font-mono text-body">{unitText(selectedLayer?.width ?? frame.width, "px")}</div></div>
+                  <div className="rounded-lg bg-muted p-2"><div className="text-micro text-muted-foreground">高度</div><div className="font-mono text-body">{unitText(selectedLayer?.height ?? frame.height, "px")}</div></div>
                 </div>
                 <Field label="不透明度" value={selectedLayer?.opacity !== undefined ? `${Math.round(selectedLayer.opacity * 100)}%` : undefined} />
                 <Field label="圆角" value={styleRadius(style)} />
@@ -1075,62 +1075,62 @@ export function DesignFramePage({ designId, frameId }: { designId: string; frame
 
               <InspectorSection title="选区编辑" icon={<Sparkles className="h-3.5 w-3.5" />}>
                 <div className="space-y-3">
-                  {editSummary ? <div className="rounded-lg bg-muted p-2 text-xs text-muted-foreground">当前 JSON：{editSummary.summary ?? "已更新设计元数据"}</div> : null}
-                  {isHistoricalRevision ? <div className="rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900">历史版本仅供查看和创建还原任务，不支持直接编辑。</div> : null}
+                  {editSummary ? <div className="rounded-lg bg-muted p-2 text-caption text-muted-foreground">当前 JSON：{editSummary.summary ?? "已更新设计元数据"}</div> : null}
+                  {isHistoricalRevision ? <div className="rounded-lg border border-amber-200 bg-amber-50 p-2 text-caption text-amber-900">历史版本仅供查看和创建还原任务，不支持直接编辑。</div> : null}
                   {editSummary ? <Button size="sm" variant="outline" className="w-full" disabled={!canEditActiveRevision || !selectedLayer || selectedLayer.id === frame.rootLayerId || saveLayerEdit.isPending} onClick={() => saveLayerEdit.mutate({ undo_last: true })}>撤销上次轻编辑</Button> : null}
                   <div className="space-y-1.5">
-                    <div className="text-xs font-medium text-muted-foreground">图层名称</div>
-                    <Input value={editName} className="h-8 text-xs" onChange={(event) => setEditName(event.target.value)} disabled={!canEditActiveRevision || !selectedLayer || selectedLayer.id === frame.rootLayerId} />
+                    <div className="text-caption font-medium text-muted-foreground">图层名称</div>
+                    <Input value={editName} className="h-8 text-caption" onChange={(event) => setEditName(event.target.value)} disabled={!canEditActiveRevision || !selectedLayer || selectedLayer.id === frame.rootLayerId} />
                   </div>
-                  <label className="flex items-center gap-2 rounded-lg border p-2 text-xs">
+                  <label className="flex items-center gap-2 rounded-lg border p-2 text-caption">
                     <Checkbox checked={editVisible} disabled={!canEditActiveRevision || !selectedLayer || selectedLayer.id === frame.rootLayerId} onCheckedChange={(checked) => setEditVisible(checked === true)} />
                     <span>显示图层</span>
                   </label>
                   <div className="grid grid-cols-2 gap-2">
-                    <label className="space-y-1.5 rounded-lg border p-2 text-xs">
+                    <label className="space-y-1.5 rounded-lg border p-2 text-caption">
                       <span className="font-medium text-muted-foreground">填充色</span>
                       <div className="flex items-center gap-2">
                         <input type="color" value={editFillColor || "#000000"} disabled={layerEditDisabled} className="h-7 w-9 rounded border bg-transparent" onChange={(event) => setEditFillColor(event.target.value.toUpperCase())} />
-                        <span className="font-mono text-[11px] text-muted-foreground">{editFillColor || "—"}</span>
+                        <span className="font-mono text-micro text-muted-foreground">{editFillColor || "—"}</span>
                       </div>
                     </label>
                     {selectedLayer?.type === "text" ? (
-                      <label className="space-y-1.5 rounded-lg border p-2 text-xs">
+                      <label className="space-y-1.5 rounded-lg border p-2 text-caption">
                         <span className="font-medium text-muted-foreground">文本色</span>
                         <div className="flex items-center gap-2">
                           <input type="color" value={editTextColor || "#000000"} disabled={layerEditDisabled} className="h-7 w-9 rounded border bg-transparent" onChange={(event) => setEditTextColor(event.target.value.toUpperCase())} />
-                          <span className="font-mono text-[11px] text-muted-foreground">{editTextColor || "—"}</span>
+                          <span className="font-mono text-micro text-muted-foreground">{editTextColor || "—"}</span>
                         </div>
                       </label>
                     ) : null}
                   </div>
                   <div className="grid grid-cols-2 gap-2">
-                    <label className="space-y-1.5 rounded-lg border p-2 text-xs">
+                    <label className="space-y-1.5 rounded-lg border p-2 text-caption">
                       <span className="font-medium text-muted-foreground">描边色</span>
                       <div className="flex items-center gap-2">
                         <input type="color" value={editStrokeColor || "#000000"} disabled={layerEditDisabled} className="h-7 w-9 rounded border bg-transparent" onChange={(event) => setEditStrokeColor(event.target.value.toUpperCase())} />
-                        <span className="font-mono text-[11px] text-muted-foreground">{editStrokeColor || "—"}</span>
+                        <span className="font-mono text-micro text-muted-foreground">{editStrokeColor || "—"}</span>
                       </div>
                     </label>
-                    <label className="space-y-1.5 rounded-lg border p-2 text-xs">
+                    <label className="space-y-1.5 rounded-lg border p-2 text-caption">
                       <span className="font-medium text-muted-foreground">描边宽度</span>
                       <Input value={editStrokeWidth} disabled={layerEditDisabled} inputMode="decimal" placeholder="0" onChange={(event) => setEditStrokeWidth(event.target.value)} />
-                      {strokeWidthValidationMessage ? <span className="text-[11px] text-destructive">{strokeWidthValidationMessage}</span> : null}
+                      {strokeWidthValidationMessage ? <span className="text-micro text-destructive">{strokeWidthValidationMessage}</span> : null}
                     </label>
                   </div>
                   {selectedLayer?.type === "text" ? (
                     <div className="space-y-1.5">
-                      <div className="text-xs font-medium text-muted-foreground">文本内容</div>
-                      <Textarea value={editText} className="min-h-24 resize-none text-xs" disabled={layerEditDisabled} onChange={(event) => setEditText(event.target.value)} />
+                      <div className="text-caption font-medium text-muted-foreground">文本内容</div>
+                      <Textarea value={editText} className="min-h-24 resize-none text-caption" disabled={layerEditDisabled} onChange={(event) => setEditText(event.target.value)} />
                     </div>
                   ) : null}
                   {selectedLayerSupportsImageURL ? (
                     <div className="space-y-1.5">
-                      <div className="text-xs font-medium text-muted-foreground">替换图片 URL</div>
+                      <div className="text-caption font-medium text-muted-foreground">替换图片 URL</div>
                       <Input value={editImageUrl} disabled={layerEditDisabled} placeholder="https://..." onChange={(event) => setEditImageUrl(event.target.value)} />
                     </div>
                   ) : null}
-                  <p className="text-xs text-muted-foreground">当前只支持名称、显隐与文本内容等轻量编辑；几何、布局、层级和资产不在此处修改。</p>
+                  <p className="text-caption text-muted-foreground">当前只支持名称、显隐与文本内容等轻量编辑；几何、布局、层级和资产不在此处修改。</p>
                   <Button size="sm" className="w-full" disabled={!canEditActiveRevision || !hasLayerEditChanges || !!strokeWidthValidationMessage || saveLayerEdit.isPending} onClick={() => saveLayerEdit.mutate(undefined)}>{saveLayerEdit.isPending ? "保存中…" : "保存到当前 JSON"}</Button>
                 </div>
               </InspectorSection>
@@ -1144,8 +1144,8 @@ export function DesignFramePage({ designId, frameId }: { designId: string; frame
               {selectedLayer?.text ? (
                 <InspectorSection title="字体">
                   <div className="mb-3 space-y-2">
-                    <div className="flex items-center justify-between text-xs text-muted-foreground"><span>内容</span><Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => copyWithToast(textContent)}><Copy className="h-3.5 w-3.5" />复制</Button></div>
-                    <pre className="max-h-40 whitespace-pre-wrap break-words rounded-lg bg-muted p-3 text-xs leading-relaxed text-foreground">{textContent || "—"}</pre>
+                    <div className="flex items-center justify-between text-caption text-muted-foreground"><span>内容</span><Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => copyWithToast(textContent)}><Copy className="h-3.5 w-3.5" />复制</Button></div>
+                    <pre className="max-h-40 whitespace-pre-wrap break-words rounded-lg bg-muted p-3 text-caption leading-relaxed text-foreground">{textContent || "—"}</pre>
                   </div>
                   <Field label="字体" value={selectedLayer.text.fontFamily} />
                   <Field label="字号" value={selectedLayer.text.fontSize} />
@@ -1166,11 +1166,11 @@ export function DesignFramePage({ designId, frameId }: { designId: string; frame
 
               <InspectorSection title="CSS" icon={<Code2 className="h-3.5 w-3.5" />}>
                 <div className="mb-3 grid grid-cols-4 gap-1 rounded-lg bg-muted p-1">
-                  {(["css", "rn", "android", "ios"] as CodeKind[]).map((kind) => <button key={kind} type="button" onClick={() => setActiveCodeKind(kind)} className={`rounded-md px-2 py-1.5 text-xs font-medium uppercase ${activeCodeKind === kind ? "bg-background shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>{kind}</button>)}
+                  {(["css", "rn", "android", "ios"] as CodeKind[]).map((kind) => <button key={kind} type="button" onClick={() => setActiveCodeKind(kind)} className={`rounded-md px-2 py-1.5 text-caption font-medium uppercase ${activeCodeKind === kind ? "bg-background shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>{kind}</button>)}
                 </div>
                 <div className="relative">
                   <Button size="icon" variant="ghost" className="absolute right-1 top-1 h-7 w-7" onClick={() => copyWithToast(code[activeCodeKind])}><Copy className="h-3.5 w-3.5" /></Button>
-                  <pre className="max-h-60 overflow-auto rounded-lg bg-muted p-3 pr-10 text-xs leading-relaxed"><code>{code[activeCodeKind] || "—"}</code></pre>
+                  <pre className="max-h-60 overflow-auto rounded-lg bg-muted p-3 pr-10 text-caption leading-relaxed"><code>{code[activeCodeKind] || "—"}</code></pre>
                 </div>
               </InspectorSection>
 
@@ -1179,11 +1179,11 @@ export function DesignFramePage({ designId, frameId }: { designId: string; frame
               </InspectorSection>
 
               <InspectorSection title="选区上下文" icon={<MousePointer2 className="h-3.5 w-3.5" />}>
-                <div className="space-y-2 text-xs">
+                <div className="space-y-2 text-caption">
                   <div className="flex items-center justify-between rounded-lg bg-muted p-2"><span className="text-muted-foreground">显式图层</span><span className="font-mono">{selectionLayerIds.length}</span></div>
                   <div className="flex items-center justify-between rounded-lg bg-muted p-2"><span className="text-muted-foreground">解析后图层</span><span className="font-mono">{selectionContextLoading ? "…" : activeSelectionContext?.resolvedLayerIds.length ?? selectionLayerIds.length}</span></div>
-                  {selectionBounds ? <div className="rounded-lg bg-muted p-2 font-mono text-[11px] text-muted-foreground">bounds · x {numberText(rectX(selectionBounds))} · y {numberText(rectY(selectionBounds))} · {numberText(selectionBounds.width)} × {numberText(selectionBounds.height)}</div> : null}
-                  {activeSelectionContext?.resolvedLayerIds.length ? <div className="max-h-28 overflow-auto rounded-lg border p-2 font-mono text-[11px] text-muted-foreground">{activeSelectionContext.resolvedLayerIds.slice(0, 20).join("\n")}</div> : <p className="text-xs text-muted-foreground">按住 Shift 点击多个图层，或在画板上拖拽，预览内部智能体选区上下文。</p>}
+                  {selectionBounds ? <div className="rounded-lg bg-muted p-2 font-mono text-micro text-muted-foreground">bounds · x {numberText(rectX(selectionBounds))} · y {numberText(rectY(selectionBounds))} · {numberText(selectionBounds.width)} × {numberText(selectionBounds.height)}</div> : null}
+                  {activeSelectionContext?.resolvedLayerIds.length ? <div className="max-h-28 overflow-auto rounded-lg border p-2 font-mono text-micro text-muted-foreground">{activeSelectionContext.resolvedLayerIds.slice(0, 20).join("\n")}</div> : <p className="text-caption text-muted-foreground">按住 Shift 点击多个图层，或在画板上拖拽，预览内部智能体选区上下文。</p>}
                   <Button size="sm" variant="outline" className="mt-2 w-full" onClick={copySelectionRestorePrompt} disabled={selectionContextLoading || (!selectionLayerIds.length && !selectionBounds)}>
                     <Code2 className="h-3.5 w-3.5" />复制 MCP 还原 Prompt
                   </Button>
@@ -1203,8 +1203,8 @@ export function DesignFramePage({ designId, frameId }: { designId: string; frame
                       <div key={item.itemId} className="space-y-3 rounded-xl border bg-muted/30 p-3">
                         <div className="flex items-start justify-between gap-2">
                           <div className="min-w-0">
-                            <div className="flex items-center gap-2 text-xs font-semibold"><Badge variant="secondary">#{item.order}</Badge><span>{restoreTaskSourceLabel(item.source)}</span></div>
-                            <div className="mt-1 truncate text-xs text-muted-foreground">{item.frameName} · {item.resolvedLayerIds.length || item.layerIds.length || 1} 个图层</div>
+                            <div className="flex items-center gap-2 text-caption font-semibold"><Badge variant="secondary">#{item.order}</Badge><span>{restoreTaskSourceLabel(item.source)}</span></div>
+                            <div className="mt-1 truncate text-caption text-muted-foreground">{item.frameName} · {item.resolvedLayerIds.length || item.layerIds.length || 1} 个图层</div>
                           </div>
                           <div className="flex shrink-0 items-center gap-1">
                             <Button size="icon" variant="ghost" className="h-7 w-7" disabled={index === 0} onClick={() => moveTaskItem(item.itemId, -1)}><ArrowUp className="h-3.5 w-3.5" /></Button>
@@ -1212,8 +1212,8 @@ export function DesignFramePage({ designId, frameId }: { designId: string; frame
                             <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive" onClick={() => removeTaskItem(item.itemId)}><Trash2 className="h-3.5 w-3.5" /></Button>
                           </div>
                         </div>
-                        <Textarea value={item.note} placeholder="备注：可选。说明这个区域的实现要求；模块/状态等语义后续由需求文档和分析流程生成。" className="min-h-16 resize-none text-xs" onChange={(event) => updateTaskItem(item.itemId, { note: event.target.value })} />
-                        {item.selectionBounds ? <div className="font-mono text-[11px] text-muted-foreground">bounds x {numberText(rectX(item.selectionBounds))} · y {numberText(rectY(item.selectionBounds))} · {numberText(item.selectionBounds.width)} × {numberText(item.selectionBounds.height)}</div> : null}
+                        <Textarea value={item.note} placeholder="备注：可选。说明这个区域的实现要求；模块/状态等语义后续由需求文档和分析流程生成。" className="min-h-16 resize-none text-caption" onChange={(event) => updateTaskItem(item.itemId, { note: event.target.value })} />
+                        {item.selectionBounds ? <div className="font-mono text-micro text-muted-foreground">bounds x {numberText(rectX(item.selectionBounds))} · y {numberText(rectY(item.selectionBounds))} · {numberText(item.selectionBounds.width)} × {numberText(item.selectionBounds.height)}</div> : null}
                       </div>
                     ))}
                     <div className="grid grid-cols-2 gap-2">
@@ -1222,18 +1222,18 @@ export function DesignFramePage({ designId, frameId }: { designId: string; frame
                     </div>
                   </div>
                 ) : (
-                  <p className="text-xs text-muted-foreground">将整画板、选中图层或框选区域加入队列；下一步会接后端 design_restore_task。</p>
+                  <p className="text-caption text-muted-foreground">将整画板、选中图层或框选区域加入队列；下一步会接后端 design_restore_task。</p>
                 )}
               </InspectorSection>
 
               <section className="rounded-xl border p-3">
-                <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground"><MessageSquareText className="h-3.5 w-3.5" />标注</div>
-                <p className="text-xs text-muted-foreground">此画板尚未导入标注/评论。</p>
+                <div className="mb-2 flex items-center gap-2 text-caption font-semibold uppercase tracking-wide text-muted-foreground"><MessageSquareText className="h-3.5 w-3.5" />标注</div>
+                <p className="text-caption text-muted-foreground">此画板尚未导入标注/评论。</p>
               </section>
 
               <section className="rounded-xl border bg-primary/5 p-3">
-                <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-primary"><Sparkles className="h-3.5 w-3.5" />建议编辑</div>
-                <p className="text-xs text-muted-foreground">从选中的画板/图层创建编辑意图。系统稍后会将其转换为受控 slotValues 或安全 jsonPatch。</p>
+                <div className="mb-2 flex items-center gap-2 text-caption font-semibold uppercase tracking-wide text-primary"><Sparkles className="h-3.5 w-3.5" />建议编辑</div>
+                <p className="text-caption text-muted-foreground">从选中的画板/图层创建编辑意图。系统稍后会将其转换为受控 slotValues 或安全 jsonPatch。</p>
                 <Button size="sm" className="mt-3 w-full" disabled>建议编辑 · 即将推出</Button>
               </section>
             </div>
@@ -1256,11 +1256,11 @@ export function DesignFramePage({ designId, frameId }: { designId: string; frame
           />
           <div className="fixed bottom-4 left-1/2 z-30 flex -translate-x-1/2 items-center gap-1 rounded-2xl border bg-background/95 px-3 py-2 shadow-xl backdrop-blur">
             <Button size="icon" variant="ghost" className="h-8 w-8" disabled={frameZoom <= MIN_FRAME_ZOOM} onClick={() => setFrameZoom((value) => Math.max(MIN_FRAME_ZOOM, value / 1.2))}>-</Button>
-            <div className="min-w-14 text-center text-xs tabular-nums text-muted-foreground">{Math.round(frameZoom * 100)}%</div>
+            <div className="min-w-14 text-center text-caption tabular-nums text-muted-foreground">{Math.round(frameZoom * 100)}%</div>
             <Button size="icon" variant="ghost" className="h-8 w-8" disabled={frameZoom >= MAX_FRAME_ZOOM} onClick={() => setFrameZoom((value) => Math.min(MAX_FRAME_ZOOM, value * 1.2))}>+</Button>
             <span className="mx-1 h-5 w-px bg-border" />
-            <Button size="sm" variant="ghost" className="h-8 px-2 text-xs" disabled={!previousFrame} onClick={() => previousFrame && navigation.push(paths.designFrameDetail(designId, previousFrame.id, { revisionId: activeRevision?.id }))}>上一页</Button>
-            <Button size="sm" variant="ghost" className="h-8 px-2 text-xs" disabled={!nextFrame} onClick={() => nextFrame && navigation.push(paths.designFrameDetail(designId, nextFrame.id, { revisionId: activeRevision?.id }))}>下一页</Button>
+            <Button size="sm" variant="ghost" className="h-8 px-2 text-caption" disabled={!previousFrame} onClick={() => previousFrame && navigation.push(paths.designFrameDetail(designId, previousFrame.id, { revisionId: activeRevision?.id }))}>上一页</Button>
+            <Button size="sm" variant="ghost" className="h-8 px-2 text-caption" disabled={!nextFrame} onClick={() => nextFrame && navigation.push(paths.designFrameDetail(designId, nextFrame.id, { revisionId: activeRevision?.id }))}>下一页</Button>
           </div>
           <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
             <AlertDialogContent>

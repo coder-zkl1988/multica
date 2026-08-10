@@ -264,10 +264,10 @@ Relevant verification:
 
 Important files:
 
-- `server/migrations/122_design_delivery.up.sql`
-- `server/migrations/123_design_restore_task_delivery.up.sql`
-- `server/migrations/124_design_delivery_cancel_audit.up.sql`
-- `server/migrations/125_design_delivery_single_active_source.up.sql`
+- `server/migrations/243_design_delivery.up.sql`
+- `server/migrations/244_design_restore_task_delivery.up.sql`
+- `server/migrations/245_design_delivery_cancel_audit.up.sql`
+- `server/migrations/246_design_delivery_single_active_source.up.sql`
 - `server/internal/handler/design_delivery.go`
 - `server/internal/handler/design_delivery_test.go`
 - `server/internal/handler/design_file.go`
@@ -410,10 +410,10 @@ Multica:
 - `server/internal/handler/design_file.go` — design file and restore handlers.
 - `server/internal/handler/design_delivery.go` — design delivery handoff handlers.
 - `server/internal/handler/daemon.go` — Agent completion/mapping parsing/policy warnings.
-- `server/migrations/122_design_delivery.up.sql` — design delivery table and indexes.
-- `server/migrations/123_design_restore_task_delivery.up.sql` — restore task to delivery binding.
-- `server/migrations/124_design_delivery_cancel_audit.up.sql` — cancellation reason and audit fields.
-- `server/migrations/125_design_delivery_single_active_source.up.sql` — source Issue can only have one active delivery.
+- `server/migrations/243_design_delivery.up.sql` — design delivery table and indexes.
+- `server/migrations/244_design_restore_task_delivery.up.sql` — restore task to delivery binding.
+- `server/migrations/245_design_delivery_cancel_audit.up.sql` — cancellation reason and audit fields.
+- `server/migrations/246_design_delivery_single_active_source.up.sql` — source Issue can only have one active delivery.
 - `docs/product/design-restore-workflow-correction-2026-07-02.md` — corrected UI-restore-first workflow and fallback strategy.
 - `packages/views/designs/design-file-page.tsx` — design board page.
 - `packages/views/designs/design-frame-page.tsx` — frame detail/native viewer page.

@@ -4,13 +4,32 @@ export type {
   AgentStatus,
   AgentRuntimeMode,
   AgentVisibility,
+  AgentPermissionMode,
+  AgentInvocationTarget,
+  AgentInvocationTargetInput,
   AgentTask,
+  TaskAttribution,
+  AttributionUser,
+  TaskEvidence,
   AgentActivityBucket,
   AgentRunCount,
+  WorkspaceWorkingAgent,
+  WorkspaceWorkingAgentType,
+  WorkspaceWorkingAgentMineRelation,
   TaskFailureReason,
   AgentRuntime,
   RuntimeDevice,
+  RuntimeProfile,
+  RuntimeProtocolFamily,
+  RuntimeProfileVisibility,
+  CreateRuntimeProfileRequest,
+  UpdateRuntimeProfileRequest,
   CreateAgentRequest,
+  AgentBuilderRuntimeSwitch,
+  AgentBuilderSession,
+  AgentBuilderSessionSummary,
+  AgentPermissionScope,
+  StoredAgentDraft,
   AgentTemplate,
   AgentTemplateSummary,
   AgentTemplateSkillRef,
@@ -23,6 +42,8 @@ export type {
   Skill,
   SkillSummary,
   AgentSkillSummary,
+  DisabledRuntimeSkill,
+  SetAgentRuntimeSkillEnabledRequest,
   SkillFile,
   CreateSkillRequest,
   UpdateSkillRequest,
@@ -35,16 +56,22 @@ export type {
   DashboardUsageByAgent,
   DashboardAgentRunTime,
   DashboardRunTimeDaily,
+  DashboardFailureDaily,
+  DashboardFailureByAgent,
   RuntimeUpdate,
   RuntimeUpdateStatus,
   RuntimeModel,
+  RuntimeModelServiceTier,
   RuntimeModelThinking,
   RuntimeModelThinkingLevel,
   RuntimeModelListRequest,
   RuntimeModelListStatus,
   RuntimeModelsResult,
   RuntimeLocalSkillStatus,
+  RuntimeLocalSkillImportAction,
+  RuntimeLocalSkillImportConflict,
   RuntimeLocalSkillSummary,
+	RuntimeLocalMcpServerSummary,
   RuntimeLocalSkillListRequest,
   CreateRuntimeLocalSkillImportRequest,
   RuntimeLocalSkillImportRequest,
@@ -52,11 +79,28 @@ export type {
   RuntimeLocalSkillImportResult,
   IssueUsageSummary,
 } from "./agent";
+export { RUNTIME_PROFILE_PROTOCOL_FAMILIES } from "./agent";
 export type { Workspace, WorkspaceRepo, Member, MemberRole, User, MemberWithUser, Invitation } from "./workspace";
-export type { InboxItem, InboxSeverity, InboxItemType } from "./inbox";
+export type { InboxItem, InboxSeverity, InboxItemType, InboxWorkspaceUnread } from "./inbox";
 export type { NotificationGroupKey, NotificationGroupValue, NotificationPreferences, NotificationPreferenceResponse } from "./notification-preference";
-export type { Comment, CommentType, CommentAuthorType, Reaction } from "./comment";
-export type { Label, CreateLabelRequest, UpdateLabelRequest, ListLabelsResponse, IssueLabelsResponse } from "./label";
+export type { Comment, CommentType, CommentAuthorType, CommentTriggerPreview, CommentTriggerPreviewAgent, CommentTriggerSource, CommentTriggerOutcome, CommentTriggerStatus, Reaction } from "./comment";
+export type { Label, LabelResourceType, CreateLabelRequest, UpdateLabelRequest, ListLabelsResponse, IssueLabelsResponse, ResourceLabelsResponse } from "./label";
+export type { IssueProperty, IssuePropertyType, IssuePropertyOption, IssuePropertyConfig, IssuePropertyValue, IssuePropertyValues, CreatePropertyRequest, UpdatePropertyRequest, ListPropertiesResponse, IssuePropertiesResponse } from "./property";
+export { ISSUE_PROPERTY_TYPES, isKnownPropertyType } from "./property";
+export type {
+  QuickAction,
+  QuickActionVisibility,
+  QuickActionAssigneeType,
+  QuickActionStatus,
+  CreateQuickActionRequest,
+  UpdateQuickActionRequest,
+  ListQuickActionsResponse,
+} from "./quick-action";
+export {
+  QUICK_ACTION_SIDEBAR_LIMIT,
+  QUICK_ACTION_TEMPLATE_TOKEN_RE,
+  findQuickActionTemplateToken,
+} from "./quick-action";
 export type {
   TimelineEntry,
   AssigneeFrequencyEntry,
@@ -65,7 +109,28 @@ export type { IssueSubscriber } from "./subscriber";
 export type * from "./events";
 export type * from "./api";
 export type { Attachment } from "./attachment";
-export type { ChatSession, ChatMessage, ChatMessagesPage, ChatPendingTask, PendingChatTaskItem, PendingChatTasksResponse, SendChatMessageResponse } from "./chat";
+export { attachmentDownloadPath, attachmentIdFromDownloadURL, contentReferencesAttachment } from "./attachment-url";
+export type {
+  ChatSession,
+  ChatLastMessage,
+  ChatPinnedAgent,
+  ChatMessage,
+  ChatQuickAction,
+  ChatQuickActionsPendingState,
+  ChatQuickActionsFailureState,
+  ChatMessagesPage,
+  ChatPendingTask,
+  ChatQueuedTask,
+  PrioritizeQueuedChatTaskResponse,
+  PendingChatTaskItem,
+  PendingChatTasksResponse,
+  HasPendingChatTasksResponse,
+  SendChatMessageResponse,
+  CancelledChatMessage,
+  CancelTaskResponse,
+  ChatDraftRestore,
+  ChatDraftRestoresResponse,
+} from "./chat";
 export type { StorageAdapter } from "./storage";
 export type {
   Project,
@@ -89,10 +154,22 @@ export type {
   GitHubMergeableState,
   GitHubPullRequest,
   GitHubPullRequestChecksConclusion,
+  GitHubPullRequestChecksRollup,
+  GitHubPullRequestMergeable,
+  GitHubPullRequestMergeStateStatus,
   GitHubPullRequestState,
   ListGitHubInstallationsResponse,
+  GitHubRepository,
+  ListGitHubRepositoriesResponse,
   GitHubConnectResponse,
 } from "./github";
+export type {
+  VCSProvider,
+  VCSConnection,
+  ListVCSConnectionsResponse,
+  ConnectVCSRequest,
+  ConnectVCSResponse,
+} from "./vcs";
 export type {
   LarkInstallation,
   ListLarkInstallationsResponse,
@@ -101,10 +178,25 @@ export type {
   RedeemLarkBindingTokenResponse,
 } from "./lark";
 export type {
+  ComposioToolkit,
+  ComposioConnection,
+  ComposioConnectInitResponse,
+} from "./composio";
+export type {
+  SlackInstallation,
+  ListSlackInstallationsResponse,
+  RegisterSlackBYORequest,
+  RedeemSlackBindingTokenResponse,
+} from "./slack";
+export type {
   Autopilot,
   AutopilotStatus,
   AutopilotExecutionMode,
   AutopilotAssigneeType,
+  AutopilotSubscriber,
+  AutopilotSubscriberInput,
+  AutopilotCollaborator,
+  AutopilotCollaboratorsResponse,
   AutopilotTrigger,
   AutopilotTriggerKind,
   AutopilotRun,
@@ -116,6 +208,7 @@ export type {
   CreateAutopilotTriggerRequest,
   UpdateAutopilotTriggerRequest,
   ListAutopilotsResponse,
+  CronPreviewResponse,
   GetAutopilotResponse,
   ListAutopilotRunsResponse,
   WebhookDelivery,

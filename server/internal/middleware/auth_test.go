@@ -13,9 +13,12 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// newRedisTestClient connects to REDIS_TEST_URL, flushes, and skips when
-// unset — same gating pattern the rest of the suite uses for Redis-backed
-// tests, so `go test ./...` works on a stock laptop without a Redis.
+const redisTestDB = 13
+
+// newRedisTestClient connects to REDIS_TEST_URL, uses this package's logical
+// test DB, flushes, and skips when unset — same gating pattern the rest of the
+// suite uses for Redis-backed tests, so `go test ./...` works on a stock laptop
+// without a Redis.
 func newRedisTestClient(t *testing.T) *redis.Client {
 	t.Helper()
 	url := os.Getenv("REDIS_TEST_URL")
@@ -26,6 +29,7 @@ func newRedisTestClient(t *testing.T) *redis.Client {
 	if err != nil {
 		t.Fatalf("parse REDIS_TEST_URL: %v", err)
 	}
+	opts.DB = redisTestDB
 	rdb := redis.NewClient(opts)
 	ctx := context.Background()
 	if err := rdb.Ping(ctx).Err(); err != nil {
@@ -49,15 +53,16 @@ func generateToken(claims jwt.MapClaims, secret []byte) string {
 
 func validClaims() jwt.MapClaims {
 	return jwt.MapClaims{
-		"sub":   "test-user-id",
-		"email": "test@multica.ai",
-		"exp":   time.Now().Add(time.Hour).Unix(),
+		"sub":         "test-user-id",
+		"email":       "test@multica.ai",
+		"auth_source": "sso",
+		"exp":         time.Now().Add(time.Hour).Unix(),
 	}
 }
 
 // authMiddleware returns the Auth middleware with nil queries (JWT-only tests).
 func authMiddleware(next http.Handler) http.Handler {
-	return Auth(nil, nil, nil)(next)
+	return Auth(nil, nil, nil, true)(next)
 }
 
 func TestAuth_MissingHeader(t *testing.T) {
@@ -237,7 +242,7 @@ func TestAuth_InvalidPAT(t *testing.T) {
 // boundary MUL-2600 introduces.
 func TestAuth_StripsClientSuppliedActorSource(t *testing.T) {
 	var gotActorSource string
-	mw := Auth(nil, nil, nil)
+	mw := Auth(nil, nil, nil, true)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotActorSource = r.Header.Get("X-Actor-Source")
 		w.WriteHeader(http.StatusOK)
@@ -247,8 +252,7 @@ func TestAuth_StripsClientSuppliedActorSource(t *testing.T) {
 	req := httptest.NewRequest("GET", "/api/me", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	// Client tries to forge the actor-source header. The middleware must
-	// discard it before the JWT branch runs (which doesn't set it again
-	// for human sessions).
+	// discard it before the JWT branch replaces it with the signed source.
 	req.Header.Set("X-Actor-Source", "task_token")
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
@@ -256,34 +260,16 @@ func TestAuth_StripsClientSuppliedActorSource(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
-	if gotActorSource != "" {
-		t.Fatalf("X-Actor-Source must be cleared on non-task-token paths, got %q", gotActorSource)
+	if gotActorSource != "sso" {
+		t.Fatalf("X-Actor-Source = %q, want signed source sso", gotActorSource)
 	}
 }
 
-// TestAuth_PATCacheHit pins the optimization: when the PAT cache already
-// holds an entry for this token, the middleware MUST NOT call into queries
-// — it short-circuits before the DB lookup and the last_used_at update.
-//
-// We exploit that by passing nil queries: a cache miss would dereference
-// the nil and panic; a cache hit must not. Reaching the next handler with
-// the cached user_id therefore proves the short-circuit fired.
-func TestAuth_PATCacheHit(t *testing.T) {
-	rdb := newRedisTestClient(t)
-	cache := auth.NewPATCache(rdb)
-	if cache == nil {
-		t.Fatal("expected non-nil cache")
-	}
-
+func TestAuth_RejectsPersonalAccessToken(t *testing.T) {
 	const rawToken = "mul_cache_hit_test_token"
-	hash := auth.HashToken(rawToken)
-	cache.Set(context.Background(), hash, "cached-user-id", auth.AuthCacheTTL)
-
-	var gotUserID string
-	mw := Auth(nil, cache, nil) // nil queries — only safe on cache hit
+	mw := Auth(nil, nil, nil, true)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotUserID = r.Header.Get("X-User-ID")
-		w.WriteHeader(http.StatusOK)
+		t.Fatal("next handler should not be called")
 	}))
 
 	req := httptest.NewRequest("GET", "/api/me", nil)
@@ -291,14 +277,10 @@ func TestAuth_PATCacheHit(t *testing.T) {
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200 on cache hit, got %d", w.Code)
-	}
-	if gotUserID != "cached-user-id" {
-		t.Fatalf("expected cached X-User-ID, got %q", gotUserID)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Code)
 	}
 }
-
 
 // TestAuth_MCN_NoVerifierConfigured pins the same fail-closed branch
 // as the daemon side: with no MULTICA_CLOUD_FLEET_URL configured, an
@@ -306,7 +288,7 @@ func TestAuth_PATCacheHit(t *testing.T) {
 // We don't fall through — an mcn_ string can't be a valid mul_ PAT or
 // JWT, so any fall-through would be wasted work.
 func TestAuth_MCN_NoVerifierConfigured(t *testing.T) {
-	mw := Auth(nil, nil, nil)
+	mw := Auth(nil, nil, nil, true)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("next must not be called when verifier is unconfigured")
 	}))
@@ -335,7 +317,7 @@ func TestAuth_MCN_ValidTokenSetsUserID(t *testing.T) {
 	verifier := auth.NewCloudPATVerifier(auth.CloudPATVerifierConfig{FleetBaseURL: srv.URL})
 
 	var gotUser, gotActorSource string
-	mw := Auth(nil, nil, verifier)
+	mw := Auth(nil, nil, verifier, true)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotUser = r.Header.Get("X-User-ID")
 		gotActorSource = r.Header.Get("X-Actor-Source")
@@ -373,7 +355,7 @@ func TestAuth_MCN_InvalidReturns401(t *testing.T) {
 	defer srv.Close()
 
 	verifier := auth.NewCloudPATVerifier(auth.CloudPATVerifierConfig{FleetBaseURL: srv.URL})
-	mw := Auth(nil, nil, verifier)
+	mw := Auth(nil, nil, verifier, true)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("next must not be called when token is invalid")
 	}))
@@ -397,7 +379,7 @@ func TestAuth_MCN_FleetUnreachableReturns503(t *testing.T) {
 	defer srv.Close()
 
 	verifier := auth.NewCloudPATVerifier(auth.CloudPATVerifierConfig{FleetBaseURL: srv.URL})
-	mw := Auth(nil, nil, verifier)
+	mw := Auth(nil, nil, verifier, true)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("next must not be called when fleet is unavailable")
 	}))
@@ -409,5 +391,64 @@ func TestAuth_MCN_FleetUnreachableReturns503(t *testing.T) {
 
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected 503, got %d", w.Code)
+	}
+}
+
+func TestAuthModeJWT(t *testing.T) {
+	expiresAt := time.Now().Add(time.Hour).Unix()
+	legacy := generateToken(jwt.MapClaims{"sub": "legacy-user", "exp": expiresAt}, auth.JWTSecret())
+	sso := generateToken(jwt.MapClaims{"sub": "sso-user", "auth_source": "sso", "exp": expiresAt}, auth.JWTSecret())
+	tests := []struct {
+		name     string
+		useSySSO bool
+		token    string
+		want     int
+	}{
+		{"legacy accepts legacy JWT", false, legacy, http.StatusOK},
+		{"legacy rejects SSO JWT", false, sso, http.StatusUnauthorized},
+		{"SSO rejects legacy JWT", true, legacy, http.StatusUnauthorized},
+		{"SSO accepts SSO JWT", true, sso, http.StatusOK},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			handler := Auth(nil, nil, nil, tc.useSySSO)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			}))
+			req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+			req.Header.Set("Authorization", "Bearer "+tc.token)
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+			if w.Code != tc.want {
+				t.Fatalf("status = %d, want %d", w.Code, tc.want)
+			}
+		})
+	}
+}
+
+func TestAuthModePersonalAccessToken(t *testing.T) {
+	rdb := newRedisTestClient(t)
+	cache := auth.NewPATCache(rdb)
+	const token = "mul_auth_mode_cache_hit"
+	cache.Set(context.Background(), auth.HashToken(token), "legacy-user", auth.AuthCacheTTL)
+	for _, tc := range []struct {
+		name     string
+		useSySSO bool
+		want     int
+	}{
+		{"legacy", false, http.StatusOK},
+		{"SSO", true, http.StatusUnauthorized},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			handler := Auth(nil, cache, nil, tc.useSySSO)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			}))
+			req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+			req.Header.Set("Authorization", "Bearer "+token)
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+			if w.Code != tc.want {
+				t.Fatalf("status = %d, want %d", w.Code, tc.want)
+			}
+		})
 	}
 }

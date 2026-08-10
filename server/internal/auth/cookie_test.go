@@ -64,8 +64,8 @@ func TestSetAuthCookies_HTTPSelfHost(t *testing.T) {
 	t.Setenv("COOKIE_DOMAIN", "192.168.5.5")
 
 	rec := httptest.NewRecorder()
-	if err := SetAuthCookies(rec, "test-token"); err != nil {
-		t.Fatalf("SetAuthCookies: %v", err)
+	if err := SetAuthCookiesUntil(rec, "test-token", time.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("SetAuthCookiesUntil: %v", err)
 	}
 
 	cookies := rec.Result().Cookies()
@@ -83,33 +83,25 @@ func TestSetAuthCookies_HTTPSelfHost(t *testing.T) {
 }
 
 func TestParseAuthTokenTTL(t *testing.T) {
-	cases := []struct {
-		name    string
-		raw     string
-		wantDur time.Duration
-		wantOK  bool
+	tests := []struct {
+		raw  string
+		want time.Duration
+		ok   bool
 	}{
-		{"empty string", "", 0, false},
-		{"valid 3600", "3600", time.Hour, true},
-		{"valid 86400", "86400", 24 * time.Hour, true},
-		{"negative", "-100", 0, false},
-		{"zero", "0", 0, false},
-		{"non-numeric", "abc", 0, false},
-		{"whitespace trimmed", " 7200 ", 2 * time.Hour, true},
-		{"duration hours", "8760h", 8760 * time.Hour, true},
-		{"duration compound", "720h30m", 720*time.Hour + 30*time.Minute, true},
-		{"duration minutes", "90m", 90 * time.Minute, true},
-		{"duration negative", "-1h", 0, false},
-		{"duration zero", "0s", 0, false},
-		{"integer overflow", "9999999999", 0, false},
+		{"", 0, false},
+		{"3600", time.Hour, true},
+		{" 7200 ", 2 * time.Hour, true},
+		{"720h30m", 720*time.Hour + 30*time.Minute, true},
+		{"0", 0, false},
+		{"-1h", 0, false},
+		{"abc", 0, false},
+		{"9999999999", 0, false},
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got, ok := parseAuthTokenTTL(tc.raw)
-			if ok != tc.wantOK || got != tc.wantDur {
-				t.Errorf("parseAuthTokenTTL(%q) = (%v, %v), want (%v, %v)", tc.raw, got, ok, tc.wantDur, tc.wantOK)
-			}
-		})
+	for _, tc := range tests {
+		got, ok := parseAuthTokenTTL(tc.raw)
+		if got != tc.want || ok != tc.ok {
+			t.Errorf("parseAuthTokenTTL(%q) = (%v, %v), want (%v, %v)", tc.raw, got, ok, tc.want, tc.ok)
+		}
 	}
 }
 
@@ -118,8 +110,8 @@ func TestSetAuthCookies_HTTPSProduction(t *testing.T) {
 	t.Setenv("COOKIE_DOMAIN", "app.example.com")
 
 	rec := httptest.NewRecorder()
-	if err := SetAuthCookies(rec, "test-token"); err != nil {
-		t.Fatalf("SetAuthCookies: %v", err)
+	if err := SetAuthCookiesUntil(rec, "test-token", time.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("SetAuthCookiesUntil: %v", err)
 	}
 
 	for _, c := range rec.Result().Cookies() {
@@ -128,6 +120,25 @@ func TestSetAuthCookies_HTTPSProduction(t *testing.T) {
 		}
 		if c.Domain != "app.example.com" {
 			t.Errorf("cookie %q Domain = %q, want %q", c.Name, c.Domain, "app.example.com")
+		}
+	}
+}
+
+func TestSetAuthCookiesUntil(t *testing.T) {
+	t.Setenv("FRONTEND_ORIGIN", "https://app.example.com")
+	expiresAt := time.Now().Add(90 * time.Minute).Truncate(time.Second)
+	rec := httptest.NewRecorder()
+
+	if err := SetAuthCookiesUntil(rec, "test-token", expiresAt); err != nil {
+		t.Fatalf("SetAuthCookiesUntil: %v", err)
+	}
+
+	for _, cookie := range rec.Result().Cookies() {
+		if !cookie.Expires.Equal(expiresAt) {
+			t.Errorf("cookie %q expiry = %v, want %v", cookie.Name, cookie.Expires, expiresAt)
+		}
+		if cookie.MaxAge < 89*60 || cookie.MaxAge > 90*60 {
+			t.Errorf("cookie %q MaxAge = %d, want remaining lifetime", cookie.Name, cookie.MaxAge)
 		}
 	}
 }

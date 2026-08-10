@@ -43,14 +43,27 @@ function workspaceScoped(slug: string) {
     autopilots: () => `${ws}/autopilots`,
     autopilotDetail: (id: string) => `${ws}/autopilots/${encode(id)}`,
     agents: () => `${ws}/agents`,
+    newAgent: () => `${ws}/agents/new`,
+    // The two creation methods behind the chooser. Each is a real route so a
+    // half-filled form survives a refresh and can be linked to directly.
+    newAgentManual: () => `${ws}/agents/new/manual`,
+    newAgentAi: () => `${ws}/agents/new/ai`,
+    // One creation conversation. It is a durable object, not a step of the
+    // route above: it survives leaving the studio and is resumed later, so it
+    // owns an address instead of being a query param on the "start one" screen.
+    newAgentAiSession: (sessionId: string) =>
+      `${ws}/agents/new/ai/${encode(sessionId)}`,
     agentDetail: (id: string) => `${ws}/agents/${encode(id)}`,
     memberDetail: (id: string) => `${ws}/members/${encode(id)}`,
     squads: () => `${ws}/squads`,
     squadDetail: (id: string) => `${ws}/squads/${encode(id)}`,
     inbox: () => `${ws}/inbox`,
+    chat: () => `${ws}/chat`,
     myIssues: () => `${ws}/my-issues`,
     runtimes: () => `${ws}/runtimes`,
     runtimeDetail: (id: string) => `${ws}/runtimes/${encode(id)}`,
+    runtimeSettings: (machineId: string, runtimeId: string) =>
+      `${ws}/runtimes/${encode(machineId)}/runtime/${encode(runtimeId)}`,
     skills: () => `${ws}/skills`,
     skillDetail: (id: string) => `${ws}/skills/${encode(id)}`,
     settings: () => `${ws}/settings`,
@@ -63,11 +76,11 @@ export const paths = {
 
   // Global (pre-workspace) routes
   login: () => "/login",
+  authCallback: () => "/auth/callback",
   newWorkspace: () => "/workspaces/new",
   invite: (id: string) => `/invite/${encode(id)}`,
   invitations: () => "/invitations",
   onboarding: () => "/onboarding",
-  authCallback: () => "/auth/callback",
   root: () => "/",
 };
 
@@ -77,7 +90,7 @@ export type WorkspacePaths = ReturnType<typeof workspaceScoped>;
 // A path is global if it equals or begins with any of these.
 // Note: `/workspaces/` (trailing slash) is the prefix — `workspaces` is reserved,
 // so any path starting with `/workspaces/...` is system-owned, not user-owned.
-const GLOBAL_PREFIXES = ["/login", "/workspaces/", "/invite/", "/invitations", "/onboarding", "/auth/", "/logout", "/signup"];
+const GLOBAL_PREFIXES = ["/login", "/auth/", "/workspaces/", "/invite/", "/invitations", "/onboarding", "/logout", "/signup"];
 
 export function isGlobalPath(path: string): boolean {
   return GLOBAL_PREFIXES.some((p) => path === p || path.startsWith(p));

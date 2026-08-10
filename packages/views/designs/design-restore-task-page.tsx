@@ -46,8 +46,8 @@ function sourceLabel(source: DesignRestoreTaskItemInput["source"]) {
 function JsonBlock({ title, value }: { title: string; value: unknown }) {
   return (
     <section className="rounded-lg border bg-background">
-      <div className="border-b px-3 py-2 text-sm font-medium">{title}</div>
-      <pre className="max-h-96 overflow-auto p-3 text-xs leading-relaxed text-muted-foreground">{JSON.stringify(value, null, 2)}</pre>
+      <div className="border-b px-3 py-2 text-body font-medium">{title}</div>
+      <pre className="max-h-96 overflow-auto p-3 text-caption leading-relaxed text-muted-foreground">{JSON.stringify(value, null, 2)}</pre>
     </section>
   );
 }
@@ -74,7 +74,7 @@ function jsonPreview(value: unknown) {
 function JsonTree({ value, name, depth = 0 }: { value: unknown; name?: string; depth?: number }) {
   if (value === null || typeof value !== "object") {
     return (
-      <div className="flex gap-2 py-0.5 text-xs">
+      <div className="flex gap-2 py-0.5 text-caption">
         {name ? <span className="text-muted-foreground">{name}:</span> : null}
         <span className="break-all font-mono text-foreground">{JSON.stringify(value)}</span>
       </div>
@@ -86,7 +86,7 @@ function JsonTree({ value, name, depth = 0 }: { value: unknown; name?: string; d
   const bracket = Array.isArray(value) ? ["[", "]"] : ["{", "}"];
   return (
     <details className="group/json py-0.5" open={depth < 1}>
-      <summary className="flex cursor-pointer list-none items-center gap-1 rounded px-1 py-0.5 text-xs hover:bg-muted">
+      <summary className="flex cursor-pointer list-none items-center gap-1 rounded px-1 py-0.5 text-caption hover:bg-muted">
         <ChevronRight className="h-3 w-3 text-muted-foreground transition-transform group-open/json:rotate-90" />
         {name ? <span className="text-muted-foreground">{name}:</span> : null}
         <span className="font-mono text-foreground">{bracket[0]}</span>
@@ -315,7 +315,7 @@ export function DesignRestoreTaskPage({ taskId }: { taskId: string }) {
         <div className="grid gap-4 p-4 lg:grid-cols-[1fr_340px]"><Skeleton className="h-96" /><Skeleton className="h-96" /></div>
       ) : error || !task ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
-          <p className="text-sm font-medium">无法加载此还原任务</p>
+          <p className="text-body font-medium">无法加载此还原任务</p>
           <Button size="sm" variant="outline" onClick={() => void refetch()}>重试</Button>
         </div>
       ) : (
@@ -325,12 +325,12 @@ export function DesignRestoreTaskPage({ taskId }: { taskId: string }) {
               <section className="rounded-lg border bg-background p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div>
-                    <div className="flex items-center gap-2 text-sm font-medium"><FileJson className="h-4 w-4 text-muted-foreground" />设计还原任务</div>
-                    <p className="mt-1 text-xs text-muted-foreground">按任务项复制上下文，供人或 Agent 逐个画板消费。</p>
+                    <div className="flex items-center gap-2 text-body font-medium"><FileJson className="h-4 w-4 text-muted-foreground" />设计还原任务</div>
+                    <p className="mt-1 text-caption text-muted-foreground">按任务项复制上下文，供人或 Agent 逐个画板消费。</p>
                   </div>
                   <Badge variant="outline">{task.status}</Badge>
                 </div>
-                <div className="mt-4 grid gap-2 text-xs text-muted-foreground sm:grid-cols-2">
+                <div className="mt-4 grid gap-2 text-caption text-muted-foreground sm:grid-cols-2">
                   <div>任务：<span className="text-foreground">Gallery Native 还原 · {task.status}</span></div>
                   <div>设计稿：<span className="text-foreground">{designFileName}</span></div>
                   <div>版本：<span className="text-foreground">{revisionName}</span></div>
@@ -338,12 +338,12 @@ export function DesignRestoreTaskPage({ taskId }: { taskId: string }) {
                   <div>Agent 任务：<span className="text-foreground">{agentTaskName}</span></div>
                   <div>创建时间：{task.created_at}</div>
                 </div>
-                <RestoreExecutionDiagnostic task={task} className="mt-4 text-xs" />
+                <RestoreExecutionDiagnostic task={task} className="mt-4 text-caption" />
               </section>
 
               <section className="rounded-lg border bg-background">
                 <div className="flex items-center justify-between border-b px-3 py-2">
-                  <div className="flex items-center gap-2 text-sm font-medium"><Layers className="h-4 w-4 text-muted-foreground" />任务项</div>
+                  <div className="flex items-center gap-2 text-body font-medium"><Layers className="h-4 w-4 text-muted-foreground" />任务项</div>
                   <Badge variant="secondary">{items.length} 项</Badge>
                 </div>
                 <div className="divide-y">
@@ -353,13 +353,13 @@ export function DesignRestoreTaskPage({ taskId }: { taskId: string }) {
                       <div key={key} className="p-3">
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0">
-                            <div className="flex items-center gap-2 text-sm font-medium"><Badge variant="secondary">#{item.order}</Badge><span className="truncate">{item.frameName || item.frameId}</span></div>
-                            <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                            <div className="flex items-center gap-2 text-body font-medium"><Badge variant="secondary">#{item.order}</Badge><span className="truncate">{item.frameName || item.frameId}</span></div>
+                            <div className="mt-1 flex flex-wrap items-center gap-2 text-caption text-muted-foreground">
                               <span>{sourceLabel(item.source)}</span>
                               <span className="font-mono">{item.frameId}</span>
                               {item.layerIds?.length ? <span>{item.layerIds.length} 个图层</span> : null}
                             </div>
-                            {item.note ? <p className="mt-2 text-xs text-muted-foreground">{item.note}</p> : null}
+                            {item.note ? <p className="mt-2 text-caption text-muted-foreground">{item.note}</p> : null}
                           </div>
                           <div className="flex shrink-0 items-center gap-2">
                             <Button size="sm" variant="outline" onClick={() => navigation.push(paths.designFrameDetail(item.designFileId, item.frameId, { revisionId: item.revisionId }))}><ExternalLink className="h-3.5 w-3.5" />打开画板</Button>
@@ -368,7 +368,7 @@ export function DesignRestoreTaskPage({ taskId }: { taskId: string }) {
                         </div>
                       </div>
                     );
-                  }) : <div className="p-6 text-center text-sm text-muted-foreground">暂无任务项</div>}
+                  }) : <div className="p-6 text-center text-body text-muted-foreground">暂无任务项</div>}
                 </div>
               </section>
             </div>
@@ -376,8 +376,8 @@ export function DesignRestoreTaskPage({ taskId }: { taskId: string }) {
               <section className="rounded-lg border bg-background p-3">
                 <div className="flex items-start justify-between gap-2">
                   <div>
-                    <div className="flex items-center gap-2 text-sm font-medium"><ClipboardList className="h-4 w-4 text-muted-foreground" />Restore Plan</div>
-                    <p className="mt-1 text-xs text-muted-foreground">默认先生成并批准计划，再交给 Agent；开发调试可临时跳过。</p>
+                    <div className="flex items-center gap-2 text-body font-medium"><ClipboardList className="h-4 w-4 text-muted-foreground" />Restore Plan</div>
+                    <p className="mt-1 text-caption text-muted-foreground">默认先生成并批准计划，再交给 Agent；开发调试可临时跳过。</p>
                   </div>
                   <Badge variant={hasApprovedPlan ? "secondary" : restorePlan?.status === "draft" ? "outline" : "destructive"}>{restorePlan?.status ?? (planMissing ? "未生成" : "加载中")}</Badge>
                 </div>
@@ -391,7 +391,7 @@ export function DesignRestoreTaskPage({ taskId }: { taskId: string }) {
                 </div>
                 {restorePlan ? (
                   <div className="mt-3 space-y-3">
-                    <div className="grid gap-2 text-xs text-muted-foreground">
+                    <div className="grid gap-2 text-caption text-muted-foreground">
                       <div>关联 Issue：<span className="text-foreground">{taskIssueName}</span></div>
                       <div>任务项：{planItems(restorePlan).length} 项</div>
                       <div>还原模式：<span className="text-foreground">{planText(restorePlan.plan.mode)}</span></div>
@@ -400,7 +400,7 @@ export function DesignRestoreTaskPage({ taskId }: { taskId: string }) {
                       <div>类型检查：<span className="text-foreground">{stringList(executionBlock.commands).join("、") || "未设置"}</span></div>
                       {restorePlan.approved_at ? <div>批准时间：{restorePlan.approved_at}</div> : null}
                     </div>
-                    <div className="rounded-md border p-2 text-xs">
+                    <div className="rounded-md border p-2 text-caption">
                       <div className="flex items-center justify-between gap-2">
                         <div className="font-medium">目标路径</div>
                         <Badge variant={selectedPlanTarget ? "secondary" : planNeedsTargetSelection ? "destructive" : "outline"}>{selectedPlanTarget ? "已选择" : planNeedsTargetSelection ? "待选择" : "无需选择"}</Badge>
@@ -413,7 +413,7 @@ export function DesignRestoreTaskPage({ taskId }: { taskId: string }) {
                       ) : null}
                       {canEditPlan && candidates.length ? (
                         <details className="mt-2 rounded-md border" open={!selectedPlanTarget}>
-                          <summary className="cursor-pointer list-none px-2 py-1.5 text-xs font-medium hover:bg-muted/50">{selectedPlanTarget ? "更换目标路径" : "选择目标路径"}</summary>
+                          <summary className="cursor-pointer list-none px-2 py-1.5 text-caption font-medium hover:bg-muted/50">{selectedPlanTarget ? "更换目标路径" : "选择目标路径"}</summary>
                           <div className="space-y-2 border-t p-2">
                             {candidates.map((candidate, index) => {
                               const path = planText(candidate.path, `candidate-${index + 1}`);
@@ -432,11 +432,11 @@ export function DesignRestoreTaskPage({ taskId }: { taskId: string }) {
                       {!candidates.length && targetsBlock.needsUserSelection === true ? <div className="mt-2 text-muted-foreground">暂无候选路径，可编辑原始 JSON 后保存。</div> : null}
                     </div>
                     <div>
-                      <label className="mb-1 block text-xs font-medium text-muted-foreground">审核备注</label>
-                      <Input value={reviewNotes} onChange={(event) => setReviewNotes(event.target.value)} disabled={!canEditPlan} className="h-8 text-xs" placeholder="可选：记录人工审核意见" />
+                      <label className="mb-1 block text-caption font-medium text-muted-foreground">审核备注</label>
+                      <Input value={reviewNotes} onChange={(event) => setReviewNotes(event.target.value)} disabled={!canEditPlan} className="h-8 text-caption" placeholder="可选：记录人工审核意见" />
                     </div>
                     <details className="rounded-md border" open={false}>
-                      <summary className="flex cursor-pointer list-none items-center justify-between px-3 py-2 text-xs font-medium hover:bg-muted/50">
+                      <summary className="flex cursor-pointer list-none items-center justify-between px-3 py-2 text-caption font-medium hover:bg-muted/50">
                         <span>Plan JSON</span>
                         <span className="text-muted-foreground">可展开查看，节点可逐级折叠</span>
                       </summary>
@@ -445,12 +445,12 @@ export function DesignRestoreTaskPage({ taskId }: { taskId: string }) {
                       </div>
                     </details>
                     <details className="rounded-md border" open={canEditPlan}>
-                      <summary className="flex cursor-pointer list-none items-center justify-between px-3 py-2 text-xs font-medium hover:bg-muted/50">
+                      <summary className="flex cursor-pointer list-none items-center justify-between px-3 py-2 text-caption font-medium hover:bg-muted/50">
                         <span>编辑原始 JSON</span>
                         <span className="text-muted-foreground">批准前可编辑</span>
                       </summary>
                       <div className="border-t p-2">
-                        <Textarea value={planDraft} onChange={(event) => setPlanDraft(event.target.value)} disabled={!canEditPlan} className="min-h-56 font-mono text-xs" />
+                        <Textarea value={planDraft} onChange={(event) => setPlanDraft(event.target.value)} disabled={!canEditPlan} className="min-h-56 font-mono text-caption" />
                       </div>
                     </details>
                     <Button size="sm" variant="outline" className="w-full" disabled={!canEditPlan || savePlan.isPending} onClick={() => savePlan.mutate()}>
@@ -458,15 +458,15 @@ export function DesignRestoreTaskPage({ taskId }: { taskId: string }) {
                     </Button>
                   </div>
                 ) : (
-                  <div className="mt-3 rounded-md border border-dashed p-3 text-xs leading-relaxed text-muted-foreground">
+                  <div className="mt-3 rounded-md border border-dashed p-3 text-caption leading-relaxed text-muted-foreground">
                     还没有 Restore Plan。先生成规则计划，确认目标路径、范围和禁止整图策略后再批准。
                   </div>
                 )}
               </section>
               <section className="rounded-lg border bg-background p-3">
-                <div className="flex items-center gap-2 text-sm font-medium"><Bot className="h-4 w-4 text-muted-foreground" />交给 Agent</div>
-                <p className="mt-1 text-xs text-muted-foreground">选择本地 Agent 消费 approved Restore Plan 和 restore task context，进入执行队列。</p>
-                <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-2 text-xs leading-relaxed text-amber-900">
+                <div className="flex items-center gap-2 text-body font-medium"><Bot className="h-4 w-4 text-muted-foreground" />交给 Agent</div>
+                <p className="mt-1 text-caption text-muted-foreground">选择本地 Agent 消费 approved Restore Plan 和 restore task context，进入执行队列。</p>
+                <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-2 text-caption leading-relaxed text-amber-900">
                   <div className="font-medium">结构化还原策略</div>
                   <div>模式：strict-structure</div>
                   <div>整图 preview / thumbnail / full-frame slice：禁止作为还原结果。</div>
@@ -474,29 +474,29 @@ export function DesignRestoreTaskPage({ taskId }: { taskId: string }) {
                 </div>
                 <div className="mt-3 space-y-3">
                   <div>
-                    <label className="mb-1 block text-xs font-medium text-muted-foreground">Agent</label>
-                    <select value={dispatchAgentId} onChange={(event) => setSelectedAgentId(event.target.value)} className="h-8 w-full rounded-md border bg-background px-2 text-xs" disabled={!availableAgents.length}>
+                    <label className="mb-1 block text-caption font-medium text-muted-foreground">Agent</label>
+                    <select value={dispatchAgentId} onChange={(event) => setSelectedAgentId(event.target.value)} className="h-8 w-full rounded-md border bg-background px-2 text-caption" disabled={!availableAgents.length}>
                       {availableAgents.length ? availableAgents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name} · {agent.status}</option>) : <option value="">暂无可用 Agent</option>}
                     </select>
                   </div>
                   <div>
-                    <label className="mb-1 block text-xs font-medium text-muted-foreground">关联 Issue（可选）</label>
-                    <select value={dispatchIssueId} onChange={(event) => setIssueId(event.target.value)} className="h-8 w-full rounded-md border bg-background px-2 text-xs">
+                    <label className="mb-1 block text-caption font-medium text-muted-foreground">关联 Issue（可选）</label>
+                    <select value={dispatchIssueId} onChange={(event) => setIssueId(event.target.value)} className="h-8 w-full rounded-md border bg-background px-2 text-caption">
                       {!dispatchIssueId ? <option value="">不关联 Issue</option> : null}
                       {taskIssue && !issues.some((item) => item.id === taskIssue.id) ? <option value={taskIssue.id}>{taskIssue.identifier}: {taskIssue.title}</option> : null}
                       {issues.map((item) => <option key={item.id} value={item.id}>{item.identifier}: {item.title}</option>)}
                     </select>
-                    <div className="mt-1 text-xs text-muted-foreground">当前选择：{dispatchIssueName}</div>
+                    <div className="mt-1 text-caption text-muted-foreground">当前选择：{dispatchIssueName}</div>
                   </div>
                   <div>
-                    <label className="mb-1 block text-xs font-medium text-muted-foreground">执行提示</label>
-                    <Textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} className="min-h-28 text-xs" />
+                    <label className="mb-1 block text-caption font-medium text-muted-foreground">执行提示</label>
+                    <Textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} className="min-h-28 text-caption" />
                   </div>
-                  <label className="flex items-center gap-2 rounded-md border border-dashed p-2 text-xs text-muted-foreground">
+                  <label className="flex items-center gap-2 rounded-md border border-dashed p-2 text-caption text-muted-foreground">
                     <input type="checkbox" checked={skipPlan} onChange={(event) => setSkipPlan(event.target.checked)} />
                     开发模式：跳过 Plan 直接派发
                   </label>
-                  {!hasApprovedPlan && !skipPlan ? <div className="rounded-md border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900">需要先批准 Restore Plan，或勾选开发模式跳过。</div> : null}
+                  {!hasApprovedPlan && !skipPlan ? <div className="rounded-md border border-amber-200 bg-amber-50 p-2 text-caption text-amber-900">需要先批准 Restore Plan，或勾选开发模式跳过。</div> : null}
                   <Button className="w-full" disabled={!dispatchAgentId || dispatchTask.isPending || task.status === "running" || (!hasApprovedPlan && !skipPlan)} onClick={() => dispatchTask.mutate()}>
                     <Bot className="h-3.5 w-3.5" />{task.status === "running" ? "执行中…" : task.agent_task_id ? "重新派发" : dispatchTask.isPending ? "派发中…" : "交给 Agent"}
                   </Button>
@@ -506,11 +506,11 @@ export function DesignRestoreTaskPage({ taskId }: { taskId: string }) {
                 <>
                   <section className="rounded-lg border bg-background p-3">
                     <div className="flex items-center justify-between gap-2">
-                      <div className="text-sm font-medium">执行摘要</div>
+                      <div className="text-body font-medium">执行摘要</div>
                       <Badge variant={resultStatus === "completed" ? "secondary" : resultStatus === "failed" || resultStatus === "blocked" ? "destructive" : "outline"}>{resultStatus}</Badge>
                     </div>
-                    {resultText ? <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{resultText}</p> : null}
-                    <div className="mt-3 space-y-3 text-xs">
+                    {resultText ? <p className="mt-2 text-caption leading-relaxed text-muted-foreground">{resultText}</p> : null}
+                    <div className="mt-3 space-y-3 text-caption">
                       {resultFiles.length ? <div><div className="mb-1 font-medium">变更文件</div><ul className="space-y-1 text-muted-foreground">{resultFiles.map((file) => <li key={file} className="font-mono">{file}</li>)}</ul></div> : null}
                       {resultChecks.length ? <div><div className="mb-1 font-medium">检查命令</div><ul className="space-y-1 text-muted-foreground">{resultChecks.map((check) => <li key={check} className="font-mono">{check}</li>)}</ul></div> : null}
                       {resultBlockers.length ? <div><div className="mb-1 font-medium text-destructive">阻塞项</div><ul className="space-y-1 text-destructive">{resultBlockers.map((blocker) => <li key={blocker}>{blocker}</li>)}</ul></div> : null}
@@ -531,8 +531,8 @@ export function DesignRestoreTaskPage({ taskId }: { taskId: string }) {
                   </section>
                   <DesignRestoreVisualReviewPanel review={visualReview} />
                   <section className="rounded-lg border bg-background p-3">
-                    <div className="text-sm font-medium">策略校验</div>
-                    <div className="mt-3 space-y-2 text-xs text-muted-foreground">
+                    <div className="text-body font-medium">策略校验</div>
+                    <div className="mt-3 space-y-2 text-caption text-muted-foreground">
                       <div className="flex items-center justify-between gap-2"><span>整图预览</span><Badge variant={usedFullFramePreview ? "destructive" : "secondary"}>{usedFullFramePreview ? "已使用" : "未使用"}</Badge></div>
                       <div className="flex items-center justify-between gap-2"><span>策略违规</span><Badge variant={policyViolation ? "destructive" : "secondary"}>{policyViolation || "无"}</Badge></div>
                       {usedLayerIds.length ? <div>使用图层：<span className="font-mono">{usedLayerIds.join(", ")}</span></div> : null}

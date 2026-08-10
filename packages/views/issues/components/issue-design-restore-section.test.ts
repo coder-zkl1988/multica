@@ -67,6 +67,8 @@ function issue(overrides: Partial<Issue>): Issue {
     created_at: "2026-06-29T00:00:00Z",
     updated_at: "2026-06-29T00:00:00Z",
     ...overrides,
+    stage: overrides.stage ?? null,
+    properties: overrides.properties ?? {},
   };
 }
 

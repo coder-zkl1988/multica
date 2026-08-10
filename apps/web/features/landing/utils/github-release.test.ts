@@ -1,16 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { fetchLatestRelease } from "./github-release";
 
 const SAMPLE_LATEST_ASSET = {
-  name: "multica-desktop-0.2.14-mac-arm64.dmg",
+  name: "multica-desktop-0.4.17-sso.2-mac-arm64.dmg",
   browser_download_url:
-    "https://github.com/multica-ai/multica/releases/download/v0.2.14/multica-desktop-0.2.14-mac-arm64.dmg",
-};
-
-const SAMPLE_PREV_ASSET = {
-  name: "multica-desktop-0.2.13-mac-arm64.dmg",
-  browser_download_url:
-    "https://github.com/multica-ai/multica/releases/download/v0.2.13/multica-desktop-0.2.13-mac-arm64.dmg",
+    "https://github.com/coder-zkl1988/multica/releases/download/desktop-v0.4.17-sso.2/multica-desktop-0.4.17-sso.2-mac-arm64.dmg",
 };
 
 function releasePayload(overrides: {
@@ -26,7 +20,7 @@ function releasePayload(overrides: {
   return {
     tag_name: overrides.tag,
     published_at: published,
-    html_url: `https://github.com/multica-ai/multica/releases/tag/${overrides.tag}`,
+    html_url: `https://github.com/coder-zkl1988/multica/releases/tag/${overrides.tag}`,
     prerelease: overrides.prerelease ?? false,
     draft: overrides.draft ?? false,
     assets: overrides.asset ? [overrides.asset] : [],
@@ -49,73 +43,24 @@ afterEach(() => {
 });
 
 describe("fetchLatestRelease", () => {
-  it("uses previous release when latest was published within the fresh window", async () => {
-    mockFetchWithReleases([
+  it("uses the newest published SSO desktop release from the fork", async () => {
+    const fetchMock = mockFetchWithReleases([
+      releasePayload({ tag: "v0.4.16-sso.1", prerelease: true }),
+      releasePayload({ tag: "desktop-v0.4.17-sso.3", draft: true }),
       releasePayload({
-        tag: "v0.2.14",
-        publishedMinutesAgo: 10,
+        tag: "desktop-v0.4.17-sso.2",
         asset: SAMPLE_LATEST_ASSET,
-      }),
-      releasePayload({
-        tag: "v0.2.13",
-        publishedMinutesAgo: 60 * 24,
-        asset: SAMPLE_PREV_ASSET,
-      }),
-    ]);
-
-    const result = await fetchLatestRelease();
-    expect(result.version).toBe("v0.2.13");
-    expect(result.assets.macArm64Dmg).toBe(SAMPLE_PREV_ASSET.browser_download_url);
-  });
-
-  it("uses latest release once it is older than the fresh window", async () => {
-    mockFetchWithReleases([
-      releasePayload({
-        tag: "v0.2.14",
-        publishedMinutesAgo: 120,
-        asset: SAMPLE_LATEST_ASSET,
-      }),
-      releasePayload({
-        tag: "v0.2.13",
-        publishedMinutesAgo: 60 * 24,
-        asset: SAMPLE_PREV_ASSET,
-      }),
-    ]);
-
-    const result = await fetchLatestRelease();
-    expect(result.version).toBe("v0.2.14");
-    expect(result.assets.macArm64Dmg).toBe(SAMPLE_LATEST_ASSET.browser_download_url);
-  });
-
-  it("falls back to latest when there is no previous release", async () => {
-    mockFetchWithReleases([
-      releasePayload({
-        tag: "v0.0.1",
-        publishedMinutesAgo: 5,
-        asset: SAMPLE_LATEST_ASSET,
-      }),
-    ]);
-
-    const result = await fetchLatestRelease();
-    expect(result.version).toBe("v0.0.1");
-  });
-
-  it("skips prereleases and drafts in the candidate list", async () => {
-    mockFetchWithReleases([
-      releasePayload({
-        tag: "v0.2.15-rc.1",
-        publishedMinutesAgo: 30,
         prerelease: true,
       }),
-      releasePayload({
-        tag: "v0.2.14",
-        publishedMinutesAgo: 120,
-        asset: SAMPLE_LATEST_ASSET,
-      }),
     ]);
 
     const result = await fetchLatestRelease();
-    expect(result.version).toBe("v0.2.14");
+    expect(result.version).toBe("desktop-v0.4.17-sso.2");
+    expect(result.assets.macArm64Dmg).toBe(SAMPLE_LATEST_ASSET.browser_download_url);
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("coder-zkl1988/multica/releases?per_page=20"),
+      expect.any(Object),
+    );
   });
 
   it("returns an empty release shape when the API errors", async () => {
@@ -136,10 +81,9 @@ describe("fetchLatestRelease", () => {
     warnSpy.mockRestore();
   });
 
-  it("returns an empty release shape when all candidates are filtered out", async () => {
+  it("returns an empty release shape for a draft", async () => {
     mockFetchWithReleases([
-      releasePayload({ tag: "v0.2.15-rc.1", prerelease: true }),
-      releasePayload({ tag: "v0.2.14-draft", draft: true }),
+      releasePayload({ tag: "desktop-v0.4.16-sso.1", draft: true }),
     ]);
 
     const result = await fetchLatestRelease();

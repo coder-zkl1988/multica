@@ -32,11 +32,8 @@ var loginCmd = &cobra.Command{
 	Use:   "login",
 	Short: "Authenticate and set up workspaces",
 	Long:  "Log in to Multica, then automatically discover and watch all your workspaces.",
-	// Up to one positional is accepted so `--token mul_...` / `--token mcn_...`
-	// (space form) can recover the token in runAuthLogin even though pflag
-	// won't bind it.
-	Args: cobra.MaximumNArgs(1),
-	RunE: runLogin,
+	Args:  cobra.MaximumNArgs(1),
+	RunE:  runLogin,
 }
 
 // tokenPromptSentinel is the value pflag assigns to `--token` when the flag
@@ -44,15 +41,25 @@ var loginCmd = &cobra.Command{
 // "prompt me interactively", preserving the legacy `multica login --token`
 // no-value form alongside the documented `--token mul_...` / `--token mcn_...`
 // value form.
-const tokenPromptSentinel = "\x00prompt"
+//
+// The sentinel must be printable: pflag renders NoOptDefVal verbatim in help
+// output ("--token string[=\"prompt\"]") and uses "\x00" internally as its
+// column-alignment marker, so a NUL-prefixed sentinel corrupts `login -h`.
+// Colliding with a user literally typing `--token prompt` is harmless — that
+// string is never a valid PAT, and prompting is a reasonable response.
+const tokenPromptSentinel = "prompt"
 
 func init() {
-	loginCmd.Flags().String("token", "", "Authenticate using a personal access token (`mul_...` user PAT or `mcn_...` Cloud Node PAT). Pass `--token mul_...` / `--token mcn_...` to supply it inline, or `--token` alone to be prompted interactively.")
+	// No backticks in the usage string: pflag's UnquoteUsage treats the first
+	// backquoted segment as the flag's value placeholder in help output.
+	loginCmd.Flags().String("token", "", "Authenticate using a personal access token (mul_... user PAT or mcn_... Cloud Node PAT). Pass --token mul_... / --token mcn_... to supply it inline, or --token alone to be prompted interactively.")
 	// NoOptDefVal lets `--token` (no value) keep its old prompt-mode behavior
 	// while `--token mul_...` / `--token mcn_...` and the `=value` form
 	// consume the value normally.
 	loginCmd.Flags().Lookup("token").NoOptDefVal = tokenPromptSentinel
-	loginCmd.Flags().String(callbackHostFlag, "", "Host the OAuth callback URL points at (auto-detected from the server's route when empty). Use this for reverse-proxy / FQDN setups where auto-detection picks the wrong interface.")
+	loginCmd.Flags().String("service-token", "", "Authenticate the dedicated ai_work machine with an msa_ service token. Pass --service-token alone to be prompted interactively.")
+	loginCmd.Flags().Lookup("service-token").NoOptDefVal = tokenPromptSentinel
+	loginCmd.Flags().String(callbackHostFlag, "", callbackHostFlagHelp)
 }
 
 func runLogin(cmd *cobra.Command, args []string) error {
@@ -80,7 +87,7 @@ func autoWatchWorkspaces(cmd *cobra.Command) error {
 	}
 
 	client := cli.NewAPIClient(serverURL, "", token)
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := cli.APIContext(context.Background())
 	defer cancel()
 
 	var workspaces []struct {
@@ -162,10 +169,17 @@ func waitForWorkspaceCreation(cmd *cobra.Command, client *cli.APIClient) ([]stru
 	const pollTimeout = 5 * time.Minute
 	deadline := time.Now().Add(pollTimeout)
 
+	// Per-poll request budget. We keep a short 10s floor so the loop stays
+	// responsive (a hung request shouldn't block a single iteration for long),
+	// but it still honors MULTICA_HTTP_TIMEOUT via AtLeastAPITimeout so a user
+	// who raised the timeout for a slow network isn't capped below it. The
+	// overall wait is bounded by pollTimeout regardless.
+	pollRequestTimeout := cli.AtLeastAPITimeout(10 * time.Second)
+
 	for time.Now().Before(deadline) {
 		time.Sleep(pollInterval)
 
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), pollRequestTimeout)
 		var workspaces []struct {
 			ID   string `json:"id"`
 			Name string `json:"name"`

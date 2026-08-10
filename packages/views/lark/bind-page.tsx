@@ -29,6 +29,7 @@ type RedeemState =
 export function LarkBindPage({ token }: { token: string | null }) {
   const { t } = useT("common");
   const user = useAuthStore((s) => s.user);
+  const isAuthLoading = useAuthStore((s) => s.isLoading);
   const navigation = useNavigation();
   const [state, setState] = useState<RedeemState>({ kind: "idle" });
 
@@ -37,11 +38,12 @@ export function LarkBindPage({ token }: { token: string | null }) {
       setState({ kind: "error", reason: "missing_token" });
       return;
     }
+    if (isAuthLoading) return;
     if (!user) {
       setState({ kind: "needs-auth" });
       return;
     }
-    if (state.kind !== "idle") return;
+    if (state.kind !== "idle" && state.kind !== "needs-auth") return;
     setState({ kind: "redeeming" });
     (async () => {
       try {
@@ -58,25 +60,25 @@ export function LarkBindPage({ token }: { token: string | null }) {
         });
       }
     })();
-  }, [token, user, state.kind]);
+  }, [token, user, isAuthLoading, state.kind]);
 
   return (
     <div className="mx-auto flex min-h-screen max-w-md flex-col items-center justify-center p-6">
       <Card className="w-full">
         <CardContent className="space-y-4">
-          <h1 className="text-lg font-semibold">{t(($) => $.lark_bind.page_title)}</h1>
+          <h1 className="text-title font-semibold">{t(($) => $.lark_bind.page_title)}</h1>
           {state.kind === "idle" || state.kind === "redeeming" ? (
-            <p className="text-sm text-muted-foreground">{t(($) => $.lark_bind.redeeming)}</p>
+            <p className="text-body text-muted-foreground">{t(($) => $.lark_bind.redeeming)}</p>
           ) : state.kind === "needs-auth" ? (
             <>
-              <p className="text-sm text-muted-foreground">
+              <p className="text-body text-muted-foreground">
                 {t(($) => $.lark_bind.needs_auth_description)}
               </p>
               <Button
                 size="sm"
                 onClick={() =>
                   navigation.push(
-                    `/login?redirect=${encodeURIComponent(
+                    `/login?next=${encodeURIComponent(
                       `/lark/bind?token=${encodeURIComponent(token ?? "")}`,
                     )}`,
                   )
@@ -87,15 +89,15 @@ export function LarkBindPage({ token }: { token: string | null }) {
             </>
           ) : state.kind === "done" ? (
             <>
-              <p className="text-sm font-medium">{t(($) => $.lark_bind.done_title)}</p>
-              <p className="text-xs text-muted-foreground">
+              <p className="text-body font-medium">{t(($) => $.lark_bind.done_title)}</p>
+              <p className="text-caption text-muted-foreground">
                 {t(($) => $.lark_bind.done_description)}
               </p>
             </>
           ) : (
             <>
-              <p className="text-sm font-medium">{t(($) => $.lark_bind.error_title)}</p>
-              <p className="text-xs text-muted-foreground">
+              <p className="text-body font-medium">{t(($) => $.lark_bind.error_title)}</p>
+              <p className="text-caption text-muted-foreground">
                 {(() => {
                   switch (state.reason) {
                     case "missing_token":
@@ -111,7 +113,7 @@ export function LarkBindPage({ token }: { token: string | null }) {
                   }
                 })()}
               </p>
-              <p className="text-[10px] text-muted-foreground">
+              <p className="text-micro text-muted-foreground">
                 {t(($) => $.lark_bind.error_admin_hint)}
               </p>
             </>

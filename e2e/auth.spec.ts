@@ -5,26 +5,20 @@ test.describe("Authentication", () => {
   test("login page renders correctly", async ({ page }) => {
     await page.goto("/login");
 
-    await expect(page.locator("h1")).toContainText("Multica");
-    await expect(page.locator('input[placeholder="Email"]')).toBeVisible();
-    await expect(page.locator('input[placeholder="Name"]')).toBeVisible();
-    await expect(page.locator('button[type="submit"]')).toContainText(
-      "Sign in",
-    );
+    await expect(page.getByText("Sign-in failed", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Retry" })).toBeVisible();
+    await expect(page.locator('input[placeholder="Email"]')).toHaveCount(0);
   });
 
   test("login and redirect to /issues", async ({ page }) => {
     await loginAsDefault(page);
 
     await expect(page).toHaveURL(/\/issues/);
-    await expect(page.locator("text=All Issues")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Issues" })).toBeVisible();
   });
 
-  test("unauthenticated user is redirected to /login", async ({ page }) => {
-    await page.goto("/login");
-    await page.evaluate(() => {
-      localStorage.removeItem("multica_token");
-    });
+  test("unauthenticated user is redirected to /login", async ({ page, context }) => {
+    await context.clearCookies();
 
     // Visit a workspace-scoped route; DashboardGuard should redirect to /login.
     // The slug here need not exist — the guard runs before workspace resolution
@@ -33,16 +27,21 @@ test.describe("Authentication", () => {
     await page.waitForURL("**/login", { timeout: 10000 });
   });
 
-  test("logout redirects to /login", async ({ page }) => {
+  test("logout redirects to the APISIX logout path", async ({ page }) => {
     await loginAsDefault(page);
 
     // Open the workspace dropdown menu
     await openWorkspaceMenu(page);
 
-    // Click Sign out
-    await page.locator("text=Sign out").click();
+    const logoutResponse = page.waitForResponse(
+      (response) =>
+        response.url().endsWith("/auth/logout") &&
+        response.request().method() === "POST",
+    );
+    await page.getByRole("menuitem", { name: "Log out" }).click();
+    await expect((await logoutResponse).status()).toBe(200);
 
-    await page.waitForURL("**/login", { timeout: 10000 });
-    await expect(page).toHaveURL(/\/login/);
+    await page.waitForURL("**/logout", { timeout: 10000 });
+    await expect(page).toHaveURL(/\/logout/);
   });
 });

@@ -25,6 +25,10 @@ import type {
   CreateLabelRequest,
   CreateProjectRequest,
   CreateProjectResourceRequest,
+  DashboardAgentRunTime,
+  DashboardRunTimeDaily,
+  DashboardUsageByAgent,
+  DashboardUsageDaily,
   InboxItem,
   Issue,
   IssueLabelsResponse,
@@ -46,6 +50,8 @@ import type {
   SearchIssuesResponse,
   SearchProjectsResponse,
   SendChatMessageResponse,
+  Skill,
+  SkillSummary,
   Squad,
   NotificationPreferenceResponse,
   NotificationPreferences,
@@ -58,6 +64,10 @@ import type {
   Workspace,
 } from "@multica/core/types";
 import {
+  DashboardAgentRunTimeListSchema,
+  DashboardRunTimeDailyListSchema,
+  DashboardUsageByAgentListSchema,
+  DashboardUsageDailyListSchema,
   EMPTY_LIST_ISSUES_RESPONSE,
   EMPTY_TIMELINE_ENTRIES,
   IssueSchema,
@@ -95,6 +105,8 @@ import {
   EMPTY_RUNTIME_LIST,
   EMPTY_SEARCH_ISSUES_RESPONSE,
   EMPTY_SEARCH_PROJECTS_RESPONSE,
+  EMPTY_SKILL,
+  EMPTY_SKILL_SUMMARY_LIST,
   EMPTY_SQUAD_LIST,
   EMPTY_USER,
   EMPTY_WORKSPACE_LIST,
@@ -111,6 +123,8 @@ import {
   SearchIssuesResponseSchema,
   SearchProjectsResponseSchema,
   SendChatMessageResponseSchema,
+  SkillSchema,
+  SkillSummaryListSchema,
   SquadListSchema,
   TaskMessageListSchema,
   EMPTY_TASK_MESSAGE_LIST,
@@ -134,6 +148,11 @@ if (!API_URL) {
 export interface LoginResponse {
   token: string;
   user: User;
+  expires_at?: string;
+}
+
+export interface AppConfigResponse {
+  use_sy_sso: boolean;
 }
 
 /** Mobile file payload for `uploadFile`. RN doesn't have a browser `File`
@@ -211,7 +230,7 @@ class ApiClient {
     // Backend middleware (server/internal/middleware/workspace.go) resolves
     // slug → ws UUID and gates membership. Mirrors packages/core/api/client.ts.
     const slug = getCurrentSlug();
-    if (slug) {
+    if (slug && !headers["X-Workspace-Slug"]) {
       headers["X-Workspace-Slug"] = slug;
     }
 
@@ -362,6 +381,10 @@ class ApiClient {
   }
 
   // --- Auth ---
+  async getConfig(): Promise<AppConfigResponse> {
+    return this.fetch<AppConfigResponse>("/api/config");
+  }
+
   async sendCode(email: string): Promise<void> {
     await this.fetch<void>("/auth/send-code", {
       method: "POST",
@@ -373,6 +396,23 @@ class ApiClient {
     return this.fetch<LoginResponse>("/auth/verify-code", {
       method: "POST",
       body: JSON.stringify({ email, code }),
+    });
+  }
+
+  async exchangeSSOCode(
+    code: string,
+    codeVerifier: string,
+    redirectUri: string,
+  ): Promise<LoginResponse> {
+    return this.fetch<LoginResponse>("/auth/sso/token", {
+      method: "POST",
+      body: JSON.stringify({
+        grant_type: "authorization_code",
+        code,
+        code_verifier: codeVerifier,
+        client_id: "mobile",
+        redirect_uri: redirectUri,
+      }),
     });
   }
 
@@ -411,12 +451,19 @@ class ApiClient {
 
   async updateNotificationPreferences(
     preferences: NotificationPreferences,
+    workspaceSlug?: string,
   ): Promise<NotificationPreferenceResponse> {
     return this.fetchValidatedWith(
       "/api/notification-preferences",
       NotificationPreferenceResponseSchema,
       EMPTY_NOTIFICATION_PREFERENCES,
-      { method: "PUT", body: JSON.stringify({ preferences }) },
+      {
+        method: "PATCH",
+        headers: workspaceSlug
+          ? { "X-Workspace-Slug": workspaceSlug }
+          : undefined,
+        body: JSON.stringify({ preferences }),
+      },
       { endpoint: "updateNotificationPreferences" },
     );
   }
@@ -912,6 +959,25 @@ class ApiClient {
     });
   }
 
+  async listSkills(opts?: { signal?: AbortSignal }): Promise<SkillSummary[]> {
+    return this.fetchValidated(
+      "/api/skills",
+      SkillSummaryListSchema,
+      EMPTY_SKILL_SUMMARY_LIST,
+      { ...opts, endpoint: "listSkills" },
+    );
+  }
+
+  async getSkill(
+    id: string,
+    opts?: { signal?: AbortSignal },
+  ): Promise<Skill> {
+    return this.fetchValidated(`/api/skills/${id}`, SkillSchema, EMPTY_SKILL, {
+      ...opts,
+      endpoint: "GET /api/skills/:id",
+    });
+  }
+
   // Write endpoints — no parseWithFallback (mirrors updateIssue:430). A
   // malformed write response surfaces as an error so the optimistic
   // patch rolls back; pretending the write succeeded with empty data
@@ -1161,6 +1227,82 @@ class ApiClient {
     await this.fetch<void>("/api/pins/reorder", {
       method: "PUT",
       body: JSON.stringify(data),
+    });
+  }
+
+  // --- Dashboard ---
+  // Usage analytics for the mobile "Usage" page (More tab). Mirrors the
+  // three server-backed rollups from packages/core/api/client.ts's
+  // "Workspace dashboard" section — same endpoints, same query params
+  // (days / project_id / tz). Follows the searchProjects pattern (build
+  // URLSearchParams, call this.fetch<unknown>, then parseWithFallback)
+  // rather than fetchValidated since every param is caller-supplied.
+
+  async getDashboardUsageDaily(
+    params: { days: number; project_id?: string | null; tz: string },
+    opts?: { signal?: AbortSignal },
+  ): Promise<DashboardUsageDaily[]> {
+    const search = new URLSearchParams();
+    search.set("days", String(params.days));
+    if (params.project_id) search.set("project_id", params.project_id);
+    search.set("tz", params.tz);
+    const raw = await this.fetch<unknown>(
+      `/api/dashboard/usage/daily?${search}`,
+      { signal: opts?.signal },
+    );
+    return parseWithFallback(raw, DashboardUsageDailyListSchema, [], {
+      endpoint: "GET /api/dashboard/usage/daily",
+    });
+  }
+
+  async getDashboardUsageByAgent(
+    params: { days: number; project_id?: string | null; tz: string },
+    opts?: { signal?: AbortSignal },
+  ): Promise<DashboardUsageByAgent[]> {
+    const search = new URLSearchParams();
+    search.set("days", String(params.days));
+    if (params.project_id) search.set("project_id", params.project_id);
+    search.set("tz", params.tz);
+    const raw = await this.fetch<unknown>(
+      `/api/dashboard/usage/by-agent?${search}`,
+      { signal: opts?.signal },
+    );
+    return parseWithFallback(raw, DashboardUsageByAgentListSchema, [], {
+      endpoint: "GET /api/dashboard/usage/by-agent",
+    });
+  }
+
+  async getDashboardAgentRunTime(
+    params: { days: number; project_id?: string | null; tz: string },
+    opts?: { signal?: AbortSignal },
+  ): Promise<DashboardAgentRunTime[]> {
+    const search = new URLSearchParams();
+    search.set("days", String(params.days));
+    if (params.project_id) search.set("project_id", params.project_id);
+    search.set("tz", params.tz);
+    const raw = await this.fetch<unknown>(
+      `/api/dashboard/agent-runtime?${search}`,
+      { signal: opts?.signal },
+    );
+    return parseWithFallback(raw, DashboardAgentRunTimeListSchema, [], {
+      endpoint: "GET /api/dashboard/agent-runtime",
+    });
+  }
+
+  async getDashboardRunTimeDaily(
+    params: { days: number; project_id?: string | null; tz: string },
+    opts?: { signal?: AbortSignal },
+  ): Promise<DashboardRunTimeDaily[]> {
+    const search = new URLSearchParams();
+    search.set("days", String(params.days));
+    if (params.project_id) search.set("project_id", params.project_id);
+    search.set("tz", params.tz);
+    const raw = await this.fetch<unknown>(
+      `/api/dashboard/runtime/daily?${search}`,
+      { signal: opts?.signal },
+    );
+    return parseWithFallback(raw, DashboardRunTimeDailyListSchema, [], {
+      endpoint: "GET /api/dashboard/runtime/daily",
     });
   }
 

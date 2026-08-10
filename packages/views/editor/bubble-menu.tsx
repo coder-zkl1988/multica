@@ -35,7 +35,8 @@ import { NodeSelection } from "@tiptap/pm/state";
 import { toast } from "sonner";
 import { useCreateIssue } from "@multica/core/issues/mutations";
 import { useT } from "../i18n";
-import { modKey } from "@multica/core/platform";
+import { createShortcutChord, type ShortcutChord } from "@multica/core/shortcuts";
+import { ShortcutKeycaps } from "../common/shortcut-keycaps";
 import { Toggle } from "@multica/ui/components/ui/toggle";
 import { Separator } from "@multica/ui/components/ui/separator";
 import {
@@ -60,6 +61,7 @@ import {
   Link2,
   List,
   ListOrdered,
+  ListTodo,
   Quote,
   ChevronDown,
   Check,
@@ -115,7 +117,7 @@ function MarkButton({
   mark: InlineMark;
   icon: React.ComponentType<{ className?: string }>;
   label: string;
-  shortcut: string;
+  shortcut: ShortcutChord;
   isActive: boolean;
 }) {
   return (
@@ -134,7 +136,7 @@ function MarkButton({
       </TooltipTrigger>
       <TooltipContent side="top" sideOffset={8}>
         {label}
-        <span className="ml-1.5 text-muted-foreground">{shortcut}</span>
+        <ShortcutKeycaps shortcut={shortcut} className="ml-1.5" />
       </TooltipContent>
     </Tooltip>
   );
@@ -214,7 +216,7 @@ function LinkEditBar({
         onChange={(e) => setUrl(e.target.value)}
         placeholder="https://..."
         aria-label={t(($) => $.bubble_menu.url_aria_label)}
-        className="h-7 flex-1 text-xs"
+        className="h-7 flex-1 text-caption"
         onKeyDown={(e) => {
           if (e.key === "Enter") { e.preventDefault(); apply(); }
           if (e.key === "Escape") { e.preventDefault(); onClose(); editor.commands.focus(); }
@@ -258,7 +260,7 @@ function HeadingDropdown({ editor, onOpenChange, activeLevel }: { editor: Editor
   return (
     <Popover modal={false} open={open} onOpenChange={handleOpenChange}>
       <PopoverTrigger
-        className="inline-flex h-7 items-center gap-0.5 rounded-md px-1.5 text-xs font-medium hover:bg-muted"
+        className="inline-flex h-7 items-center gap-0.5 rounded-md px-1.5 text-caption font-medium hover:bg-muted"
         onMouseDown={(e) => e.preventDefault()}
       >
         {label}
@@ -276,7 +278,7 @@ function HeadingDropdown({ editor, onOpenChange, activeLevel }: { editor: Editor
           <button
             type="button"
             key={item.label}
-            className="flex w-full cursor-default items-center gap-2 rounded-md px-1.5 py-1 text-xs outline-hidden select-none hover:bg-accent hover:text-accent-foreground"
+            className="flex w-full cursor-default items-center gap-2 rounded-md px-1.5 py-1 text-caption outline-hidden select-none hover:bg-accent hover:text-accent-foreground"
             onMouseDown={(e) => {
               e.preventDefault();
               item.action();
@@ -297,7 +299,7 @@ function HeadingDropdown({ editor, onOpenChange, activeLevel }: { editor: Editor
 // List Dropdown
 // ---------------------------------------------------------------------------
 
-function ListDropdown({ editor, onOpenChange, isBullet, isOrdered }: { editor: Editor; onOpenChange: (open: boolean) => void; isBullet: boolean; isOrdered: boolean }) {
+function ListDropdown({ editor, onOpenChange, isBullet, isOrdered, isTask }: { editor: Editor; onOpenChange: (open: boolean) => void; isBullet: boolean; isOrdered: boolean; isTask: boolean }) {
   const { t } = useT("editor");
   const [open, setOpen] = useState(false);
 
@@ -310,7 +312,7 @@ function ListDropdown({ editor, onOpenChange, isBullet, isOrdered }: { editor: E
     <Popover modal={false} open={open} onOpenChange={handleOpenChange}>
       <Tooltip>
         <TooltipTrigger render={
-          <PopoverTrigger className="inline-flex h-7 items-center gap-0.5 rounded-md px-1.5 text-xs font-medium hover:bg-muted aria-pressed:bg-muted" aria-pressed={isBullet || isOrdered} onMouseDown={(e) => e.preventDefault()} />
+          <PopoverTrigger className="inline-flex h-7 items-center gap-0.5 rounded-md px-1.5 text-caption font-medium hover:bg-muted aria-pressed:bg-muted" aria-pressed={isBullet || isOrdered || isTask} onMouseDown={(e) => e.preventDefault()} />
         }>
           <List className="size-3.5" />
           <ChevronDown className="size-3" />
@@ -327,7 +329,7 @@ function ListDropdown({ editor, onOpenChange, isBullet, isOrdered }: { editor: E
       >
         <button
           type="button"
-          className="flex w-full cursor-default items-center gap-2 rounded-md px-1.5 py-1 text-xs outline-hidden select-none hover:bg-accent hover:text-accent-foreground"
+          className="flex w-full cursor-default items-center gap-2 rounded-md px-1.5 py-1 text-caption outline-hidden select-none hover:bg-accent hover:text-accent-foreground"
           onMouseDown={(e) => {
             e.preventDefault();
             editor.chain().focus().toggleBulletList().run();
@@ -339,7 +341,7 @@ function ListDropdown({ editor, onOpenChange, isBullet, isOrdered }: { editor: E
         </button>
         <button
           type="button"
-          className="flex w-full cursor-default items-center gap-2 rounded-md px-1.5 py-1 text-xs outline-hidden select-none hover:bg-accent hover:text-accent-foreground"
+          className="flex w-full cursor-default items-center gap-2 rounded-md px-1.5 py-1 text-caption outline-hidden select-none hover:bg-accent hover:text-accent-foreground"
           onMouseDown={(e) => {
             e.preventDefault();
             editor.chain().focus().toggleOrderedList().run();
@@ -348,6 +350,18 @@ function ListDropdown({ editor, onOpenChange, isBullet, isOrdered }: { editor: E
         >
           <ListOrdered className="size-3.5" /> {t(($) => $.bubble_menu.list_dropdown.ordered_list)}
           {isOrdered && <Check className="ml-auto size-3.5" />}
+        </button>
+        <button
+          type="button"
+          className="flex w-full cursor-default items-center gap-2 rounded-md px-1.5 py-1 text-caption outline-hidden select-none hover:bg-accent hover:text-accent-foreground"
+          onMouseDown={(e) => {
+            e.preventDefault();
+            editor.chain().focus().toggleTaskList().run();
+            handleOpenChange(false);
+          }}
+        >
+          <ListTodo className="size-3.5" /> {t(($) => $.bubble_menu.list_dropdown.task_list)}
+          {isTask && <Check className="ml-auto size-3.5" />}
         </button>
       </PopoverContent>
     </Popover>
@@ -478,6 +492,7 @@ function EditorBubbleMenu({
       blockquote: e.isActive("blockquote"),
       bulletList: e.isActive("bulletList"),
       orderedList: e.isActive("orderedList"),
+      taskList: e.isActive("taskList"),
       heading1: e.isActive("heading", { level: 1 }),
       heading2: e.isActive("heading", { level: 2 }),
       heading3: e.isActive("heading", { level: 3 }),
@@ -590,11 +605,11 @@ function EditorBubbleMenu({
       ) : (
         <TooltipProvider delay={300}>
           <div className="bubble-menu">
-            <MarkButton editor={editor} mark="bold" icon={Bold} label={t(($) => $.bubble_menu.bold)} shortcut={`${modKey}+B`} isActive={fmt.bold} />
-            <MarkButton editor={editor} mark="italic" icon={Italic} label={t(($) => $.bubble_menu.italic)} shortcut={`${modKey}+I`} isActive={fmt.italic} />
-            <MarkButton editor={editor} mark="strike" icon={Strikethrough} label={t(($) => $.bubble_menu.strikethrough)} shortcut={`${modKey}+Shift+S`} isActive={fmt.strike} />
-            <MarkButton editor={editor} mark="code" icon={Code} label={t(($) => $.bubble_menu.code)} shortcut={`${modKey}+E`} isActive={fmt.code} />
-            <MarkButton editor={editor} mark="highlight" icon={Highlighter} label={t(($) => $.bubble_menu.highlight)} shortcut={`${modKey}+Shift+H`} isActive={fmt.highlight} />
+            <MarkButton editor={editor} mark="bold" icon={Bold} label={t(($) => $.bubble_menu.bold)} shortcut={createShortcutChord("B", { primary: true })} isActive={fmt.bold} />
+            <MarkButton editor={editor} mark="italic" icon={Italic} label={t(($) => $.bubble_menu.italic)} shortcut={createShortcutChord("I", { primary: true })} isActive={fmt.italic} />
+            <MarkButton editor={editor} mark="strike" icon={Strikethrough} label={t(($) => $.bubble_menu.strikethrough)} shortcut={createShortcutChord("S", { primary: true, shift: true })} isActive={fmt.strike} />
+            <MarkButton editor={editor} mark="code" icon={Code} label={t(($) => $.bubble_menu.code)} shortcut={createShortcutChord("E", { primary: true })} isActive={fmt.code} />
+            <MarkButton editor={editor} mark="highlight" icon={Highlighter} label={t(($) => $.bubble_menu.highlight)} shortcut={createShortcutChord("H", { primary: true, shift: true })} isActive={fmt.highlight} />
             <Separator orientation="vertical" className="mx-0.5 h-5" />
             <Tooltip>
               <TooltipTrigger render={
@@ -606,7 +621,20 @@ function EditorBubbleMenu({
             </Tooltip>
             <Separator orientation="vertical" className="mx-0.5 h-5" />
             <HeadingDropdown editor={editor} onOpenChange={handleMenuOpenChange} activeLevel={fmt.heading1 ? 1 : fmt.heading2 ? 2 : fmt.heading3 ? 3 : undefined} />
-            <ListDropdown editor={editor} onOpenChange={handleMenuOpenChange} isBullet={fmt.bulletList} isOrdered={fmt.orderedList} />
+            <ListDropdown editor={editor} onOpenChange={handleMenuOpenChange} isBullet={fmt.bulletList} isOrdered={fmt.orderedList} isTask={fmt.taskList} />
+            {/* Dedicated one-click toggle for checkbox task lists — turns the
+                current line(s) into a `- [ ]` task item or back to a paragraph.
+                The same toggle also lives in the List dropdown, but a direct
+                button keeps the common "make this a checklist" action one tap
+                away instead of two. */}
+            <Tooltip>
+              <TooltipTrigger render={
+                <Toggle size="sm" pressed={fmt.taskList} onPressedChange={() => editor.chain().focus().toggleTaskList().run()} onMouseDown={(e) => e.preventDefault()} />
+              }>
+                <ListTodo className="size-3.5" />
+              </TooltipTrigger>
+              <TooltipContent side="top" sideOffset={8}>{t(($) => $.bubble_menu.task_list)}</TooltipContent>
+            </Tooltip>
             <Tooltip>
               <TooltipTrigger render={
                 <Toggle size="sm" pressed={fmt.blockquote} onPressedChange={() => editor.chain().focus().toggleBlockquote().run()} onMouseDown={(e) => e.preventDefault()} />

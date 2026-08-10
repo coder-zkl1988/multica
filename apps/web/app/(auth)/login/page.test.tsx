@@ -1,207 +1,255 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { I18nProvider } from "@multica/core/i18n/react";
-import enCommon from "@multica/views/locales/en/common.json";
-import enAuth from "@multica/views/locales/en/auth.json";
-import enSettings from "@multica/views/locales/en/settings.json";
 import type { ReactNode } from "react";
 
-const TEST_RESOURCES = {
-  en: { common: enCommon, auth: enAuth, settings: enSettings },
-};
-
-function createWrapper() {
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return ({ children }: { children: ReactNode }) => (
-    <I18nProvider locale="en" resources={TEST_RESOURCES}>
-      <QueryClientProvider client={qc}>{children}</QueryClientProvider>
-    </I18nProvider>
-  );
-}
-
-const {
-  mockSendCode,
-  mockVerifyCode,
-  mockIssueCliToken,
-  searchParamsState,
-  authStateRef,
-} = vi.hoisted(() => ({
-  mockSendCode: vi.fn(),
-  mockVerifyCode: vi.fn(),
-  mockIssueCliToken: vi.fn(),
-  searchParamsState: { params: new URLSearchParams() },
-  authStateRef: {
-    state: {
-      sendCode: vi.fn(),
-      verifyCode: vi.fn(),
-      user: null as null | { id: string; email: string },
-      isLoading: false,
-    },
+const state = vi.hoisted(() => ({
+  params: new URLSearchParams(),
+  config: {
+    useSySso: null as boolean | null,
+    authConfigError: null as string | null,
+    googleClientId: "",
+    loadConfig: vi.fn(),
+  },
+  auth: {
+    user: null as null | { id: string; email: string; onboarded_at: string | null },
+    isLoading: false,
+    loginWithSSO: vi.fn(),
   },
 }));
+const mockPush = vi.hoisted(() => vi.fn());
+const mockReplace = vi.hoisted(() => vi.fn());
+const mockListWorkspaces = vi.hoisted(() => vi.fn());
+const mockListMyInvitations = vi.hoisted(() => vi.fn());
+const mockGetConfig = vi.hoisted(() => vi.fn());
+const mockIssueCliToken = vi.hoisted(() => vi.fn());
+const mockTranslate = vi.hoisted(() => vi.fn(() => "translated"));
 
-// Mock next/navigation
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
-  usePathname: () => "/login",
-  useSearchParams: () => searchParamsState.params,
+  useRouter: () => ({ push: mockPush, replace: mockReplace }),
+  useSearchParams: () => state.params,
 }));
 
-// Mock auth store — shared LoginPage uses getState().sendCode/verifyCode,
-// web wrapper uses useAuthStore((s) => s.user/isLoading). Keep the real
-// sanitizeNextUrl so the redirect-sanitization rules are exercised rather
-// than silently drifting behind a mock reimplementation.
+vi.mock("@multica/core/config", () => ({
+  useConfigStore: (selector: (value: typeof state.config) => unknown) =>
+    selector(state.config),
+}));
+
 vi.mock("@multica/core/auth", async () => {
-  const actual =
-    await vi.importActual<typeof import("@multica/core/auth")>(
-      "@multica/core/auth",
-    );
-  authStateRef.state.sendCode = mockSendCode;
-  authStateRef.state.verifyCode = mockVerifyCode;
-  const useAuthStore = Object.assign(
-    (selector: (s: typeof authStateRef.state) => unknown) =>
-      selector(authStateRef.state),
-    { getState: () => authStateRef.state },
+  const actual = await vi.importActual<typeof import("@multica/core/auth")>(
+    "@multica/core/auth",
   );
-  return { ...actual, useAuthStore };
+  return {
+    ...actual,
+    useAuthStore: Object.assign(
+      (selector: (value: typeof state.auth) => unknown) => selector(state.auth),
+      { getState: () => state.auth },
+    ),
+  };
 });
 
-// Mock auth-cookie
+vi.mock("@multica/core/api", () => ({
+  api: {
+    getConfig: mockGetConfig,
+    listWorkspaces: mockListWorkspaces,
+    listMyInvitations: mockListMyInvitations,
+    issueCliToken: mockIssueCliToken,
+  },
+}));
+vi.mock("@multica/views/auth", () => ({
+  LoginPage: (props: { google?: unknown }) => (
+    <div>
+      Legacy login
+      {props.google ? <span>Google enabled</span> : null}
+    </div>
+  ),
+  validateCliCallback: () => true,
+}));
+vi.mock("@multica/views/i18n", () => ({
+  useT: () => ({ t: mockTranslate }),
+}));
 vi.mock("@/features/auth/auth-cookie", () => ({
   setLoggedInCookie: vi.fn(),
 }));
 
-// Mock api
-vi.mock("@multica/core/api", () => ({
-  api: {
-    listWorkspaces: vi.fn().mockResolvedValue([]),
-    verifyCode: vi.fn(),
-    setToken: vi.fn(),
-    getMe: vi.fn(),
-    issueCliToken: mockIssueCliToken,
-  },
-}));
-
 import LoginPage from "./page";
 
-describe("LoginPage", () => {
+function createWrapper() {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return ({ children }: { children: ReactNode }) => (
+    <QueryClientProvider client={client}>{children}</QueryClientProvider>
+  );
+}
+
+const wrapper = createWrapper();
+
+describe("Web login auth mode", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    searchParamsState.params = new URLSearchParams();
-    authStateRef.state.user = null;
-    authStateRef.state.isLoading = false;
-  });
-
-  it("renders login form with email input and continue button", () => {
-    render(<LoginPage />, { wrapper: createWrapper() });
-
-    expect(screen.getByText("Sign in to Multica")).toBeInTheDocument();
-    expect(screen.getByText("Enter your email to get a login code")).toBeInTheDocument();
-    expect(screen.getByLabelText("Email")).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "Continue" })
-    ).toBeInTheDocument();
-  });
-
-  it("does not call sendCode when email is empty", async () => {
-    const user = userEvent.setup();
-    render(<LoginPage />, { wrapper: createWrapper() });
-
-    await user.click(screen.getByRole("button", { name: "Continue" }));
-    expect(mockSendCode).not.toHaveBeenCalled();
-  });
-
-  it("calls sendCode with email on submit", async () => {
-    mockSendCode.mockResolvedValueOnce(undefined);
-    const user = userEvent.setup();
-    render(<LoginPage />, { wrapper: createWrapper() });
-
-    await user.type(screen.getByLabelText("Email"), "test@multica.ai");
-    await user.click(screen.getByRole("button", { name: "Continue" }));
-
-    await waitFor(() => {
-      expect(mockSendCode).toHaveBeenCalledWith("test@multica.ai");
+    state.params = new URLSearchParams();
+    state.config.useSySso = null;
+    state.config.authConfigError = null;
+    state.config.googleClientId = "";
+    state.auth.user = null;
+    state.auth.isLoading = false;
+    state.auth.loginWithSSO.mockResolvedValue({
+      id: "u1",
+      email: "alice@example.com",
+      onboarded_at: "2026-01-01T00:00:00Z",
     });
+    mockListWorkspaces.mockResolvedValue([{ id: "w1", slug: "platform" }]);
+    mockListMyInvitations.mockResolvedValue([]);
+    mockGetConfig.mockResolvedValue({ use_sy_sso: false });
+    state.config.loadConfig.mockImplementation((request) => request());
   });
 
-  it("shows 'Sending code...' while submitting", async () => {
-    mockSendCode.mockReturnValueOnce(new Promise(() => {}));
-    const user = userEvent.setup();
-    render(<LoginPage />, { wrapper: createWrapper() });
+  it("shows a stable loading state until config resolves", () => {
+    render(<LoginPage />, { wrapper });
 
-    await user.type(screen.getByLabelText("Email"), "test@multica.ai");
-    await user.click(screen.getByRole("button", { name: "Continue" }));
-
-    await waitFor(() => {
-      expect(screen.getByText("Sending code...")).toBeInTheDocument();
-    });
+    expect(screen.getByText("Loading sign-in configuration")).toBeInTheDocument();
+    expect(state.auth.loginWithSSO).not.toHaveBeenCalled();
+    expect(screen.queryByText("Legacy login")).not.toBeInTheDocument();
   });
 
-  it("shows verification code step after sending code", async () => {
-    mockSendCode.mockResolvedValueOnce(undefined);
-    const user = userEvent.setup();
-    render(<LoginPage />, { wrapper: createWrapper() });
+  it("shows config failure and retries the shared loader without choosing a mode", () => {
+    state.config.authConfigError = "Config unavailable";
+    render(<LoginPage />, { wrapper });
 
-    await user.type(screen.getByLabelText("Email"), "test@multica.ai");
-    await user.click(screen.getByRole("button", { name: "Continue" }));
+    expect(screen.getByText("Config unavailable")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
 
-    await waitFor(() => {
-      expect(screen.getByText("Check your email")).toBeInTheDocument();
-    });
+    expect(state.config.loadConfig).toHaveBeenCalledOnce();
+    expect(mockGetConfig).toHaveBeenCalledOnce();
+    expect(state.auth.loginWithSSO).not.toHaveBeenCalled();
+    expect(screen.queryByText("Legacy login")).not.toBeInTheDocument();
   });
 
-  it("shows error when sendCode fails", async () => {
-    mockSendCode.mockRejectedValueOnce(new Error("Network error"));
-    const user = userEvent.setup();
-    render(<LoginPage />, { wrapper: createWrapper() });
+  it("renders legacy email and Google login only when use_sy_sso is false", () => {
+    state.config.useSySso = false;
+    state.config.googleClientId = "google-client";
+    render(<LoginPage />, { wrapper });
 
-    await user.type(screen.getByLabelText("Email"), "test@multica.ai");
-    await user.click(screen.getByRole("button", { name: "Continue" }));
-
-    await waitFor(() => {
-      expect(screen.getByText("Network error")).toBeInTheDocument();
-    });
+    expect(screen.getByText("Legacy login")).toBeInTheDocument();
+    expect(screen.getByText("Google enabled")).toBeInTheDocument();
+    expect(state.auth.loginWithSSO).not.toHaveBeenCalled();
   });
 
-  // Regression: MUL-1080 — if the user is already authenticated on the web
-  // and the Desktop app redirects them to /login?platform=desktop, the web
-  // must exchange the cookie session for a bearer token and hand it off via
-  // the multica:// deep link, not silently redirect to the workspace page.
-  it("mints a token and deep-links to Desktop when already logged in with platform=desktop", async () => {
-    searchParamsState.params = new URLSearchParams({ platform: "desktop" });
-    authStateRef.state.user = { id: "u1", email: "test@multica.ai" };
-    mockIssueCliToken.mockImplementation(() =>
-      Promise.resolve({ token: "handoff-jwt" }),
-    );
+  it("exchanges SSO and preserves a safe next destination only in SSO mode", async () => {
+    state.config.useSySso = true;
+    state.params = new URLSearchParams({ next: "/invite/inv-1" });
+    render(<LoginPage />, { wrapper });
 
+    await waitFor(() => expect(state.auth.loginWithSSO).toHaveBeenCalledOnce());
+    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/invite/inv-1"));
+    expect(screen.queryByText("Legacy login")).not.toBeInTheDocument();
+  });
+
+  it("drops an unsafe next destination in SSO mode", async () => {
+    state.config.useSySso = true;
+    state.params = new URLSearchParams({ next: "https://evil.example" });
+    render(<LoginPage />, { wrapper });
+
+    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/platform/issues"));
+    expect(mockReplace).not.toHaveBeenCalledWith("https://evil.example");
+  });
+
+  it("hands an existing legacy session back to Desktop", async () => {
+    state.config.useSySso = false;
+    state.params = new URLSearchParams({ platform: "desktop" });
+    state.auth.user = {
+      id: "u1",
+      email: "alice@example.com",
+      onboarded_at: "2026-01-01T00:00:00Z",
+    };
+    mockIssueCliToken.mockResolvedValue({ token: "desktop-token" });
     const hrefSetter = vi.fn();
     const originalLocation = window.location;
     Object.defineProperty(window, "location", {
       configurable: true,
-      value: { ...originalLocation, set href(value: string) { hrefSetter(value); } },
+      value: {
+        ...originalLocation,
+        set href(value: string) {
+          hrefSetter(value);
+        },
+      },
     });
 
     try {
-      render(<LoginPage />, { wrapper: createWrapper() });
-
-      await waitFor(() => {
-        expect(mockIssueCliToken).toHaveBeenCalledTimes(1);
-      });
-      await waitFor(() => {
+      render(<LoginPage />, { wrapper });
+      await waitFor(() => expect(mockIssueCliToken).toHaveBeenCalledOnce());
+      await waitFor(() =>
         expect(hrefSetter).toHaveBeenCalledWith(
-          "multica://auth/callback?token=handoff-jwt",
-        );
-      });
-      expect(
-        await screen.findByRole("button", { name: "Open Multica Desktop" }),
-      ).toBeInTheDocument();
+          "multica://auth/callback?token=desktop-token",
+        ),
+      );
     } finally {
       Object.defineProperty(window, "location", {
         configurable: true,
         value: originalLocation,
       });
     }
+  });
+
+  // Regression: #5009 — the "already authenticated on arrival" effect used to
+  // fire for fresh form logins too. verifyCode writes `user` while handleVerify
+  // is still fetching the workspace list, so the effect read an empty cache and
+  // raced handleSuccess with replace("/workspaces/new"); depending on the
+  // interleaving the user could end up stuck on the create-workspace page
+  // despite having workspaces.
+  describe("post-login redirect ownership (#5009)", () => {
+    beforeEach(() => {
+      state.config.useSySso = false;
+    });
+
+    const onboardedUser = {
+      id: "u1",
+      email: "test@multica.ai",
+      onboarded_at: "2026-01-01T00:00:00Z",
+    };
+
+    it("does not redirect from the arrival effect when the user logs in via the form", async () => {
+      // Auth settles as logged-out first — the page latches "any user from
+      // now on came from the form".
+      const wrapper = createWrapper();
+      const { rerender } = render(<LoginPage />, { wrapper });
+      // verifyCode set the user; the workspace list fetch is still in flight
+      // (cache cold). The arrival effect must stay silent — handleSuccess
+      // owns this navigation.
+      state.auth.user = onboardedUser;
+      rerender(<LoginPage />);
+
+      await act(async () => {});
+      expect(mockReplace).not.toHaveBeenCalled();
+      expect(mockPush).not.toHaveBeenCalled();
+      expect(mockListWorkspaces).not.toHaveBeenCalled();
+    });
+
+    it("fetches the workspace list before redirecting a visitor who arrived authenticated", async () => {
+      // Cold Query cache on a fresh page load: reading it would say "no
+      // workspaces" and misroute to /workspaces/new. The effect must fetch.
+      state.auth.user = onboardedUser;
+      mockListWorkspaces.mockResolvedValue([{ id: "ws-1", slug: "acme" }]);
+
+      render(<LoginPage />, { wrapper: createWrapper() });
+
+      await waitFor(() => {
+        expect(mockReplace).toHaveBeenCalledWith("/acme/issues");
+      });
+      expect(mockListWorkspaces).toHaveBeenCalledTimes(1);
+    });
+
+    it("still honors ?next= for a visitor who arrived authenticated", async () => {
+      state.params = new URLSearchParams({
+        next: "/invite/abc",
+      });
+      state.auth.user = onboardedUser;
+
+      render(<LoginPage />, { wrapper: createWrapper() });
+
+      await waitFor(() => {
+        expect(mockReplace).toHaveBeenCalledWith("/invite/abc");
+      });
+      expect(mockListWorkspaces).not.toHaveBeenCalled();
+    });
   });
 });

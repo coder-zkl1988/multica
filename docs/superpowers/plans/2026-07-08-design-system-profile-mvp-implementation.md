@@ -12,8 +12,8 @@
 
 ## Files And Responsibilities
 
-- Create `server/migrations/126_design_system_profile.up.sql`: create `design_system_profile` table and default uniqueness index.
-- Create `server/migrations/126_design_system_profile.down.sql`: drop design-system schema.
+- Create `server/migrations/247_design_system_profile.up.sql`: create `design_system_profile` table and default uniqueness index.
+- Create `server/migrations/247_design_system_profile.down.sql`: drop design-system schema.
 - Modify `server/pkg/db/queries/design.sql`: add sqlc queries for create/list/get/update/set-default.
 - Regenerate `server/pkg/db/generated/design.sql.go` with `make sqlc`.
 - Modify `server/internal/handler/design_file.go`: add request/response types, analyzer helper, handlers, and UI Agent context injection.
@@ -31,8 +31,8 @@
 ## Task 1: Database Schema And Queries
 
 **Files:**
-- Create: `server/migrations/126_design_system_profile.up.sql`
-- Create: `server/migrations/126_design_system_profile.down.sql`
+- Create: `server/migrations/247_design_system_profile.up.sql`
+- Create: `server/migrations/247_design_system_profile.down.sql`
 - Modify: `server/pkg/db/queries/design.sql`
 - Generated: `server/pkg/db/generated/design.sql.go`
 
@@ -42,7 +42,7 @@ Add tests in Task 2 before running sqlc-dependent implementation. The failing te
 
 - [ ] **Step 2: Create migration**
 
-Create `server/migrations/126_design_system_profile.up.sql`:
+Create `server/migrations/247_design_system_profile.up.sql`:
 
 ```sql
 CREATE TABLE design_system_profile (
@@ -75,7 +75,7 @@ CREATE UNIQUE INDEX idx_design_system_profile_default_project
       AND project_id IS NOT NULL;
 ```
 
-Create `server/migrations/126_design_system_profile.down.sql`:
+Create `server/migrations/247_design_system_profile.down.sql`:
 
 ```sql
 DROP INDEX IF EXISTS idx_design_system_profile_default_project;

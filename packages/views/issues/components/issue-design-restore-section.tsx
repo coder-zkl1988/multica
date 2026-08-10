@@ -1016,9 +1016,9 @@ export function IssueDesignRestoreSection({ issue, agents }: IssueDesignRestoreS
 
   return (
     <>
-      <section className="rounded-lg border bg-card p-3 text-xs">
+      <section className="rounded-lg border bg-card p-3 text-caption">
         <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2 text-sm font-medium"><FileJson className="size-4 text-muted-foreground" />设计交付</div>
+          <div className="flex items-center gap-2 text-body font-medium"><FileJson className="size-4 text-muted-foreground" />设计交付</div>
           <Badge variant={statusBadgeVariant}>{displayStatusLabel}</Badge>
         </div>
         <p className="mt-1 text-muted-foreground">{isUiIssue ? "1 上传设计稿 · 2 UI 还原 · 3 交付前端" : isFrontendIssue ? "1 接收 UI 产物 · 2 动态接入" : "识别设计阶段后进入设计交付流程"}</p>
@@ -1215,7 +1215,7 @@ export function IssueDesignRestoreSection({ issue, agents }: IssueDesignRestoreS
                   value={cancelReason}
                   onChange={(event) => setCancelReason(event.target.value)}
                   placeholder="撤回原因，可选"
-                  className="min-h-16 resize-none text-xs"
+                  className="min-h-16 resize-none text-caption"
                   maxLength={520}
                 />
                 <div className={`text-right ${cancelReasonTooLong ? "text-destructive" : "text-muted-foreground"}`}>{cancelReason.length}/500</div>
@@ -1279,7 +1279,7 @@ export function IssueDesignRestoreSection({ issue, agents }: IssueDesignRestoreS
             <SheetTitle>交付详情</SheetTitle>
             <SheetDescription>{issue.title} · {historyCount ? `${historyCount} 次交付` : "暂无交付"}</SheetDescription>
           </SheetHeader>
-          <div className="space-y-3 p-4 text-xs">
+          <div className="space-y-3 p-4 text-caption">
             {activeDesignDelivery ? (
               <div className="rounded-md border bg-muted p-3">
                 <div className="flex items-center justify-between gap-2">

@@ -16,15 +16,43 @@ import {
 } from "fs";
 import { join } from "path";
 import { homedir, hostname } from "os";
-import type { DaemonStatus, DaemonPrefs } from "../shared/daemon-types";
+import type {
+  DaemonStatus,
+  DaemonPrefs,
+  LocalRuntimeProbe,
+} from "../shared/daemon-types";
+import { daemonStatusAlive } from "../shared/daemon-types";
 import { ensureManagedCli, managedCliPath } from "./cli-bootstrap";
 import { decideVersionAction } from "./version-decision";
+import {
+  daemonLifecycleUnreachable,
+  isDaemonExternallyManaged,
+  normalizeHostOS,
+} from "./daemon-os";
+import {
+  classifyAuthProbe,
+  isAuthStatusError,
+  type AuthProbeResult,
+} from "./daemon-auth-probe";
+import { planDaemonToken } from "./daemon-token-sync";
 
 const DEFAULT_HEALTH_PORT = 19514;
 const POLL_INTERVAL_MS = 5_000;
 const PREFS_PATH = join(homedir(), ".multica", "desktop_prefs.json");
 const LOG_TAIL_RETRY_MS = 2_000;
 const LOG_TAIL_MAX_RETRIES = 5;
+// How long a start may sit in "starting" (with no /health) before we probe the
+// token to find out whether login expired. The daemon's own startup can legitimately
+// take a while (it renews the PAT and lists workspaces before serving /health), so we
+// wait past the common case to avoid probing healthy-but-slow starts.
+const AUTH_PROBE_GRACE_MS = 10_000;
+// `multica daemon start` blocks until the daemon reports ready, polling /health
+// for up to its own startup timeout (45s in server/cmd/multica/cmd_daemon.go) to
+// cover cold-start agent-version detection. This execFile timeout MUST stay
+// above that — otherwise Electron kills the CLI supervisor mid-startup and a
+// healthy-but-slow start is misreported as a failure (the detached daemon child
+// keeps running, so the UI flashes "stopped" then "running").
+const DAEMON_START_EXEC_TIMEOUT_MS = 60_000;
 
 const DEFAULT_PREFS: DaemonPrefs = { autoStart: true, autoStop: false };
 
@@ -47,6 +75,15 @@ let cachedCliBinaryVersion: string | null | undefined = undefined;
 let pendingVersionRestart = false;
 let targetApiBaseUrl: string | null = null;
 let activeProfile: ActiveProfile | null = null;
+
+// Auth-probe state for the current start attempt. When a start fails to reach
+// "running", we probe the daemon's token once (after AUTH_PROBE_GRACE_MS) to
+// decide whether the cause is an expired/invalid login. `authExpired` is sticky
+// until the next start attempt or a successful /health, so the UI keeps showing
+// the re-login prompt instead of flapping back to "starting". See #3512.
+let startingSince: number | null = null;
+let authProbeDone = false;
+let authExpired = false;
 
 // Serialize all writes to any profile config file. Multiple paths
 // (syncToken, resolveActiveProfile, clearToken, watch/unwatch handlers)
@@ -134,6 +171,8 @@ function sendStatus(status: DaemonStatus): void {
 interface HealthPayload {
   status?: string;
   pid?: number;
+  /** Daemon's runtime.GOOS. Absent on daemons older than the #3916 fix. */
+  os?: string;
   uptime?: string;
   daemon_id?: string;
   device_name?: string;
@@ -158,6 +197,36 @@ async function fetchHealthAtPort(
     return (await res.json()) as HealthPayload;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Validates the daemon profile's token against the backend to find out whether
+ * a stuck start is an auth problem. Hits the same endpoint `multica auth status`
+ * uses (GET /api/me) with the exact token the daemon loads from config.json, so
+ * the verdict matches what the daemon itself would get from the server.
+ *
+ * Only the HTTP status is inspected (never the body) so a future change to the
+ * /api/me response shape can't break this — a 401 means the token is rejected,
+ * a 2xx means it's fine, and a thrown request means the network is the problem,
+ * not auth. See classifyAuthProbe for the full rule set.
+ */
+async function probeTokenValidity(profile: string): Promise<AuthProbeResult> {
+  if (!targetApiBaseUrl) return "unknown";
+  const cfg = await readProfileConfig(profile);
+  const token = typeof cfg.token === "string" ? cfg.token : "";
+  if (!token) return classifyAuthProbe({ noToken: true });
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 4_000);
+    const res = await fetch(`${targetApiBaseUrl.replace(/\/+$/, "")}/api/me`, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    return classifyAuthProbe({ status: res.status });
+  } catch {
+    return classifyAuthProbe({ networkError: true });
   }
 }
 
@@ -249,11 +318,56 @@ async function fetchHealth(): Promise<DaemonStatus> {
   const data = await fetchHealthAtPort(active.port);
 
   if (!data || data.status !== "running") {
+    // A start that never reaches "running" is the symptom; an expired/invalid
+    // login is the most common cause and the one with no other signal (the
+    // daemon exits before it can serve /health, so we can't read the reason
+    // from it). Probe the token once per attempt, after a grace period, to
+    // surface a re-login prompt instead of spinning on "starting" forever.
+    if (
+      currentState === "starting" &&
+      !authExpired &&
+      !authProbeDone &&
+      startingSince !== null &&
+      Date.now() - startingSince >= AUTH_PROBE_GRACE_MS
+    ) {
+      authProbeDone = true;
+      if ((await probeTokenValidity(active.name)) === "auth_expired") {
+        authExpired = true;
+      }
+    }
+    // Sticky: once login is known-expired, keep reporting it (even after
+    // currentState flips away from "starting") until the next start attempt or
+    // a successful /health clears the flag.
+    if (authExpired) {
+      return { state: "auth_expired", profile: active.name };
+    }
+    // The daemon binds /health before preflight finishes and self-reports
+    // "starting" until it's ready. Trust that over our own currentState, so a
+    // daemon booting on its own — or started via the CLI — surfaces as
+    // "starting" instead of "stopped".
+    if (data?.status === "starting") {
+      return { state: "starting", profile: active.name };
+    }
     return {
       state: currentState === "starting" ? "starting" : "stopped",
       profile: active.name,
     };
   }
+
+  // A live, authenticated daemon clears any prior auth-failure verdict so the
+  // re-login prompt disappears once the user reconnects.
+  authExpired = false;
+  startingSince = null;
+
+  // A running daemon whose OS differs from this host's is one we can't drive
+  // via the native lifecycle CLI (e.g. Linux-in-WSL2 behind a Windows desktop,
+  // reachable only over localhost forwarding). Surface it so the UI disables
+  // the auto-start/auto-stop toggles instead of letting them silently no-op,
+  // and so before-quit skips a stop that would never land. See #3916.
+  const externallyManaged = isDaemonExternallyManaged(
+    data.os,
+    normalizeHostOS(process.platform),
+  );
 
   // Safety: if we have a target URL and the daemon on our port reports a
   // different server_url, it's not "our" daemon — drop it and re-resolve.
@@ -278,6 +392,7 @@ async function fetchHealth(): Promise<DaemonStatus> {
       : 0,
     profile: active.name,
     serverUrl: data.server_url,
+    externallyManaged,
   };
 }
 
@@ -464,6 +579,15 @@ async function ensureRunningDaemonVersionMatches(): Promise<
 > {
   const active = await ensureActiveProfile();
   const running = await fetchHealthAtPort(active.port);
+
+  // Don't try to version-match a daemon we can't restart (e.g. WSL2). Treat it
+  // as up-to-date — restartDaemon would no-op anyway, and skipping here avoids
+  // a misleading "restarting daemon" log on every auto-start. #3916.
+  if (isDaemonExternallyManaged(running?.os, normalizeHostOS(process.platform))) {
+    pendingVersionRestart = false;
+    return "ok";
+  }
+
   const bundled = await getCliBinaryVersion();
   const action = decideVersionAction(bundled, running);
 
@@ -515,7 +639,13 @@ async function mintPat(jwt: string): Promise<string> {
   });
   if (!res.ok) {
     const body = await res.text().catch(() => "");
-    throw new Error(`mint PAT failed: ${res.status} ${res.statusText} ${body}`);
+    // Attach the status so callers can tell a genuine auth rejection (401 — the
+    // session token is dead) apart from a transient failure (5xx, etc.) without
+    // string-matching the message.
+    throw Object.assign(
+      new Error(`mint PAT failed: ${res.status} ${res.statusText} ${body}`),
+      { status: res.status },
+    );
   }
   const data = (await res.json()) as { token?: unknown };
   if (typeof data.token !== "string" || !data.token.startsWith("mul_")) {
@@ -527,14 +657,17 @@ async function mintPat(jwt: string): Promise<string> {
 /**
  * Ensure the active profile's config.json has a usable token for the daemon.
  *
- * - Input from the renderer is the user's JWT (from localStorage) plus the
- *   current user's id, so we can detect session changes.
+ * - Input from the renderer is the user's session token (from localStorage),
+ *   current user's id, and the server's authentication mode.
+ * - SSO servers accept the internal session token directly for daemon auth and
+ *   deliberately do not expose POST /api/tokens, so never mint a PAT there.
  * - If the profile already has a cached PAT (`mul_...`) AND the sidecar user
- *   id matches the caller, reuse it — minting fresh on every launch would
- *   accumulate garbage in the user's tokens page.
- * - On user mismatch (or first run) call POST /api/tokens with the JWT to
- *   mint a fresh PAT, overwriting any stale cached PAT. This is the critical
- *   path: without it, a previous user's PAT would be used by a new session.
+ *   id matches the caller in legacy mode, reuse it — minting fresh on every
+ *   launch would accumulate garbage in the user's tokens page.
+ * - In legacy mode, on user mismatch (or first run) call POST /api/tokens with
+ *   the JWT to mint a fresh PAT, overwriting any stale cached PAT. This is the
+ *   critical path: without it, a previous user's PAT would be used by a new
+ *   session.
  * - If the caller happens to pass a PAT directly, write it through.
  * - When we mint fresh and a daemon is already running, restart it so the
  *   new credentials take effect (the Go daemon reads config at startup).
@@ -542,22 +675,23 @@ async function mintPat(jwt: string): Promise<string> {
 async function syncToken(
   tokenFromRenderer: string,
   userId: string,
+  useSySso: boolean,
+  restartOnCredentialChange = true,
 ): Promise<void> {
   const active = await ensureActiveProfile();
   const config = await readProfileConfig(active.name);
   const previousUserId = await readProfileUserId(active.name);
   const userChanged = Boolean(previousUserId) && previousUserId !== userId;
-  const sameUserWithCachedPat =
-    !userChanged &&
-    previousUserId === userId &&
-    typeof config.token === "string" &&
-    config.token.startsWith("mul_");
+  const tokenPlan = planDaemonToken({
+    tokenFromRenderer,
+    cachedToken: config.token,
+    sameUser: !userChanged && previousUserId === userId,
+    useSySso,
+  });
 
   let finalToken: string;
-  if (tokenFromRenderer.startsWith("mul_")) {
-    finalToken = tokenFromRenderer;
-  } else if (sameUserWithCachedPat) {
-    finalToken = config.token as string;
+  if (tokenPlan.kind === "direct" || tokenPlan.kind === "cached_pat") {
+    finalToken = tokenPlan.token;
   } else {
     try {
       finalToken = await mintPat(tokenFromRenderer);
@@ -570,6 +704,7 @@ async function syncToken(
     }
   }
 
+  const credentialChanged = config.token !== finalToken || userChanged;
   config.token = finalToken;
   if (targetApiBaseUrl) config.server_url = targetApiBaseUrl;
   await writeProfileConfig(active.name, config);
@@ -577,17 +712,20 @@ async function syncToken(
 
   // If we just rotated credentials onto a running daemon, restart it so the
   // in-memory token in the Go process matches the new config.
-  if (userChanged) {
+  if (restartOnCredentialChange && credentialChanged) {
     try {
       const existing = await fetchHealthAtPort(active.port);
-      if (existing?.status === "running") {
+      if (daemonStatusAlive(existing?.status)) {
+        // Restart whether it's "running" or still "starting" — a booting daemon
+        // already loaded the old token at startup, so it must be restarted to
+        // pick up the rotated credentials.
         console.log(
-          "[daemon] user switched — restarting daemon with new credentials",
+          "[daemon] credentials changed — restarting daemon",
         );
         void restartDaemon();
       }
     } catch (err) {
-      console.warn("[daemon] restart-on-user-switch failed:", err);
+      console.warn("[daemon] restart-on-credential-change failed:", err);
     }
   }
 }
@@ -615,9 +753,56 @@ async function clearToken(): Promise<void> {
     delete config.token;
     await writeProfileConfig(active.name, config);
   }
-  // Always drop the sidecar so a subsequent syncToken from any user is
-  // treated as a fresh mint, not a reuse of a stale cached PAT.
+  // Always drop the sidecar so a subsequent syncToken from any user cannot
+  // reuse credentials that belonged to the prior session.
   await removeProfileUserId(active.name);
+}
+
+// Result of a user-initiated daemon re-authentication. The distinction matters:
+// only `session_invalid` justifies signing the user out of the whole app; a
+// `transient` failure must keep them logged in so they can retry.
+export type ReauthResult =
+  | { ok: true }
+  | { ok: false; reason: "session_invalid" }
+  | { ok: false; reason: "transient"; message: string };
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * Recover the local daemon from the "auth_expired" state. Drops the stale
+ * cached token, resolves a replacement for the server's authentication mode,
+ * and restarts the daemon so it loads the new credential.
+ *
+ * Legacy mint failures are classified rather than collapsed: a 401 means the
+ * session token itself is dead (`session_invalid` → the renderer drives a full
+ * re-login); anything else — mint 5xx, a network blip, a config write error, a
+ * restart hiccup — is `transient`, leaving the user signed in so they can retry.
+ */
+async function reauthenticate(
+  token: string,
+  userId: string,
+  useSySso: boolean,
+): Promise<ReauthResult> {
+  try {
+    await clearToken();
+    // Reauthentication owns the awaited restart below, so avoid scheduling a
+    // second background restart while the credential is being replaced.
+    await syncToken(token, userId, useSySso, false);
+  } catch (err) {
+    if (isAuthStatusError(err)) return { ok: false, reason: "session_invalid" };
+    return { ok: false, reason: "transient", message: errorMessage(err) };
+  }
+  const restart = await restartDaemon();
+  if (!restart.success) {
+    return {
+      ok: false,
+      reason: "transient",
+      message: restart.error ?? "failed to restart daemon",
+    };
+  }
+  return { ok: true };
 }
 
 async function withGuard<T>(fn: () => Promise<T>): Promise<T | { success: false; error: string }> {
@@ -636,6 +821,92 @@ function profileArgs(active: ActiveProfile): string[] {
   return active.name ? ["--profile", active.name] : [];
 }
 
+function successfulRuntimeProbe(
+  providers: string[],
+  daemonRunning: boolean,
+): Extract<LocalRuntimeProbe, { probeResult: "success" }> {
+  const providerSummary: Record<string, number> = {};
+  for (const rawProvider of providers) {
+    const provider = rawProvider.trim().toLowerCase();
+    if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(provider)) continue;
+    providerSummary[provider] = (providerSummary[provider] ?? 0) + 1;
+  }
+  const runtimeCount = Object.values(providerSummary).reduce(
+    (sum, count) => sum + count,
+    0,
+  );
+  return {
+    probeResult: "success",
+    runtimeCount,
+    providerSummary,
+    onlineCount: daemonRunning ? runtimeCount : 0,
+    offlineCount: daemonRunning ? 0 : runtimeCount,
+  };
+}
+
+async function probeLocalRuntimes(): Promise<LocalRuntimeProbe> {
+  const health = await fetchHealth();
+  if (health.state === "running") {
+    return successfulRuntimeProbe(health.agents ?? [], true);
+  }
+
+  const bin = await resolveCliBinary();
+  if (!bin) return { probeResult: "error" };
+  const active = await ensureActiveProfile();
+  return new Promise((resolve) => {
+    execFile(
+      bin,
+      ["daemon", "probe-runtimes", ...profileArgs(active)],
+      { timeout: 15_000, env: desktopSpawnEnv(), maxBuffer: 64 * 1024 },
+      (error, stdout) => {
+        if (error) {
+          resolve({ probeResult: "error" });
+          return;
+        }
+        try {
+          const parsed = JSON.parse(stdout) as {
+            probe_result?: unknown;
+            runtime_count?: unknown;
+            provider_summary?: unknown;
+          };
+          if (
+            parsed.probe_result !== "success" ||
+            typeof parsed.runtime_count !== "number" ||
+            !parsed.provider_summary ||
+            typeof parsed.provider_summary !== "object" ||
+            Array.isArray(parsed.provider_summary)
+          ) {
+            resolve({ probeResult: "error" });
+            return;
+          }
+          const providers: string[] = [];
+          for (const [provider, count] of Object.entries(
+            parsed.provider_summary as Record<string, unknown>,
+          )) {
+            if (
+              !Number.isInteger(count) ||
+              (count as number) < 0 ||
+              (count as number) > 1000
+            ) {
+              resolve({ probeResult: "error" });
+              return;
+            }
+            providers.push(...Array<string>(count as number).fill(provider));
+          }
+          const probe = successfulRuntimeProbe(providers, false);
+          resolve(
+            probe.runtimeCount === parsed.runtime_count
+              ? probe
+              : { probeResult: "error" },
+          );
+        } catch {
+          resolve({ probeResult: "error" });
+        }
+      },
+    );
+  });
+}
+
 // Env passed to every CLI child so the daemon process knows it was spawned
 // by the Desktop app. The server uses this to mark runtimes as managed and
 // hide CLI self-update UI. Computed lazily so it picks up the PATH fix
@@ -651,12 +922,19 @@ async function startDaemon(): Promise<{ success: boolean; error?: string }> {
 
   const active = await ensureActiveProfile();
   const existing = await fetchHealthAtPort(active.port);
-  if (existing?.status === "running") {
+  if (daemonStatusAlive(existing?.status)) {
+    // A daemon is already up ("running") or booting ("starting") on this port —
+    // don't spawn a second one (the CLI rejects that as "already running").
+    // Let polling track it through to "running".
     pollOnce();
     return { success: true };
   }
 
   currentState = "starting";
+  // Begin a fresh auth-probe window for this attempt.
+  startingSince = Date.now();
+  authProbeDone = false;
+  authExpired = false;
   sendStatus({ state: "starting" });
 
   const args = ["daemon", "start", ...profileArgs(active)];
@@ -665,7 +943,7 @@ async function startDaemon(): Promise<{ success: boolean; error?: string }> {
     execFile(
       bin,
       args,
-      { timeout: 20_000, env: desktopSpawnEnv() },
+      { timeout: DAEMON_START_EXEC_TIMEOUT_MS, env: desktopSpawnEnv() },
       (err) => {
         if (err) {
           currentState = "stopped";
@@ -683,12 +961,40 @@ async function startDaemon(): Promise<{ success: boolean; error?: string }> {
   });
 }
 
+/**
+ * Fresh boundary preflight for stop/restart: read the active profile's CURRENT
+ * /health and decide whether the daemon runs somewhere the app can't drive
+ * (WSL2 etc.). Done per call rather than off the poll cache, so a lifecycle op
+ * never shells out to a CLI that can't reach the daemon's process — even on
+ * paths that didn't just poll (e.g. restart-on-user-switch in syncToken, which
+ * calls restartDaemon directly). See #3916.
+ */
+async function lifecycleBlockedByForeignDaemon(): Promise<boolean> {
+  const active = await ensureActiveProfile();
+  return daemonLifecycleUnreachable(
+    async () => (await fetchHealthAtPort(active.port))?.os,
+    normalizeHostOS(process.platform),
+  );
+}
+
 async function stopDaemon(): Promise<{ success: boolean; error?: string }> {
+  // Central lifecycle guard: a daemon running in an environment we can't drive
+  // (e.g. Linux in WSL2 behind a Windows desktop) can't be stopped by the
+  // native CLI — it would act on the host process namespace and no-op, while
+  // still flipping our state to "stopped". Bail as a successful no-op so every
+  // caller (logout, quit, restart, the Runtime card) is covered in one place
+  // rather than each remembering to check. Preflighted against live /health so
+  // it holds even when no poll ran first. #3916.
+  if (await lifecycleBlockedByForeignDaemon()) return { success: true };
+
   const bin = await resolveCliBinary();
   if (!bin) return { success: false, error: "multica CLI is not installed" };
 
   const active = await ensureActiveProfile();
   currentState = "stopping";
+  // An explicit stop is a clean reset — drop any pending auth-failure verdict.
+  authExpired = false;
+  startingSince = null;
   sendStatus({ state: "stopping" });
 
   const args = ["daemon", "stop", ...profileArgs(active)];
@@ -707,6 +1013,11 @@ async function stopDaemon(): Promise<{ success: boolean; error?: string }> {
 }
 
 async function restartDaemon(): Promise<{ success: boolean; error?: string }> {
+  // Same central, live-preflighted guard as stopDaemon: we can neither stop nor
+  // start a daemon we don't manage, so don't try (user-switch, reauth,
+  // first-workspace, and any future restart caller all route through here).
+  // #3916.
+  if (await lifecycleBlockedByForeignDaemon()) return { success: true };
   const stopResult = await stopDaemon();
   if (!stopResult.success) return stopResult;
   return startDaemon();
@@ -864,6 +1175,7 @@ export function setupDaemonManager(
   ipcMain.handle("daemon:stop", () => withGuard(() => stopDaemon()));
   ipcMain.handle("daemon:restart", () => withGuard(() => restartDaemon()));
   ipcMain.handle("daemon:get-status", () => fetchHealth());
+  ipcMain.handle("daemon:probe-runtimes", () => probeLocalRuntimes());
   // The host's OS name, available regardless of daemon state. The Runtimes
   // page uses it as a fallback identity for "this machine" when no
   // app-managed daemon is reporting a device name (e.g. the daemon runs
@@ -871,9 +1183,15 @@ export function setupDaemonManager(
   ipcMain.handle("daemon:get-host-name", () => hostname());
   ipcMain.handle(
     "daemon:sync-token",
-    (_event, token: string, userId: string) => syncToken(token, userId),
+    (_event, token: string, userId: string, useSySso: boolean) =>
+      syncToken(token, userId, useSySso),
   );
   ipcMain.handle("daemon:clear-token", () => clearToken());
+  ipcMain.handle(
+    "daemon:reauthenticate",
+    (_event, token: string, userId: string, useSySso: boolean) =>
+      reauthenticate(token, userId, useSySso),
+  );
   ipcMain.handle("daemon:is-cli-installed", async () => {
     const bin = await resolveCliBinary();
     return bin !== null;
@@ -950,6 +1268,8 @@ export function setupDaemonManager(
         isQuitting = true;
         event.preventDefault();
         try {
+          // stopDaemon no-ops for an externally-managed daemon (WSL2 etc.), so
+          // this is safe and instant in that case — the guard lives there. #3916
           await stopDaemon();
         } catch {
           // Best-effort stop on quit

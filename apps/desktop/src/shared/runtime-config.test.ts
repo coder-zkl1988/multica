@@ -3,6 +3,7 @@ import {
   DEFAULT_RUNTIME_CONFIG,
   deriveWsUrl,
   parseRuntimeConfig,
+  runtimeConfigFromBuildEnv,
   runtimeConfigFromDevEnv,
 } from "./runtime-config";
 
@@ -147,5 +148,22 @@ describe("runtime config", () => {
       wsUrl: "wss://api.test.multica.ai/ws",
       appUrl: "https://staging.multica.ai",
     });
+  });
+
+  it("derives missing packaged build URLs from VITE_API_URL", () => {
+    expect(
+      runtimeConfigFromBuildEnv({
+        apiUrl: "https://iworker.soyoung.com",
+      }),
+    ).toEqual({
+      schemaVersion: 1,
+      apiUrl: "https://iworker.soyoung.com",
+      wsUrl: "wss://iworker.soyoung.com/ws",
+      appUrl: "https://iworker.soyoung.com",
+    });
+  });
+
+  it("ignores an absent packaged build config", () => {
+    expect(runtimeConfigFromBuildEnv({})).toBeNull();
   });
 });

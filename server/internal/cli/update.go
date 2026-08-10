@@ -19,6 +19,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/multica-ai/multica/server/internal/selfexec"
 )
 
 // ChecksumManifestName is the asset name GoReleaser publishes for the
@@ -26,6 +28,9 @@ import (
 // .goreleaser.yml). Kept as a constant rather than inlined so a future rename
 // changes one place.
 const ChecksumManifestName = "checksums.txt"
+
+const forkReleaseAPIBase = "https://api.github.com/repos/coder-zkl1988/multica/releases"
+const forkCLIReleaseTag = "v0.4.18-sso.1"
 
 const DefaultUpdateDownloadTimeout = 120 * time.Second
 
@@ -42,31 +47,14 @@ type GitHubRelease struct {
 // uses this to skip self-update for source builds, where downgrading to a
 // public release would clobber unreleased changes.
 func IsReleaseVersion(v string) bool {
-	s := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(v), "v"))
-	if s == "" {
-		return false
-	}
-	parts := strings.Split(s, ".")
-	if len(parts) != 3 {
-		return false
-	}
-	for _, p := range parts {
-		if p == "" {
-			return false
-		}
-		for _, r := range p {
-			if r < '0' || r > '9' {
-				return false
-			}
-		}
-	}
-	return true
+	_, ok := parseReleaseVersion(v)
+	return ok
 }
 
 // IsNewerVersion reports whether latest is strictly newer than current. Both
-// arguments may carry an optional "v" prefix; non-numeric tails are ignored
-// (a 4th component, pre-release tag, etc.). Returns false if either side
-// cannot be parsed — the caller treats that as "stay on current".
+// arguments may carry an optional "v" prefix and an optional fork build suffix
+// (`-sso.N`). Returns false if either side cannot be parsed — the caller treats
+// that as "stay on current".
 func IsNewerVersion(latest, current string) bool {
 	l, ok := parseReleaseVersion(latest)
 	if !ok {
@@ -76,7 +64,7 @@ func IsNewerVersion(latest, current string) bool {
 	if !ok {
 		return false
 	}
-	for i := 0; i < 3; i++ {
+	for i := range l {
 		if l[i] != c[i] {
 			return l[i] > c[i]
 		}
@@ -84,37 +72,45 @@ func IsNewerVersion(latest, current string) bool {
 	return false
 }
 
-// parseReleaseVersion extracts the three numeric components of v. Returns
-// (parts, true) on success; (_, false) when v is missing, malformed, or
-// carries any non-numeric tail (a dev-describe suffix, a 4th component, a
-// pre-release tag, etc.). The strict shape is intentional: this is the only
-// parser used by IsNewerVersion, and the autoUpdateLoop must never silently
-// downgrade a developer build to a public release just because the
-// dev-describe patch happened to look numeric after trimming.
-func parseReleaseVersion(v string) ([3]int, bool) {
+// parseReleaseVersion extracts the three semver components and an optional SSO
+// build number. Other suffixes remain invalid so the auto-update loop never
+// replaces a developer build based on a partially parsed git-describe version.
+func parseReleaseVersion(v string) ([4]int, bool) {
 	s := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(v), "v"))
 	if s == "" {
-		return [3]int{}, false
+		return [4]int{}, false
 	}
-	parts := strings.Split(s, ".")
+	base, suffix, hasSuffix := strings.Cut(s, "-")
+	parts := strings.Split(base, ".")
 	if len(parts) != 3 {
-		return [3]int{}, false
+		return [4]int{}, false
 	}
-	var out [3]int
+	var out [4]int
 	for i, p := range parts {
 		if p == "" {
-			return [3]int{}, false
+			return [4]int{}, false
 		}
 		for _, r := range p {
 			if r < '0' || r > '9' {
-				return [3]int{}, false
+				return [4]int{}, false
 			}
 		}
 		n, err := strconv.Atoi(p)
 		if err != nil {
-			return [3]int{}, false
+			return [4]int{}, false
 		}
 		out[i] = n
+	}
+	if hasSuffix {
+		build, ok := strings.CutPrefix(suffix, "sso.")
+		if !ok || build == "" {
+			return [4]int{}, false
+		}
+		n, err := strconv.Atoi(build)
+		if err != nil || n < 0 {
+			return [4]int{}, false
+		}
+		out[3] = n
 	}
 	return out, true
 }
@@ -223,7 +219,7 @@ func verifyAssetSHA256(data []byte, expectedHex, assetName string) error {
 
 func fetchReleaseByTag(tag string) (*GitHubRelease, error) {
 	client := &http.Client{Timeout: 10 * time.Second}
-	req, err := http.NewRequest(http.MethodGet, "https://api.github.com/repos/multica-ai/multica/releases/tags/"+tag, nil)
+	req, err := http.NewRequest(http.MethodGet, forkReleaseAPIBase+"/tags/"+tag, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -246,30 +242,9 @@ func fetchReleaseByTag(tag string) (*GitHubRelease, error) {
 	return &release, nil
 }
 
-// FetchLatestRelease fetches the latest release tag from the multica GitHub repo.
+// FetchLatestRelease fetches the pinned SSO CLI release from the fork.
 func FetchLatestRelease() (*GitHubRelease, error) {
-	client := &http.Client{Timeout: 10 * time.Second}
-	req, err := http.NewRequest(http.MethodGet, "https://api.github.com/repos/multica-ai/multica/releases/latest", nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("GitHub API returned %d", resp.StatusCode)
-	}
-
-	var release GitHubRelease
-	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
-		return nil, err
-	}
-	return &release, nil
+	return fetchReleaseByTag(forkCLIReleaseTag)
 }
 
 // knownBrewPrefixes lists the install roots Homebrew uses on each platform.
@@ -291,7 +266,7 @@ func MatchKnownBrewPrefix(path string) string {
 
 // IsBrewInstall checks whether the running multica binary was installed via Homebrew.
 func IsBrewInstall() bool {
-	exePath, err := os.Executable()
+	exePath, err := selfexec.Resolve()
 	if err != nil {
 		return false
 	}
@@ -361,7 +336,7 @@ func UpdateViaDownload(targetVersion string) (string, error) {
 // UpdateViaDownloadWithTimeout downloads the latest release binary with a caller-selected timeout.
 func UpdateViaDownloadWithTimeout(targetVersion string, downloadTimeout time.Duration) (string, error) {
 	// Determine current binary path.
-	exePath, err := os.Executable()
+	exePath, err := selfexec.Resolve()
 	if err != nil {
 		return "", fmt.Errorf("resolve executable path: %w", err)
 	}

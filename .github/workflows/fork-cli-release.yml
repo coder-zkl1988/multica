@@ -1,0 +1,78 @@
+name: Fork CLI Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*-sso.*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fork-cli-release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.repository == 'coder-zkl1988/multica'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate release tag
+        shell: bash
+        run: |
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-sso\.[0-9]+$ ]]; then
+            echo "::error::Tag must look like v0.4.18-sso.1; got '$GITHUB_REF_NAME'."
+            exit 1
+          fi
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+
+      - name: Verify Go test wrapper
+        run: bash scripts/test-go.test.sh
+
+      - name: Run tests
+        run: bash scripts/test-go.sh --race
+
+      - name: Publish fork CLI release
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --clean --config .goreleaser-fork.yml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify published assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          expected=(checksums.txt)
+          for os in darwin linux windows; do
+            for arch in amd64 arm64; do
+              extension="tar.gz"
+              if [[ "$os" == "windows" ]]; then
+                extension="zip"
+              fi
+              expected+=("multica-cli-${version}-${os}-${arch}.${extension}")
+            done
+          done
+
+          published="$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
+          for asset in "${expected[@]}"; do
+            if ! grep -Fxq "$asset" <<< "$published"; then
+              echo "::error::Missing release asset: $asset"
+              exit 1
+            fi
+          done
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --json url,tagName,isDraft,isPrerelease,assets

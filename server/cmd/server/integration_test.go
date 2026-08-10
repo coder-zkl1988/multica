@@ -274,152 +274,63 @@ func TestConfigRouteIsPublic(t *testing.T) {
 
 // ---- Auth ----
 
-func TestSendCodeAndVerify(t *testing.T) {
-	const email = "integration-sendcode@multica.ai"
-	ctx := context.Background()
+func TestRouterAuthMode(t *testing.T) {
+	hub := realtime.NewHub()
+	go hub.Run()
+	ssoRouter, _ := NewRouterWithOptions(testPool, hub, events.New(), analytics.NoopClient{}, nil, RouterOptions{UseSySSO: true})
+	ssoServer := httptest.NewServer(ssoRouter)
+	defer ssoServer.Close()
 
-	t.Cleanup(func() {
-		testPool.Exec(ctx, `DELETE FROM verification_code WHERE email = $1`, email)
-		var userID string
-		err := testPool.QueryRow(ctx, `SELECT id FROM "user" WHERE email = $1`, email).Scan(&userID)
-		if err == nil {
-			rows, queryErr := testPool.Query(ctx, `
-				SELECT w.id FROM workspace w JOIN member m ON m.workspace_id = w.id WHERE m.user_id = $1
-			`, userID)
-			if queryErr == nil {
-				defer rows.Close()
-				for rows.Next() {
-					var wsID string
-					if rows.Scan(&wsID) == nil {
-						testPool.Exec(ctx, `DELETE FROM workspace WHERE id = $1`, wsID)
-					}
-				}
-			}
+	assertStatus := func(name, baseURL, method, path string, want int) {
+		t.Helper()
+		req, err := http.NewRequest(method, baseURL+path, nil)
+		if err != nil {
+			t.Fatal(err)
 		}
-		testPool.Exec(ctx, `DELETE FROM "user" WHERE email = $1`, email)
-	})
-
-	// Step 1: Send code
-	body, _ := json.Marshal(map[string]string{"email": email})
-	resp, err := http.Post(testServer.URL+"/auth/send-code", "application/json", bytes.NewReader(body))
-	if err != nil {
-		t.Fatalf("send-code failed: %v", err)
-	}
-	if resp.StatusCode != 200 {
-		t.Fatalf("send-code: expected 200, got %d", resp.StatusCode)
-	}
-	resp.Body.Close()
-
-	// Read code from DB
-	var code string
-	err = testPool.QueryRow(ctx, `SELECT code FROM verification_code WHERE email = $1 ORDER BY created_at DESC LIMIT 1`, email).Scan(&code)
-	if err != nil {
-		t.Fatalf("failed to read code from DB: %v", err)
-	}
-
-	// Step 2: Verify code
-	body, _ = json.Marshal(map[string]string{"email": email, "code": code})
-	resp, err = http.Post(testServer.URL+"/auth/verify-code", "application/json", bytes.NewReader(body))
-	if err != nil {
-		t.Fatalf("verify-code failed: %v", err)
-	}
-	if resp.StatusCode != 200 {
-		respBody, _ := io.ReadAll(resp.Body)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
 		resp.Body.Close()
-		t.Fatalf("verify-code: expected 200, got %d: %s", resp.StatusCode, respBody)
+		if resp.StatusCode != want {
+			t.Fatalf("%s: status = %d, want %d", name, resp.StatusCode, want)
+		}
 	}
 
-	var loginResp struct {
-		Token string `json:"token"`
-		User  struct {
-			Email string `json:"email"`
-		} `json:"user"`
+	legacyRoutes := []struct{ method, path string }{
+		{http.MethodPost, "/auth/send-code"},
+		{http.MethodPost, "/auth/verify-code"},
+		{http.MethodPost, "/auth/google"},
+		{http.MethodPost, "/api/cli-token"},
+		{http.MethodGet, "/api/tokens"},
 	}
-	readJSON(t, resp, &loginResp)
-
-	if loginResp.Token == "" {
-		t.Fatal("expected non-empty token")
-	}
-	if loginResp.User.Email != email {
-		t.Fatalf("expected email '%s', got '%s'", email, loginResp.User.Email)
-	}
-
-	// Verify the token works with /api/me
-	req, _ := http.NewRequest("GET", testServer.URL+"/api/me", nil)
-	req.Header.Set("Authorization", "Bearer "+loginResp.Token)
-	meResp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("getMe failed: %v", err)
-	}
-	if meResp.StatusCode != 200 {
-		t.Fatalf("getMe: expected 200, got %d", meResp.StatusCode)
-	}
-	meResp.Body.Close()
-}
-
-func TestVerifyCodeNewUserHasNoWorkspace(t *testing.T) {
-	const email = "new-integration-verify@multica.ai"
-	ctx := context.Background()
-
-	t.Cleanup(func() {
-		testPool.Exec(ctx, `DELETE FROM verification_code WHERE email = $1`, email)
-		testPool.Exec(ctx, `DELETE FROM "user" WHERE email = $1`, email)
-	})
-
-	testPool.Exec(ctx, `DELETE FROM "user" WHERE email = $1`, email)
-
-	// Send code
-	body, _ := json.Marshal(map[string]string{"email": email})
-	resp, err := http.Post(testServer.URL+"/auth/send-code", "application/json", bytes.NewReader(body))
-	if err != nil {
-		t.Fatalf("send-code failed: %v", err)
-	}
-	resp.Body.Close()
-
-	// Read code from DB
-	var code string
-	err = testPool.QueryRow(ctx, `SELECT code FROM verification_code WHERE email = $1 ORDER BY created_at DESC LIMIT 1`, email).Scan(&code)
-	if err != nil {
-		t.Fatalf("failed to read code from DB: %v", err)
+	for _, route := range legacyRoutes {
+		want := http.StatusBadRequest
+		if strings.HasPrefix(route.path, "/api/") {
+			want = http.StatusUnauthorized
+		}
+		assertStatus("legacy route exists", testServer.URL, route.method, route.path, want)
+		assertStatus("legacy route absent in SSO", ssoServer.URL, route.method, route.path, http.StatusNotFound)
 	}
 
-	// Verify code
-	body, _ = json.Marshal(map[string]string{"email": email, "code": code})
-	resp, err = http.Post(testServer.URL+"/auth/verify-code", "application/json", bytes.NewReader(body))
-	if err != nil {
-		t.Fatalf("verify-code failed: %v", err)
+	ssoRoutes := []struct{ method, path string }{
+		{http.MethodPost, "/auth/sso/session"},
+		{http.MethodGet, "/auth/sso/authorize"},
+		{http.MethodPost, "/auth/sso/token"},
 	}
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("verify-code: expected 200, got %d", resp.StatusCode)
+	for _, route := range ssoRoutes {
+		assertStatus("SSO route absent in legacy", testServer.URL, route.method, route.path, http.StatusNotFound)
+		want := http.StatusBadRequest
+		if strings.Contains(route.path, "session") || strings.Contains(route.path, "service-account") {
+			want = http.StatusUnauthorized
+		}
+		assertStatus("SSO route exists", ssoServer.URL, route.method, route.path, want)
 	}
-
-	var loginResp struct {
-		Token string `json:"token"`
-	}
-	readJSON(t, resp, &loginResp)
-
-	// New users should have no workspaces (/workspaces/new creates one)
-	req, _ := http.NewRequest("GET", testServer.URL+"/api/workspaces", nil)
-	req.Header.Set("Authorization", "Bearer "+loginResp.Token)
-	workspacesResp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("listWorkspaces failed: %v", err)
-	}
-	defer workspacesResp.Body.Close()
-
-	if workspacesResp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200, got %d", workspacesResp.StatusCode)
-	}
-
-	var workspaces []struct {
-		Name string `json:"name"`
-		Slug string `json:"slug"`
-	}
-	readJSON(t, workspacesResp, &workspaces)
-
-	if len(workspaces) != 0 {
-		t.Fatalf("expected 0 workspaces for new user, got %d", len(workspaces))
-	}
+	serviceAccountPath := "/api/workspaces/00000000-0000-0000-0000-000000000000/service-account"
+	assertStatus("service account route protected in legacy", testServer.URL, http.MethodGet, serviceAccountPath, http.StatusUnauthorized)
+	assertStatus("service account route protected in SSO", ssoServer.URL, http.MethodGet, serviceAccountPath, http.StatusUnauthorized)
+	assertStatus("legacy logout", testServer.URL, http.MethodPost, "/auth/logout", http.StatusOK)
+	assertStatus("SSO logout", ssoServer.URL, http.MethodPost, "/auth/logout", http.StatusOK)
 }
 
 func TestProtectedRoutesRequireAuth(t *testing.T) {
@@ -841,6 +752,446 @@ func TestInboxThroughRouter(t *testing.T) {
 	// Inbox may be empty, just verify it returns valid JSON array
 	if items == nil {
 		t.Fatal("expected non-nil inbox items array")
+	}
+}
+
+func TestInboxUnreadSummaryThroughRouter(t *testing.T) {
+	ctx := context.Background()
+
+	// Seed one unread inbox item for the test user in the test workspace.
+	var itemID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO inbox_item (workspace_id, recipient_type, recipient_id, type, title)
+		VALUES ($1, 'member', $2, 'issue_assigned', 'Summary fixture')
+		RETURNING id
+	`, testWorkspaceID, testUserID).Scan(&itemID); err != nil {
+		t.Fatalf("failed to seed inbox item: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM inbox_item WHERE id = $1`, itemID)
+	})
+
+	resp := authRequest(t, "GET", "/api/inbox/unread-summary", nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("UnreadInboxSummary: expected 200, got %d", resp.StatusCode)
+	}
+	var summary []struct {
+		WorkspaceID string `json:"workspace_id"`
+		Count       int64  `json:"count"`
+	}
+	readJSON(t, resp, &summary)
+
+	var found bool
+	for _, s := range summary {
+		if s.WorkspaceID == testWorkspaceID {
+			found = true
+			if s.Count < 1 {
+				t.Fatalf("expected unread count >= 1 for test workspace, got %d", s.Count)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected test workspace %s in unread summary, got %+v", testWorkspaceID, summary)
+	}
+
+	// After marking it read, the workspace should drop out of the summary.
+	if _, err := testPool.Exec(ctx, `UPDATE inbox_item SET read = true WHERE id = $1`, itemID); err != nil {
+		t.Fatalf("failed to mark item read: %v", err)
+	}
+	resp = authRequest(t, "GET", "/api/inbox/unread-summary", nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("UnreadInboxSummary (after read): expected 200, got %d", resp.StatusCode)
+	}
+	readJSON(t, resp, &summary)
+	for _, s := range summary {
+		if s.WorkspaceID == testWorkspaceID && s.Count > 0 {
+			t.Fatalf("expected no unread for test workspace after read, got count %d", s.Count)
+		}
+	}
+}
+
+// ---- Archived inbox (MUL-3736) ----
+
+type inboxItemJSON struct {
+	ID       string  `json:"id"`
+	IssueID  *string `json:"issue_id"`
+	Title    string  `json:"title"`
+	Read     bool    `json:"read"`
+	Archived bool    `json:"archived"`
+}
+
+// seedArchivedFixtureIssue creates an issue owned by the test user and returns
+// its id, registering the cleanup that cascades to its inbox_item rows.
+//
+// `number` is taken from the workspace counter the way the real create path
+// does it (see IncrementIssueCounter). Letting it default to 0 works only for a
+// test that seeds ONE issue — a second one collides on uq_issue_workspace_number.
+func seedArchivedFixtureIssue(t *testing.T, title string) string {
+	t.Helper()
+	ctx := context.Background()
+	var issueID string
+	if err := testPool.QueryRow(ctx, `
+		WITH bumped AS (
+			UPDATE workspace SET issue_counter = issue_counter + 1
+			WHERE id = $1
+			RETURNING issue_counter
+		)
+		INSERT INTO issue (workspace_id, title, creator_type, creator_id, number)
+		SELECT $1, $2, 'member', $3, bumped.issue_counter FROM bumped
+		RETURNING id
+	`, testWorkspaceID, title, testUserID).Scan(&issueID); err != nil {
+		t.Fatalf("failed to seed issue: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, issueID)
+	})
+	return issueID
+}
+
+func listArchivedInbox(t *testing.T) []inboxItemJSON {
+	t.Helper()
+	resp := authRequest(t, "GET", "/api/inbox/archived", nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("ListArchivedInbox: expected 200, got %d", resp.StatusCode)
+	}
+	var items []inboxItemJSON
+	readJSON(t, resp, &items)
+	if items == nil {
+		t.Fatal("expected non-nil archived items array")
+	}
+	return items
+}
+
+func TestArchivedInboxThroughRouter(t *testing.T) {
+	issueID := seedArchivedFixtureIssue(t, "Archived fixture")
+	if _, err := testPool.Exec(context.Background(), `
+		INSERT INTO inbox_item (workspace_id, recipient_type, recipient_id, type, title, issue_id, archived)
+		VALUES ($1, 'member', $2, 'new_comment', 'archived one', $3, true)
+	`, testWorkspaceID, testUserID, issueID); err != nil {
+		t.Fatalf("failed to seed inbox item: %v", err)
+	}
+
+	var found bool
+	for _, item := range listArchivedInbox(t) {
+		if item.Title == "archived one" {
+			found = true
+			if !item.Archived {
+				t.Fatalf("archived list returned a non-archived item: %+v", item)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected the archived item in GET /api/inbox/archived")
+	}
+}
+
+// The main inbox and the archived list must stay mutually exclusive per issue.
+// Archiving is issue-level, so a NEW notification on an already-archived issue
+// leaves old archived rows sitting next to a fresh active one — without the
+// query's NOT EXISTS guard the issue would render in BOTH lists.
+func TestArchivedInboxExcludesIssuesWithActiveItems(t *testing.T) {
+	ctx := context.Background()
+	revivedIssue := seedArchivedFixtureIssue(t, "Revived fixture")
+	quietIssue := seedArchivedFixtureIssue(t, "Quiet fixture")
+
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO inbox_item (workspace_id, recipient_type, recipient_id, type, title, issue_id, archived, created_at)
+		VALUES
+			-- Archived a while ago, then a new notification arrived: back in the
+			-- main inbox, so it must NOT appear in the archive.
+			($1, 'member', $2, 'new_comment',    'revived-old', $3, true,  now() - interval '2 hours'),
+			($1, 'member', $2, 'status_changed', 'revived-new', $3, false, now()),
+			-- Archived with no follow-up: belongs in the archive.
+			($1, 'member', $2, 'new_comment',    'quiet-old',   $4, true,  now() - interval '2 hours')
+	`, testWorkspaceID, testUserID, revivedIssue, quietIssue); err != nil {
+		t.Fatalf("failed to seed inbox items: %v", err)
+	}
+
+	var sawRevived, sawQuiet bool
+	for _, item := range listArchivedInbox(t) {
+		if item.IssueID == nil {
+			continue
+		}
+		if *item.IssueID == revivedIssue {
+			sawRevived = true
+		}
+		if *item.IssueID == quietIssue {
+			sawQuiet = true
+		}
+	}
+	if sawRevived {
+		t.Fatal("an issue with an active inbox item must not appear in the archived list")
+	}
+	if !sawQuiet {
+		t.Fatal("an issue whose items are all archived must appear in the archived list")
+	}
+}
+
+// Unarchive restores the whole issue group (mirroring issue-level archive) and
+// leaves `read` alone. Restoring an item that was archived while unread raises
+// the unread badge again — that is correct, not a regression: the unread count
+// only ever included non-archived rows.
+func TestUnarchiveInboxPreservesUnread(t *testing.T) {
+	ctx := context.Background()
+	issueID := seedArchivedFixtureIssue(t, "Unarchive fixture")
+
+	var unreadItemID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO inbox_item (workspace_id, recipient_type, recipient_id, type, title, issue_id, read, archived, created_at)
+		VALUES ($1, 'member', $2, 'new_comment', 'archived unread', $3, false, true, now())
+		RETURNING id
+	`, testWorkspaceID, testUserID, issueID).Scan(&unreadItemID); err != nil {
+		t.Fatalf("failed to seed inbox item: %v", err)
+	}
+	// A read sibling on the same issue: the restore is issue-level, so it must
+	// come back too — and come back READ, not reset.
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO inbox_item (workspace_id, recipient_type, recipient_id, type, title, issue_id, read, archived, created_at)
+		VALUES ($1, 'member', $2, 'status_changed', 'archived read', $3, true, true, now() - interval '1 hour')
+	`, testWorkspaceID, testUserID, issueID); err != nil {
+		t.Fatalf("failed to seed sibling inbox item: %v", err)
+	}
+
+	resp := authRequest(t, "POST", "/api/inbox/"+unreadItemID+"/unarchive", nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("UnarchiveInboxItem: expected 200, got %d", resp.StatusCode)
+	}
+	var restored inboxItemJSON
+	readJSON(t, resp, &restored)
+	if restored.Archived {
+		t.Fatalf("expected the restored item to be un-archived, got %+v", restored)
+	}
+	if restored.Read {
+		t.Fatalf("unarchive must not mark an unread item read, got %+v", restored)
+	}
+
+	// Both siblings are back, each with its original read state.
+	rows, err := testPool.Query(ctx, `
+		SELECT title, read, archived FROM inbox_item WHERE issue_id = $1 ORDER BY title
+	`, issueID)
+	if err != nil {
+		t.Fatalf("failed to read back inbox items: %v", err)
+	}
+	defer rows.Close()
+	got := map[string][2]bool{}
+	for rows.Next() {
+		var title string
+		var read, archived bool
+		if err := rows.Scan(&title, &read, &archived); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		got[title] = [2]bool{read, archived}
+	}
+	if want := ([2]bool{false, false}); got["archived unread"] != want {
+		t.Fatalf("unread item: expected read=false archived=false, got read=%v archived=%v",
+			got["archived unread"][0], got["archived unread"][1])
+	}
+	if want := ([2]bool{true, false}); got["archived read"] != want {
+		t.Fatalf("read sibling: expected read=true archived=false, got read=%v archived=%v",
+			got["archived read"][0], got["archived read"][1])
+	}
+
+	// The restored unread item now counts toward the badge again.
+	resp = authRequest(t, "GET", "/api/inbox/unread-count", nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("CountUnreadInbox: expected 200, got %d", resp.StatusCode)
+	}
+	var count struct {
+		Count int64 `json:"count"`
+	}
+	readJSON(t, resp, &count)
+	if count.Count < 1 {
+		t.Fatal("expected the restored unread item to raise the unread count")
+	}
+}
+
+// An inbox item belonging to someone else must not be unarchivable, even with a
+// valid session — the loader resolves the item within the caller's workspace and
+// recipient scope.
+// Mark-unread is the inverse of mark-read and, like it, scoped to the single
+// item: the inbox renders one row per issue carrying that group's NEWEST item,
+// so flipping the whole group would resurrect siblings the user already dealt
+// with. The restored item counts toward the unread badge again.
+func TestMarkInboxUnreadIsItemScoped(t *testing.T) {
+	ctx := context.Background()
+	issueID := seedArchivedFixtureIssue(t, "Mark unread fixture")
+
+	var newestID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO inbox_item (workspace_id, recipient_type, recipient_id, type, title, issue_id, read, archived, created_at)
+		VALUES ($1, 'member', $2, 'new_comment', 'newest', $3, true, false, now())
+		RETURNING id
+	`, testWorkspaceID, testUserID, issueID).Scan(&newestID); err != nil {
+		t.Fatalf("failed to seed inbox item: %v", err)
+	}
+	// An older sibling on the same issue, already read. It must stay read.
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO inbox_item (workspace_id, recipient_type, recipient_id, type, title, issue_id, read, archived, created_at)
+		VALUES ($1, 'member', $2, 'status_changed', 'older sibling', $3, true, false, now() - interval '1 hour')
+	`, testWorkspaceID, testUserID, issueID); err != nil {
+		t.Fatalf("failed to seed sibling inbox item: %v", err)
+	}
+
+	resp := authRequest(t, "POST", "/api/inbox/"+newestID+"/unread", nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("MarkInboxUnread: expected 200, got %d", resp.StatusCode)
+	}
+	var updated inboxItemJSON
+	readJSON(t, resp, &updated)
+	if updated.Read {
+		t.Fatalf("expected the item to come back unread, got %+v", updated)
+	}
+	if updated.Archived {
+		t.Fatalf("mark unread must not archive the item, got %+v", updated)
+	}
+
+	rows, err := testPool.Query(ctx, `
+		SELECT title, read FROM inbox_item WHERE issue_id = $1 ORDER BY title
+	`, issueID)
+	if err != nil {
+		t.Fatalf("failed to read back inbox items: %v", err)
+	}
+	defer rows.Close()
+	got := map[string]bool{}
+	for rows.Next() {
+		var title string
+		var read bool
+		if err := rows.Scan(&title, &read); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		got[title] = read
+	}
+	if got["newest"] {
+		t.Fatal("the targeted item must be unread")
+	}
+	if !got["older sibling"] {
+		t.Fatal("mark unread must not touch older siblings on the same issue")
+	}
+}
+
+// The read/unread endpoints resolve the item within the caller's workspace and
+// recipient scope, so someone else's notification is not addressable.
+func TestMarkInboxUnreadRejectsForeignItem(t *testing.T) {
+	ctx := context.Background()
+	var foreignItemID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO inbox_item (workspace_id, recipient_type, recipient_id, type, title, read)
+		VALUES ($1, 'member', gen_random_uuid(), 'issue_assigned', 'someone else', true)
+		RETURNING id
+	`, testWorkspaceID).Scan(&foreignItemID); err != nil {
+		t.Fatalf("failed to seed foreign inbox item: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM inbox_item WHERE id = $1`, foreignItemID)
+	})
+
+	resp := authRequest(t, "POST", "/api/inbox/"+foreignItemID+"/unread", nil)
+	if resp.StatusCode == 200 {
+		t.Fatal("expected mark-unread of another recipient's item to be rejected")
+	}
+
+	var read bool
+	if err := testPool.QueryRow(ctx,
+		`SELECT read FROM inbox_item WHERE id = $1`, foreignItemID).Scan(&read); err != nil {
+		t.Fatalf("failed to read back foreign item: %v", err)
+	}
+	if !read {
+		t.Fatal("another recipient's item must stay read")
+	}
+}
+
+func TestUnarchiveInboxRejectsForeignItem(t *testing.T) {
+	ctx := context.Background()
+	var foreignItemID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO inbox_item (workspace_id, recipient_type, recipient_id, type, title, archived)
+		VALUES ($1, 'member', gen_random_uuid(), 'issue_assigned', 'someone else', true)
+		RETURNING id
+	`, testWorkspaceID).Scan(&foreignItemID); err != nil {
+		t.Fatalf("failed to seed foreign inbox item: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM inbox_item WHERE id = $1`, foreignItemID)
+	})
+
+	resp := authRequest(t, "POST", "/api/inbox/"+foreignItemID+"/unarchive", nil)
+	if resp.StatusCode == 200 {
+		t.Fatal("expected unarchive of another recipient's item to be rejected")
+	}
+
+	var archived bool
+	if err := testPool.QueryRow(ctx,
+		`SELECT archived FROM inbox_item WHERE id = $1`, foreignItemID).Scan(&archived); err != nil {
+		t.Fatalf("failed to read back foreign item: %v", err)
+	}
+	if !archived {
+		t.Fatal("another recipient's item must stay archived")
+	}
+}
+
+// An issue's inbox notifications are deduplicated per issue: opening the issue
+// marks only the NEWEST item read, leaving older siblings unread. The summary
+// must mirror the inbox UI (issue is read when its newest item is read), so a
+// read-newest / unread-older issue must NOT light the switcher dot (MUL-3695).
+func TestInboxUnreadSummaryDedupesByIssue(t *testing.T) {
+	ctx := context.Background()
+
+	var issueID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO issue (workspace_id, title, creator_type, creator_id)
+		VALUES ($1, 'Dedup fixture', 'member', $2)
+		RETURNING id
+	`, testWorkspaceID, testUserID).Scan(&issueID); err != nil {
+		t.Fatalf("failed to seed issue: %v", err)
+	}
+	// Deleting the issue cascades to its inbox_item rows (FK ON DELETE CASCADE).
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, issueID)
+	})
+
+	// Older sibling stays unread; newer sibling is read (the one "opening the
+	// issue" would have marked read).
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO inbox_item (workspace_id, recipient_type, recipient_id, type, title, issue_id, read, created_at)
+		VALUES
+			($1, 'member', $2, 'new_comment',    'older', $3, false, now() - interval '1 hour'),
+			($1, 'member', $2, 'status_changed', 'newer', $3, true,  now())
+	`, testWorkspaceID, testUserID, issueID); err != nil {
+		t.Fatalf("failed to seed inbox items: %v", err)
+	}
+
+	resp := authRequest(t, "GET", "/api/inbox/unread-summary", nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("UnreadInboxSummary: expected 200, got %d", resp.StatusCode)
+	}
+	var summary []struct {
+		WorkspaceID string `json:"workspace_id"`
+		Count       int64  `json:"count"`
+	}
+	readJSON(t, resp, &summary)
+	for _, s := range summary {
+		if s.WorkspaceID == testWorkspaceID && s.Count > 0 {
+			t.Fatalf("issue whose newest item is read must not count as unread, got count %d", s.Count)
+		}
+	}
+
+	// Now mark the newest item unread again → the issue becomes unread and the
+	// workspace reappears in the summary.
+	if _, err := testPool.Exec(ctx, `
+		UPDATE inbox_item SET read = false WHERE issue_id = $1 AND title = 'newer'
+	`, issueID); err != nil {
+		t.Fatalf("failed to flip newest item unread: %v", err)
+	}
+	resp = authRequest(t, "GET", "/api/inbox/unread-summary", nil)
+	readJSON(t, resp, &summary)
+	var found bool
+	for _, s := range summary {
+		if s.WorkspaceID == testWorkspaceID && s.Count >= 1 {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected workspace in summary once newest item is unread, got %+v", summary)
 	}
 }
 

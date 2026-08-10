@@ -11,7 +11,7 @@ export function NativeDesignPreview({ nativeJson, className }: { nativeJson: Gal
   const scale = Math.min(1, 760 / Math.max(frame.width, 1), 520 / Math.max(frame.height, 1));
   return (
     <div className={className}>
-      <div className="mb-2 flex items-center justify-between text-xs text-muted-foreground">
+      <div className="mb-2 flex items-center justify-between text-caption text-muted-foreground">
         <span className="truncate">{frame.name}</span>
         <span className="font-mono">{Math.round(frame.width)}×{Math.round(frame.height)}</span>
       </div>
@@ -22,7 +22,7 @@ export function NativeDesignPreview({ nativeJson, className }: { nativeJson: Gal
               key={item.id}
               type="button"
               onClick={() => setSelectedIndex(index)}
-              className={`shrink-0 rounded-full border px-3 py-1 text-xs ${index === safeIndex ? "border-primary bg-primary text-primary-foreground" : "bg-background text-muted-foreground hover:bg-accent hover:text-foreground"}`}
+              className={`shrink-0 rounded-full border px-3 py-1 text-caption ${index === safeIndex ? "border-primary bg-primary text-primary-foreground" : "bg-background text-muted-foreground hover:bg-accent hover:text-foreground"}`}
             >
               {item.name}
             </button>

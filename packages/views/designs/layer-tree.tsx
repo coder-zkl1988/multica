@@ -159,7 +159,7 @@ function LayerTreeRow({
       <div
         ref={rowRef}
         className={cn(
-          "group flex h-8 w-max min-w-full cursor-pointer items-center gap-1.5 rounded-lg pr-2 text-left text-xs transition-colors",
+          "group flex h-8 w-max min-w-full cursor-pointer items-center gap-1.5 rounded-lg pr-2 text-left text-caption transition-colors",
           isSelected && "bg-primary text-primary-foreground shadow-sm",
           !isSelected && isHovered && "bg-muted text-foreground",
           !isSelected && !isHovered && "text-muted-foreground hover:bg-muted/70 hover:text-foreground",
@@ -186,12 +186,12 @@ function LayerTreeRow({
             <span className="h-1.5 w-1.5 rounded-full bg-current opacity-35" />
           )}
         </span>
-        <Badge variant={isSelected ? "secondary" : "outline"} className="h-5 shrink-0 px-1.5 text-[10px] font-medium">
+        <Badge variant={isSelected ? "secondary" : "outline"} className="h-5 shrink-0 px-1.5 text-micro font-medium">
           {TYPE_LABELS[node.type] ?? "层"}
         </Badge>
         {fidelity ? <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", STATUS_DOT_CLASS[fidelity.status])} title={fidelity.reason} /> : null}
         <span className="whitespace-nowrap font-medium">{node.name || "未命名图层"}</span>
-        {node.children.length ? <span className="ml-auto shrink-0 text-[10px] opacity-60">{node.children.length}</span> : null}
+        {node.children.length ? <span className="ml-auto shrink-0 text-micro opacity-60">{node.children.length}</span> : null}
       </div>
       {hasChildren && isOpen ? (
         <div className="mt-0.5 space-y-0.5 border-l border-dashed border-border/70" style={{ marginLeft: depth * 12 + 17 }}>
@@ -246,14 +246,14 @@ export function LayerTree({ nativeJson, frame, selectedLayerId, hoveredLayerId, 
       <div className="sticky top-0 z-10 border-b bg-background/95 p-4 backdrop-blur">
         <div className="flex items-center justify-between gap-2">
           <div className="min-w-0">
-            <div className="text-sm font-semibold">图层</div>
-            <p className="mt-1 truncate text-xs text-muted-foreground">可见图层 · {hasFilter ? `${filteredCount}/${totalCount}` : totalCount} 项</p>
+            <div className="text-body font-semibold">图层</div>
+            <p className="mt-1 truncate text-caption text-muted-foreground">可见图层 · {hasFilter ? `${filteredCount}/${totalCount}` : totalCount} 项</p>
           </div>
           <div className="flex shrink-0 items-center gap-1">
-            <Button type="button" size="sm" variant="outline" className="h-7 px-2 text-xs" onClick={() => setExpanded(new Set(expandableIds))}>
+            <Button type="button" size="sm" variant="outline" className="h-7 px-2 text-caption" onClick={() => setExpanded(new Set(expandableIds))}>
               展开
             </Button>
-            <Button type="button" size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={() => setExpanded(new Set(findAncestorIds(tree, selectedLayerId)))}>
+            <Button type="button" size="sm" variant="ghost" className="h-7 px-2 text-caption" onClick={() => setExpanded(new Set(findAncestorIds(tree, selectedLayerId)))}>
               收起
             </Button>
             {onClose ? (
@@ -263,7 +263,7 @@ export function LayerTree({ nativeJson, frame, selectedLayerId, hoveredLayerId, 
             ) : null}
           </div>
         </div>
-        <div className="mt-3 flex h-8 items-center gap-2 rounded-lg border bg-muted/30 px-2 text-xs">
+        <div className="mt-3 flex h-8 items-center gap-2 rounded-lg border bg-muted/30 px-2 text-caption">
           <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
           <input
             value={query}
@@ -278,7 +278,7 @@ export function LayerTree({ nativeJson, frame, selectedLayerId, hoveredLayerId, 
           ) : null}
         </div>
         {fidelityReport ? (
-          <div className="mt-2 grid grid-cols-4 gap-1 rounded-lg bg-muted/40 p-1 text-[11px]">
+          <div className="mt-2 grid grid-cols-4 gap-1 rounded-lg bg-muted/40 p-1 text-micro">
             {([
               ["all", "全部", fidelityReport.total],
               ["native", "原生", fidelityReport.native],
@@ -315,7 +315,7 @@ export function LayerTree({ nativeJson, frame, selectedLayerId, hoveredLayerId, 
             onHoverLayer={onHoverLayer}
           />
         ) : (
-          <div className="rounded-xl border border-dashed p-4 text-xs text-muted-foreground">{hasFilter ? "没有匹配的图层。" : "暂无可见图层。"}</div>
+          <div className="rounded-xl border border-dashed p-4 text-caption text-muted-foreground">{hasFilter ? "没有匹配的图层。" : "暂无可见图层。"}</div>
         )}
       </div>
       </div>

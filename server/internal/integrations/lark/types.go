@@ -35,6 +35,51 @@ const (
 	InstallationRevoked InstallationStatus = "revoked"
 )
 
+// Region identifies which Lark open-platform cloud an installation lives
+// on. Feishu (mainland China, open.feishu.cn / accounts.feishu.cn) and
+// Lark (international, open.larksuite.com / accounts.larksuite.com) are
+// separate clouds with distinct hosts; a single Multica deployment serves
+// both by resolving the host per installation from this value rather than
+// from a deployment-wide env var. Mirrors the lark_installation.region
+// CHECK constraint (migration 116) — keep the two in lockstep.
+type Region string
+
+const (
+	RegionFeishu Region = "feishu"
+	RegionLark   Region = "lark"
+)
+
+// larkInternationalOpenBaseURL is the open-platform host for the Lark
+// international cloud. The Feishu (mainland) counterpart is
+// defaultLarkBaseURL ("https://open.feishu.cn"), defined in http_client.go;
+// it doubles as the WS long-conn bootstrap host (the /callback/ws/endpoint
+// POST runs against the same open-platform host).
+const larkInternationalOpenBaseURL = "https://open.larksuite.com"
+
+// OpenPlatformBaseURL maps a region to its open-platform host — the base
+// URL for both the REST API (http_client.go) and the WebSocket
+// /callback/ws/endpoint bootstrap (ws_endpoint.go). An unset or unknown
+// region falls back to Feishu (mainland), which is the default every
+// pre-region installation row carries.
+func (r Region) OpenPlatformBaseURL() string {
+	if r == RegionLark {
+		return larkInternationalOpenBaseURL
+	}
+	return defaultLarkBaseURL
+}
+
+// RegionOrDefault normalizes a stored region string (originating from the
+// lark_installation.region column) to a Region, defaulting to Feishu for
+// empty or unrecognized values so a malformed row never resolves to an
+// empty host (or a CHECK-violating write). Exported because the router's
+// WS credentials provider (package main) hydrates creds from the raw row.
+func RegionOrDefault(s string) Region {
+	if Region(s) == RegionLark {
+		return RegionLark
+	}
+	return RegionFeishu
+}
+
 // DropReason enumerates the categories the inbound pipeline writes
 // into lark_inbound_audit.drop_reason. The DB column is open TEXT so
 // new reasons can be added without a migration; callers should reuse
@@ -77,7 +122,7 @@ const (
 )
 
 // BindingTokenTTL caps the lifetime of a member-binding token. The DB
-// CHECK on lark_binding_token (`expires_at <= created_at + INTERVAL '15
+// CHECK on channel_binding_token (`expires_at <= created_at + INTERVAL '15
 // minutes'`) enforces the same bound at the storage layer, so a
 // misconfigured caller or a hand-inserted SQL row cannot exceed it.
 // Keep these two values in sync if the product value changes.

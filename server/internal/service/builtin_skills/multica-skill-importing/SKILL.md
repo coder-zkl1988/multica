@@ -1,6 +1,6 @@
 ---
 name: multica-skill-importing
-description: Use when a user provides a skill URL, slug, or clear intent to import/install a specific skill into the current Multica workspace. Teaches the workspace import API/CLI path (POST /api/skills/import), the supported URL source families, the SkillWithFilesResponse shape returned on success, duplicate 409 handling with the existing_skill body, additive agent binding vs replace-all, and the reserved SKILL.md supporting-file rule. Do not use it to decide which skill the user needs, and never treat an external local installer like npx skills add as the final Multica install.
+description: "Use when asked to import or install a specific skill into this Multica workspace from a URL or slug. Not for choosing which skill the user needs; never treat a local installer such as `npx skills add` as the final install."
 user-invocable: false
 allowed-tools: Bash(multica *)
 ---
@@ -22,18 +22,25 @@ Every claim below is traced to source in
 
 A skill is installed for Multica only when it exists in the current workspace's
 skill database. The single supported path that puts it there is the workspace
-import endpoint, driven by this CLI:
+import endpoint. It accepts either a hosted URL or an uploaded local archive
+(`.skill` / `.zip`), driven by this CLI:
 
 ```bash
-multica skill import --url <url> --output json
+multica skill import --url <url> --output json              # hosted source
+multica skill import --file <path-to.skill> --output json   # local archive
 ```
 
-That CLI sends:
+The CLI defaults to `--on-conflict fail`. A URL import sends:
 
 ```text
 POST /api/skills/import
-body: { "url": "<url>" }
+Content-Type: application/json
+body: { "url": "<url>", "on_conflict": "fail" }
 ```
+
+A `--file` import hits the same route as `multipart/form-data` with a `file`
+part (the `.skill` / `.zip` bytes) and an `on_conflict` field. `--url` and
+`--file` are mutually exclusive; exactly one is required.
 
 Do not finish with `npx skills add`. That installs into an external/local skill
 environment, not the Multica workspace DB, so Multica cannot manage or bind it.
@@ -57,6 +64,29 @@ multica skill import --url github.com/owner/repo/blob/main/path/to/SKILL.md --ou
 - A bare ClawHub slug (no host) is accepted and routed to ClawHub.
 - Any other host is rejected with a 400 naming the supported sources.
 
+## Local archive import (`.skill` / `.zip`)
+
+`multica skill import --file <path> --output json` imports a skill from a local
+archive instead of a hosted URL. A `.skill` file is a standard zip — the format
+Anthropic's skill-creator `package_skill` produces — and a plain `.zip` of a
+skill folder works too. The server:
+
+- accepts the upload as `multipart/form-data` (a `file` part plus an optional
+  `on_conflict` field) on the same `POST /api/skills/import` route;
+- decompresses it and roots on the shallowest `SKILL.md`, so both a root-level
+  `SKILL.md` and the nested `my-skill/SKILL.md` wrapper layout are accepted;
+- takes the name/description from `SKILL.md` frontmatter, falling back to the
+  wrapper directory name and then the uploaded filename;
+- carries the supporting files — dropping any `SKILL.md`, dotfiles, `__MACOSX`,
+  license files, and binary assets — under the same per-file (1 MiB),
+  per-bundle (8 MiB), and file-count (256) caps as URL imports, and rejects path
+  traversal (zip-slip);
+- returns the same structured result envelope and honors the same
+  `--on-conflict` strategies as URL imports.
+
+The upload itself is capped at 16 MiB (compressed). Any source that is not a
+local archive still goes through `--url`.
+
 ## Direct URL flow
 
 1. When the request contains a concrete URL, the import endpoint can be called
@@ -66,17 +96,30 @@ directly; search is not required by the API:
 multica skill import --url <url> --output json
 ```
 
-2. Treat a successful response as the source of truth. The body is a workspace
-`SkillWithFilesResponse` — it embeds the standard `SkillResponse` and adds the
-supporting `files` array. Report the relevant fields:
+2. Treat the response as the source of truth. Current CLI imports use the
+structured import result envelope:
 
-- `id`
-- `name`
-- `description`
-- `config.origin` (provenance: which source the skill was imported from — set
-  only when the source supplied an origin, so treat it as possibly absent)
-- `files` / files count
-- `created_at` / `updated_at`
+```json
+{
+  "status": "created|updated|conflict|skipped|failed",
+  "reason": "...",
+  "skill": { "...": "SkillWithFilesResponse when created/updated" },
+  "existing_skill": { "id": "...", "name": "...", "can_overwrite": true }
+}
+```
+
+For `created` / `updated`, `skill` is a workspace `SkillWithFilesResponse`: it
+embeds the standard `SkillResponse` and adds the supporting `files` array. Report
+the relevant fields:
+
+- `status` and `reason` when present.
+- `skill.id` / `skill.name` / `skill.description`.
+- `skill.config.origin` (provenance: which source the skill was imported from —
+  set only when the source supplied an origin, so treat it as possibly absent).
+- `skill.files` / files count.
+- `skill.created_at` / `skill.updated_at`.
+- `existing_skill.id` / `existing_skill.name` when status is `conflict`,
+  `skipped`, or `failed` due to an existing skill.
 
 Because the response is structured, read these returned fields instead of guessing
 whether the import succeeded.
@@ -118,9 +161,46 @@ rename it to a non-reserved path. (The hard `400` rejection — "SKILL.md is res
 for the primary skill content" — only fires on the dedicated single-file endpoint
 `PUT /api/skills/{id}/files`, not on import.)
 
-## Duplicate imports (409)
+## Same-name conflicts: `--on-conflict`
 
-A duplicate import returns `409`. On current servers the body carries the existing
+Default behavior is safe: `multica skill import --url <url>` is equivalent to
+`--on-conflict fail`. If the imported skill name already exists, the command
+prints a structured `conflict` result and exits non-zero; no skill is created or
+updated.
+
+Choose an explicit strategy only when the user asked for it or the intent is
+clear:
+
+- `--on-conflict fail` (default): do nothing on conflict; report `status:
+  conflict` with a reason that suggests overwrite or rename.
+- `--on-conflict overwrite`: update the existing same-name skill in place, but
+  only if the current user is the skill's original creator. This preserves the
+  skill ID, `created_by`, `created_at`, and agent-skill bindings; it replaces
+  description, content, provenance config, and supporting files. Non-creators get
+  `status: failed`.
+- `--on-conflict rename`: create a new skill with an automatic suffix such as
+  `-2` / `-3`; the existing skill is untouched.
+- `--on-conflict skip`: leave the existing skill untouched and report `status:
+  skipped`.
+
+Concrete examples:
+
+```bash
+# Safe default. Fails with status=conflict if review-helper already exists.
+multica skill import --url https://skills.sh/acme/repo/review-helper --output json
+
+# Replace the existing same-name skill, preserving its ID and agent bindings.
+multica skill import --url https://skills.sh/acme/repo/review-helper --on-conflict overwrite --output json
+
+# Keep the existing skill and import a copy such as review-helper-2.
+multica skill import --url https://skills.sh/acme/repo/review-helper --on-conflict rename --output json
+
+# Batch-friendly behavior: leave the existing skill alone and mark it skipped.
+multica skill import --url https://skills.sh/acme/repo/review-helper --on-conflict skip --output json
+```
+
+Legacy compatibility: clients that do not send `on_conflict` keep the old
+contract. A duplicate import returns `409` and the body carries the existing
 workspace skill identity:
 
 ```json
@@ -133,19 +213,17 @@ workspace skill identity:
 }
 ```
 
-`multica skill import --url <url> --output json` prints that structured conflict
-body and exits successfully (exit 0) for this duplicate case. Treat
-`existing_skill.id` and `existing_skill.name` as the source of truth, then fetch
-details if needed:
+Current CLI normalizes that legacy shape into `status: conflict` and exits
+non-zero for the default `fail` strategy. Treat `existing_skill.id` and
+`existing_skill.name` as the source of truth, then fetch details if needed:
 
 ```bash
 multica skill get <skill-id> --output json
 ```
 
-Legacy fallback: a legacy server or old CLI may return a `409` whose body is only a
-string like `a skill with this name already exists`, with no `existing_skill` key.
-The CLI cannot recognize that as the duplicate case, so it exits non-zero. Recover
-by finding the existing workspace skill yourself:
+Older servers may return a `409` whose body is only a string like `a skill with
+this name already exists`, with no `existing_skill` key. Recover by finding the
+existing workspace skill yourself:
 
 ```bash
 multica skill list --output json

@@ -1,0 +1,1 @@
+DROP INDEX CONCURRENTLY IF EXISTS service_account_token_one_active_idx;

@@ -41,17 +41,14 @@ func testSigner(t *testing.T) *auth.CloudFrontSigner {
 	return signer
 }
 
-func TestRefreshCloudFrontCookies_UsesAuthTokenTTL(t *testing.T) {
-	// Set a short TTL (1 hour) so we can verify the middleware does NOT use
-	// the old hardcoded 30-day value.
-	t.Setenv("AUTH_TOKEN_TTL", "1h")
-
+func TestRefreshCloudFrontCookies_UsesCurrentAuthExpiry(t *testing.T) {
 	signer := testSigner(t)
 	handler := RefreshCloudFrontCookies(signer)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("X-Auth-Expires-At", time.Now().Add(time.Hour).UTC().Format(time.RFC3339))
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
@@ -62,11 +59,23 @@ func TestRefreshCloudFrontCookies_UsesAuthTokenTTL(t *testing.T) {
 	}
 
 	for _, c := range cookies {
-		// Cookie expiry should be ~1 hour from now, not ~30 days.
 		untilExpiry := time.Until(c.Expires)
-		if untilExpiry > 2*time.Hour {
-			t.Errorf("cookie %q expires in %v; expected ~1h (AUTH_TOKEN_TTL), got what looks like 30-day hardcode", c.Name, untilExpiry)
+		if untilExpiry < 50*time.Minute || untilExpiry > 70*time.Minute {
+			t.Errorf("cookie %q expires in %v; expected current auth expiry (~1h)", c.Name, untilExpiry)
 		}
+	}
+}
+
+func TestRefreshCloudFrontCookies_SkipsWithoutAuthExpiry(t *testing.T) {
+	signer := testSigner(t)
+	handler := RefreshCloudFrontCookies(signer)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	if len(rec.Result().Cookies()) != 0 {
+		t.Fatal("must not mint CDN cookies without an authoritative auth expiry")
 	}
 }
 
@@ -76,6 +85,7 @@ func TestRefreshCloudFrontCookies_NilSigner(t *testing.T) {
 	}))
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("X-Auth-Expires-At", time.Now().Add(time.Hour).UTC().Format(time.RFC3339))
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)

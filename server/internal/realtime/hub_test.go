@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strings"
 	"sync"
 	"testing"
@@ -29,9 +30,15 @@ func (m *mockMembershipChecker) IsMember(_ context.Context, _, _ string) bool {
 }
 
 func makeTestToken(t *testing.T) string {
+	return makeTestTokenUntil(t, time.Now().Add(time.Hour))
+}
+
+func makeTestTokenUntil(t *testing.T, expiresAt time.Time) string {
 	t.Helper()
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"sub": testUserID,
+		"sub":         testUserID,
+		"auth_source": "sso",
+		"exp":         expiresAt.Unix(),
 	})
 	signed, err := token.SignedString(auth.JWTSecret())
 	if err != nil {
@@ -40,7 +47,33 @@ func makeTestToken(t *testing.T) string {
 	return signed
 }
 
+func makeLegacyTestToken(t *testing.T) string {
+	t.Helper()
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"sub": testUserID,
+		"exp": time.Now().Add(time.Hour).Unix(),
+	})
+	signed, err := token.SignedString(auth.JWTSecret())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return signed
+}
+
+type mockPATResolver struct {
+	calls int
+}
+
+func (r *mockPATResolver) ResolveToken(context.Context, string) (string, bool) {
+	r.calls++
+	return testUserID, true
+}
+
 func newTestHub(t *testing.T) (*Hub, *httptest.Server) {
+	return newTestHubMode(t, true, nil)
+}
+
+func newTestHubMode(t *testing.T, useSySSO bool, resolver PATResolver) (*Hub, *httptest.Server) {
 	t.Helper()
 	hub := NewHub()
 	go hub.Run()
@@ -48,15 +81,97 @@ func newTestHub(t *testing.T) (*Hub, *httptest.Server) {
 	mc := &mockMembershipChecker{}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
-		HandleWebSocket(hub, mc, nil, nil, w, r)
+		HandleWebSocket(hub, mc, resolver, nil, useSySSO, w, r)
 	})
 	server := httptest.NewServer(mux)
 	return hub, server
 }
 
+func TestAuthenticateTokenMode(t *testing.T) {
+	legacy := makeLegacyTestToken(t)
+	sso := makeTestToken(t)
+
+	userID, expiresAt, errMessage := authenticateToken(legacy, nil, context.Background(), false)
+	if userID != testUserID || !expiresAt.IsZero() || errMessage != "" {
+		t.Fatalf("legacy identity = %q, %v, %q", userID, expiresAt, errMessage)
+	}
+	userID, expiresAt, errMessage = authenticateToken(sso, nil, context.Background(), true)
+	if userID != testUserID || expiresAt.IsZero() || errMessage != "" {
+		t.Fatalf("SSO identity = %q, %v, %q", userID, expiresAt, errMessage)
+	}
+	if _, _, errMessage = authenticateToken(legacy, nil, context.Background(), true); errMessage == "" {
+		t.Fatal("SSO mode accepted legacy JWT")
+	}
+	if _, _, errMessage = authenticateToken(sso, nil, context.Background(), false); errMessage == "" {
+		t.Fatal("legacy mode accepted SSO JWT")
+	}
+
+	resolver := &mockPATResolver{}
+	userID, expiresAt, errMessage = authenticateToken("mul_test", resolver, context.Background(), false)
+	if userID != testUserID || !expiresAt.IsZero() || errMessage != "" || resolver.calls != 1 {
+		t.Fatalf("PAT identity = %q, %v, %q, calls %d", userID, expiresAt, errMessage, resolver.calls)
+	}
+	if _, _, errMessage = authenticateToken("mul_test", resolver, context.Background(), true); errMessage == "" || resolver.calls != 1 {
+		t.Fatalf("SSO PAT result = %q, calls %d", errMessage, resolver.calls)
+	}
+}
+
+func TestWebSocketLegacyFirstMessageAuth(t *testing.T) {
+	_, server := newTestHubMode(t, false, nil)
+	defer server.Close()
+	conn := connectWSWithToken(t, server, makeLegacyTestToken(t))
+	_ = conn.Close()
+}
+
+func TestWebSocketCookieAuthMode(t *testing.T) {
+	tests := []struct {
+		name     string
+		useSySSO bool
+		token    func(*testing.T) string
+		resolver *mockPATResolver
+		wantOK   bool
+	}{
+		{"legacy JWT in legacy mode", false, makeLegacyTestToken, nil, true},
+		{"SSO JWT in SSO mode", true, makeTestToken, nil, true},
+		{"SSO JWT in legacy mode", false, makeTestToken, nil, false},
+		{"legacy JWT in SSO mode", true, makeLegacyTestToken, nil, false},
+		{"PAT in legacy mode", false, func(*testing.T) string { return "mul_cookie" }, &mockPATResolver{}, true},
+		{"PAT in SSO mode", true, func(*testing.T) string { return "mul_cookie" }, &mockPATResolver{}, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, server := newTestHubMode(t, tc.useSySSO, tc.resolver)
+			defer server.Close()
+			header := http.Header{}
+			header.Set("Cookie", (&http.Cookie{Name: auth.AuthCookieName, Value: tc.token(t)}).String())
+			url := "ws" + strings.TrimPrefix(server.URL, "http") + "/ws?workspace_id=" + testWorkspaceID
+			conn, response, err := websocket.DefaultDialer.Dial(url, header)
+			if tc.wantOK {
+				if err != nil {
+					t.Fatalf("dial failed: %v", err)
+				}
+				_ = conn.Close()
+				return
+			}
+			if err == nil {
+				_ = conn.Close()
+				t.Fatal("dial succeeded")
+			}
+			if response == nil || response.StatusCode != http.StatusUnauthorized {
+				t.Fatalf("response = %#v, err %v", response, err)
+			}
+			_ = response.Body.Close()
+		})
+	}
+}
+
 func connectWS(t *testing.T, server *httptest.Server) *websocket.Conn {
 	t.Helper()
-	token := makeTestToken(t)
+	return connectWSWithToken(t, server, makeTestToken(t))
+}
+
+func connectWSWithToken(t *testing.T, server *httptest.Server, token string) *websocket.Conn {
+	t.Helper()
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/ws?workspace_id=" + testWorkspaceID
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
@@ -80,6 +195,55 @@ func connectWS(t *testing.T, server *httptest.Server) *websocket.Conn {
 	}
 	conn.SetReadDeadline(time.Time{})
 	return conn
+}
+
+type failingScopeAuthorizer struct{}
+
+func (failingScopeAuthorizer) AuthorizeScope(context.Context, string, string, string, string) (bool, error) {
+	return false, errors.New("database unavailable")
+}
+
+func TestClientHandleSubscribeReportsLookupFailure(t *testing.T) {
+	hub := NewHub()
+	hub.SetAuthorizer(failingScopeAuthorizer{})
+	client := &Client{
+		hub:           hub,
+		send:          make(chan []byte, 1),
+		userID:        testUserID,
+		workspaceID:   testWorkspaceID,
+		subscriptions: make(map[scopeKey]bool),
+	}
+
+	client.handleSubscribe(ScopeTask, "task-id")
+
+	select {
+	case raw := <-client.send:
+		var frame struct {
+			Type    string            `json:"type"`
+			Payload map[string]string `json:"payload"`
+		}
+		if err := json.Unmarshal(raw, &frame); err != nil {
+			t.Fatalf("unmarshal subscribe error: %v", err)
+		}
+		if frame.Type != "subscribe_error" {
+			t.Fatalf("frame type = %q, want subscribe_error", frame.Type)
+		}
+		if got := frame.Payload["error"]; got != "lookup_failed" {
+			t.Fatalf("error = %q, want lookup_failed", got)
+		}
+		if got := frame.Payload["scope"]; got != ScopeTask {
+			t.Fatalf("scope = %q, want %q", got, ScopeTask)
+		}
+		if got := frame.Payload["id"]; got != "task-id" {
+			t.Fatalf("id = %q, want task-id", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for subscribe_error")
+	}
+
+	if len(client.subscriptions) != 0 {
+		t.Fatalf("lookup failure must not subscribe client, got %d subscriptions", len(client.subscriptions))
+	}
 }
 
 // totalClients counts all currently registered clients.
@@ -360,32 +524,166 @@ func TestCheckOrigin(t *testing.T) {
 	})
 	t.Cleanup(func() { SetAllowedOrigins(prev) })
 
+	prevProxies := trustedProxies.Load().([]netip.Prefix)
+	SetTrustedProxies([]netip.Prefix{
+		netip.MustParsePrefix("127.0.0.1/32"),
+		netip.MustParsePrefix("10.0.0.0/8"),
+		netip.MustParsePrefix("::1/128"),
+	})
+	t.Cleanup(func() { SetTrustedProxies(prevProxies) })
+
 	cases := []struct {
-		name   string
-		host   string
-		origin string
-		want   bool
+		name       string
+		host       string
+		origin     string
+		fwdHost    string
+		remoteAddr string
+		want       bool
 	}{
-		{"empty origin allowed", "api.multica.ai", "", true},
-		{"same-origin allowed (native client default)", "localhost:8080", "http://localhost:8080", true},
-		{"same-origin allowed (https)", "api.multica.ai", "https://api.multica.ai", true},
-		{"same-origin allowed (case-insensitive host, RFC 7230)", "API.Multica.AI", "https://api.multica.ai", true},
-		{"whitelisted origin allowed (web cross-origin)", "localhost:8080", "http://localhost:3000", true},
-		{"whitelisted origin allowed (prod web)", "api.multica.ai", "https://multica.ai", true},
-		{"unknown origin rejected (CSWSH defense)", "api.multica.ai", "https://evil.com", false},
-		{"different port rejected", "localhost:8080", "http://localhost:9999", false},
+		{"empty origin allowed", "api.multica.ai", "", "", "1.2.3.4:5678", true},
+		{"same-origin allowed (native client default)", "localhost:8080", "http://localhost:8080", "", "1.2.3.4:5678", true},
+		{"same-origin allowed (https)", "api.multica.ai", "https://api.multica.ai", "", "1.2.3.4:5678", true},
+		{"same-origin allowed (case-insensitive host, RFC 7230)", "API.Multica.AI", "https://api.multica.ai", "", "1.2.3.4:5678", true},
+		{"whitelisted origin allowed (web cross-origin)", "localhost:8080", "http://localhost:3000", "", "1.2.3.4:5678", true},
+		{"whitelisted origin allowed (prod web)", "api.multica.ai", "https://multica.ai", "", "1.2.3.4:5678", true},
+		{"unknown origin rejected (CSWSH defense)", "api.multica.ai", "https://evil.com", "", "1.2.3.4:5678", false},
+		{"different port rejected", "localhost:8080", "http://localhost:9999", "", "1.2.3.4:5678", false},
+		{"X-Forwarded-Host from trusted proxy matches origin", "internal.proxy", "https://multica.ai", "multica.ai", "127.0.0.1:5678", true},
+		{"X-Forwarded-Host from trusted proxy case-insensitive", "internal.proxy", "https://Multica.AI", "multica.ai", "10.0.0.1:5678", true},
+		{"X-Forwarded-Host from untrusted source rejected", "internal.proxy", "https://example.com", "example.com", "1.2.3.4:5678", false},
+		{"X-Forwarded-Host from trusted proxy but evil origin rejected", "internal.proxy", "https://evil.com", "multica.ai", "127.0.0.1:5678", false},
+		{"X-Forwarded-Host present but origin matches direct Host", "multica.ai", "https://multica.ai", "other.host", "1.2.3.4:5678", true},
+		{"X-Forwarded-Host spoofed by attacker rejected", "internal.proxy", "https://evil.com", "evil.com", "1.2.3.4:5678", false},
+		{"X-Forwarded-Host from trusted CIDR range matches origin", "internal.proxy", "https://multica.ai", "multica.ai", "10.5.6.7:5678", true},
+		{"X-Forwarded-Host from trusted IPv6 proxy matches origin", "internal.proxy", "https://multica.ai", "multica.ai", "[::1]:5678", true},
+		{"X-Forwarded-Host comma list uses first (client-facing) value", "internal.proxy", "https://multica.ai", "multica.ai, proxy.internal", "127.0.0.1:5678", true},
+		{"X-Forwarded-Host comma list ignores trailing values", "internal.proxy", "https://staging.multica.ai", "proxy.internal, staging.multica.ai", "127.0.0.1:5678", false},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			r := httptest.NewRequest(http.MethodGet, "/ws", nil)
 			r.Host = tc.host
+			r.RemoteAddr = tc.remoteAddr
 			if tc.origin != "" {
 				r.Header.Set("Origin", tc.origin)
 			}
+			if tc.fwdHost != "" {
+				r.Header.Set("X-Forwarded-Host", tc.fwdHost)
+			}
 			if got := checkOrigin(r); got != tc.want {
-				t.Fatalf("checkOrigin(host=%q, origin=%q) = %v, want %v", tc.host, tc.origin, got, tc.want)
+				t.Fatalf("checkOrigin(host=%q, origin=%q, X-Forwarded-Host=%q, remoteAddr=%q) = %v, want %v", tc.host, tc.origin, tc.fwdHost, tc.remoteAddr, got, tc.want)
 			}
 		})
+	}
+}
+
+// waitFor polls cond until it holds or the deadline expires. Hub registration
+// and the metrics bump both happen off the connection's own goroutine, so
+// asserting on them right after a read would race.
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", what)
+}
+
+// The token-auth path reads its first frame before the caller has presented
+// any credential, so the read limit has to be in place by then (#6210).
+func TestHandleWebSocket_RejectsOversizedFrameBeforeAuth(t *testing.T) {
+	hub, server := newTestHub(t)
+	defer server.Close()
+
+	before := M.InboundTooLargeTotal.Load()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/ws?workspace_id=" + testWorkspaceID
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("failed to connect WebSocket: %v", err)
+	}
+	defer conn.Close()
+
+	// Write errors are expected here: the server rejects the frame from its
+	// declared length and closes before the payload is drained.
+	_ = conn.WriteMessage(websocket.TextMessage, bytes.Repeat([]byte("a"), inboundReadLimit+1))
+
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, _, err := conn.ReadMessage(); !websocket.IsCloseError(err, websocket.CloseMessageTooBig) {
+		t.Fatalf("read after oversized pre-auth frame = %v, want close code %d", err, websocket.CloseMessageTooBig)
+	}
+
+	waitFor(t, "inbound_too_large_total to increment", func() bool {
+		return M.InboundTooLargeTotal.Load()-before == 1
+	})
+	if n := totalClients(hub); n != 0 {
+		t.Fatalf("oversized pre-auth frame registered %d clients, want 0", n)
+	}
+}
+
+func TestReadPump_RejectsOversizedFrameAfterAuth(t *testing.T) {
+	hub, server := newTestHub(t)
+	defer server.Close()
+
+	conn := connectWS(t, server)
+	defer conn.Close()
+
+	waitFor(t, "client registration", func() bool { return totalClients(hub) == 1 })
+	before := M.InboundTooLargeTotal.Load()
+
+	oversized, err := json.Marshal(map[string]any{
+		"type": "ping",
+		"pad":  string(bytes.Repeat([]byte("a"), inboundReadLimit)),
+	})
+	if err != nil {
+		t.Fatalf("marshal oversized frame: %v", err)
+	}
+	_ = conn.WriteMessage(websocket.TextMessage, oversized)
+
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, _, err := conn.ReadMessage(); !websocket.IsCloseError(err, websocket.CloseMessageTooBig) {
+		t.Fatalf("read after oversized frame = %v, want close code %d", err, websocket.CloseMessageTooBig)
+	}
+
+	waitFor(t, "inbound_too_large_total to increment", func() bool {
+		return M.InboundTooLargeTotal.Load()-before == 1
+	})
+	waitFor(t, "client to be unregistered", func() bool { return totalClients(hub) == 0 })
+}
+
+// The limit must not clip legitimate traffic: real frames are ~1 KiB, so
+// anything comfortably below the cap has to keep working.
+func TestReadPump_AcceptsFrameUnderReadLimit(t *testing.T) {
+	_, server := newTestHub(t)
+	defer server.Close()
+
+	conn := connectWS(t, server)
+	defer conn.Close()
+
+	frame, err := json.Marshal(map[string]any{
+		"type": "ping",
+		"pad":  string(bytes.Repeat([]byte("a"), inboundReadLimit/2)),
+	})
+	if err != nil {
+		t.Fatalf("marshal ping frame: %v", err)
+	}
+	if len(frame) >= inboundReadLimit {
+		t.Fatalf("test frame is %d bytes, not under the %d byte limit", len(frame), inboundReadLimit)
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, frame); err != nil {
+		t.Fatalf("write ping: %v", err)
+	}
+
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, raw, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("read pong: %v", err)
+	}
+	if !strings.Contains(string(raw), "pong") {
+		t.Fatalf("got %s, want a pong frame", raw)
 	}
 }

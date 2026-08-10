@@ -31,6 +31,7 @@ vi.mock("@multica/core/paths", () => ({
 vi.mock("../navigation", () => ({
   AppLink: ({ children, href }: { children: ReactNode; href: string }) => <a href={href}>{children}</a>,
   useNavigation: () => ({ push: vi.fn(), openInNewTab: vi.fn() }),
+  useAppOrigin: () => null,
 }));
 
 vi.mock("sonner", () => ({
@@ -52,6 +53,8 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
     runtime_config: {},
     custom_args: [],
     visibility: "workspace",
+    permission_mode: "private",
+    invocation_targets: [],
     status: "idle",
     max_concurrent_tasks: 1,
     model: "",
@@ -76,6 +79,8 @@ function makeProject(overrides: Partial<Project> = {}): Project {
     priority: "medium",
     lead_type: null,
     lead_id: null,
+    start_date: null,
+    due_date: null,
     created_at: "2026-07-29T00:00:00Z",
     updated_at: "2026-07-29T00:00:00Z",
     issue_count: 0,

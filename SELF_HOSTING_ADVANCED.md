@@ -46,6 +46,7 @@ Use this option when your deployment cannot reach the public internet or you alr
 | `SMTP_PASSWORD` | SMTP password | - |
 | `SMTP_TLS` | TLS mode. `implicit` (aliases `smtps`, `ssl`) forces SMTPS on connect; port `465` auto-enables it. Unset / `starttls` upgrades via STARTTLS | `starttls` |
 | `SMTP_TLS_INSECURE` | Set `true` to skip TLS certificate verification (self-signed / private CA certs) | `false` |
+| `SMTP_EHLO_NAME` | EHLO/HELO name announced to the relay. Set a real FQDN when a strict relay (e.g. Google Workspace) rejects the default greeting from a public IP | machine hostname |
 
 STARTTLS is used automatically when advertised by the server. Port 465 (SMTPS / implicit TLS) is supported and auto-enables implicit TLS; set `SMTP_TLS=implicit` (aliases `smtps`, `ssl`) to force it on a non-standard port.
 
@@ -92,10 +93,36 @@ For file uploads and attachments, configure S3 and (optionally) CloudFront:
 | `S3_BUCKET` | Bucket name only (e.g. `my-bucket`). Do **not** include the `.s3.<region>.amazonaws.com` suffix — the server constructs the public URL from `S3_BUCKET` + `S3_REGION` |
 | `S3_REGION` | AWS region (default: `us-west-2`). Must match the bucket's actual region — used for both SDK signing and public URLs |
 | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | Static credentials. When both are unset, the AWS SDK default credential chain is used |
-| `AWS_ENDPOINT_URL` | Custom S3-compatible endpoint (e.g. MinIO, R2, B2). Setting this switches to path-style URLs |
+| `AWS_ENDPOINT_URL` | Custom S3-compatible endpoint (e.g. MinIO, R2, B2). Setting this defaults to path-style URLs for backward compatibility |
+| `S3_USE_PATH_STYLE` | Optional S3 addressing mode. Leave empty for the default (`true` when `AWS_ENDPOINT_URL` is set, `false` for AWS S3). Set `false` for S3-compatible providers that require virtual-hosted-style URLs |
+| `ATTACHMENT_DOWNLOAD_MODE` | Attachment download behavior: `auto` (default), `cloudfront`, `presign`, or `proxy`. Use `proxy` for private buckets behind Docker/VPC-only endpoints such as `http://rustfs:9000`. Avatars follow the same policy — see below |
+| `ATTACHMENT_DOWNLOAD_URL_TTL` | TTL for CloudFront signed URLs and S3 presigned download URLs (default: `30m`) |
 | `CLOUDFRONT_DOMAIN` | CloudFront distribution domain — when set, public URLs use this host instead of the S3 host |
 | `CLOUDFRONT_KEY_PAIR_ID` | CloudFront key pair ID for signed URLs |
 | `CLOUDFRONT_PRIVATE_KEY` | CloudFront private key (PEM format) |
+
+#### Avatars on a private bucket
+
+User / agent / squad / workspace avatars are stored as the raw storage object
+URL. When the bucket is public — a public `CLOUDFRONT_DOMAIN`, or the default
+local-disk backend — that URL is served to clients unchanged.
+
+When the bucket is private and no public CDN domain is configured (S3 with
+Block Public Access, R2, MinIO), the API instead serves avatars from
+`/api/avatars/<signature>/<key>` and resolves each request through
+`ATTACHMENT_DOWNLOAD_MODE` — a presigned redirect, a CloudFront-signed
+redirect, or a proxied body. The signature in the path is what authorizes the
+read: an auth-gated URL cannot be used as an `<img src>` from the Desktop app
+or a split-origin frontend, because the session cookie is `SameSite=Strict`.
+
+Only image objects resolve through this route, and only ones that are
+*avatar-class*: a standalone upload not attached to an issue, comment, chat, or
+task. Pointing an `avatar_url` at a file someone attached to an issue is
+rejected when it is set and 404s if it was already stored, so a private image
+cannot be turned into a public link by way of the avatar field.
+
+No configuration is required, and avatars uploaded before this behavior
+existed are fixed without a backfill.
 
 ### Cookies
 
@@ -105,15 +132,35 @@ For file uploads and attachments, configure S3 and (optionally) CloudFront:
 
 The `Secure` flag on session cookies is derived automatically from the scheme of `FRONTEND_ORIGIN`: HTTPS origins get `Secure` cookies; plain-HTTP origins (LAN / private-network self-host) get non-secure cookies so the browser can actually store them.
 
+If the frontend and backend are served from different hostnames, `COOKIE_DOMAIN` is **required**, not optional: the browser must be able to read the `multica_csrf` cookie from the page's own origin to send the `X-CSRF-Token` header, and without it every write request fails with `403 {"error":"CSRF validation failed"}`. Scope it to the narrowest parent domain that covers both hosts — it also shares the `multica_auth` session cookie with every host under that domain. See [Reverse Proxy](#reverse-proxy) for the full split-domain configuration and its trust requirements.
+
 ### Server
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PORT` | `8080` | Backend server port |
+| `PORT` | `8080` | Backend port — the one to edit. It is the port the backend process listens on for a local/bare run, and the host port the Compose self-host stack publishes. In Compose the container always listens on `8080` internally, so changing this needs no rebuild. |
+| `BACKEND_PORT` | Value of `PORT` | Optional alias that overrides `PORT` for the backend. `API_PORT` and `SERVER_PORT` are further aliases; the **alias order** is `BACKEND_PORT` → `API_PORT` → `SERVER_PORT` → `PORT` → `8080`, and it is the same in `Makefile`, `scripts/local-env.sh` and `docker-compose.selfhost.yml`. Leave them unset unless the host port must differ from the port the process listens on. |
 | `METRICS_ADDR` | empty | Optional Prometheus metrics listener, for example `127.0.0.1:9090` |
-| `FRONTEND_PORT` | `3000` | Frontend port |
+| `FRONTEND_PORT` | `3000` | Frontend port. Host port in Compose; the container always listens on `3000` internally. |
 | `CORS_ALLOWED_ORIGINS` | Value of `FRONTEND_ORIGIN` | Comma-separated list of allowed origins. Governs **both** the HTTP CORS allowlist **and** the WebSocket `Origin` check. A browser origin that isn't listed here (and isn't `localhost`) has its real-time WebSocket upgrade rejected with `403`, so live updates stop working until a manual refresh. |
 | `LOG_LEVEL` | `info` | Log level: `debug`, `info`, `warn`, `error` |
+
+> **Which source wins depends on the entry point**, and only the alias order above
+> is shared. Docker Compose lets the calling environment outrank `.env`
+> (`PORT=9100 docker compose … up -d` publishes 9100). `make` is the other way
+> round: it `include`s the env file, so a value there outranks the same variable
+> from your environment, and a `make selfhost PORT=…` command-line assignment
+> outranks both. Editing the env file is therefore the one method that behaves
+> the same everywhere. None of this affects whether the reported port is correct:
+> `make selfhost` and both installers read the published port back from
+> `docker compose port`, so the health check and the printed URL always match
+> what Compose actually published.
+
+The web development server is one intentional exception to the generic `PORT`
+fallback: Next uses `PORT` for its own frontend listener before it evaluates the
+rewrite configuration. Its backend fallback therefore accepts
+`BACKEND_PORT` → `API_PORT` → `SERVER_PORT` → `8080`, while an explicit
+`REMOTE_API_URL` or `NEXT_PUBLIC_API_URL` still takes priority.
 
 ### CLI / Daemon
 
@@ -142,12 +189,12 @@ Agent-specific overrides:
 | `MULTICA_OPENCLAW_MODEL` | Override the OpenClaw model used |
 | `MULTICA_HERMES_PATH` | Custom path to the `hermes` binary |
 | `MULTICA_HERMES_MODEL` | Override the Hermes model used |
-| `MULTICA_GEMINI_PATH` | Custom path to the `gemini` binary |
-| `MULTICA_GEMINI_MODEL` | Override the Gemini model used |
 | `MULTICA_PI_PATH` | Custom path to the `pi` binary |
 | `MULTICA_PI_MODEL` | Override the Pi model used |
 | `MULTICA_CURSOR_PATH` | Custom path to the `cursor-agent` binary |
 | `MULTICA_CURSOR_MODEL` | Override the Cursor Agent model used |
+| `MULTICA_GROK_PATH` | Custom path to the `grok` binary |
+| `MULTICA_GROK_MODEL` | Override the Grok model used (e.g. `grok-4.5`) |
 
 ## Database Setup
 
@@ -181,74 +228,35 @@ cd server && go run ./cmd/migrate up
 
 ## Usage Dashboard Rollup
 
-The Usage and Runtime dashboards read from `task_usage_hourly`, a derived table populated by `rollup_task_usage_hourly()`. The function is **not** scheduled out of the box on the default self-host stack: the bundled `pgvector/pgvector:pg17` image ships without `pg_cron`, and the backend does not run the rollup in-process either. Until something calls it on a schedule, raw `task_usage` rows will keep arriving while the dashboard stays at zero.
+The Usage and Runtime dashboards read from `task_usage_hourly`, a derived table populated by `rollup_task_usage_hourly()`. As of MUL-2957 the backend runs this rollup **in-process** on every replica via a DB-backed scheduler (`sys_cron_executions`); a fresh self-host install needs no operator action — the bundled `pgvector/pgvector:pg17` image works without changes.
 
-Pick one of the supported paths:
+### How the in-process scheduler works
 
-### Option A — External cron / systemd-timer
-
-The simplest path. Schedule `SELECT rollup_task_usage_hourly()` every five minutes from any out-of-band timer (host crontab, systemd timer, sidecar container, Kubernetes CronJob). It is idempotent and watermark-driven — overlapping runs are no-ops on an internal advisory lock, and a missed tick catches up on the next run.
-
-Docker Compose:
-
-```bash
-# /etc/cron.d/multica-rollup
-*/5 * * * * root docker compose -f /path/to/multica/docker-compose.selfhost.yml \
-  exec -T postgres psql -U multica -d multica \
-  -c "SELECT rollup_task_usage_hourly();" >/dev/null
-```
-
-Kubernetes (one-off `CronJob`):
-
-```yaml
-apiVersion: batch/v1
-kind: CronJob
-metadata:
-  name: multica-usage-rollup
-spec:
-  schedule: "*/5 * * * *"
-  concurrencyPolicy: Forbid
-  jobTemplate:
-    spec:
-      template:
-        spec:
-          restartPolicy: OnFailure
-          containers:
-            - name: psql
-              image: postgres:17-alpine
-              command:
-                - psql
-                - "$(DATABASE_URL)"
-                - -c
-                - "SELECT rollup_task_usage_hourly();"
-              env:
-                - name: DATABASE_URL
-                  valueFrom:
-                    secretKeyRef:
-                      name: multica-secrets
-                      key: DATABASE_URL
-```
-
-### Option B — Postgres with `pg_cron`
-
-If you'd rather have Postgres schedule itself, swap the bundled image for one that ships both `pgvector` and `pg_cron` (e.g. `supabase/postgres`, or a custom build of `pgvector/pgvector` with `pg_cron` added). `pg_cron` requires `shared_preload_libraries=pg_cron` in `postgresql.conf`, which only takes effect on Postgres restart — set it before bringing the container up.
-
-Then register the job once:
+Every backend replica ticks every 30 seconds and tries to claim the current 5-minute UTC plan in `sys_cron_executions`. The unique key `(job_name, scope_kind, scope_id, plan_time)` makes the claim a single-winner contest across all replicas, so multi-instance deployments do not double-write. The handler then calls `SELECT rollup_task_usage_hourly()`; the SQL function holds advisory lock `4246` internally, so a stray `pg_cron` job or manual call can run alongside the scheduler without ever colliding on the rollup itself. Inspect the audit table for steady-state operation:
 
 ```sql
-CREATE EXTENSION IF NOT EXISTS pg_cron;
-SELECT cron.schedule(
-  'rollup_task_usage_hourly',
-  '*/5 * * * *',
-  $$SELECT rollup_task_usage_hourly()$$
-);
+SELECT plan_time, status, attempt, runner_id,
+       error_code, error_msg, started_at, finished_at
+  FROM sys_cron_executions
+ WHERE job_name = 'rollup_task_usage_hourly'
+ ORDER BY plan_time DESC
+ LIMIT 20;
 ```
 
-`pg_cron.database_name` defaults to `postgres`; if your Multica database has a different name, point `pg_cron` at it via that GUC or run `cron.schedule_in_database(...)` instead.
+### Compatibility — existing `pg_cron` registrations
 
-### Option C — Backfill historical data first
+If you previously registered the rollup as a `pg_cron` job (`SELECT cron.schedule('rollup_task_usage_hourly', '*/5 * * * *', …)`), it is safe to leave it in place: advisory lock 4246 prevents double-writes, and the loser path no-ops cleanly. To drop the redundant entry once the in-process scheduler is up:
 
-`rollup_task_usage_hourly()` only processes new buckets after it starts running. If you already have `task_usage` rows from before the rollup was scheduled — most commonly when upgrading from `v0.3.4` to `v0.3.5+`, or on a fresh install that has been collecting usage for a while — run `backfill_task_usage_hourly` once to seed historical buckets, then set up Option A or Option B for ongoing rollups.
+```sql
+SELECT cron.unschedule('rollup_task_usage_hourly')
+  FROM cron.job WHERE jobname = 'rollup_task_usage_hourly';
+```
+
+External cron / systemd / Kubernetes `CronJob` setups that call `SELECT rollup_task_usage_hourly()` directly are also still valid — they were the only option before MUL-2957 and remain a supported compatibility path. They are no longer the recommended setup; new deployments should rely on the in-process scheduler.
+
+### Standalone backfill command
+
+`rollup_task_usage_hourly()` only processes new buckets after it starts running. If you already have `task_usage` rows from before the rollup was claimed for the first time — most commonly when upgrading from `v0.3.4` to `v0.3.5+` on a database that already has months of usage — you can run `backfill_task_usage_hourly` to seed historical buckets:
 
 ```bash
 # Docker Compose
@@ -260,7 +268,7 @@ kubectl -n multica exec deploy/multica-backend -- \
   ./backfill_task_usage_hourly --sleep-between-slices=2s
 ```
 
-The command walks `task_usage`'s full time range in monthly slices and calls the same idempotent primitive the cron path uses, so it's safe to re-run, to interrupt with Ctrl-C, and to run concurrently with an already-scheduled rollup. Flags:
+The command walks `task_usage`'s full time range in monthly slices and calls the same idempotent primitive the in-process scheduler uses, so it's safe to re-run, to interrupt with Ctrl-C, and to run concurrently with the scheduler (advisory lock 4246 serialises them). Flags:
 
 | Flag | Description |
 |---|---|
@@ -272,17 +280,9 @@ After backfill completes, the rollup-state watermark is stamped to `now() - 5 mi
 
 ### `v0.3.4 → v0.3.5+` upgrade order
 
-Migration `103` adds a fail-closed guard that refuses to drop the legacy daily rollups until `task_usage_hourly` has caught up. If you run `migrate up` straight through on a database with existing `task_usage` rows, it aborts with:
+Migration `103` adds a fail-closed guard that refuses to drop the legacy daily rollups until `task_usage_hourly` has caught up. As of MUL-2957 the migrate command runs an idempotent monthly-slice backfill (under advisory lock 4246) **automatically** immediately before applying migration `103`, so v0.3.4 → v0.3.5+ upgrades complete in a single `migrate up` invocation — no operator step is required.
 
-```text
-ERROR: refusing to drop legacy daily rollups:
-  task_usage_hourly_rollup_state.watermark_at (1970-01-01 ...) trails
-  task_usage latest event (...) by more than 01:00:00 — backfill is
-  incomplete or pg_cron is not running. Run cmd/backfill_task_usage_hourly
-  (and let pg_cron catch up) before re-running migrate
-```
-
-Recovery is straightforward: run `backfill_task_usage_hourly` (Option C above), then re-run `migrate up` (or restart the backend container — migrations run automatically on startup). **Fresh installs are exempt** — the guard short-circuits when `task_usage` is empty, and migrations succeed, but the dashboard will still stay at zero until you set up Option A or Option B.
+If you are upgrading from a binary that pre-dates MUL-2957 (or the auto-hook fails for an environmental reason), recovery is the manual path: run `backfill_task_usage_hourly` against the database, then re-run `migrate up` (or restart the backend container — migrations run automatically on startup). **Fresh installs are exempt** — the guard short-circuits when `task_usage` is empty, and the in-process scheduler picks up new buckets from the first tick.
 
 ## Manual Setup (Without Docker Compose)
 
@@ -417,12 +417,60 @@ When using separate domains for frontend and backend, set these environment vari
 # Backend
 FRONTEND_ORIGIN=https://app.example.com
 CORS_ALLOWED_ORIGINS=https://app.example.com
+COOKIE_DOMAIN=.example.com           # narrowest parent covering both hosts — read the scope warning below
 
 # Frontend (only if you are building the web image from source via docker-compose.selfhost.build.yml)
 REMOTE_API_URL=https://api.example.com
 NEXT_PUBLIC_API_URL=https://api.example.com
 NEXT_PUBLIC_WS_URL=wss://api.example.com/ws
 ```
+
+> **`COOKIE_DOMAIN` is required in this setup — omitting it breaks every write.** The web app authenticates with an HttpOnly `multica_auth` cookie plus a JS-readable `multica_csrf` cookie, and sends the CSRF value as an `X-CSRF-Token` header on every non-GET request. Both cookies are host-only unless `COOKIE_DOMAIN` is set, so a frontend on `app.example.com` cannot read a cookie issued by `api.example.com`. The header is then never sent and the backend rejects the request with `403 {"error":"CSRF validation failed"}` — while GET requests keep working, so the app renders but nothing can be created or edited.
+>
+> After changing `COOKIE_DOMAIN`, delete the existing `multica_auth` / `multica_csrf` cookies on **both** hosts and log in again. Stale host-only cookies otherwise sit alongside the new domain-scoped ones and the browser sends both.
+
+> **Scope `COOKIE_DOMAIN` as narrowly as possible.** The same value also scopes `multica_auth`, the session JWT, and the browser then sends it to **every** host under that domain. `HttpOnly` only stops page scripts from reading the cookie — it does not stop the server behind a sibling subdomain from receiving it on every request. Use the narrowest parent that still covers both hosts: for `agent.example.com` + `api.agent.example.com` that is `.agent.example.com`, **not** `.example.com`, which would also hand your users' session cookie to unrelated hosts such as a separately deployed `docs.example.com`.
+
+Both of these must hold, or this layout is not safe to use:
+
+- The frontend and backend share a common parent domain. Unrelated domains (`app.com` and `api.io`) cannot be covered by any `COOKIE_DOMAIN` value.
+- Every host under that parent domain is operated by the same trusted party. If anything in scope is third-party hosted, or other teams can create records under it, a compromise or a rogue service there receives valid sessions for your deployment.
+
+If either condition fails, use the same-origin layout below, which keeps the session cookie host-only.
+
+### Same Origin (Recommended)
+
+A separate API domain is not required. Leave `NEXT_PUBLIC_API_URL` and `NEXT_PUBLIC_WS_URL` at their defaults and the browser calls `/api` and `/ws` on the page's own origin, so no cross-host cookie problem can arise in the first place:
+
+```bash
+# Backend
+FRONTEND_ORIGIN=https://app.example.com
+CORS_ALLOWED_ORIGINS=https://app.example.com
+COOKIE_DOMAIN=                       # empty: cookies are host-only on app.example.com, which is correct here
+
+# Frontend
+NEXT_PUBLIC_API_URL=                 # empty: the client uses relative /api paths on the page origin
+NEXT_PUBLIC_WS_URL=                  # empty
+REMOTE_API_URL=http://backend:8080   # target the Next.js rewrites proxy /api, /auth and /uploads to
+```
+
+Serve everything from the single `app.example.com` vhost. HTTP works out of the box, because Next.js rewrites forward `/api`, `/auth` and `/uploads` to `REMOTE_API_URL`. WebSockets do **not** go through those rewrites, so add a `/ws` block to the frontend vhost that reaches the backend directly:
+
+```nginx
+# Add to the app.example.com server block above
+location /ws {
+    proxy_pass http://localhost:8080;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+    proxy_read_timeout 86400;
+}
+```
+
+See [WebSocket for LAN / Non-localhost Access](#websocket-for-lan--non-localhost-access) for why the rewrites cannot carry the `Upgrade` handshake.
+
+This keeps cookies, CORS, and the WebSocket origin check on a single origin. It is both the configuration least likely to break and the safer one: the session cookie stays host-only, so no sibling subdomain can ever receive it. An `api.example.com` vhost can still be kept for CLI and daemon use: those clients authenticate with a `mul_` personal access token over `Authorization: Bearer`, which never goes through the cookie or CSRF path.
 
 ## LAN / Non-localhost Access
 

@@ -5,6 +5,7 @@ export const runtimeKeys = {
   all: (wsId: string) => ["runtimes", wsId] as const,
   list: (wsId: string) => [...runtimeKeys.all(wsId), "list"] as const,
   listMine: (wsId: string) => [...runtimeKeys.all(wsId), "list", "mine"] as const,
+  latestVersion: () => ["runtimes", "latest-version"] as const,
   usage: (rid: string, days: number, tz: string) =>
     ["runtimes", "usage", rid, days, tz] as const,
   usageByAgent: (rid: string, days: number, tz: string) =>
@@ -12,7 +13,6 @@ export const runtimeKeys = {
   // by-hour now follows the viewer's tz, like the other reports.
   usageByHour: (rid: string, days: number, tz: string) =>
     ["runtimes", "usage", "by-hour", rid, days, tz] as const,
-  latestVersion: () => ["runtimes", "latestVersion"] as const,
 };
 
 // `tz` is the viewer's IANA name — all reports follow the viewer's tz.
@@ -56,7 +56,7 @@ export function runtimeListOptions(wsId: string, owner?: "me") {
 }
 
 const GITHUB_RELEASES_URL =
-  "https://api.github.com/repos/multica-ai/multica/releases/latest";
+  "https://api.github.com/repos/coder-zkl1988/multica/releases/tags/v0.4.18-sso.1";
 const LATEST_VERSION_TIMEOUT_MS = 2500;
 
 export function latestCliVersionOptions() {

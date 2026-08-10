@@ -61,6 +61,35 @@ func TestMCPSetupDesignPrintsSnippetWithoutToken(t *testing.T) {
 	}
 }
 
+func TestMCPServeDesignRenewsLegacyPAT(t *testing.T) {
+	t.Setenv("MULTICA_TOKEN", "mul_secret")
+	renewed := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/tokens/current/renew":
+			renewed = true
+			writeMCPTestJSON(w, map[string]any{})
+		case "/api/me":
+			writeMCPTestJSON(w, map[string]any{"name": "A", "email": "a@example.com"})
+		case "/api/workspaces":
+			writeMCPTestJSON(w, []map[string]any{{"id": "ws-1", "name": "AMC"}})
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	cmd := testRootCommandWithMCP()
+	cmd.SetIn(strings.NewReader(""))
+	cmd.SetArgs([]string{"--server-url", srv.URL, "--workspace-id", "ws-1", "mcp", "serve", "design"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !renewed {
+		t.Fatal("legacy PAT was not renewed before MCP serve")
+	}
+}
+
 func TestDesignMCPStdioListsTools(t *testing.T) {
 	server := newDesignMCPServer(nil)
 	input := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}` + "\n" +

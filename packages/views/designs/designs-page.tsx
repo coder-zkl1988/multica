@@ -69,9 +69,9 @@ function DesignToolMenu({ state, onClose, onView, onCopyImage, onDelete, deletin
   return (
     <div className="fixed inset-0 z-50" onClick={onClose} onContextMenu={(event) => { event.preventDefault(); onClose(); }}>
       <div className="absolute min-w-40 overflow-hidden rounded-xl border bg-popover p-1 text-popover-foreground shadow-xl" style={{ left: state.x, top: state.y }} onClick={(event) => event.stopPropagation()}>
-        <button type="button" className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-accent" onClick={() => onView(state.file)}><Eye className="h-4 w-4" />查看详情</button>
-        <button type="button" className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-accent" onClick={() => onCopyImage(state.file)}><Copy className="h-4 w-4" />复制图片</button>
-        <button type="button" className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-destructive hover:bg-destructive/10" disabled={deleting} onClick={() => onDelete(state.file)}><Trash2 className="h-4 w-4" />{deleting ? "删除中…" : "删除"}</button>
+        <button type="button" className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-body hover:bg-accent" onClick={() => onView(state.file)}><Eye className="h-4 w-4" />查看详情</button>
+        <button type="button" className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-body hover:bg-accent" onClick={() => onCopyImage(state.file)}><Copy className="h-4 w-4" />复制图片</button>
+        <button type="button" className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-body text-destructive hover:bg-destructive/10" disabled={deleting} onClick={() => onDelete(state.file)}><Trash2 className="h-4 w-4" />{deleting ? "删除中…" : "删除"}</button>
       </div>
     </div>
   );
@@ -105,9 +105,9 @@ function DesignFileCard({ file, projectName, folderName, onContextMenu }: { file
         <Badge variant="secondary" className="absolute left-3 top-3 bg-background/90">{sourceLabel(file.source_type)}</Badge>
       </div>
       <div className="min-w-0 p-3">
-        <div className="truncate text-sm font-medium">{file.title}</div>
-        <div className="mt-1 truncate text-xs text-muted-foreground">{file.description ?? "暂无描述"}</div>
-        <div className="mt-3 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+        <div className="truncate text-body font-medium">{file.title}</div>
+        <div className="mt-1 truncate text-caption text-muted-foreground">{file.description ?? "暂无描述"}</div>
+        <div className="mt-3 flex items-center justify-between gap-2 text-caption text-muted-foreground">
           <span className="truncate">{projectName} · {folderName}</span>
           <span className="shrink-0">{formatDate(file.updated_at)}</span>
         </div>
@@ -182,18 +182,18 @@ function TemplateCatalogCard({ template, sourceFile, onCreateDraft }: { template
       <div className="flex min-w-0 flex-col gap-3 p-3">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <div className="truncate text-sm font-medium">{template.name}</div>
-            <div className="mt-1 truncate text-xs text-muted-foreground">{template.description ?? template.design_file_title ?? "已发布设计模版"}</div>
+            <div className="truncate text-body font-medium">{template.name}</div>
+            <div className="mt-1 truncate text-caption text-muted-foreground">{template.description ?? template.design_file_title ?? "已发布设计模版"}</div>
           </div>
           <Badge variant="secondary" className="shrink-0">v{template.template_revision_number ?? 1}</Badge>
         </div>
-        <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+        <div className="flex items-center justify-between gap-2 text-caption text-muted-foreground">
           <span className="truncate">{sourceFile?.title ?? template.design_file_title ?? "来源设计稿"}</span>
           <span className="shrink-0">{formatDate(template.updated_at)}</span>
         </div>
         <div className="flex items-center gap-2">
           <Button type="button" size="sm" className="h-7" onClick={() => onCreateDraft(template)}>创建设计草稿</Button>
-          {template.design_file_id ? <AppLink href={paths.designDetail(template.design_file_id)} className="text-xs text-muted-foreground hover:text-foreground">打开来源</AppLink> : null}
+          {template.design_file_id ? <AppLink href={paths.designDetail(template.design_file_id)} className="text-caption text-muted-foreground hover:text-foreground">打开来源</AppLink> : null}
         </div>
       </div>
     </div>
@@ -207,15 +207,15 @@ function DraftReviewCard({ draft, previewFile, onMaterialize, materializing }: {
       <AssetPreview thumbnailUrl={previewFile?.thumbnail_url} badge={draft.status} icon={<ClipboardList className="h-6 w-6" />} />
       <div className="flex min-w-0 flex-col gap-3 p-3">
         <div className="min-w-0">
-          <AppLink href={paths.designDraftDetail(draft.id)} className="block truncate text-sm font-medium hover:text-primary">{draft.title}</AppLink>
-          <div className="mt-1 truncate text-xs text-muted-foreground">{draft.catalog_template_id ? `模版 ${draft.catalog_template_id.slice(0, 8)}` : "设计草稿"}</div>
+          <AppLink href={paths.designDraftDetail(draft.id)} className="block truncate text-body font-medium hover:text-primary">{draft.title}</AppLink>
+          <div className="mt-1 truncate text-caption text-muted-foreground">{draft.catalog_template_id ? `模版 ${draft.catalog_template_id.slice(0, 8)}` : "设计草稿"}</div>
         </div>
-        <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+        <div className="flex items-center justify-between gap-2 text-caption text-muted-foreground">
           <span>{draft.patch.length} 个 patch 操作</span>
           <span className="shrink-0">{formatDate(draft.materialized_at ?? draft.updated_at)}</span>
         </div>
         {draft.generated_file_id ? (
-          <AppLink href={paths.designDetail(draft.generated_file_id)} className="flex h-7 w-full items-center justify-center rounded-md border px-3 text-xs font-medium hover:bg-accent">打开生成的设计稿</AppLink>
+          <AppLink href={paths.designDetail(draft.generated_file_id)} className="flex h-7 w-full items-center justify-center rounded-md border px-3 text-caption font-medium hover:bg-accent">打开生成的设计稿</AppLink>
         ) : (
           <Button type="button" size="sm" variant="outline" className="h-7 w-full" disabled={materializing} onClick={() => onMaterialize(draft)}>{materializing ? "生成中…" : "生成设计稿"}</Button>
         )}
@@ -235,15 +235,15 @@ function WorkspaceAssetCard({ icon, title, count, description, meta, active, onC
       <div className="flex h-full flex-col justify-between gap-4">
         <div className="flex items-start justify-between gap-3">
           <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-md ${active ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"}`}>{icon}</span>
-          <span className="font-mono text-lg font-semibold leading-none text-foreground">{count}</span>
+          <span className="font-mono text-body-lg font-semibold leading-none text-foreground">{count}</span>
         </div>
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <div className="truncate text-sm font-medium">{title}</div>
+            <div className="truncate text-body font-medium">{title}</div>
             {active ? <span className="h-1.5 w-1.5 rounded-full bg-primary" /> : null}
           </div>
-          <p className="mt-1 text-xs text-muted-foreground">{description}</p>
-          <p className="mt-2 truncate text-xs text-muted-foreground/80">{meta}</p>
+          <p className="mt-1 text-caption text-muted-foreground">{description}</p>
+          <p className="mt-2 truncate text-caption text-muted-foreground">{meta}</p>
         </div>
       </div>
     </button>
@@ -254,12 +254,12 @@ function SectionHeader({ icon, title, count, description, action }: { icon: Reac
   return (
     <div className="flex items-start justify-between gap-3 border-b pb-2">
       <div className="min-w-0">
-        <div className="flex min-w-0 items-center gap-2 text-sm font-medium">
+        <div className="flex min-w-0 items-center gap-2 text-body font-medium">
           <span className="text-muted-foreground">{icon}</span>
           <span className="truncate">{title}</span>
-          {typeof count === "number" ? <span className="font-mono text-xs text-muted-foreground">{count}</span> : null}
+          {typeof count === "number" ? <span className="font-mono text-caption text-muted-foreground">{count}</span> : null}
         </div>
-        {description ? <p className="mt-1 text-xs text-muted-foreground">{description}</p> : null}
+        {description ? <p className="mt-1 text-caption text-muted-foreground">{description}</p> : null}
       </div>
       {action ? <div className="shrink-0">{action}</div> : null}
     </div>
@@ -268,7 +268,7 @@ function SectionHeader({ icon, title, count, description, action }: { icon: Reac
 
 function InlineEmpty({ children }: { children: React.ReactNode }) {
   return (
-    <div className="rounded-md border border-dashed bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+    <div className="rounded-md border border-dashed bg-muted/20 px-3 py-2 text-caption text-muted-foreground">
       {children}
     </div>
   );
@@ -276,11 +276,11 @@ function InlineEmpty({ children }: { children: React.ReactNode }) {
 
 function FolderSectionHeader({ folderName, count, canDelete, onDelete }: { folderName: string; count: number; canDelete: boolean; onDelete: () => void }) {
   return (
-    <div className="group/folder mb-3 flex items-center justify-between gap-3 border-b pb-2 text-xs text-muted-foreground">
+    <div className="group/folder mb-3 flex items-center justify-between gap-3 border-b pb-2 text-caption text-muted-foreground">
       <div className="flex min-w-0 items-center gap-2">
         <Folder className="h-3.5 w-3.5" />
-        <span className="truncate font-medium text-foreground/80">{folderName}</span>
-        <span className="font-mono text-muted-foreground/80">{count}</span>
+        <span className="truncate font-medium text-foreground">{folderName}</span>
+        <span className="font-mono text-muted-foreground">{count}</span>
       </div>
       {canDelete ? (
         <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive opacity-0 transition-opacity hover:text-destructive group-hover/folder:opacity-100 focus-visible:opacity-100" title="删除分组" aria-label="删除分组" onClick={onDelete}>
@@ -530,8 +530,8 @@ export function DesignsPage({ figmaPluginDownloadUrl }: { figmaPluginDownloadUrl
       <PageHeader className="justify-between gap-2 px-3 sm:px-5">
         <div className="flex min-w-0 items-center gap-2">
           <Palette className="h-4 w-4 text-muted-foreground" />
-          <h1 className="truncate text-sm font-medium">设计库</h1>
-          {!isLoading && projectFiles.length > 0 ? <span className="hidden font-mono text-xs text-muted-foreground/70 sm:inline">{projectFiles.length}</span> : null}
+          <h1 className="truncate text-body font-medium">设计库</h1>
+          {!isLoading && projectFiles.length > 0 ? <span className="hidden font-mono text-caption text-muted-foreground sm:inline">{projectFiles.length}</span> : null}
         </div>
         <div className="flex shrink-0 items-center gap-2">
           <FigmaPluginDownload downloadUrl={figmaPluginDownloadUrl} />
@@ -551,31 +551,31 @@ export function DesignsPage({ figmaPluginDownloadUrl }: { figmaPluginDownloadUrl
 
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         {figmaCode ? (
-          <div className="border-b bg-muted/30 px-4 py-3 text-sm">
+          <div className="border-b bg-muted/30 px-4 py-3 text-body">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <div className="font-medium">Figma 连接代码</div>
-                <div className="text-xs text-muted-foreground">将此一次性代码粘贴到 Figma 插件中。过期时间：{figmaCode.expiresAt}。</div>
+                <div className="text-caption text-muted-foreground">将此一次性代码粘贴到 Figma 插件中。过期时间：{figmaCode.expiresAt}。</div>
               </div>
-              <code className="select-all rounded-md border bg-background px-3 py-1.5 font-mono text-xs">{figmaCode.code}</code>
+              <code className="select-all rounded-md border bg-background px-3 py-1.5 font-mono text-caption">{figmaCode.code}</code>
             </div>
           </div>
         ) : null}
         {figmaConnection.error ? (
-          <div className="border-b px-4 py-2 text-xs text-destructive">无法创建 Figma 连接代码。</div>
+          <div className="border-b px-4 py-2 text-caption text-destructive">无法创建 Figma 连接代码。</div>
         ) : null}
         <div className="flex shrink-0 flex-col gap-3 border-b px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex min-w-0 items-center gap-2">
-            <span className="shrink-0 text-xs text-muted-foreground">项目</span>
-            <select value={selectedProjectId} onChange={(event) => setSelectedProjectId(event.target.value)} className="h-8 max-w-72 rounded-md border bg-background px-3 text-sm">
+            <span className="shrink-0 text-caption text-muted-foreground">项目</span>
+            <select value={selectedProjectId} onChange={(event) => setSelectedProjectId(event.target.value)} className="h-8 max-w-72 rounded-md border bg-background px-3 text-body">
               {projects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}
             </select>
           </div>
           <div className="relative w-full sm:w-72">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-            <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={searchPlaceholder} className="h-8 pl-8 text-sm" />
+            <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={searchPlaceholder} className="h-8 pl-8 text-body" />
           </div>
-          <span className="hidden font-mono text-xs text-muted-foreground/70 sm:block">
+          <span className="hidden font-mono text-caption text-muted-foreground sm:block">
             {activeTab === "designs" ? `${designSearchCount} / ${designAssetCount}` : activeTab === "templates" ? `${filteredTemplates.length} / ${projectTemplates.length}` : `${projectDesignSystemCount} / ${projectDesignSystemCount}`}
           </span>
         </div>
@@ -586,14 +586,14 @@ export function DesignsPage({ figmaPluginDownloadUrl }: { figmaPluginDownloadUrl
           </div>
         ) : error ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
-            <p className="text-sm font-medium">无法加载设计库</p>
-            <p className="text-sm text-muted-foreground">请检查后端路由后重试。</p>
+            <p className="text-body font-medium">无法加载设计库</p>
+            <p className="text-body text-muted-foreground">请检查后端路由后重试。</p>
             <Button size="sm" variant="outline" onClick={() => void refetch()}>重试</Button>
           </div>
         ) : !selectedProjectId ? (
           <div className="flex flex-1 flex-col items-center justify-center px-6 text-center">
-            <h2 className="text-base font-semibold">请选择项目</h2>
-            <p className="mt-1 max-w-md text-sm text-muted-foreground">设计稿、模版和设计体系都按项目归类展示。</p>
+            <h2 className="text-title-sm font-semibold">请选择项目</h2>
+            <p className="mt-1 max-w-md text-body text-muted-foreground">设计稿、模版和设计体系都按项目归类展示。</p>
           </div>
         ) : (
           <div className="min-h-0 flex-1 overflow-auto p-4">
@@ -745,18 +745,18 @@ export function DesignsPage({ figmaPluginDownloadUrl }: { figmaPluginDownloadUrl
           {draftDialog ? (
             <div className="grid gap-3">
               <div>
-                <label className="mb-1 block text-xs font-medium text-muted-foreground">模板</label>
+                <label className="mb-1 block text-caption font-medium text-muted-foreground">模板</label>
                 <Input value={draftDialog.template.name} readOnly className="h-8" />
               </div>
               <div>
-                <label className="mb-1 block text-xs font-medium text-muted-foreground">草稿标题</label>
+                <label className="mb-1 block text-caption font-medium text-muted-foreground">草稿标题</label>
                 <Input value={draftDialog.title} onChange={(event) => setDraftDialog({ ...draftDialog, title: event.target.value })} className="h-8" />
               </div>
               <div className="grid gap-3 md:grid-cols-2">
                 <div>
-                  <label className="mb-1 block text-xs font-medium text-muted-foreground">UI 智能体</label>
+                  <label className="mb-1 block text-caption font-medium text-muted-foreground">UI 智能体</label>
                   {availableAgents.length ? (
-                    <select value={draftDialog.agentId} onChange={(event) => setDraftDialog({ ...draftDialog, agentId: event.target.value })} className="h-8 w-full rounded-md border bg-background px-2 text-xs">
+                    <select value={draftDialog.agentId} onChange={(event) => setDraftDialog({ ...draftDialog, agentId: event.target.value })} className="h-8 w-full rounded-md border bg-background px-2 text-caption">
                       {availableAgents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name}</option>)}
                     </select>
                   ) : (
@@ -764,23 +764,23 @@ export function DesignsPage({ figmaPluginDownloadUrl }: { figmaPluginDownloadUrl
                   )}
                 </div>
                 <div>
-                  <label className="mb-1 block text-xs font-medium text-muted-foreground">智能体提示词</label>
+                  <label className="mb-1 block text-caption font-medium text-muted-foreground">智能体提示词</label>
                   <Input value={draftDialog.prompt} onChange={(event) => setDraftDialog({ ...draftDialog, prompt: event.target.value })} className="h-8" />
                 </div>
               </div>
               <div className="grid gap-3 md:grid-cols-2">
                 <div>
-                  <label className="mb-1 block text-xs font-medium text-muted-foreground">需求 JSON</label>
-                  <Textarea value={draftDialog.requirement} onChange={(event) => setDraftDialog({ ...draftDialog, requirement: event.target.value })} className="min-h-40 font-mono text-xs" />
+                  <label className="mb-1 block text-caption font-medium text-muted-foreground">需求 JSON</label>
+                  <Textarea value={draftDialog.requirement} onChange={(event) => setDraftDialog({ ...draftDialog, requirement: event.target.value })} className="min-h-40 font-mono text-caption" />
                 </div>
                 <div>
-                  <label className="mb-1 block text-xs font-medium text-muted-foreground">槽位值 JSON</label>
-                  <Textarea value={draftDialog.slotValues} onChange={(event) => setDraftDialog({ ...draftDialog, slotValues: event.target.value })} className="min-h-40 font-mono text-xs" />
+                  <label className="mb-1 block text-caption font-medium text-muted-foreground">槽位值 JSON</label>
+                  <Textarea value={draftDialog.slotValues} onChange={(event) => setDraftDialog({ ...draftDialog, slotValues: event.target.value })} className="min-h-40 font-mono text-caption" />
                 </div>
               </div>
               <div>
-                <label className="mb-1 block text-xs font-medium text-muted-foreground">安全 patch JSON</label>
-                <Textarea value={draftDialog.patch} onChange={(event) => setDraftDialog({ ...draftDialog, patch: event.target.value })} className="min-h-24 font-mono text-xs" />
+                <label className="mb-1 block text-caption font-medium text-muted-foreground">安全 patch JSON</label>
+                <Textarea value={draftDialog.patch} onChange={(event) => setDraftDialog({ ...draftDialog, patch: event.target.value })} className="min-h-24 font-mono text-caption" />
               </div>
             </div>
           ) : null}

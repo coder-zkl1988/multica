@@ -3,6 +3,7 @@ package lark
 import (
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 )
 
@@ -69,6 +70,141 @@ type APIClient interface {
 	// is then frozen into lark_installation alongside the app_id /
 	// app_secret in the same transaction as the installer-bind.
 	GetBotInfo(ctx context.Context, creds InstallationCredentials) (BotInfo, error)
+
+	// GetMessage fetches a message by id via
+	// GET /open-apis/im/v1/messages/{message_id}. Lark always returns an
+	// ARRAY (data.items[]): for a normal message exactly one element;
+	// for a `merge_forward` message the first element is the forward
+	// sentinel and the remaining elements are the bundled child messages
+	// (each a normal typed message linked back by upper_message_id). The
+	// inbound enricher relies on both shapes: items[0] for a quoted-reply
+	// parent, items[1:] for a forwarded transcript. Returning the raw
+	// slice keeps this method a thin transport adapter — flattening and
+	// block assembly are the enricher's job.
+	GetMessage(ctx context.Context, creds InstallationCredentials, messageID string) ([]LarkMessage, error)
+
+	// ListChatMessages fetches the most recent messages in a single chat
+	// via GET /open-apis/im/v1/messages. It powers the group-context
+	// prefetch: when a user @-mentions the Bot in a busy group, the
+	// enricher pulls a bounded window of surrounding messages so the agent
+	// sees the conversation, not just the one @-ed line.
+	//
+	// When p.ThreadID is set the request is scoped to a single Lark topic
+	// (话题) via container_id_type=thread, so a @-mention inside a topic
+	// only ever sees that topic's messages — sibling topics in the same
+	// chat share one chat_id but must stay isolated (#5835). Empty ThreadID
+	// keeps the chat-level container_id_type=chat window.
+	//
+	// Results come back newest-first (sort_type=ByCreateTimeDesc), capped
+	// at p.PageSize (Lark hard-caps a page at 50); the caller orders and
+	// trims for rendering. Only a single page is fetched — pagination is
+	// deliberately not exposed so the inbound ACK path's HTTP fan-out
+	// stays a single round-trip. Like GetMessage, this is a thin transport
+	// adapter: flattening and block assembly are the enricher's job.
+	ListChatMessages(ctx context.Context, creds InstallationCredentials, p ListMessagesParams) ([]LarkMessage, error)
+
+	// DownloadMessageResource downloads one binary resource attached to a
+	// message via GET /open-apis/im/v1/messages/{message_id}/resources/{file_key}.
+	// Type is the Open Platform resource class ("image" for image_key,
+	// "file" for file_key-backed video/file/audio).
+	DownloadMessageResource(ctx context.Context, creds InstallationCredentials, p DownloadResourceParams) (DownloadedResource, error)
+
+	// BatchGetUsers resolves a set of user open_ids to their display names
+	// via GET /open-apis/contact/v3/users/batch. The enricher uses it to
+	// label recent-context / quoted / forwarded speakers (and the sender
+	// who @-mentioned the Bot) with real names instead of positional
+	// "User 1 / User 2". Returns an open_id -> name map; ids the API does
+	// not return (restricted contact scope, deactivated user, …) are
+	// simply absent from the map, and the caller falls back to a
+	// positional label. openIDs beyond Lark's 50-per-call cap are dropped
+	// by the client.
+	BatchGetUsers(ctx context.Context, creds InstallationCredentials, openIDs []string) (map[string]string, error)
+
+	// AddMessageReaction adds an emoji reaction to an existing message.
+	// The standard use-case is the "Typing" indicator that signals the
+	// Bot is processing the user's message. Returns the reaction_id Lark
+	// assigns so it can be removed later.
+	AddMessageReaction(ctx context.Context, p AddReactionParams) (string, error)
+
+	// DeleteMessageReaction removes a previously-added reaction from a
+	// message. This is the cleanup half of the typing-indicator lifecycle.
+	DeleteMessageReaction(ctx context.Context, p DeleteReactionParams) error
+}
+
+// ListMessagesParams selects a bounded, recent window of messages in a
+// single Lark chat for the group-context prefetch. Only the fields the
+// enricher needs today are exposed (ChatID, ThreadID, PageSize, EndTime);
+// start_time and page_token are intentionally omitted until a caller
+// needs them.
+type ListMessagesParams struct {
+	ChatID ChatID
+	// ThreadID, when non-empty, scopes the list to a single Lark topic
+	// (话题): the client sends container_id_type=thread with the thread id
+	// as container_id instead of the chat container. This keeps a
+	// @-mention inside a topic from ever seeing sibling topics' messages
+	// (#5835). Lark's thread container does NOT accept end_time, so EndTime
+	// is ignored on this path — the caller anchors the window client-side.
+	// Empty keeps the chat-level container.
+	ThreadID string
+	// PageSize is how many of the most-recent messages to fetch. The
+	// client clamps it into Lark's valid 1..50 range.
+	PageSize int
+	// EndTime, when > 0, caps the window to messages created at or before
+	// this Unix timestamp in SECONDS (Lark's end_time is second-, not
+	// millisecond-, granularity). The enricher sets it to the trigger
+	// message's time so the prefetch is anchored to the @-mention moment
+	// rather than whatever is newest by the time the fetch runs. Ignored
+	// when ThreadID is set (the thread container rejects end_time).
+	EndTime int64
+}
+
+type DownloadResourceParams struct {
+	MessageID string
+	FileKey   string
+	Type      string
+}
+
+type DownloadedResource struct {
+	Data        []byte
+	ContentType string
+	Filename    string
+	SizeBytes   int64
+}
+
+type DownloadedResourceStream struct {
+	Body        io.ReadCloser
+	ContentType string
+	Filename    string
+	SizeBytes   int64
+}
+
+// LarkMessage is the normalized slice of an IM v1 message item the
+// enricher needs. Body.content is passed through raw (still the
+// JSON-encoded, msg_type-specific string Lark double-encodes) so the
+// flattener — not the transport client — owns content interpretation.
+type LarkMessage struct {
+	MessageID      string
+	MessageType    string // Lark `msg_type`: text / post / image / merge_forward / …
+	Content        string // raw body.content (a JSON-encoded string)
+	SenderID       string // sender.id (open_id for users, app_id for apps)
+	SenderType     string // sender.sender_type: user / app / anonymous / …
+	CreateTime     string // epoch milliseconds, as Lark returns it (a string)
+	ParentID       string
+	RootID         string
+	ThreadID       string // Lark topic (话题) id; empty for messages outside a thread
+	UpperMessageID string // the merge_forward parent a child hangs under
+	Deleted        bool
+	Mentions       []LarkMessageMention
+}
+
+// LarkMessageMention mirrors a mentions[] entry on the IM REST item
+// shape. Note this differs from the WS receive event's mention shape:
+// here `id` is a bare open_id string, not a nested {open_id, union_id,
+// user_id} object.
+type LarkMessageMention struct {
+	Key  string // e.g. "@_user_1"
+	ID   string // open_id
+	Name string // display name (may be empty)
 }
 
 // BotInfo is the slice of /open-apis/bot/v3/info (+ a follow-up
@@ -105,7 +241,29 @@ type SendCardParams struct {
 	// through opaque so the card-template package can evolve without
 	// dragging this transport interface along.
 	CardJSON string
+	// ReplyTarget, when set, routes the send through Lark's reply
+	// endpoint (POST /im/v1/messages/{id}/reply) instead of the
+	// chat-level send endpoint, so the card lands inside the originating
+	// 话题 (thread). Empty ReplyTarget keeps the legacy chat-level send.
+	ReplyTarget ReplyTarget
 }
+
+// ReplyTarget describes how an outbound message should be threaded back
+// to an inbound message. When MessageID is non-empty the transport uses
+// Lark's reply endpoint targeting that message; InThread maps to the
+// reply_in_thread flag so the reply stays inside the message's topic.
+// The zero value (empty MessageID) means "send at the chat level" — the
+// historical behavior — so callers that don't care about threading just
+// leave it unset.
+type ReplyTarget struct {
+	MessageID string
+	InThread  bool
+}
+
+// IsSet reports whether this target should route through the reply
+// endpoint. A reply needs a parent message_id; without one there is
+// nothing to reply to and the caller falls back to a chat-level send.
+func (r ReplyTarget) IsSet() bool { return r.MessageID != "" }
 
 // PatchCardParams is the input shape for updating an existing card.
 type PatchCardParams struct {
@@ -121,6 +279,9 @@ type SendTextParams struct {
 	InstallationID InstallationCredentials
 	ChatID         ChatID
 	Text           string
+	// ReplyTarget threads the text reply back into a Lark topic; see
+	// ReplyTarget. Empty keeps the chat-level send.
+	ReplyTarget ReplyTarget
 }
 
 // SendMarkdownCardParams is the input shape for posting an agent
@@ -138,6 +299,9 @@ type SendMarkdownCardParams struct {
 	// Lark shows in the chat list / desktop notification. Empty falls
 	// back to whatever Lark derives from the body.
 	Summary string
+	// ReplyTarget threads the card reply back into a Lark topic; see
+	// ReplyTarget. Empty keeps the chat-level send.
+	ReplyTarget ReplyTarget
 }
 
 // BindingPromptParams carries the data needed to render and send the
@@ -148,6 +312,22 @@ type BindingPromptParams struct {
 	// BindURL is the absolute URL the user clicks. The token is
 	// embedded in the URL by the caller; the client never sees it.
 	BindURL string
+}
+
+// AddReactionParams is the input shape for adding an emoji reaction to
+// a message.
+type AddReactionParams struct {
+	InstallationID InstallationCredentials
+	MessageID      string
+	EmojiType      string
+}
+
+// DeleteReactionParams is the input shape for removing a previously-added
+// reaction from a message.
+type DeleteReactionParams struct {
+	InstallationID InstallationCredentials
+	MessageID      string
+	ReactionID     string
 }
 
 // InstallationCredentials is the per-installation transport context the
@@ -162,6 +342,14 @@ type InstallationCredentials struct {
 	AppID     string
 	AppSecret string
 	TenantKey string
+	// Region selects the Lark open-platform host (Feishu mainland vs
+	// Lark international) for every call made with these credentials.
+	// Empty defaults to Feishu. Credential-build sites copy it from
+	// lark_installation.region; the device-flow installer sets it from
+	// the auto-detected tenant. This is what lets one deployment serve
+	// both clouds — see http_client.go resolveBaseURL and
+	// ws_endpoint.go Endpoint.
+	Region Region
 }
 
 // ErrAPIClientNotConfigured is returned by the stub client to signal
@@ -226,4 +414,34 @@ func (s *stubAPIClient) SendBindingPromptCard(ctx context.Context, p BindingProm
 func (s *stubAPIClient) GetBotInfo(ctx context.Context, creds InstallationCredentials) (BotInfo, error) {
 	s.log.Warn("lark stub client: GetBotInfo called", "app_id", creds.AppID)
 	return BotInfo{}, ErrAPIClientNotConfigured
+}
+
+func (s *stubAPIClient) GetMessage(ctx context.Context, creds InstallationCredentials, messageID string) ([]LarkMessage, error) {
+	s.log.Warn("lark stub client: GetMessage called", "message_id", messageID)
+	return nil, ErrAPIClientNotConfigured
+}
+
+func (s *stubAPIClient) ListChatMessages(ctx context.Context, creds InstallationCredentials, p ListMessagesParams) ([]LarkMessage, error) {
+	s.log.Warn("lark stub client: ListChatMessages called", "chat_id", string(p.ChatID))
+	return nil, ErrAPIClientNotConfigured
+}
+
+func (s *stubAPIClient) DownloadMessageResource(ctx context.Context, creds InstallationCredentials, p DownloadResourceParams) (DownloadedResource, error) {
+	s.log.Warn("lark stub client: DownloadMessageResource called", "message_id", p.MessageID)
+	return DownloadedResource{}, ErrAPIClientNotConfigured
+}
+
+func (s *stubAPIClient) BatchGetUsers(ctx context.Context, creds InstallationCredentials, openIDs []string) (map[string]string, error) {
+	s.log.Warn("lark stub client: BatchGetUsers called", "count", len(openIDs))
+	return nil, ErrAPIClientNotConfigured
+}
+
+func (s *stubAPIClient) AddMessageReaction(ctx context.Context, p AddReactionParams) (string, error) {
+	s.log.Warn("lark stub client: AddMessageReaction called", "message_id", p.MessageID, "emoji_type", p.EmojiType)
+	return "", ErrAPIClientNotConfigured
+}
+
+func (s *stubAPIClient) DeleteMessageReaction(ctx context.Context, p DeleteReactionParams) error {
+	s.log.Warn("lark stub client: DeleteMessageReaction called", "message_id", p.MessageID, "reaction_id", p.ReactionID)
+	return ErrAPIClientNotConfigured
 }

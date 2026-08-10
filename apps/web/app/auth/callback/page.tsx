@@ -4,9 +4,11 @@ import { Suspense, useEffect, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
 import { sanitizeNextUrl, useAuthStore } from "@multica/core/auth";
+import { useConfigStore } from "@multica/core/config";
 import { workspaceKeys } from "@multica/core/workspace/queries";
 import { paths, resolvePostAuthDestination } from "@multica/core/paths";
 import { api } from "@multica/core/api";
+import { validateCliCallback, redirectToCliCallback } from "@multica/views/auth";
 import {
   Card,
   CardHeader,
@@ -15,7 +17,7 @@ import {
   CardContent,
 } from "@multica/ui/components/ui/card";
 import { Button } from "@multica/ui/components/ui/button";
-import { Loader2 } from "lucide-react";
+import { Loader2, RefreshCw } from "lucide-react";
 
 function CallbackContent() {
   const router = useRouter();
@@ -46,9 +48,39 @@ function CallbackContent() {
     // so an attacker-controlled `state=next:https://evil` cannot redirect here.
     const nextUrl = sanitizeNextUrl(nextPart ? nextPart.slice(5) : null);
 
+    // CLI callback params — carried across the Google OAuth round-trip so
+    // headless/WSL2 `multica login` can receive the JWT after browser-based
+    // Google auth completes.
+    const cliCallbackPart = stateParts.find((p) => p.startsWith("cli_callback:"));
+    const cliStatePart = stateParts.find((p) => p.startsWith("cli_state:"));
+    const cliCallbackRaw = cliCallbackPart
+      ? decodeURIComponent(cliCallbackPart.slice("cli_callback:".length))
+      : null;
+    const cliState = cliStatePart
+      ? decodeURIComponent(cliStatePart.slice("cli_state:".length))
+      : "";
+
     const redirectUri = `${window.location.origin}/auth/callback`;
 
-    if (isDesktop) {
+    // Validate the CLI callback URL before redirecting — the state parameter
+    // passes through Google OAuth and must be treated as attacker-controlled.
+    const cliCallback =
+      cliCallbackRaw && validateCliCallback(cliCallbackRaw)
+        ? cliCallbackRaw
+        : null;
+
+    if (cliCallback) {
+      // CLI login flow: exchange the Google code for a JWT, then redirect the
+      // token back to the CLI's local HTTP listener (e.g. WSL2 host).
+      api
+        .googleLogin(code, redirectUri)
+        .then(({ token }) => {
+          redirectToCliCallback(cliCallback, token, cliState);
+        })
+        .catch((err) => {
+          setError(err instanceof Error ? err.message : "Login failed");
+        });
+    } else if (isDesktop) {
       // Desktop flow: exchange code for token, then redirect via deep link
       api
         .googleLogin(code, redirectUri)
@@ -77,7 +109,7 @@ function CallbackContent() {
 
           // 2. Un-onboarded users may have pending invitations on their
           //    email even when no `next=` was carried (came from a fresh
-          //    login on app.multica.ai instead of clicking the email link,
+          //    login on multica.ai instead of clicking the email link,
           //    or `state` was lost across the round-trip). Look them up by
           //    email and route to the batch /invitations page if any.
           //    Already-onboarded users skip this lookup — their new invites
@@ -117,7 +149,7 @@ function CallbackContent() {
       <div className="flex min-h-screen items-center justify-center">
         <Card className="w-full max-w-sm">
           <CardHeader className="text-center">
-            <CardTitle className="text-2xl">Opening Multica</CardTitle>
+            <CardTitle className="text-display-sm">Opening Multica</CardTitle>
             <CardDescription>
               You should see a prompt to open the Multica desktop app. If
               nothing happens, click the button below.
@@ -143,7 +175,7 @@ function CallbackContent() {
       <div className="flex min-h-screen items-center justify-center">
         <Card className="w-full max-w-sm">
           <CardHeader className="text-center">
-            <CardTitle className="text-2xl">Login Failed</CardTitle>
+            <CardTitle className="text-display-sm">Login Failed</CardTitle>
             <CardDescription>{error}</CardDescription>
           </CardHeader>
           <CardContent className="flex justify-center">
@@ -160,7 +192,7 @@ function CallbackContent() {
     <div className="flex min-h-screen items-center justify-center">
       <Card className="w-full max-w-sm">
         <CardHeader className="text-center">
-          <CardTitle className="text-2xl">Signing in...</CardTitle>
+          <CardTitle className="text-display-sm">Signing in...</CardTitle>
           <CardDescription>Please wait while we complete your login</CardDescription>
         </CardHeader>
         <CardContent className="flex justify-center">
@@ -171,10 +203,58 @@ function CallbackContent() {
   );
 }
 
+function ConfigStatus({ error }: { error: string | null }) {
+  const loadConfig = useConfigStore((state) => state.loadConfig);
+  return (
+    <div className="flex min-h-screen items-center justify-center px-4">
+      <Card className="w-full max-w-sm">
+        <CardHeader className="text-center">
+          <CardTitle>
+            {error ? "Unable to load sign-in" : "Loading sign-in configuration"}
+          </CardTitle>
+          <CardDescription>
+            {error || "Checking the server authentication mode..."}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex justify-center">
+          {error ? (
+            <Button
+              onClick={() => {
+                void loadConfig(() => api.getConfig()).catch(() => {});
+              }}
+            >
+              <RefreshCw />
+              Retry
+            </Button>
+          ) : (
+            <Loader2 className="size-5 animate-spin text-muted-foreground" />
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function RedirectFromSSOCallback() {
+  const router = useRouter();
+  useEffect(() => {
+    router.replace(paths.login());
+  }, [router]);
+  return null;
+}
+
+function CallbackModeContent() {
+  const useSySso = useConfigStore((state) => state.useSySso);
+  const configError = useConfigStore((state) => state.authConfigError);
+  if (useSySso === null) return <ConfigStatus error={configError} />;
+  if (useSySso) return <RedirectFromSSOCallback />;
+  return <CallbackContent />;
+}
+
 export default function CallbackPage() {
   return (
     <Suspense fallback={null}>
-      <CallbackContent />
+      <CallbackModeContent />
     </Suspense>
   );
 }

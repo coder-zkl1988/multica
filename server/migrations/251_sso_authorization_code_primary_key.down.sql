@@ -1,0 +1,1 @@
+ALTER TABLE sso_authorization_code DROP CONSTRAINT IF EXISTS sso_authorization_code_pkey;

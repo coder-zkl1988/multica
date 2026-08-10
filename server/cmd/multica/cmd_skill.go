@@ -7,9 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -59,7 +59,7 @@ var skillDeleteCmd = &cobra.Command{
 
 var skillImportCmd = &cobra.Command{
 	Use:   "import",
-	Short: "Import a skill from a URL (clawhub.ai, skills.sh, or github.com)",
+	Short: "Import a skill from a URL (clawhub.ai, skills.sh, github.com) or a local .skill/.zip archive",
 	RunE:  runSkillImport,
 }
 
@@ -140,7 +140,9 @@ func init() {
 	skillDeleteCmd.Flags().Bool("yes", false, "Skip confirmation prompt")
 
 	// skill import
-	skillImportCmd.Flags().String("url", "", "URL to import from (required)")
+	skillImportCmd.Flags().String("url", "", "URL to import from (clawhub.ai, skills.sh, or github.com). Mutually exclusive with --file.")
+	skillImportCmd.Flags().String("file", "", "Path to a local skill archive (.skill or .zip) to import. Mutually exclusive with --url.")
+	skillImportCmd.Flags().String("on-conflict", "fail", "Conflict strategy when a skill with the same name exists: fail, overwrite, rename, or skip")
 	skillImportCmd.Flags().String("output", "json", "Output format: table or json")
 
 	// skill search
@@ -221,7 +223,7 @@ func runSkillList(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := cli.APIContext(context.Background())
 	defer cancel()
 
 	var skills []map[string]any
@@ -254,7 +256,7 @@ func runSkillGet(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := cli.APIContext(context.Background())
 	defer cancel()
 
 	var skill map[string]any
@@ -311,7 +313,7 @@ func runSkillCreate(cmd *cobra.Command, _ []string) error {
 		body["config"] = config
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := cli.APIContext(context.Background())
 	defer cancel()
 
 	var result map[string]any
@@ -363,7 +365,7 @@ func runSkillUpdate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("no fields to update; use --name, --description, --content, or --config")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := cli.APIContext(context.Background())
 	defer cancel()
 
 	var result map[string]any
@@ -398,7 +400,7 @@ func runSkillDelete(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := cli.APIContext(context.Background())
 	defer cancel()
 
 	if err := client.DeleteJSON(ctx, "/api/skills/"+args[0]); err != nil {
@@ -416,57 +418,142 @@ func runSkillImport(cmd *cobra.Command, _ []string) error {
 	}
 
 	importURL, _ := cmd.Flags().GetString("url")
-	if importURL == "" {
-		return fmt.Errorf("--url is required")
+	importFile, _ := cmd.Flags().GetString("file")
+	switch {
+	case importURL == "" && importFile == "":
+		return fmt.Errorf("either --url or --file is required")
+	case importURL != "" && importFile != "":
+		return fmt.Errorf("--url and --file are mutually exclusive")
+	}
+	onConflict, _ := cmd.Flags().GetString("on-conflict")
+	if !validSkillImportConflictStrategy(onConflict) {
+		return fmt.Errorf("--on-conflict must be one of: fail, overwrite, rename, skip")
 	}
 
-	body := map[string]any{
-		"url": importURL,
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), cli.AtLeastAPITimeout(60*time.Second))
 	defer cancel()
 
 	var result map[string]any
+	if importFile != "" {
+		fileData, readErr := os.ReadFile(importFile)
+		if readErr != nil {
+			return fmt.Errorf("read skill archive: %w", readErr)
+		}
+		if err := client.ImportSkillFile(ctx, fileData, filepath.Base(importFile), onConflict, &result); err != nil {
+			if handledErr := handleSkillImportError(cmd, err); handledErr != nil {
+				return handledErr
+			}
+			return fmt.Errorf("import skill: %w", err)
+		}
+		return printSkillImportResult(cmd, result)
+	}
+
+	body := map[string]any{
+		"url":         importURL,
+		"on_conflict": onConflict,
+	}
 	if err := client.PostJSON(ctx, "/api/skills/import", body, &result); err != nil {
-		if handleSkillImportConflict(cmd, err) {
-			return nil
+		if handledErr := handleSkillImportError(cmd, err); handledErr != nil {
+			return handledErr
 		}
 		return fmt.Errorf("import skill: %w", err)
 	}
 
+	return printSkillImportResult(cmd, result)
+}
+
+func validSkillImportConflictStrategy(strategy string) bool {
+	switch strategy {
+	case "fail", "overwrite", "rename", "skip":
+		return true
+	}
+	return false
+}
+
+func handleSkillImportError(cmd *cobra.Command, err error) error {
+	var httpErr *cli.HTTPError
+	if !errors.As(err, &httpErr) || strings.TrimSpace(httpErr.Body) == "" {
+		return nil
+	}
+
+	var body map[string]any
+	if json.Unmarshal([]byte(httpErr.Body), &body) != nil {
+		return nil
+	}
+	if _, ok := body["status"]; !ok {
+		if _, hasExisting := body["existing_skill"]; !hasExisting {
+			return nil
+		}
+		body = normalizeLegacySkillImportConflict(body)
+	}
+
+	if err := printSkillImportResult(cmd, body); err != nil {
+		return err
+	}
+	reason := strVal(body, "reason")
+	if reason == "" {
+		reason = strVal(body, "error")
+	}
+	if reason == "" {
+		reason = "skill import conflict"
+	}
+	return errors.New(reason)
+}
+
+func normalizeLegacySkillImportConflict(body map[string]any) map[string]any {
+	reason := strVal(body, "error")
+	if reason == "" {
+		reason = "a skill with this name already exists"
+	}
+	reason += "; use --on-conflict overwrite to replace it or --on-conflict rename to import a copy"
+	return map[string]any{
+		"status":         "conflict",
+		"reason":         reason,
+		"existing_skill": body["existing_skill"],
+	}
+}
+
+func printSkillImportResult(cmd *cobra.Command, result map[string]any) error {
 	output, _ := cmd.Flags().GetString("output")
 	if output == "json" {
 		return cli.PrintJSON(os.Stdout, result)
 	}
 
-	fmt.Printf("Skill imported: %s (%s)\n", strVal(result, "name"), strVal(result, "id"))
+	status := strVal(result, "status")
+	if status == "" {
+		fmt.Printf("Skill imported: %s (%s)\n", strVal(result, "name"), strVal(result, "id"))
+		return nil
+	}
+
+	skill := nestedMap(result, "skill")
+	existing := nestedMap(result, "existing_skill")
+	reason := strVal(result, "reason")
+	switch status {
+	case "created":
+		fmt.Printf("Skill imported: %s (%s)\n", strVal(skill, "name"), strVal(skill, "id"))
+	case "updated":
+		fmt.Printf("Skill updated: %s (%s)\n", strVal(skill, "name"), strVal(skill, "id"))
+	case "skipped":
+		fmt.Printf("Skill skipped: %s (%s)\n", strVal(existing, "name"), strVal(existing, "id"))
+	case "conflict":
+		fmt.Printf("Skill import conflict: %s (%s)\n", strVal(existing, "name"), strVal(existing, "id"))
+	case "failed":
+		fmt.Printf("Skill import failed: %s\n", reason)
+	default:
+		fmt.Printf("Skill import %s\n", status)
+	}
+	if reason != "" && status != "failed" {
+		fmt.Printf("Reason: %s\n", reason)
+	}
 	return nil
 }
 
-func handleSkillImportConflict(cmd *cobra.Command, err error) bool {
-	var httpErr *cli.HTTPError
-	if !errors.As(err, &httpErr) || httpErr.StatusCode != http.StatusConflict || strings.TrimSpace(httpErr.Body) == "" {
-		return false
+func nestedMap(m map[string]any, key string) map[string]any {
+	nested, _ := m[key].(map[string]any)
+	if nested == nil {
+		return map[string]any{}
 	}
-
-	var body map[string]any
-	if json.Unmarshal([]byte(httpErr.Body), &body) != nil {
-		return false
-	}
-	if _, ok := body["existing_skill"]; !ok {
-		return false
-	}
-
-	output, _ := cmd.Flags().GetString("output")
-	if output == "json" {
-		_ = cli.PrintJSON(os.Stdout, body)
-		return true
-	}
-
-	existing, _ := body["existing_skill"].(map[string]any)
-	fmt.Printf("Skill already exists: %s (%s)\n", strVal(existing, "name"), strVal(existing, "id"))
-	return true
+	return nested
 }
 
 func runSkillSearch(cmd *cobra.Command, args []string) error {
@@ -480,7 +567,7 @@ func runSkillSearch(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("query is required")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), cli.AtLeastAPITimeout(60*time.Second))
 	defer cancel()
 
 	var results []map[string]any
@@ -519,7 +606,7 @@ func runSkillFilesList(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := cli.APIContext(context.Background())
 	defer cancel()
 
 	var files []map[string]any
@@ -569,7 +656,7 @@ func runSkillFilesUpsert(cmd *cobra.Command, args []string) error {
 		"content": content,
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := cli.APIContext(context.Background())
 	defer cancel()
 
 	var result map[string]any
@@ -592,7 +679,7 @@ func runSkillFilesDelete(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := cli.APIContext(context.Background())
 	defer cancel()
 
 	if err := client.DeleteJSON(ctx, "/api/skills/"+args[0]+"/files/"+args[1]); err != nil {

@@ -19,4 +19,17 @@ export default [
       ],
     },
   },
+  {
+    // The design workbench is currently a Chinese-only internal surface. Keep
+    // raw copy visible in CI without blocking unrelated releases until the
+    // design namespace is added to all four locale bundles.
+    files: [
+      "designs/**/*.tsx",
+      "issues/components/issue-design-restore-section.tsx",
+    ],
+    plugins: { i18next },
+    rules: {
+      "i18next/no-literal-string": "warn",
+    },
+  },
 ];

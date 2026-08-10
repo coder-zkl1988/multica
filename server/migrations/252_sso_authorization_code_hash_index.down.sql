@@ -1,0 +1,1 @@
+DROP INDEX CONCURRENTLY IF EXISTS sso_authorization_code_code_hash_idx;

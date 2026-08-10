@@ -28,6 +28,8 @@
 import { useMemo } from "react";
 import { ActivityIndicator, Linking, Pressable, ScrollView, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { useTranslation } from "react-i18next";
+import { resolveAttachmentUrl } from "@/lib/attachment-url";
 import { useLightbox } from "@/lib/markdown/lightbox-provider";
 import { useColorScheme } from "@/lib/use-color-scheme";
 import { THEME } from "@/lib/theme";
@@ -130,6 +132,7 @@ function MentionChipView({
   mention: MentionChip;
   onRemove: (type: MentionChipType, id: string) => void;
 }) {
+  const { t } = useTranslation("issues");
   const { colorScheme } = useColorScheme();
   const theme = THEME[colorScheme];
 
@@ -154,7 +157,9 @@ function MentionChipView({
         onPress={() => onRemove(mention.type, mention.id)}
         hitSlop={8}
         accessibilityRole="button"
-        accessibilityLabel={`Remove mention ${mention.name}`}
+        accessibilityLabel={t("composer_attachment.remove_mention_accessibility_label", {
+          name: mention.name,
+        })}
         className="h-4 w-4 items-center justify-center"
       >
         <Ionicons name="close" size={12} color={theme.mutedForeground} />
@@ -174,6 +179,7 @@ interface AttachmentChipProps {
 }
 
 function AttachmentChipView({ item, onRemove, onRetry }: AttachmentChipProps) {
+  const { t } = useTranslation("issues");
   const { colorScheme } = useColorScheme();
   const theme = THEME[colorScheme];
   const { open } = useLightbox();
@@ -193,8 +199,17 @@ function AttachmentChipView({ item, onRemove, onRetry }: AttachmentChipProps) {
       // Prefer the local on-device file over the network URL — instant,
       // no signed-URL round-trip, works the same pre/post upload.
       open(item.localUri);
-    } else if (item.downloadUrl) {
-      void Linking.openURL(item.downloadUrl);
+    } else {
+      // Non-image file chip: open the canonical download URL in Safari.
+      // `downloadUrl` comes from `api.uploadFile(...).download_url`, which
+      // on non-CloudFront deployments is a server-relative path like
+      // `/api/attachments/{id}/download` (MUL-2976). RN's `Linking.openURL`
+      // requires an absolute http(s) URL — `Cannot open URL` otherwise — so
+      // resolve against `EXPO_PUBLIC_API_URL` first. Already-absolute
+      // CloudFront/presigned URLs pass through unchanged. `null` (no
+      // downloadUrl yet) falls through to a no-op.
+      const target = resolveAttachmentUrl(item.downloadUrl);
+      if (target) void Linking.openURL(target);
     }
   };
 
@@ -210,8 +225,12 @@ function AttachmentChipView({ item, onRemove, onRetry }: AttachmentChipProps) {
       accessibilityRole={item.status === "failed" ? "button" : "image"}
       accessibilityLabel={
         item.status === "failed"
-          ? `Retry upload of ${item.filename}`
-          : `Open ${item.filename}`
+          ? t("composer_attachment.retry_upload_accessibility_label", {
+              filename: item.filename,
+            })
+          : t("composer_attachment.open_accessibility_label", {
+              filename: item.filename,
+            })
       }
       className="flex-row items-center gap-1 h-7 px-2 rounded-full bg-secondary active:opacity-80"
     >
@@ -238,7 +257,9 @@ function AttachmentChipView({ item, onRemove, onRetry }: AttachmentChipProps) {
         onPress={() => onRemove(item.localId)}
         hitSlop={8}
         accessibilityRole="button"
-        accessibilityLabel={`Remove ${item.filename}`}
+        accessibilityLabel={t("composer_attachment.remove_attachment_accessibility_label", {
+          filename: item.filename,
+        })}
         className="h-4 w-4 items-center justify-center"
       >
         <Ionicons name="close" size={12} color={theme.mutedForeground} />

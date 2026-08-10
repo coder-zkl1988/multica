@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX CONCURRENTLY sso_authorization_code_code_hash_idx ON sso_authorization_code (code_hash);

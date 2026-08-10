@@ -11,6 +11,8 @@ import (
 
 const defaultJWTSecret = "multica-dev-secret-change-in-production"
 
+const ServiceAccountTokenPrefix = "msa_"
+
 var (
 	jwtSecret     []byte
 	jwtSecretOnce sync.Once
@@ -28,13 +30,20 @@ func JWTSecret() []byte {
 	return jwtSecret
 }
 
-// GeneratePATToken creates a new personal access token: "mul_" + 40 random hex chars.
 func GeneratePATToken() (string, error) {
-	b := make([]byte, 20) // 20 bytes = 40 hex chars
+	b := make([]byte, 20)
 	if _, err := rand.Read(b); err != nil {
 		return "", fmt.Errorf("generate PAT token: %w", err)
 	}
 	return "mul_" + hex.EncodeToString(b), nil
+}
+
+func GenerateServiceAccountToken() (string, error) {
+	b := make([]byte, 20)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generate service account token: %w", err)
+	}
+	return ServiceAccountTokenPrefix + hex.EncodeToString(b), nil
 }
 
 // GenerateDaemonToken creates a new daemon auth token: "mdt_" + 40 random hex chars.

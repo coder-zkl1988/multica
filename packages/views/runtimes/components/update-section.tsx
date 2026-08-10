@@ -5,14 +5,19 @@ import {
   XCircle,
   ArrowUpCircle,
   Check,
+  Lock,
 } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
 import { api } from "@multica/core/api";
+import {
+  isCliReleaseVersion,
+  isNewerCliReleaseVersion,
+} from "@multica/core/runtimes";
 import type { RuntimeUpdateStatus } from "@multica/core/types";
 import { useT } from "../../i18n";
 
 const GITHUB_RELEASES_URL =
-  "https://api.github.com/repos/multica-ai/multica/releases/latest";
+  "https://api.github.com/repos/coder-zkl1988/multica/releases/tags/v0.4.18-sso.1";
 const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
 let cachedLatestVersion: string | null = null;
@@ -36,22 +41,6 @@ async function fetchLatestVersion(): Promise<string | null> {
   }
 }
 
-function stripV(v: string): string {
-  return v.replace(/^v/, "");
-}
-
-function isNewer(latest: string, current: string): boolean {
-  const l = stripV(latest).split(".").map(Number);
-  const c = stripV(current).split(".").map(Number);
-  for (let i = 0; i < Math.max(l.length, c.length); i++) {
-    const lv = l[i] ?? 0;
-    const cv = c[i] ?? 0;
-    if (lv > cv) return true;
-    if (lv < cv) return false;
-  }
-  return false;
-}
-
 const statusConfig: Record<
   RuntimeUpdateStatus,
   { icon: typeof Loader2; color: string }
@@ -64,7 +53,8 @@ const statusConfig: Record<
 };
 
 interface UpdateSectionProps {
-  runtimeId: string;
+  /** Null for a read-only viewer who cannot use a runtime as the command channel. */
+  runtimeId: string | null;
   currentVersion: string | null;
   isOnline: boolean;
   /**
@@ -122,13 +112,13 @@ export function UpdateSection({
 
   useEffect(() => {
     if (!updating || !targetVersion || !currentVersion) return;
-    if (!isNewer(targetVersion, currentVersion)) {
+    if (!isNewerCliReleaseVersion(targetVersion, currentVersion)) {
       markCompleted(`Updated to ${targetVersion}`);
     }
   }, [currentVersion, markCompleted, targetVersion, updating]);
 
   const handleUpdate = async () => {
-    if (!latestVersion) return;
+    if (!latestVersion || !runtimeId) return;
     cleanup();
     setUpdating(true);
     setTargetVersion(latestVersion);
@@ -172,7 +162,14 @@ export function UpdateSection({
   const hasUpdate =
     currentVersion &&
     latestVersion &&
-    isNewer(latestVersion, currentVersion);
+    isNewerCliReleaseVersion(latestVersion, currentVersion);
+
+  // A source build cannot be ordered against a release tag, so neither
+  // "update available" nor "Latest" is a claim we can make. Say that, rather
+  // than defaulting to "Latest" and telling the operator their local binary is
+  // up to date when we never parsed its version.
+  const isLocalBuild =
+    !!currentVersion && !isCliReleaseVersion(currentVersion);
 
   const config = status ? statusConfig[status] : null;
   const Icon = config?.icon;
@@ -181,38 +178,61 @@ export function UpdateSection({
   return (
     <div className="space-y-2">
       <div className="flex items-center gap-2 flex-wrap">
-        <span className="text-xs text-muted-foreground">{t(($) => $.update.cli_version_label)}</span>
-        <span className="text-xs font-mono">
+        <span className="text-caption text-muted-foreground">{t(($) => $.update.cli_version_label)}</span>
+        <span className="text-caption font-mono">
           {currentVersion ?? t(($) => $.update.version_unknown)}
         </span>
 
         {isManaged ? (
           <span
-            className="inline-flex items-center gap-1 text-xs text-muted-foreground"
+            className="inline-flex items-center gap-1 text-caption text-muted-foreground"
             title={t(($) => $.update.managed_by_desktop_title)}
           >
             {t(($) => $.update.managed_by_desktop)}
           </span>
         ) : (
           <>
-            {!hasUpdate && currentVersion && latestVersion && !status && (
-              <span className="inline-flex items-center gap-1 text-xs text-success">
-                <Check className="h-3 w-3" />
-                {t(($) => $.update.latest)}
+            {isLocalBuild && !status && (
+              <span
+                className="inline-flex items-center gap-1 text-caption text-muted-foreground"
+                title={t(($) => $.update.local_build_title)}
+              >
+                {t(($) => $.update.local_build)}
               </span>
             )}
 
+            {!isLocalBuild &&
+              !hasUpdate &&
+              currentVersion &&
+              latestVersion &&
+              !status && (
+                <span className="inline-flex items-center gap-1 text-caption text-success">
+                  <Check className="h-3 w-3" />
+                  {t(($) => $.update.latest)}
+                </span>
+              )}
+
             {hasUpdate && !status && (
               <>
-                <span className="text-xs text-muted-foreground">→</span>
-                <span className="text-xs font-mono text-info">
+                <span className="text-caption text-muted-foreground">→</span>
+                <span className="text-caption font-mono text-info">
                   {latestVersion}
                 </span>
-                <span className="text-xs text-muted-foreground">{t(($) => $.update.available)}</span>
+                <span className="text-caption text-muted-foreground">{t(($) => $.update.available)}</span>
               </>
             )}
 
-            {hasUpdate && isOnline && !status && (
+            {hasUpdate && !runtimeId && (
+              <span
+                className="inline-flex items-center gap-1 text-caption text-muted-foreground"
+                title={t(($) => $.update.read_only_title)}
+              >
+                <Lock className="h-3 w-3" />
+                {t(($) => $.update.read_only)}
+              </span>
+            )}
+
+            {hasUpdate && runtimeId && isOnline && !status && (
               <Button
                 variant="outline"
                 size="xs"
@@ -228,7 +248,7 @@ export function UpdateSection({
 
         {config && Icon && status && (
           <span
-            className={`inline-flex items-center gap-1 text-xs ${config.color}`}
+            className={`inline-flex items-center gap-1 text-caption ${config.color}`}
           >
             <Icon className={`h-3 w-3 ${isActive ? "animate-spin" : ""}`} />
             {t(($) => $.update.status[status])}
@@ -238,13 +258,13 @@ export function UpdateSection({
 
       {status === "completed" && output && (
         <div className="rounded-lg border bg-success/5 px-3 py-2">
-          <p className="text-xs text-success">{output}</p>
+          <p className="text-caption text-success">{output}</p>
         </div>
       )}
 
       {(status === "failed" || status === "timeout") && error && (
         <div className="rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2">
-          <p className="text-xs text-destructive">{error}</p>
+          <p className="text-caption text-destructive">{error}</p>
           {status === "failed" && (
             <Button
               variant="ghost"

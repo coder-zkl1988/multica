@@ -1,0 +1,87 @@
+name: Publish Existing Fork Desktop Artifacts
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Successful Fork Desktop Release run containing build artifacts
+        required: true
+        type: string
+      version:
+        description: Desktop version without the leading v
+        required: true
+        type: string
+      prerelease:
+        description: Publish as a prerelease
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  publish:
+    if: github.repository == 'coder-zkl1988/multica'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate inputs
+        env:
+          RUN_ID: ${{ inputs.run_id }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          [[ "$RUN_ID" =~ ^[0-9]+$ ]]
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]
+
+      - name: Download packaged artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Collect release assets
+        shell: bash
+        run: |
+          mkdir release-assets
+          while IFS= read -r -d '' asset; do
+            cp "$asset" release-assets/
+          done < <(
+            find artifacts -type f \( \
+              -name 'multica-desktop-*' -o -name 'latest*.yml' \
+            \) -print0
+          )
+          test -n "$(find release-assets -type f -print -quit)"
+          ls -lh release-assets
+
+      - name: Publish fork Desktop release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ inputs.version }}
+          PRERELEASE: ${{ inputs.prerelease }}
+        shell: bash
+        run: |
+          release_tag="desktop-v${VERSION}"
+          prerelease_flag=()
+          if [[ "$PRERELEASE" == "true" ]]; then
+            prerelease_flag+=(--prerelease)
+          fi
+
+          if gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$release_tag" release-assets/* \
+              --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$release_tag" release-assets/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "Multica Desktop ${VERSION} (SSO fork)" \
+              --notes "Desktop installers built from coder-zkl1988/multica with the fork's SSO support. macOS artifacts are signed and notarized with Apple Team WCYBD629RJ." \
+              "${prerelease_flag[@]}"
+          fi
+
+      - name: Verify published release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: desktop-v${{ inputs.version }}
+        run: gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json url,tagName,isDraft,isPrerelease,assets

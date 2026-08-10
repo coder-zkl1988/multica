@@ -50,6 +50,29 @@ export function runtimeConfigFromDevEnv(env: RuntimeConfigEnv): RuntimeConfig {
   };
 }
 
+export function runtimeConfigFromBuildEnv(
+  env: RuntimeConfigEnv,
+): RuntimeConfig | null {
+  if (!env.apiUrl && !env.wsUrl && !env.appUrl) return null;
+  if (!env.apiUrl) {
+    throw new Error(
+      "Invalid packaged desktop build config: VITE_API_URL is required when a build-time runtime URL is set",
+    );
+  }
+
+  const apiUrl = normalizeHttpUrl(env.apiUrl, "VITE_API_URL");
+  return {
+    schemaVersion: 1,
+    apiUrl,
+    wsUrl: env.wsUrl
+      ? normalizeWsUrl(env.wsUrl, "VITE_WS_URL")
+      : deriveWsUrl(apiUrl),
+    appUrl: env.appUrl
+      ? normalizeHttpUrl(env.appUrl, "VITE_APP_URL")
+      : deriveAppUrl(apiUrl),
+  };
+}
+
 export function parseRuntimeConfig(raw: string): RuntimeConfig {
   let parsed: unknown;
   try {

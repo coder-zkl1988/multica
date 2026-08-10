@@ -25,10 +25,10 @@ export function DesignRestoreVisualReviewPanel({ review }: { review: DesignResto
   return (
     <section className="rounded-lg border bg-background p-3">
       <div className="flex items-center justify-between gap-2">
-        <div className="text-sm font-medium">视觉验收</div>
+        <div className="text-body font-medium">视觉验收</div>
         <Badge variant={review.score !== null && review.score >= 80 ? "secondary" : "outline"}>{scoreBadge(review)}</Badge>
       </div>
-      <div className="mt-3 space-y-3 text-xs">
+      <div className="mt-3 space-y-3 text-caption">
         <EvidenceRow label="实现路由" value={review.implementedRoute} icon={<Route className="h-3.5 w-3.5" />} />
         <EvidenceRow label="设计截图" value={review.designScreenshot} icon={<ImageIcon className="h-3.5 w-3.5" />} />
         <EvidenceRow label="实现截图" value={review.implementationScreenshot} icon={<ExternalLink className="h-3.5 w-3.5" />} />

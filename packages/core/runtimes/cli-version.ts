@@ -2,15 +2,16 @@
  * Frontend mirror of the server's MinQuickCreateCLIVersion gate. The
  * agent-create flow (Quick Create modal) requires the daemon's bundled
  * multica CLI to be at least this version — older daemons either
- * double-create issues on partial CLI failures or mishandle pasted
- * screenshot URLs (see PR #1851 / MUL-1496).
+ * double-create issues on partial CLI failures, drop quick-create attachment
+ * bindings, or mishandle pasted screenshot URLs (see PR #1851 / MUL-1496).
  *
  * Both the frontend pre-validation in the modal and the server's
  * `/api/issues/quick-create` handler enforce this; the server is the
  * authoritative trust boundary, the frontend just lets us tell the user
  * "your daemon needs an upgrade" before they hit submit.
  */
-export const MIN_QUICK_CREATE_CLI_VERSION = "0.2.20";
+export const MIN_QUICK_CREATE_CLI_VERSION = "0.2.21";
+export const MIN_QUICK_CREATE_FIELDS_CLI_VERSION = "0.4.3";
 
 export type CliVersionState = "ok" | "too_old" | "missing";
 
@@ -31,6 +32,39 @@ const SEMVER_RE = /v?(\d+)\.(\d+)\.(\d+)/;
 // is what keeps `pnpm dev:desktop` + `make daemon` unblocked without weakening
 // the gate for staging or production users running stale stable releases.
 const DEV_DESCRIBE_RE = /^v?\d+\.\d+\.\d+-\d+-g[0-9a-fA-F]+/;
+const CLI_RELEASE_RE = /^v?(\d+)\.(\d+)\.(\d+)(?:-sso\.(\d+))?$/;
+
+function parseCliReleaseVersion(
+  raw: string,
+): [number, number, number, number] | null {
+  const match = raw.trim().match(CLI_RELEASE_RE);
+  if (!match) return null;
+  return [
+    Number(match[1]),
+    Number(match[2]),
+    Number(match[3]),
+    Number(match[4] ?? 0),
+  ];
+}
+
+export function isCliReleaseVersion(raw: string): boolean {
+  return parseCliReleaseVersion(raw) !== null;
+}
+
+export function isNewerCliReleaseVersion(
+  latest: string,
+  current: string,
+): boolean {
+  const latestParts = parseCliReleaseVersion(latest);
+  const currentParts = parseCliReleaseVersion(current);
+  if (!latestParts || !currentParts) return false;
+  for (const [index, latestPart] of latestParts.entries()) {
+    const currentPart = currentParts[index] ?? 0;
+    if (latestPart > currentPart) return true;
+    if (latestPart < currentPart) return false;
+  }
+  return false;
+}
 
 function parseSemver(raw: string): [number, number, number] | null {
   const m = SEMVER_RE.exec(raw.trim());
@@ -52,23 +86,94 @@ function lessThan(a: [number, number, number], b: [number, number, number]) {
  * itself is the shared signal, so frontend and server agree by construction.
  */
 export function checkQuickCreateCliVersion(detected: string | undefined | null): CliVersionCheck {
+  return checkCliVersion(detected, MIN_QUICK_CREATE_CLI_VERSION);
+}
+
+/** Capability gate for explicit quick-create priority and due-date fields. */
+export function checkQuickCreateFieldsCliVersion(
+  detected: string | undefined | null,
+): CliVersionCheck {
+  return checkCliVersion(detected, MIN_QUICK_CREATE_FIELDS_CLI_VERSION);
+}
+
+function checkCliVersion(
+  detected: string | undefined | null,
+  minimum: string,
+): CliVersionCheck {
   const current = (detected ?? "").trim();
   if (DEV_DESCRIBE_RE.test(current)) {
-    return { state: "ok", current, min: MIN_QUICK_CREATE_CLI_VERSION };
+    return { state: "ok", current, min: minimum };
   }
   const parsed = current ? parseSemver(current) : null;
   if (!parsed) {
-    return { state: "missing", current, min: MIN_QUICK_CREATE_CLI_VERSION };
+    return { state: "missing", current, min: minimum };
   }
-  const min = parseSemver(MIN_QUICK_CREATE_CLI_VERSION)!;
+  const min = parseSemver(minimum)!;
   if (lessThan(parsed, min)) {
-    return { state: "too_old", current, min: MIN_QUICK_CREATE_CLI_VERSION };
+    return { state: "too_old", current, min: minimum };
   }
-  return { state: "ok", current, min: MIN_QUICK_CREATE_CLI_VERSION };
+  return { state: "ok", current, min: minimum };
 }
 
 /** Pull `cli_version` off a runtime row's loosely-typed metadata bag. */
 export function readRuntimeCliVersion(metadata: Record<string, unknown> | undefined): string {
   const v = metadata?.cli_version;
   return typeof v === "string" ? v : "";
+}
+
+/**
+ * Frontend mirror of the server's `MinHandoffCLIVersion` soft gate
+ * (`server/pkg/agent/version.go`). The assignment handoff note is only rendered
+ * into the run's opening prompt by daemons at or above this multica CLI version
+ * (MUL-3375); older daemons silently drop it. Unlike the quick-create gate this
+ * never blocks the assignment — the UI just grays out the note box and warns.
+ *
+ * Keep in lockstep with the server constant; the two are enforced independently
+ * (the server is authoritative) but must agree so the warning matches reality.
+ */
+export const MIN_HANDOFF_CLI_VERSION = "0.3.28";
+
+/**
+ * Whether a daemon-reported CLI version is new enough to render a handoff note.
+ * Mirrors server `agent.HandoffSupported`: missing / unparsable / below-minimum
+ * all degrade to `false`, and dev-built daemons (git-describe shape) always
+ * pass — the version string is the shared signal, so frontend and server agree
+ * by construction. Pure and synchronous, so the note box can settle from the
+ * already-warm runtime cache instead of waiting on the trigger-preview
+ * round-trip, exactly like the quick-create version gate.
+ */
+export function handoffSupported(detected: string | undefined | null): boolean {
+  return meetsMinCliVersion(detected, MIN_HANDOFF_CLI_VERSION);
+}
+
+/**
+ * First release whose daemon renders the chat session's project context
+ * (description + resources) into the run brief (PR #5765, ships in v0.4.10).
+ * Older daemons still receive and honor the project's repos — the server
+ * pre-extracts those into the generic `repos` claim field — but silently skip
+ * the Project Context section, so the durable description never reaches the
+ * agent. SOFT gate: selecting a project always works; the UI only warns.
+ *
+ * Frontend-only constant: unlike handoff there is no server preview endpoint
+ * computing this, so there is no server twin to keep in lockstep with.
+ */
+export const MIN_CHAT_PROJECT_CONTEXT_CLI_VERSION = "0.4.10";
+
+/**
+ * Whether a daemon-reported CLI version is new enough to inject a chat
+ * session's project description into the run brief. Same degrade rules as
+ * `handoffSupported`: missing / unparsable / below-minimum are `false`,
+ * dev-built daemons (git-describe shape) always pass.
+ */
+export function chatProjectContextSupported(detected: string | undefined | null): boolean {
+  return meetsMinCliVersion(detected, MIN_CHAT_PROJECT_CONTEXT_CLI_VERSION);
+}
+
+function meetsMinCliVersion(detected: string | undefined | null, minimum: string): boolean {
+  const current = (detected ?? "").trim();
+  if (!current) return false;
+  if (DEV_DESCRIBE_RE.test(current)) return true;
+  const parsed = parseSemver(current);
+  if (!parsed) return false;
+  return !lessThan(parsed, parseSemver(minimum)!);
 }

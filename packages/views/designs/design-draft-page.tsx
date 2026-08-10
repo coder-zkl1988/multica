@@ -19,8 +19,8 @@ import type { GalleryNativeJson } from "@multica/core/types";
 function JsonBlock({ title, value }: { title: string; value: unknown }) {
   return (
     <section className="rounded-lg border bg-background">
-      <div className="border-b px-3 py-2 text-sm font-medium">{title}</div>
-      <pre className="max-h-80 overflow-auto p-3 text-xs leading-relaxed text-muted-foreground">{JSON.stringify(value, null, 2)}</pre>
+      <div className="border-b px-3 py-2 text-body font-medium">{title}</div>
+      <pre className="max-h-80 overflow-auto p-3 text-caption leading-relaxed text-muted-foreground">{JSON.stringify(value, null, 2)}</pre>
     </section>
   );
 }
@@ -125,7 +125,7 @@ export function DesignDraftPage({ draftId }: { draftId: string }) {
         <div className="grid gap-4 p-4 lg:grid-cols-[1fr_320px]"><Skeleton className="h-96" /><Skeleton className="h-96" /></div>
       ) : error || !draft ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
-          <p className="text-sm font-medium">无法加载此设计草稿</p>
+          <p className="text-body font-medium">无法加载此设计草稿</p>
           <Button size="sm" variant="outline" onClick={() => void refetch()}>重试</Button>
         </div>
       ) : (
@@ -135,8 +135,8 @@ export function DesignDraftPage({ draftId }: { draftId: string }) {
               <div className="rounded-lg border bg-background p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div>
-                    <div className="flex items-center gap-2 text-sm font-medium"><FileJson className="h-4 w-4 text-muted-foreground" />{draft.title}</div>
-                    <p className="mt-1 text-xs text-muted-foreground">生成或打开生成的设计稿前，请检查槽位值和安全补丁。</p>
+                    <div className="flex items-center gap-2 text-body font-medium"><FileJson className="h-4 w-4 text-muted-foreground" />{draft.title}</div>
+                    <p className="mt-1 text-caption text-muted-foreground">生成或打开生成的设计稿前，请检查槽位值和安全补丁。</p>
                   </div>
                   <Badge variant="outline">{draft.status}</Badge>
                 </div>
@@ -144,8 +144,8 @@ export function DesignDraftPage({ draftId }: { draftId: string }) {
               <section className="rounded-lg border bg-background p-4">
                 <div className="mb-3 flex items-center justify-between gap-3">
                   <div>
-                    <div className="text-sm font-medium">原生预览</div>
-                    <p className="mt-1 text-xs text-muted-foreground">{draft.generated_file_id ? "预览已生成设计稿。" : "预览来源模板，并临时套用文本 slot 与 safe patch。"}</p>
+                    <div className="text-body font-medium">原生预览</div>
+                    <p className="mt-1 text-caption text-muted-foreground">{draft.generated_file_id ? "预览已生成设计稿。" : "预览来源模板，并临时套用文本 slot 与 safe patch。"}</p>
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
                     <Button size="sm" variant="outline" onClick={() => void copyPreviewJSON()} disabled={!previewNativeJson}><Copy className="h-3.5 w-3.5" />复制预览 JSON</Button>
@@ -160,7 +160,7 @@ export function DesignDraftPage({ draftId }: { draftId: string }) {
             </div>
             <aside className="space-y-3">
               <div className="rounded-lg border bg-background p-3">
-                <div className="text-sm font-medium">审核操作</div>
+                <div className="text-body font-medium">审核操作</div>
                 <div className="mt-3 space-y-2">
                   {draft.generated_file_id ? (
                     <Button className="w-full" onClick={() => navigation.push(paths.designDetail(draft.generated_file_id!))}><ExternalLink className="h-3.5 w-3.5" />打开生成的设计稿</Button>
@@ -170,7 +170,7 @@ export function DesignDraftPage({ draftId }: { draftId: string }) {
                   {draft.file_id ? <Button className="w-full" variant="outline" onClick={() => navigation.push(paths.designDetail(draft.file_id!))}>打开来源模板</Button> : null}
                 </div>
               </div>
-              <div className="rounded-lg border bg-background p-3 text-xs text-muted-foreground">
+              <div className="rounded-lg border bg-background p-3 text-caption text-muted-foreground">
                 <div>草稿 ID：<span className="font-mono">{draft.id}</span></div>
                 {draft.catalog_template_id ? <div className="mt-1">模板：<span className="font-mono">{draft.catalog_template_id}</span></div> : null}
                 {draft.materialized_at ? <div className="mt-1">已生成：{draft.materialized_at}</div> : null}

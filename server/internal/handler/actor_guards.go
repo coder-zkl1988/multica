@@ -13,23 +13,23 @@ import (
 // Why this guard is needed (read carefully — auth here is subtle):
 //
 // The general Auth middleware (server/internal/middleware/auth.go)
-// turns four different bearer formats into the same shape — a stamped
+// turns trusted bearer formats into the same shape — a stamped
 // `X-User-ID` header — so downstream handlers don't have to care which
 // token kind the caller used:
 //
-//   - JWT cookie / mul_ PAT  → X-User-ID = the human's user id.
-//                              X-Actor-Source is left empty.
+//   - SSO JWT               → X-User-ID = the human's user id,
+//     plus `X-Actor-Source: sso`.
 //   - mat_ task token        → X-User-ID = the OWNING human's user id,
-//                              plus X-Agent-ID, X-Task-ID, and the
-//                              authoritative server-set header
-//                              `X-Actor-Source: task_token`.
+//     plus X-Agent-ID, X-Task-ID, and the
+//     authoritative server-set header
+//     `X-Actor-Source: task_token`.
 //   - mcn_ cloud-node PAT    → X-User-ID = the OWNING human's user id,
-//                              plus `X-Actor-Source: cloud_pat`.
-//                              The token authenticates a cloud-runtime
-//                              EC2 node operating on the owner's
-//                              behalf — same conceptual category as
-//                              mat_ (machine running owner-scoped
-//                              code) for authorization purposes.
+//     plus `X-Actor-Source: cloud_pat`.
+//     The token authenticates a cloud-runtime
+//     EC2 node operating on the owner's
+//     behalf — same conceptual category as
+//     mat_ (machine running owner-scoped
+//     code) for authorization purposes.
 //
 // The mat_ and mcn_ designs (MUL-2600 and the cloud-node PAT story
 // respectively) were both deliberately built this way: every request
@@ -99,7 +99,7 @@ func RequireHumanActor(next http.Handler) http.Handler {
 		// strips any client-supplied value before stamping its own,
 		// so a non-empty value here is authoritative.
 		switch r.Header.Get("X-Actor-Source") {
-		case "task_token", "cloud_pat":
+		case "task_token", "cloud_pat", "service_account":
 			writeError(w, http.StatusForbidden, "this endpoint is only available to human actors")
 			return
 		}

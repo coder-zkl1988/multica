@@ -19,9 +19,17 @@
  *     server back-fills `chat_message_id` on each row when the message
  *     persists (server-side). `MessageComposer` calls `api.uploadFile`
  *     without `{ issueId, commentId }`.
- *   - **Parent owns keyboard**: chat.tsx wraps in KeyboardAvoidingView +
- *     SafeAreaView, so `manageKeyboard={false}` prevents the composer
- *     from double-stacking its own keyboard handling.
+ *   - **Composer owns keyboard + bottom inset**: `chat/[id]` and
+ *     `chat/new` are pushed screens with no tab bar underneath (unlike
+ *     the old single-screen tab root), so the composer's own
+ *     `KeyboardStickyView` + safe-area handling (`manageKeyboard`'s
+ *     default `true`) is what keeps it above the keyboard and clear of
+ *     the bottom gesture bar — `ChatConversationView` no longer wraps
+ *     in its own `KeyboardAvoidingView`.
+ *   - **Always expanded**: chat always shows the full input (never the
+ *     collapsed pill) — `alwaysExpanded` skips the tap-to-expand step
+ *     the comment composer uses, so tapping the input focuses it
+ *     directly.
  *
  * Previously a hand-written 400-LOC twin of inline-comment-composer.tsx;
  * now ~50 LOC plus the StopButton subcomponent.
@@ -29,8 +37,8 @@
 import { useCallback } from "react";
 import { Pressable, View } from "react-native";
 import Animated, { FadeIn, FadeOut } from "react-native-reanimated";
-import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
+import { useTranslation } from "react-i18next";
 import { MessageComposer } from "@/components/composer/message-composer";
 import { useWorkspaceStore } from "@/data/workspace-store";
 import { useColorScheme } from "@/lib/use-color-scheme";
@@ -50,6 +58,8 @@ interface Props {
   /** True while an agent task is running for the active session. The
    *  composer swaps Send for Stop. */
   sending: boolean;
+  /** Queued tasks remain busy, but do not expose Stop without draft restore. */
+  allowStop?: boolean;
   /** Hard-disable typing + send. Used when there's no usable agent in the
    *  workspace or the session is archived (legacy). */
   disabled?: boolean;
@@ -65,10 +75,12 @@ export function ChatComposer({
   onSend,
   onStop,
   sending,
+  allowStop = true,
   disabled = false,
   disabledReason,
 }: Props) {
   const wsSlug = useWorkspaceStore((s) => s.currentWorkspaceSlug);
+  const { t } = useTranslation("chat");
 
   const onSubmit = useCallback(
     async ({
@@ -101,20 +113,22 @@ export function ChatComposer({
         pathname: "/[workspace]/mention-picker",
         params: { workspace: wsSlug ?? "", mode: "chat" },
       }}
-      placeholder={sending ? "Agent is working…" : "Message…"}
+      placeholder={
+        sending ? t("composer.agent_working") : t("composer.message_placeholder")
+      }
       pillLabel={
         sending
-          ? "Agent is working…"
+          ? t("composer.agent_working")
           : disabled
-            ? (disabledReason ?? "Chat unavailable")
-            : "Message…"
+            ? (disabledReason ?? t("composer.chat_unavailable"))
+            : t("composer.message_placeholder")
       }
       pillIcon="chatbubble-ellipses-outline"
       disabled={disabled}
       disabledReason={disabledReason}
       isSending={sending}
-      renderStop={() => <StopButton onPress={handleStop} />}
-      manageKeyboard={false}
+      renderStop={allowStop ? () => <StopButton onPress={handleStop} /> : undefined}
+      alwaysExpanded
     />
   );
 }
@@ -122,6 +136,7 @@ export function ChatComposer({
 function StopButton({ onPress }: { onPress: () => void }) {
   const { colorScheme } = useColorScheme();
   const theme = THEME[colorScheme];
+  const { t } = useTranslation("chat");
   return (
     <Animated.View
       key="stop"
@@ -133,7 +148,7 @@ function StopButton({ onPress }: { onPress: () => void }) {
         className="h-8 w-8 items-center justify-center rounded-full bg-foreground active:opacity-80"
         hitSlop={12}
         accessibilityRole="button"
-        accessibilityLabel="Stop agent"
+        accessibilityLabel={t("composer.stop_agent_label")}
       >
         <View
           style={{

@@ -15,21 +15,6 @@ func TestRuntimeReadyOmitsUnmeasuredDuration(t *testing.T) {
 }
 
 func TestFailedEventsUseWillRetry(t *testing.T) {
-	ctx := TaskContext{
-		UserID:      "user-1",
-		WorkspaceID: "workspace-1",
-		AgentID:     "agent-1",
-		TaskID:      "task-1",
-		Source:      SourceManual,
-	}
-	taskEv := AgentTaskFailed(ctx, 10, "runtime_offline", "runtime", true)
-	if got := taskEv.Properties["will_retry"]; got != true {
-		t.Fatalf("task will_retry = %v, want true", got)
-	}
-	if _, ok := taskEv.Properties["recoverable"]; ok {
-		t.Fatalf("task failure should not emit recoverable")
-	}
-
 	runEv := AutopilotRunFailed("user-1", "workspace-1", "autopilot-1", "run-1", "manual", AutopilotAssignee{AgentID: "agent-1", AssigneeType: "agent"}, "manual", "task failed", "task_error", false, 10)
 	if got := runEv.Properties["will_retry"]; got != false {
 		t.Fatalf("autopilot will_retry = %v, want false", got)
@@ -39,29 +24,51 @@ func TestFailedEventsUseWillRetry(t *testing.T) {
 	}
 }
 
-func TestAgentTaskDispatchedUsesTaskCoreProperties(t *testing.T) {
-	ctx := TaskContext{
-		UserID:      "user-1",
-		WorkspaceID: "workspace-1",
-		AgentID:     "agent-1",
-		TaskID:      "task-1",
-		IssueID:     "issue-1",
-		Source:      SourceManual,
-		RuntimeMode: "local",
-		Provider:    "codex",
+func TestIsMetricsOnly(t *testing.T) {
+	// As of MUL-4127, PostHog is retired for server-side product analytics:
+	// every server-side event is Prometheus-only and must not ship to PostHog.
+	for _, name := range []string{
+		// runtime / autopilot execution-lifecycle telemetry
+		EventRuntimeRegistered, EventRuntimeReady, EventRuntimeFailed, EventRuntimeOffline,
+		EventAutopilotRunStarted, EventAutopilotRunCompleted, EventAutopilotRunFailed,
+		// product-behaviour events (now DB + Grafana only)
+		EventSignup, EventWorkspaceCreated, EventIssueCreated, EventIssueExecuted,
+		EventChatMessageSent, EventTeamInviteSent, EventTeamInviteAccepted,
+		EventOnboardingStarted, EventOnboardingQuestionnaireSubmit, EventOnboardingSourceSubmit,
+		EventAgentCreated,
+		EventOnboardingCompleted, EventCloudWaitlistJoined, EventFeedbackSubmitted,
+		EventContactSalesSubmitted, EventSquadCreated, EventAutopilotCreated,
+	} {
+		if !IsMetricsOnly(name) {
+			t.Errorf("IsMetricsOnly(%q) = false, want true (server events stay out of PostHog since MUL-4127)", name)
+		}
 	}
-	ev := AgentTaskDispatched(ctx)
+	// A name that isn't a declared server event is not metrics-only.
+	if IsMetricsOnly("$exception") {
+		t.Errorf("IsMetricsOnly(%q) = true, want false (frontend-only event)", "$exception")
+	}
+}
 
-	if ev.Name != EventAgentTaskDispatched {
-		t.Fatalf("event name = %q, want %q", ev.Name, EventAgentTaskDispatched)
+func TestOnboardingSourceSubmittedSetOnlyWhenAnswered(t *testing.T) {
+	answered := OnboardingSourceSubmitted("u1", []string{"search"}, false, false)
+	if answered.Properties["source_skipped"] != false {
+		t.Fatalf("answered: source_skipped = %v, want false", answered.Properties["source_skipped"])
 	}
-	if got := ev.WorkspaceID; got != "workspace-1" {
-		t.Fatalf("workspace_id = %q, want workspace-1", got)
+	if answered.Set == nil || answered.Set["source"] == nil {
+		t.Fatalf("answered: expected $set source, got %v", answered.Set)
 	}
-	if got := ev.Properties["task_id"]; got != "task-1" {
-		t.Fatalf("task_id = %v, want task-1", got)
+
+	declined := OnboardingSourceSubmitted("u1", nil, true, false)
+	if declined.Properties["source_skipped"] != true {
+		t.Fatalf("declined: source_skipped = %v, want true", declined.Properties["source_skipped"])
 	}
-	if got := ev.Properties["runtime_mode"]; got != "local" {
-		t.Fatalf("runtime_mode = %v, want local", got)
+	if declined.Set != nil {
+		t.Fatalf("declined: a skip has nothing to mirror — expected nil Set, got %v", declined.Set)
+	}
+	// nil slice must normalize to [] so property types stay stable.
+	// (Key is acquisition_source — plain "source" is the event-source
+	// dimension stamped by core properties.)
+	if src, ok := declined.Properties["acquisition_source"].([]string); !ok || src == nil {
+		t.Fatalf("declined: acquisition_source property = %#v, want empty []string", declined.Properties["acquisition_source"])
 	}
 }

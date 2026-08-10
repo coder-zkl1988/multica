@@ -17,20 +17,57 @@ type ReloadPromptResult = "reload" | "dismiss";
 type RendererRecoveryOptions = {
   isDev: boolean;
   showReloadPrompt: (payload: ReloadPromptPayload) => Promise<ReloadPromptResult>;
+  getDiagnosticContext?: () => Record<string, unknown>;
+  /**
+   * Persist a freeze/crash breadcrumb to disk. The renderer can't report a
+   * true hang or process death itself (blocked / gone), so the main process
+   * writes it here and the next renderer boot flushes it to telemetry. Omit
+   * in dev to keep field telemetry clean.
+   */
+  persistBreadcrumb?: (payload: ReloadPromptPayload) => void;
+  /**
+   * Delete a previously-persisted unresponsive breadcrumb. Called when the
+   * renderer recovers (`responsive` after `unresponsive`): the window came
+   * back, so the in-thread watchdog reports the freeze and the breadcrumb
+   * would only double-count it. Crash breadcrumbs are never cleared — a dead
+   * process never recovers.
+   */
+  clearBreadcrumb?: () => void;
+  /**
+   * Read the JS call stack out of the hung renderer. This is the only signal
+   * that says WHICH code blocked the thread — the in-thread watchdog reports a
+   * duration and the breadcrumb reports a route, but neither can name the
+   * function. Resolves to null whenever a stack can't be obtained; the hang is
+   * still reported without it. Omit in dev.
+   */
+  captureStack?: () => Promise<unknown>;
   log?: (tag: string, ...args: unknown[]) => void;
   unresponsivePromptDelayMs?: number;
 };
+
+const noopDevLog = () => undefined;
 
 export function installRendererRecoveryHandlers(
   window: RendererRecoveryWindow,
   {
     isDev,
     showReloadPrompt,
-    log = defaultDevLog,
+    getDiagnosticContext,
+    persistBreadcrumb,
+    clearBreadcrumb,
+    captureStack,
+    log = noopDevLog,
     unresponsivePromptDelayMs = 1500,
   }: RendererRecoveryOptions,
 ) {
   let unresponsivePromptTimer: ReturnType<typeof setTimeout> | null = null;
+  // True once a breadcrumb has been written for the current hang. A later
+  // `responsive` clears it; only a hang that never returns survives to report.
+  let unresponsiveBreadcrumbWritten = false;
+  const mergeDiagnosticContext = (context: Record<string, unknown>) => ({
+    ...readDiagnosticContext(getDiagnosticContext),
+    ...context,
+  });
   const maybePromptReload = (payload: ReloadPromptPayload) => {
     if (isDev) return;
     void showReloadPrompt(payload).then((result) => {
@@ -43,14 +80,23 @@ export function installRendererRecoveryHandlers(
   window.webContents.on("render-process-gone", (_event, details) => {
     if (isDev) log("process-gone", JSON.stringify(details));
     if (!isRecoverableRendererExit(details)) return;
-    maybePromptReload({ kind: "render-process-gone", context: { details } });
+    const payload: ReloadPromptPayload = {
+      kind: "render-process-gone",
+      context: mergeDiagnosticContext({ details }),
+    };
+    persistBreadcrumb?.(payload);
+    maybePromptReload(payload);
   });
 
+  // preload-error intentionally does NOT persist a breadcrumb: it's a startup
+  // failure of the preload script itself, and the breadcrumb-flush path depends
+  // on that same preload exposing `getLastFreeze` — if preload is broken, the
+  // next boot couldn't read it back anyway. We only prompt for reload here.
   window.webContents.on("preload-error", (_event, preloadPath, error) => {
     if (isDev) log("preload-error", `path=${preloadPath} err=${formatError(error)}`);
     maybePromptReload({
       kind: "preload-error",
-      context: { preloadPath, error: formatError(error) },
+      context: mergeDiagnosticContext({ preloadPath, error: formatError(error) }),
     });
   });
 
@@ -58,14 +104,36 @@ export function installRendererRecoveryHandlers(
     if (isDev || unresponsivePromptTimer) return;
     unresponsivePromptTimer = setTimeout(() => {
       unresponsivePromptTimer = null;
-      maybePromptReload({ kind: "unresponsive", context: {} });
+      void reportHang();
     }, unresponsivePromptDelayMs);
   });
 
+  // The stack has to be read while the thread is still stuck, so it is
+  // captured before the breadcrumb is written — but it is never allowed to
+  // delay the prompt indefinitely (captureStack is itself bounded) and a
+  // failure just means the hang is reported without a stack.
+  const reportHang = async () => {
+    const stack = captureStack ? await readStack(captureStack, log) : null;
+    const payload: ReloadPromptPayload = {
+      kind: "unresponsive",
+      context: mergeDiagnosticContext(stack ? { stack } : {}),
+    };
+    persistBreadcrumb?.(payload);
+    unresponsiveBreadcrumbWritten = true;
+    maybePromptReload(payload);
+  };
+
   window.on("responsive", () => {
-    if (!unresponsivePromptTimer) return;
-    clearTimeout(unresponsivePromptTimer);
-    unresponsivePromptTimer = null;
+    if (unresponsivePromptTimer) {
+      clearTimeout(unresponsivePromptTimer);
+      unresponsivePromptTimer = null;
+    }
+    // The window came back: drop any breadcrumb written during this hang so it
+    // isn't re-reported (and mislabeled `recovered: false`) on next boot.
+    if (unresponsiveBreadcrumbWritten) {
+      clearBreadcrumb?.();
+      unresponsiveBreadcrumbWritten = false;
+    }
   });
 }
 
@@ -109,25 +177,56 @@ function isRecoverableRendererExit(details: unknown) {
 function rendererRecoveryMessage(kind: ReloadPromptPayload["kind"]) {
   switch (kind) {
     case "render-process-gone":
-      return "The desktop renderer process stopped responding or crashed.";
+      return "The desktop window stopped unexpectedly.";
     case "preload-error":
-      return "The desktop preload script failed before the app could start.";
+      return "The desktop window could not finish starting.";
     case "unresponsive":
-      return "The desktop window is not responding.";
+      return "The desktop window has been stuck for a few seconds.";
   }
 }
 
 function rendererRecoveryDetail(payload: ReloadPromptPayload) {
+  const guidance = [
+    "Click Reload to refresh this window and keep using Multica.",
+    "If this keeps happening, please tell us what you were doing right before this message appeared and whether Reload recovered the window.",
+  ];
+
+  if (payload.kind === "unresponsive") {
+    guidance.push(
+      "For macOS reports, an Activity Monitor sample of the Multica Helper (Renderer) process helps us find what blocked the app.",
+    );
+  }
+
   return [
-    "Reloading is the safest recovery path for this window.",
+    ...guidance,
     "",
+    "Diagnostic details:",
     `kind: ${payload.kind}`,
     `context: ${JSON.stringify(payload.context)}`,
   ].join("\n");
 }
 
-function defaultDevLog(tag: string, ...args: unknown[]) {
-  process.stderr.write(`[renderer ${tag}] ${args.map(String).join(" ")}\n`);
+async function readStack(
+  captureStack: () => Promise<unknown>,
+  log: (tag: string, ...args: unknown[]) => void,
+): Promise<unknown> {
+  try {
+    return (await captureStack()) ?? null;
+  } catch (error) {
+    log("stack-capture-failed", formatError(error));
+    return null;
+  }
+}
+
+function readDiagnosticContext(
+  getDiagnosticContext: (() => Record<string, unknown>) | undefined,
+) {
+  if (!getDiagnosticContext) return {};
+  try {
+    return getDiagnosticContext();
+  } catch {
+    return {};
+  }
 }
 
 function formatError(error: unknown) {

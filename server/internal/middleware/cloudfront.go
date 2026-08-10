@@ -18,9 +18,11 @@ func RefreshCloudFrontCookies(signer *auth.CloudFrontSigner) func(http.Handler) 
 		}
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if _, err := r.Cookie("CloudFront-Policy"); err != nil {
-				ttl := auth.AuthTokenTTL()
-				for _, cookie := range signer.SignedCookies(time.Now().Add(ttl)) {
-					http.SetCookie(w, cookie)
+				expiresAt, parseErr := time.Parse(time.RFC3339, r.Header.Get("X-Auth-Expires-At"))
+				if parseErr == nil && time.Until(expiresAt) > 0 {
+					for _, cookie := range signer.SignedCookies(expiresAt) {
+						http.SetCookie(w, cookie)
+					}
 				}
 			}
 			next.ServeHTTP(w, r)

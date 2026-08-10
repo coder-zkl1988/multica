@@ -9,14 +9,9 @@ import {
  * Next.js fetch cache for 5 minutes (Vercel ISR) so hitting /download
  * costs at most one GitHub API call per region per 5 minutes.
  *
- * Desktop assets don't all land at the same time: CI uploads Linux
- * and Windows within a minute of each other, but macOS is packaged
- * manually (notarization credentials aren't wired into CI yet) and
- * lands tens of minutes later. To avoid showing the half-filled
- * mid-flight state on /download, the fetcher pulls the two most
- * recent releases and falls back to the previous one for the first
- * hour after publish. Empirically full desktop uploads complete in
- * ~20 min; 1 h gives 3x buffer for commonly-variable manual steps.
+ * This SSO distribution intentionally reads the fork's signed desktop
+ * releases so an upstream release cannot silently replace it. CLI-only tags,
+ * drafts, and other releases are ignored.
  *
  * On any failure (network, rate limit, malformed payload) returns a
  * `null`-shaped result and logs — the page degrades to a "version
@@ -30,12 +25,10 @@ export interface LatestRelease {
   assets: DownloadAssets;
 }
 
-const GITHUB_RELEASES_URL =
-  "https://api.github.com/repos/multica-ai/multica/releases?per_page=2";
+const GITHUB_RELEASE_URL =
+  "https://api.github.com/repos/coder-zkl1988/multica/releases?per_page=20";
 
 const REVALIDATE_SECONDS = 300;
-
-const FRESH_RELEASE_WINDOW_MS = 60 * 60 * 1000;
 
 interface GitHubReleasePayload {
   tag_name?: string;
@@ -63,27 +56,19 @@ export async function fetchLatestRelease(): Promise<LatestRelease> {
   }
 
   try {
-    const res = await fetch(GITHUB_RELEASES_URL, {
+    const res = await fetch(GITHUB_RELEASE_URL, {
       next: { revalidate: REVALIDATE_SECONDS },
       headers,
     });
     if (!res.ok) {
       throw new Error(`GitHub API responded ${res.status}`);
     }
-    const data = (await res.json()) as GitHubReleasePayload[];
-
-    // Defensive filter — Multica doesn't publish prereleases or drafts
-    // today, but the endpoint returns them if that ever changes. A
-    // prerelease shadowing a stable version on /download would be a
-    // regression.
-    const stable = data.filter((r) => !r.prerelease && !r.draft);
-    const latest = stable[0];
-    if (!latest) {
-      return emptyRelease();
-    }
-    const previous = stable[1];
-    const chosen =
-      previous && isWithinFreshWindow(latest) ? previous : latest;
+    const releases = (await res.json()) as GitHubReleasePayload[];
+    const chosen = releases.find(
+      (release) =>
+        !release.draft && release.tag_name?.startsWith("desktop-v"),
+    );
+    if (!chosen) return emptyRelease();
 
     return {
       version: chosen.tag_name ?? null,
@@ -95,13 +80,6 @@ export async function fetchLatestRelease(): Promise<LatestRelease> {
     console.warn("[download] fetchLatestRelease failed:", err);
     return emptyRelease();
   }
-}
-
-function isWithinFreshWindow(release: GitHubReleasePayload): boolean {
-  if (!release.published_at) return false;
-  const publishedAt = Date.parse(release.published_at);
-  if (Number.isNaN(publishedAt)) return false;
-  return Date.now() - publishedAt < FRESH_RELEASE_WINDOW_MS;
 }
 
 function emptyRelease(): LatestRelease {

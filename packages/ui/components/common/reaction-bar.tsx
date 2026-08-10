@@ -40,7 +40,6 @@ interface ReactionBarProps {
   onToggle: (emoji: string) => void;
   getActorName: (type: string, id: string) => string;
   className?: string;
-  hideAddButton?: boolean;
 }
 
 function ReactionBar({
@@ -49,7 +48,6 @@ function ReactionBar({
   onToggle,
   getActorName,
   className,
-  hideAddButton,
 }: ReactionBarProps) {
   const grouped = groupReactions(reactions, currentUserId);
 
@@ -62,7 +60,7 @@ function ReactionBar({
               <button
                 type="button"
                 onClick={() => onToggle(g.emoji)}
-                className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors hover:bg-brand/15 ${
+                className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-caption transition-colors hover:bg-brand/15 ${
                   g.reacted
                     ? "border-brand/30 bg-brand/8 text-brand"
                     : "border-brand/10 bg-brand/4 text-muted-foreground"
@@ -78,7 +76,7 @@ function ReactionBar({
           </TooltipContent>
         </Tooltip>
       ))}
-      {!hideAddButton && <QuickEmojiPicker onSelect={onToggle} />}
+      <QuickEmojiPicker onSelect={onToggle} />
     </div>
   );
 }
