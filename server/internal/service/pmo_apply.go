@@ -528,6 +528,7 @@ func (s *PMOService) createEntityInTx(
 			Priority:    pmoPriorityDefault,
 			StartDate:   pmoToPGDate(values["start_date"]),
 			DueDate:     pmoToPGDate(values["due_date"]),
+			CreatedBy:   run.RequestedBy,
 		})
 		if err != nil {
 			return nothing, nil, nil, fmt.Errorf("pmo apply: create project: %w", err)

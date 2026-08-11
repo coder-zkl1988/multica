@@ -259,6 +259,7 @@ const PROJECT: Project = {
   priority: "high",
   lead_type: null,
   lead_id: null,
+  created_by: "user-1",
   start_date: null,
   due_date: null,
   created_at: "2026-06-01T00:00:00Z",
@@ -328,5 +329,15 @@ describe("ProjectDetail project deletion", () => {
     expect(
       screen.queryByRole("button", { name: "Delete project" }),
     ).not.toBeInTheDocument();
+  });
+});
+
+describe("ProjectDetail created-by row", () => {
+  it("shows the member who created the project in Properties", () => {
+    renderProjectDetail();
+
+    const row = screen.getByText("Created by").closest("div");
+    expect(row).not.toBeNull();
+    expect(row).toHaveTextContent("User One");
   });
 });

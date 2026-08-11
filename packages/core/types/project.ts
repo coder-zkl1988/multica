@@ -12,6 +12,9 @@ export interface Project {
   priority: ProjectPriority;
   lead_type: "member" | "agent" | null;
   lead_id: string | null;
+  // Member who created the project (SSO account). Null for rows predating this
+  // field (e.g. seeded/PMS-created projects).
+  created_by: string | null;
   // Calendar days ("YYYY-MM-DD"), no time-of-day or timezone — same contract as
   // issue.start_date / issue.due_date.
   start_date: string | null;

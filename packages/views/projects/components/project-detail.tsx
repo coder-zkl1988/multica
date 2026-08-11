@@ -402,6 +402,12 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
               </PopoverContent>
             </Popover>
           </PropRow>
+          {project.created_by && (
+            <PropRow label={t(($) => $.detail.prop_created_by)}>
+              <ActorAvatar actorType="member" actorId={project.created_by} size="sm" enableHoverCard />
+              <span className="cursor-pointer truncate">{getActorName("member", project.created_by)}</span>
+            </PropRow>
+          )}
           <PropRow label={t(($) => $.detail.prop_start_date)}>
             <ProjectStartDatePicker startDate={project.start_date} onUpdate={handleUpdateField} />
           </PropRow>

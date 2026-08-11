@@ -68,6 +68,7 @@
     "section_properties": "Properties",
     "section_progress": "Progress",
     "section_description": "Description",
+    "prop_created_by": "Created by",
     "prop_start_date": "Start date",
     "prop_due_date": "Due date",
     "no_start_date": "No start date",

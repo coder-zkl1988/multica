@@ -67,6 +67,7 @@
     "section_properties": "속성",
     "section_progress": "진행률",
     "section_description": "설명",
+    "prop_created_by": "생성자",
     "prop_start_date": "시작일",
     "prop_due_date": "마감일",
     "no_start_date": "시작일 없음",

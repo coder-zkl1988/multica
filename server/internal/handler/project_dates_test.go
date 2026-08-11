@@ -153,3 +153,26 @@ func TestProjectInvalidDateReturns400(t *testing.T) {
 		t.Fatalf("expected 400 for invalid update due_date, got %d: %s", w.Code, w.Body.String())
 	}
 }
+
+// CreateProject stamps the requesting user as created_by; GET echoes it back.
+func TestProjectCreatedByRoundTrip(t *testing.T) {
+	w := httptest.NewRecorder()
+	testHandler.CreateProject(w, newRequest("POST", "/api/projects?workspace_id="+testWorkspaceID, map[string]any{
+		"title": "creator stamped project",
+	}))
+	created := decodeProject(t, w, http.StatusCreated)
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM project WHERE id = $1`, created.ID)
+	})
+	if created.CreatedBy == nil || *created.CreatedBy != testUserID {
+		t.Fatalf("create created_by = %v, want %s", created.CreatedBy, testUserID)
+	}
+
+	w = httptest.NewRecorder()
+	getReq := withURLParam(newRequest("GET", "/api/projects/"+created.ID, nil), "id", created.ID)
+	testHandler.GetProject(w, getReq)
+	got := decodeProject(t, w, http.StatusOK)
+	if got.CreatedBy == nil || *got.CreatedBy != testUserID {
+		t.Fatalf("get created_by = %v, want %s", got.CreatedBy, testUserID)
+	}
+}
