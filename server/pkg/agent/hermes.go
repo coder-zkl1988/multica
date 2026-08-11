@@ -18,6 +18,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/multica-ai/multica/server/internal/agentguard"
 )
 
 // hermesBlockedArgs are flags hardcoded by the daemon that must not be
@@ -922,6 +924,21 @@ func (c *hermesClient) handleAgentRequest(raw map[string]json.RawMessage) {
 	var resp map[string]any
 	switch method {
 	case "session/request_permission":
+		// Privacy gate: if the permission request would reach local private
+		// data (a command, tool input, or MCP config inside the params),
+		// never grant it. Deny exactly this action when the agent offered a
+		// single-use reject option; otherwise fail closed with a protocol
+		// error rather than fabricate an un-offered id.
+		if denied, rule := agentguard.DeniedRequest(raw["params"]); denied {
+			if optionID, ok := selectACPDenyOption(raw["params"]); ok {
+				resp = acpSelectedResponse(rawID, optionID)
+				c.cfg.Logger.Warn("privacy gate denied agent permission request", "method", method, "rule", rule, "optionId", optionID)
+			} else {
+				resp = acpRPCErrorResponse(rawID, -32603, "privacy gate denied permission request without a reject option")
+				c.cfg.Logger.Warn("privacy gate denied agent permission request; no reject option offered", "method", method, "rule", rule)
+			}
+			break
+		}
 		selector := c.selectPermission
 		if selector == nil {
 			selector = selectACPPermissionOption
@@ -934,16 +951,7 @@ func (c *hermesClient) handleAgentRequest(raw map[string]json.RawMessage) {
 			// NOT reply "cancelled" here, which means the whole prompt turn
 			// was cancelled — other ACP backends sharing this client (kimi,
 			// kiro, ...) would abort the entire task, not just this action.
-			resp = map[string]any{
-				"jsonrpc": "2.0",
-				"id":      json.RawMessage(rawID),
-				"result": map[string]any{
-					"outcome": map[string]any{
-						"outcome":  "selected",
-						"optionId": optionID,
-					},
-				},
-			}
+			resp = acpSelectedResponse(rawID, optionID)
 			if grant {
 				c.cfg.Logger.Debug("auto-approved agent permission request", "method", method, "optionId", optionID)
 			} else {
@@ -954,14 +962,7 @@ func (c *hermesClient) handleAgentRequest(raw map[string]json.RawMessage) {
 			// and no single-use reject_once (empty, malformed, permanent-only,
 			// or reject_always-only). Return a protocol error rather than
 			// fabricate an un-offered id or a whole-turn "cancelled".
-			resp = map[string]any{
-				"jsonrpc": "2.0",
-				"id":      json.RawMessage(rawID),
-				"error": map[string]any{
-					"code":    -32603,
-					"message": "no auto-selectable permission option offered",
-				},
-			}
+			resp = acpRPCErrorResponse(rawID, -32603, "no auto-selectable permission option offered")
 			c.cfg.Logger.Warn("no safely selectable permission option offered; returning error", "method", method)
 		}
 	default:
@@ -1018,6 +1019,53 @@ const (
 // we recognise the session-scoped ones by id. "approve_for_session" is the
 // equivalent id other ACP backends use.
 var acpSessionScopedOptionIDs = []string{"allow_session", "approve_for_session"}
+
+// acpSelectedResponse builds a JSON-RPC "selected" outcome that echoes one
+// of the optionIds the agent actually offered.
+func acpSelectedResponse(rawID json.RawMessage, optionID string) map[string]any {
+	return map[string]any{
+		"jsonrpc": "2.0",
+		"id":      json.RawMessage(rawID),
+		"result": map[string]any{
+			"outcome": map[string]any{
+				"outcome":  "selected",
+				"optionId": optionID,
+			},
+		},
+	}
+}
+
+// acpRPCErrorResponse builds a JSON-RPC error frame for agent→client
+// requests that must fail closed without fabricating an un-offered id.
+func acpRPCErrorResponse(rawID json.RawMessage, code int, message string) map[string]any {
+	return map[string]any{
+		"jsonrpc": "2.0",
+		"id":      json.RawMessage(rawID),
+		"error": map[string]any{
+			"code":    code,
+			"message": message,
+		},
+	}
+}
+
+// selectACPDenyOption returns the offered single-use reject option id so a
+// privacy gate can deny exactly this action instead of replying "cancelled".
+func selectACPDenyOption(params json.RawMessage) (string, bool) {
+	var p struct {
+		Options []acpPermissionOption `json:"options"`
+	}
+	if len(params) > 0 {
+		if err := json.Unmarshal(params, &p); err != nil {
+			return "", false
+		}
+	}
+	for _, opt := range p.Options {
+		if opt.OptionID != "" && strings.EqualFold(strings.TrimSpace(opt.Kind), acpKindRejectOnce) {
+			return opt.OptionID, true
+		}
+	}
+	return "", false
+}
 
 // selectACPPermissionOption decides how to auto-answer a
 // session/request_permission. It returns the offered optionId to select,

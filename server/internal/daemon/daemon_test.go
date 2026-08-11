@@ -380,11 +380,12 @@ func TestConfigureCodexTaskShellEnvironment(t *testing.T) {
 	})
 }
 
-// TestCodexTaskShellEnvInheritsRealHome pins the MUL-5578 contract at the layer
+// TestCodexTaskShellEnvInheritsRealHome pins the privacy gate at the layer
 // where the daemon assembles the environment a Codex task actually launches
-// with: HOME and the XDG base dirs reach the task's shell tools from the
-// *inherited* daemon process environment, so `gh`, `aws`, `kubectl`, and npm
-// resolve the daemon user's real config inside a task.
+// with: only non-secret allowlisted inherited variables (HOME, PATH, ...) reach
+// the task's shell tools, so `gh`, `aws`, `kubectl`, and npm still resolve the
+// daemon user's real config via the HOME default, while XDG/secret-bearing
+// inherited variables are dropped.
 //
 // This guards the pass-through, not runTask's decision not to inject a HOME of
 // its own — that decision lives inline in runTask and has no unit seam.
@@ -428,10 +429,18 @@ func TestCodexTaskShellEnvInheritsRealHome(t *testing.T) {
 	include := parsed.ShellEnvironmentPolicy.IncludeOnly
 
 	// The daemon user's real home must survive into the task's shell tools, or
-	// gh / aws / kubectl / npm stop resolving their config there.
-	for _, want := range []string{"HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME"} {
+	// gh / aws / kubectl / npm stop resolving their config there. XDG base dirs
+	// are deliberately NOT inherited: they can point into per-user state that
+	// carries cached credentials/tokens, so they are dropped and tools fall
+	// back to the HOME default.
+	for _, want := range []string{"HOME", "PATH"} {
 		if !slices.Contains(include, want) {
 			t.Errorf("include_only missing %q, got %v", want, include)
+		}
+	}
+	for _, unwanted := range []string{"XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME"} {
+		if slices.Contains(include, unwanted) {
+			t.Errorf("include_only must not inherit %q, got %v", unwanted, include)
 		}
 	}
 	// CODEX_HOME is the one home-shaped variable the daemon does own.

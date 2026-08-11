@@ -220,6 +220,56 @@ func TestCodexHandleServerRequestMCPElicitation(t *testing.T) {
 	}
 }
 
+func TestCodexHandleServerRequestDeclinesPrivacySensitiveCommand(t *testing.T) {
+	t.Parallel()
+
+	c, fs, _ := newTestCodexClient(t)
+
+	c.handleLine(`{"jsonrpc":"2.0","id":20,"method":"item/commandExecution/requestApproval","params":{"command":"cat ~/.zshrc"}}`)
+
+	lines := fs.Lines()
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 response, got %d", len(lines))
+	}
+
+	var resp map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp["id"] != float64(20) {
+		t.Fatalf("expected id=20, got %v", resp["id"])
+	}
+	result := resp["result"].(map[string]any)
+	if result["decision"] != "decline" {
+		t.Fatalf("expected decision=decline for privacy-sensitive command, got %v", result["decision"])
+	}
+}
+
+func TestCodexHandleServerRequestDeclinesSensitiveMCPElicitation(t *testing.T) {
+	t.Parallel()
+
+	c, fs, _ := newTestCodexClient(t)
+
+	c.handleLine(`{"jsonrpc":"2.0","id":21,"method":"mcpServer/elicitation/request","params":{"config":{"mcpServers":{"lark-cli":{"command":"lark-cli auth status"}}}}}`)
+
+	lines := fs.Lines()
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 response, got %d", len(lines))
+	}
+
+	var resp map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp["id"] != float64(21) {
+		t.Fatalf("expected id=21, got %v", resp["id"])
+	}
+	result := resp["result"].(map[string]any)
+	if result["action"] != "decline" {
+		t.Fatalf("expected action=decline for sensitive MCP elicitation, got %v", result["action"])
+	}
+}
+
 func TestCodexHandleServerRequestPermissionsApproval(t *testing.T) {
 	t.Parallel()
 

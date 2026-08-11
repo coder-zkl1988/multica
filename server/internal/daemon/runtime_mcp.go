@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/multica-ai/multica/server/internal/agentguard"
 	"github.com/pelletier/go-toml/v2"
 )
 
@@ -24,27 +25,21 @@ type runtimeLocalMcpServerSummary struct {
 }
 
 // mergeRuntimeAndAgentMcpConfig builds the task-local MCP configuration used
-// when an agent has MCP servers managed by Multica. Runtime servers are the
-// base layer and the agent's entries win on a same-name collision. The merge
-// happens inside the local daemon so runtime URLs, headers, commands, and env
-// values never need to leave the machine.
+// for every task. Runtime servers are the base layer and the agent's entries
+// win on a same-name collision. The merge happens inside the local daemon so
+// runtime URLs, headers, commands, and env values never need to leave the
+// machine.
 //
-// A nil/null agent config keeps the provider's native inheritance path intact.
-// A present config (including an empty mcpServers map) opts into the merged,
-// task-local config so adding one managed server no longer disables unrelated
-// runtime servers.
+// Privacy gate: native inheritance is never trusted. A nil/null agent config
+// becomes an empty managed set, and the merged result always passes through
+// agentguard.FilterMCPConfig so MCP servers that expose private data
+// (Lark/Feishu, desktop control, screenshots, credentials, keychains) are
+// stripped before the CLI launches. The function fails closed: no unchecked
+// server survives to the agent.
 func mergeRuntimeAndAgentMcpConfig(provider string, agentConfig json.RawMessage) (json.RawMessage, error) {
 	trimmed := bytes.TrimSpace(agentConfig)
 	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
-		return agentConfig, nil
-	}
-
-	runtimeServers, supported, err := loadRuntimeMcpServerConfigs(provider)
-	if err != nil {
-		return nil, err
-	}
-	if !supported {
-		return agentConfig, nil
+		trimmed = []byte(`{"mcpServers":{}}`)
 	}
 
 	var agentDocument map[string]any
@@ -63,19 +58,36 @@ func mergeRuntimeAndAgentMcpConfig(provider string, agentConfig json.RawMessage)
 		}
 	}
 
-	merged := make(map[string]any, len(runtimeServers)+len(agentServers))
-	for name, entry := range runtimeServers {
-		merged[name] = entry
+	runtimeServers, supported, err := loadRuntimeMcpServerConfigs(provider)
+	if err != nil {
+		return nil, err
 	}
-	for name, entry := range agentServers {
-		merged[name] = entry
+
+	var merged map[string]any
+	if supported {
+		merged = make(map[string]any, len(runtimeServers)+len(agentServers))
+		for name, entry := range runtimeServers {
+			merged[name] = entry
+		}
+		for name, entry := range agentServers {
+			merged[name] = entry
+		}
+	} else {
+		// Provider has no daemon-visible runtime scope (e.g. CodeBuddy): only
+		// the explicit agent MCP config can be checked, and that is what we
+		// pass through the filter below.
+		merged = agentServers
 	}
 
 	raw, err := json.Marshal(map[string]any{"mcpServers": merged})
 	if err != nil {
 		return nil, fmt.Errorf("marshal merged MCP config: %w", err)
 	}
-	return raw, nil
+	filtered, _, err := agentguard.FilterMCPConfig(raw)
+	if err != nil {
+		return nil, err
+	}
+	return filtered, nil
 }
 
 // codebuddyUserMcpConfigPath returns the user-scope MCP config file CodeBuddy

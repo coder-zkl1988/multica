@@ -802,6 +802,84 @@ func TestHermesClientAutoApprovesPermissionRequest(t *testing.T) {
 	}
 }
 
+// TestHermesClientPrivacyGateDeniesSensitivePermissionRequest asserts the
+// privacy gate intercepts session/request_permission before any auto-grant:
+// a request whose params reach local private data (Lark CLI, shell startup
+// files, env enumeration, secrets) is denied by selecting the offered
+// reject_once even when a grant option is offered; with no reject option
+// offered it fails closed with a protocol error.
+func TestHermesClientPrivacyGateDeniesSensitivePermissionRequest(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		params  string
+		wantErr bool
+		wantID  string
+	}{
+		{
+			name:   "lark-cli in params with grant offered denies",
+			params: `{"sessionId":"ses_1","options":[{"optionId":"allow_once","kind":"allow_once"},{"optionId":"deny","kind":"reject_once"}],"toolCall":{"toolCallId":"tc_1","title":"run: lark-cli auth status","content":[]}}`,
+			wantID: "deny",
+		},
+		{
+			name:   "zshrc command in params with grant offered denies",
+			params: `{"sessionId":"ses_1","options":[{"optionId":"allow_once","kind":"allow_once"},{"optionId":"deny","kind":"reject_once"}],"toolCall":{"toolCallId":"tc_1","title":"run: cat ~/.zshrc","content":[{"type":"text","text":"cat ~/.zshrc"}]}}`,
+			wantID: "deny",
+		},
+		{
+			name:    "no reject option fails closed",
+			params:  `{"sessionId":"ses_1","options":[{"optionId":"allow_once","kind":"allow_once"}],"toolCall":{"toolCallId":"tc_1","title":"run: lark-cli auth status","content":[]}}`,
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			w := &bufferWriter{}
+			c := &hermesClient{
+				cfg:     Config{Logger: slog.Default()},
+				stdin:   w,
+				pending: make(map[int]*pendingRPC),
+			}
+
+			c.handleLine(`{"jsonrpc":"2.0","id":43,"method":"session/request_permission","params":` + tc.params + `}`)
+
+			got := w.String()
+			var resp struct {
+				Result *struct {
+					Outcome struct {
+						Outcome  string `json:"outcome"`
+						OptionID string `json:"optionId"`
+					} `json:"outcome"`
+				} `json:"result"`
+				Error *struct {
+					Code    int    `json:"code"`
+					Message string `json:"message"`
+				} `json:"error"`
+			}
+			if err := json.Unmarshal([]byte(strings.TrimSpace(got)), &resp); err != nil {
+				t.Fatalf("reply is not valid JSON: %q err=%v", got, err)
+			}
+			if tc.wantErr {
+				if resp.Error == nil {
+					t.Errorf("want a JSON-RPC error reply, got result %+v", resp.Result)
+				}
+				return
+			}
+			if resp.Error != nil {
+				t.Fatalf("unexpected JSON-RPC error reply: %+v", resp.Error)
+			}
+			if resp.Result == nil || resp.Result.Outcome.OptionID != tc.wantID {
+				t.Errorf("outcome.optionId: got %+v, want %q", resp.Result, tc.wantID)
+			}
+		})
+	}
+}
+
 // TestHermesClientReplesMethodNotFoundForUnknownAgentRequest ensures
 // that any agent → client request we don't explicitly handle gets a
 // proper JSON-RPC error back, not silence. Silence would block the

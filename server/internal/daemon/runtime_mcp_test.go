@@ -177,9 +177,45 @@ func TestMergeRuntimeAndAgentMcpConfigNullKeepsNativeInheritance(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if string(merged) != string(raw) {
-			t.Fatalf("merged %q = %q", string(raw), string(merged))
+		var document struct {
+			McpServers map[string]any `json:"mcpServers"`
 		}
+		if err := json.Unmarshal(merged, &document); err != nil {
+			t.Fatal(err)
+		}
+		// Privacy gate: nil/null must become a managed empty set, never a
+		// pass-through to unchecked native inheritance.
+		if len(document.McpServers) != 0 {
+			t.Fatalf("nil/null merged %q = %q, want empty managed set", string(raw), string(merged))
+		}
+	}
+}
+
+func TestMergeRuntimeAndAgentMcpConfigFiltersPrivacySensitiveServers(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.WriteFile(filepath.Join(home, ".claude.json"), []byte(`{"mcpServers":{"lark":{"command":"lark-cli","args":["chat"]},"docs":{"type":"http","url":"https://docs.example/mcp"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	merged, err := mergeRuntimeAndAgentMcpConfig("claude", json.RawMessage(`{"mcpServers":{"paper":{"type":"http","url":"https://paper.example/mcp"}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document struct {
+		McpServers map[string]map[string]any `json:"mcpServers"`
+	}
+	if err := json.Unmarshal(merged, &document); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := document.McpServers["lark"]; ok {
+		t.Fatalf("privacy-sensitive lark server must be filtered, got %#v", document.McpServers)
+	}
+	if _, ok := document.McpServers["docs"]; !ok {
+		t.Fatalf("benign runtime server must survive filtering, got %#v", document.McpServers)
+	}
+	if _, ok := document.McpServers["paper"]; !ok {
+		t.Fatalf("benign agent server must survive filtering, got %#v", document.McpServers)
 	}
 }
 

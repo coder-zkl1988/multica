@@ -605,16 +605,16 @@ func TestMergeEnvFiltersClaudeCodeVars(t *testing.T) {
 		"CLAUDE_CODE_EXECPATH=/opt/claude",
 		"CLAUDE_CODE_SESSION_ID=abc123",
 		"CLAUDE_CODE_SSE_PORT=9999",
-		"CLAUDECODEX=keep-me",
-		"CLAUDE_CODE_GIT_BASH_PATH=C:\\Program Files\\Git\\bin\\bash.exe",
-		"CLAUDE_CODE_USE_BEDROCK=1",
-		"CLAUDE_CODE_TMPDIR=/custom/tmp",
 		"MULTICA_LLM_API_KEY=daemon-secret",
 		"MULTICA_SERVER_URL=https://daemon.example",
 	}, map[string]string{
-		"FOO":                "bar",
-		"MULTICA_SERVER_URL": "https://task.example",
-		"MULTICA_TOKEN":      "mat_task",
+		"FOO":                       "bar",
+		"CLAUDECODEX":               "keep-me",
+		"CLAUDE_CODE_GIT_BASH_PATH": "C:\\Program Files\\Git\\bin\\bash.exe",
+		"CLAUDE_CODE_USE_BEDROCK":   "1",
+		"CLAUDE_CODE_TMPDIR":        "/custom/tmp",
+		"MULTICA_SERVER_URL":        "https://task.example",
+		"MULTICA_TOKEN":             "mat_task",
 	})
 
 	// Internal runtime/session markers must be stripped so the child does not
@@ -645,20 +645,20 @@ func TestMergeEnvFiltersClaudeCodeVars(t *testing.T) {
 		t.Fatalf("expected PATH to be preserved, got %v", env)
 	}
 	if !found["CLAUDECODEX=keep-me"] {
-		t.Fatalf("expected unrelated env vars to be preserved, got %v", env)
+		t.Fatalf("expected explicit unrelated env vars to be appended, got %v", env)
 	}
 	// User-facing CLAUDE_CODE_* config must reach the child — stripping
 	// CLAUDE_CODE_GIT_BASH_PATH is what broke Claude Code on Windows (#3671).
 	if !found["CLAUDE_CODE_GIT_BASH_PATH=C:\\Program Files\\Git\\bin\\bash.exe"] {
-		t.Fatalf("expected CLAUDE_CODE_GIT_BASH_PATH to be preserved, got %v", env)
+		t.Fatalf("expected explicit CLAUDE_CODE_GIT_BASH_PATH to be appended, got %v", env)
 	}
 	if !found["CLAUDE_CODE_USE_BEDROCK=1"] {
-		t.Fatalf("expected CLAUDE_CODE_USE_BEDROCK to be preserved, got %v", env)
+		t.Fatalf("expected explicit CLAUDE_CODE_USE_BEDROCK to be appended, got %v", env)
 	}
 	// CLAUDE_CODE_TMPDIR is a documented user-configurable temp-dir override, not
 	// an internal per-session marker, so it must reach the child.
 	if !found["CLAUDE_CODE_TMPDIR=/custom/tmp"] {
-		t.Fatalf("expected CLAUDE_CODE_TMPDIR to be preserved, got %v", env)
+		t.Fatalf("expected explicit CLAUDE_CODE_TMPDIR to be appended, got %v", env)
 	}
 	if !found["FOO=bar"] {
 		t.Fatalf("expected extra env var to be appended, got %v", env)
@@ -1319,5 +1319,64 @@ func TestBuildClaudeArgsManagedSkillSettingsWins(t *testing.T) {
 	}
 	if !strings.Contains(joined, "--max-turns 7") {
 		t.Fatalf("unrelated custom arg was dropped: %v", args)
+	}
+}
+
+func TestMergeEnvDropsUnapprovedInheritedEnvironment(t *testing.T) {
+	t.Parallel()
+
+	env := mergeEnv([]string{
+		"PATH=/usr/bin",
+		"HOME=/home/alice",
+		"LANG=en_US.UTF-8",
+		"TERM=xterm-256color",
+		"ZSHRC_PRIVATE_TOKEN=from-shell-profile",
+		"AWS_SECRET_ACCESS_KEY=from-shell-profile",
+		"SSH_AUTH_SOCK=/tmp/agent.sock",
+		"ARBITRARY_ZSHRC_VALUE=private",
+	}, map[string]string{
+		"EXPLICIT_AGENT_SETTING": "allowed",
+	})
+
+	joined := strings.Join(env, "\n")
+	for _, allowed := range []string{"PATH=/usr/bin", "HOME=/home/alice", "LANG=en_US.UTF-8", "TERM=xterm-256color", "EXPLICIT_AGENT_SETTING=allowed"} {
+		if !strings.Contains(joined, allowed) {
+			t.Fatalf("required environment entry %q missing from %v", allowed, env)
+		}
+	}
+	for _, denied := range []string{"ZSHRC_PRIVATE_TOKEN", "AWS_SECRET_ACCESS_KEY", "SSH_AUTH_SOCK", "ARBITRARY_ZSHRC_VALUE"} {
+		if strings.Contains(joined, denied) {
+			t.Fatalf("inherited private environment entry %q leaked into %v", denied, env)
+		}
+	}
+}
+
+func TestClaudeHandleControlRequestDeniesPrivacySensitiveTool(t *testing.T) {
+	t.Parallel()
+
+	b := &claudeBackend{cfg: Config{Logger: slog.Default()}}
+
+	var written bytes.Buffer
+
+	msg := claudeSDKMessage{
+		Type:      "control_request",
+		RequestID: "req-99",
+		Request: mustMarshal(t, claudeControlRequestPayload{
+			Subtype:  "tool_use",
+			ToolName: "Bash",
+			Input:    mustMarshal(t, map[string]any{"command": "cat ~/.zshrc"}),
+		}),
+	}
+
+	b.handleControlRequest(msg, &written)
+
+	var resp map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(written.Bytes()), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	respInner := resp["response"].(map[string]any)
+	innerResp := respInner["response"].(map[string]any)
+	if innerResp["behavior"] != "deny" {
+		t.Fatalf("expected behavior deny for privacy-sensitive command, got %v", innerResp["behavior"])
 	}
 }

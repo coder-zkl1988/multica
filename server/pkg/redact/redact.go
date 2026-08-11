@@ -15,6 +15,8 @@ type secretPattern struct {
 	replacement string
 }
 
+const credentialPlaceholder = "[REDACTED CREDENTIAL]"
+
 // Patterns are checked in order; first match wins per position.
 var patterns = []secretPattern{
 	// AWS access key IDs (always start with AKIA)
@@ -66,13 +68,21 @@ var patterns = []secretPattern{
 
 	// Generic "Bearer <token>" in output
 	{regexp.MustCompile(`(?i)\bBearer\s+[A-Za-z0-9\-._~+/]+=*\b`), "Bearer [REDACTED]"},
+	{regexp.MustCompile(`(?i)\bAuthorization\s*:\s*Basic\s+\S+`), "Authorization: Basic [REDACTED]"},
 
 	// Connection strings with embedded passwords
 	{regexp.MustCompile(`(?i)(?:postgres|mysql|mongodb|redis|amqp)(?:ql)?://[^:\s]+:[^@\s]+@`), "[REDACTED CONNECTION STRING]@"},
 
-	// Generic key=value patterns for common secret env var names
-	{regexp.MustCompile(`(?i)(?:API_KEY|API_SECRET|SECRET_KEY|SECRET|ACCESS_TOKEN|AUTH_TOKEN|PRIVATE_KEY|DATABASE_URL|DB_PASSWORD|DB_URL|REDIS_URL|PASSWORD|TOKEN)\s*[=:]\s*\S+`), "[REDACTED CREDENTIAL]"},
+	// Any assignment whose field name identifies a token or credential. This
+	// also catches custom names such as CUSTOM_SESSION_TOKEN and JSON fields.
+	{regexp.MustCompile(`(?i)(["']?[A-Za-z0-9_.-]*(?:token|secret|password|passwd|api[_-]?key|access[_-]?key|private[_-]?key|credential|database_url|db_url|redis_url)[A-Za-z0-9_.-]*["']?\s*[=:]\s*)(?:"[^"]*"|'[^']*'|\[[^\]]*\]|[^\s,;}\]]+)`), `${1}` + credentialPlaceholder},
+
+	// Payment/authentication factors may be short numeric values and therefore
+	// cannot be recognized by token-shape heuristics.
+	{regexp.MustCompile(`(?i)((?:payment[_ -]?pin|card[_ -]?pin|cvv2?|cvc2?|otp|one[_ -]?time[_ -]?password|verification[_ -]?code|recovery[_ -]?code|支付密码|交易密码|银行卡密码|信用卡密码|解锁密码|锁屏密码)\s*[=:]\s*)(?:"[^"]*"|'[^']*'|[^\s,;}\]]+)`), `${1}` + credentialPlaceholder},
 }
+
+var secretFieldNamePattern = regexp.MustCompile(`(?i)(?:token|secret|password|passwd|api[_-]?key|apikey|access[_-]?key|private[_-]?key|credential|authorization|payment[_-]?pin|card[_-]?pin|cvv|cvc|otp|verification[_-]?code|recovery[_-]?code)`)
 
 // maxRedactDepth bounds the walk in redactValue. Tool inputs are decoded from
 // daemon-supplied JSON, so nesting depth is attacker-influenced; without a
@@ -107,6 +117,10 @@ func redactMap(m map[string]any, depth int) map[string]any {
 	}
 	out := make(map[string]any, len(m))
 	for k, v := range m {
+		if secretFieldNamePattern.MatchString(k) {
+			out[k] = credentialPlaceholder
+			continue
+		}
 		out[k] = redactValue(v, depth+1)
 	}
 	return out
@@ -144,7 +158,11 @@ func redactValue(v any, depth int) any {
 	case map[string]string:
 		out := make(map[string]string, len(t))
 		for k, e := range t {
-			out[k] = Text(e)
+			if secretFieldNamePattern.MatchString(k) {
+				out[k] = credentialPlaceholder
+			} else {
+				out[k] = Text(e)
+			}
 		}
 		return out
 	default:

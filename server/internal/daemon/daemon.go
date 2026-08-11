@@ -22,6 +22,7 @@ import (
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/singleflight"
 
+	"github.com/multica-ai/multica/server/internal/agentguard"
 	"github.com/multica-ai/multica/server/internal/cli"
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 	"github.com/multica-ai/multica/server/internal/daemon/repocache"
@@ -5812,6 +5813,14 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		skills = task.Agent.Skills
 		instructions = task.Agent.Instructions
 	}
+	// Privacy gate: every provider's runtime brief carries the non-bypassable
+	// privacy boundary first. Enforcement is the gate boundaries below; this
+	// text is defense in depth.
+	if instructions != "" {
+		instructions = agentguard.PrivacyInstruction() + "\n\n" + instructions
+	} else {
+		instructions = agentguard.PrivacyInstruction()
+	}
 
 	// Prepare isolated execution environment.
 	// Repos are passed as metadata only — the agent checks them out on demand
@@ -5905,22 +5914,26 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// before allowing reuse, so a pre-fix leader session recorded against
 	// local_directory still fails closed.
 	var agentMcpConfig json.RawMessage
-	var effectiveMcpConfig json.RawMessage
+	// Privacy gate: start from an empty managed MCP set. Native or agent MCP
+	// configs are never inherited unchecked — every server flows through
+	// mergeRuntimeAndAgentMcpConfig → agentguard.FilterMCPConfig.
+	effectiveMcpConfig := json.RawMessage(`{"mcpServers":{}}`)
 	var cursorMcpAuthSource string
 	if task.Agent != nil {
 		agentMcpConfig = task.Agent.McpConfig
-		effectiveMcpConfig = agentMcpConfig
-		if merged, mergeErr := mergeRuntimeAndAgentMcpConfig(provider, agentMcpConfig); mergeErr != nil {
-			taskLog.Warn("mcp_config: runtime merge failed; using agent configuration only",
-				"provider", provider,
-				"error", mergeErr,
-			)
-		} else {
-			effectiveMcpConfig = merged
-		}
-		if provider == "cursor" {
-			cursorMcpAuthSource = strings.TrimSpace(task.Agent.CustomEnv[execenv.CursorMcpAuthSourceEnv])
-		}
+	}
+	if merged, mergeErr := mergeRuntimeAndAgentMcpConfig(provider, agentMcpConfig); mergeErr != nil {
+		taskLog.Warn("mcp_config: runtime merge failed; MCP disabled",
+			"provider", provider,
+			"error", mergeErr,
+		)
+		// Fail closed: keep the empty managed set rather than falling back to
+		// an unchecked agent or native MCP configuration.
+	} else {
+		effectiveMcpConfig = merged
+	}
+	if task.Agent != nil && provider == "cursor" {
+		cursorMcpAuthSource = strings.TrimSpace(task.Agent.CustomEnv[execenv.CursorMcpAuthSourceEnv])
 	}
 	// Decode openclaw-specific runtime_config knobs once so reuse / prepare /
 	// ExecOptions all see the same mode + gateway pin (issue #3260). Parse
@@ -6287,8 +6300,10 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	var mcpConfig json.RawMessage
 	if task.Agent != nil {
 		customArgs = task.Agent.CustomArgs
-		mcpConfig = effectiveMcpConfig
 	}
+	// Always pass the privacy-filtered managed MCP set, even for agent-less
+	// tasks, so the CLI never falls back to unchecked native MCP servers.
+	mcpConfig = effectiveMcpConfig
 	if provider == "hermes" {
 		customArgs = hermesLaunchArgs(customArgs, env != nil && env.HermesHome != "")
 	}
@@ -7568,19 +7583,31 @@ func convertSkillsForEnv(skills []SkillData) []execenv.SkillContextForEnv {
 	if len(skills) == 0 {
 		return nil
 	}
-	result := make([]execenv.SkillContextForEnv, len(skills))
-	for i, s := range skills {
-		result[i] = execenv.SkillContextForEnv{
+	result := make([]execenv.SkillContextForEnv, 0, len(skills))
+	for _, s := range skills {
+		// Privacy gate: a skill that advertises or instructs use of private
+		// data (Lark/Feishu, screenshots, credentials, shell startup files,
+		// env enumeration) is dropped before it reaches any agent. Supporting
+		// files are part of the skill body, so their paths and contents count.
+		combined := s.Name + "\n" + s.Description + "\n" + s.Content
+		for _, f := range s.Files {
+			combined += "\n" + f.Path + "\n" + f.Content
+		}
+		if denied, _ := agentguard.DeniedSkill(s.Name, s.Description, combined); denied {
+			continue
+		}
+		ctx := execenv.SkillContextForEnv{
 			Name:        s.Name,
 			Description: s.Description,
 			Content:     s.Content,
 		}
 		for _, f := range s.Files {
-			result[i].Files = append(result[i].Files, execenv.SkillFileContextForEnv{
+			ctx.Files = append(ctx.Files, execenv.SkillFileContextForEnv{
 				Path:    f.Path,
 				Content: f.Content,
 			})
 		}
+		result = append(result, ctx)
 	}
 	return result
 }

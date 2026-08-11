@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/multica-ai/multica/server/internal/agentguard"
 )
 
 // codebuddyBackend implements Backend by spawning the CodeBuddy CLI
@@ -441,6 +443,22 @@ func (b *codebuddyBackend) handleControlRequest(msg codebuddySDKMessage, stdin i
 		inputMap = map[string]any{}
 	}
 
+	// Privacy gate: refuse tool uses that reach local private data. Log only
+	// the stable rule id, never the raw command or tool input.
+	denied, rule := agentguard.DeniedCommand(req.ToolName)
+	if !denied {
+		denied, rule = agentguard.DeniedRequest(req.Input)
+	}
+	behavior := "allow"
+	if denied {
+		behavior = "deny"
+		b.cfg.Logger.Warn("codebuddy: privacy gate denied tool use",
+			"request_id", msg.RequestID,
+			"tool", req.ToolName,
+			"rule", rule,
+		)
+	}
+
 	response := map[string]any{
 		"type": "control_response",
 		"response": map[string]any{
@@ -451,8 +469,8 @@ func (b *codebuddyBackend) handleControlRequest(msg codebuddySDKMessage, stdin i
 				// missing key as a denial; `behavior` is Claude Code's spelling,
 				// which the fork still honours on its other permission paths.
 				// Send both so an approval is never read as a silent reject.
-				"allowed":      true,
-				"behavior":     "allow",
+				"allowed":      !denied,
+				"behavior":     behavior,
 				"updatedInput": inputMap,
 			},
 		},

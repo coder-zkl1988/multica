@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/multica-ai/multica/server/internal/agentguard"
 	"github.com/multica-ai/multica/server/pkg/taskfailure"
 )
 
@@ -470,13 +471,29 @@ func (b *claudeBackend) handleControlRequest(msg claudeSDKMessage, stdin interfa
 		)
 	}
 
+	// Privacy gate: refuse tool uses that reach local private data. Log only
+	// the stable rule id, never the raw command or tool input.
+	denied, rule := agentguard.DeniedCommand(req.ToolName)
+	if !denied {
+		denied, rule = agentguard.DeniedRequest(req.Input)
+	}
+	behavior := "allow"
+	if denied {
+		behavior = "deny"
+		b.cfg.Logger.Warn("claude: privacy gate denied tool use",
+			"request_id", msg.RequestID,
+			"tool", req.ToolName,
+			"rule", rule,
+		)
+	}
+
 	response := map[string]any{
 		"type": "control_response",
 		"response": map[string]any{
 			"subtype":    "success",
 			"request_id": msg.RequestID,
 			"response": map[string]any{
-				"behavior":     "allow",
+				"behavior":     behavior,
 				"updatedInput": inputMap,
 			},
 		},
@@ -926,7 +943,7 @@ func mergeEnv(base []string, extra map[string]string) []string {
 		// MULTICA_* in the daemon's own environment is not task context. Drop
 		// the inherited namespace for every backend and append only the values
 		// daemon.go explicitly assembled for this task below.
-		if isFilteredChildEnvKey(key) || strings.HasPrefix(strings.ToUpper(key), "MULTICA_") {
+		if isFilteredChildEnvKey(key) || strings.HasPrefix(strings.ToUpper(key), "MULTICA_") || !agentguard.AllowedInheritedEnvKey(key) {
 			continue
 		}
 		env = append(env, entry)

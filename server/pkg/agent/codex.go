@@ -20,6 +20,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/multica-ai/multica/server/internal/agentguard"
 	"github.com/multica-ai/multica/server/pkg/redact"
 )
 
@@ -2482,15 +2483,35 @@ func (c *codexClient) handleServerRequest(raw map[string]json.RawMessage) {
 	var method string
 	_ = json.Unmarshal(raw["method"], &method)
 
-	// Auto-approve all exec/patch requests in daemon mode
 	switch method {
 	case "item/commandExecution/requestApproval", "execCommandApproval":
+		if denied, rule := agentguard.DeniedRequest(raw["params"]); denied {
+			if c.cfg.Logger != nil {
+				c.cfg.Logger.Warn("codex: privacy gate declined command", "rule", rule)
+			}
+			c.respond(id, map[string]any{"decision": "decline"})
+			return
+		}
 		c.respond(id, map[string]any{"decision": "accept"})
 	case "item/fileChange/requestApproval", "applyPatchApproval":
+		if denied, rule := agentguard.DeniedRequest(raw["params"]); denied {
+			if c.cfg.Logger != nil {
+				c.cfg.Logger.Warn("codex: privacy gate declined file change", "rule", rule)
+			}
+			c.respond(id, map[string]any{"decision": "decline"})
+			return
+		}
 		c.respond(id, map[string]any{"decision": "accept"})
 	case "item/permissions/requestApproval":
 		c.respond(id, codexPermissionsApprovalResponse(raw["params"], c.cfg.Logger))
 	case "mcpServer/elicitation/request":
+		if denied, rule := agentguard.DeniedRequest(raw["params"]); denied {
+			if c.cfg.Logger != nil {
+				c.cfg.Logger.Warn("codex: privacy gate declined MCP elicitation", "rule", rule)
+			}
+			c.respond(id, map[string]any{"action": "decline", "content": nil, "_meta": nil})
+			return
+		}
 		c.respond(id, map[string]any{"action": "accept", "content": nil, "_meta": nil})
 	default:
 		msg := fmt.Sprintf("unsupported codex app-server request: %s", method)

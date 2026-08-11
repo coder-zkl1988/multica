@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/multica-ai/multica/server/internal/agentguard"
 	"github.com/pelletier/go-toml/v2"
 	"github.com/pelletier/go-toml/v2/unstable"
 )
@@ -67,6 +68,14 @@ func CodexShellEnvAllowlist(inherited []string, explicit map[string]string, auth
 			return
 		}
 		upper := strings.ToUpper(key)
+		// Privacy gate: inherited process variables are trusted only when the
+		// key is on the explicit non-secret allowlist. Everything else that
+		// arrived from the user's shell startup files (XDG paths, proxies,
+		// SDK/SSH/cloud credentials, arbitrary exports) is dropped; task-owned
+		// values must be supplied through the checked custom_env instead.
+		if !isExplicit && !agentguard.AllowedInheritedEnvKey(key) {
+			return
+		}
 		if strings.HasPrefix(upper, "MULTICA_") {
 			if !isExplicit {
 				return
