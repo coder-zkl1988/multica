@@ -160,7 +160,7 @@ func TestListProductMap_MemberCanView(t *testing.T) {
 	if yuanwuNode == nil || len(yuanwuNode.Editors) == 0 {
 		t.Fatalf("院务系统 node must expose its registered editors, got %+v", yuanwuNode)
 	}
-	if !yuanwuNode.HasLiveEvidence {
+	if yuanwuNode.HasLiveEvidence {
 		t.Fatalf("pending_confirmation node must not claim live evidence")
 	}
 	_ = ctx
