@@ -8,32 +8,30 @@ import { useWorkspaceId } from "@multica/core/hooks";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { Card } from "@multica/ui/components/ui/card";
 import { Badge } from "@multica/ui/components/ui/badge";
+import { useT } from "../i18n";
 
 import { ProductNodeDetail } from "./product-node-detail";
 
-const STATUS_LABEL: Record<string, string> = {
-  dev: "研发中",
-  pending_release: "待上线",
-  pending_confirmation: "待确认",
-  released: "已上线",
-};
-
-const STATUS_SOURCE_LABEL: Record<string, string> = {
-  pmo: "PMO 上线状态",
-  code_repo: "代码仓库",
-};
-
 export function ProductStatusBadge({ node }: { node: ProductMapNode }) {
+  const { t } = useT("products");
   const tone =
     node.status === "released"
       ? "default"
       : node.status === "pending_confirmation"
         ? "secondary"
         : "outline";
+  const label =
+    node.status === "released"
+      ? t(($) => $.status.released)
+      : node.status === "pending_confirmation"
+        ? t(($) => $.status.pending_confirmation)
+        : node.status === "pending_release"
+          ? t(($) => $.status.pending_release)
+          : t(($) => $.status.dev);
   return (
     <Badge variant={tone}>
-      {STATUS_LABEL[node.status] ?? node.status}
-      {node.has_live_evidence ? " · 有证据" : ""}
+      {label}
+      {node.has_live_evidence ? t(($) => $.evidence_suffix) : ""}
     </Badge>
   );
 }
@@ -61,7 +59,7 @@ function TreeNode({
           onSelect(node.id);
           if (hasChildren) setOpen((v) => !v);
         }}
-        className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent ${
+        className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-body hover:bg-accent ${
           selected ? "bg-accent text-accent-foreground" : ""
         }`}
         style={{ paddingLeft: `${depth * 16 + 8}px` }}
@@ -96,6 +94,7 @@ function TreeNode({
 }
 
 export function ProductMapPage() {
+  const { t } = useT("products");
   const wsId = useWorkspaceId();
   const { data, isLoading } = useQuery(productMapTreeOptions(wsId));
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -127,13 +126,13 @@ export function ProductMapPage() {
   return (
     <div className="grid grid-cols-[minmax(280px,380px)_1fr] gap-4 p-6">
       <Card className="p-2">
-        <div className="flex items-center gap-2 px-2 py-2 text-sm font-semibold">
+        <div className="flex items-center gap-2 px-2 py-2 text-body font-semibold">
           <Network className="h-4 w-4" />
-          产品树
+          {t(($) => $.tree_title)}
         </div>
         {roots.length === 0 ? (
-          <p className="px-2 py-4 text-sm text-muted-foreground">
-            暂无产品节点
+          <p className="px-2 py-4 text-body text-muted-foreground">
+            {t(($) => $.empty_tree)}
           </p>
         ) : (
           roots.map((node) => (
@@ -147,7 +146,7 @@ export function ProductMapPage() {
           ))
         )}
       </Card>
-      <ProductNodeDetail node={selected} statusSourceLabel={STATUS_SOURCE_LABEL} />
+      <ProductNodeDetail node={selected} />
     </div>
   );
 }

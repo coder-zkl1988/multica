@@ -1,0 +1,23 @@
+{
+  "tree_title": "Product tree",
+  "empty_tree": "No product nodes yet",
+  "select_node_hint": "Select a product node on the left to view details",
+  "meta_line": "slug: {{slug}} · status source: {{source}}",
+  "refs_title": "Linked projects / requirements",
+  "refs_empty": "No traceability links yet (backfilled once projects enter the workspace)",
+  "evidence_title": "Live status evidence",
+  "evidence_pending": "Pending confirmation — live status is never inferred from Issue status alone without PMO / code-repo evidence",
+  "updated_at": "Updated: {{time}}",
+  "editors_suffix": " · editors: {{ids}}",
+  "status": {
+    "dev": "In development",
+    "pending_release": "Pending release",
+    "pending_confirmation": "Pending confirmation",
+    "released": "Released"
+  },
+  "status_source": {
+    "pmo": "PMO launch status",
+    "code_repo": "Code repository"
+  },
+  "evidence_suffix": " · has evidence"
+}

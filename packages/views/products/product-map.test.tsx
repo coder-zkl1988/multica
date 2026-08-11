@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { screen } from "@testing-library/react";
+import { renderWithI18n } from "../test/i18n";
 import { ProductStatusBadge, ProductNodeDetail } from "./index";
 import type { ProductMapNode } from "@multica/core/products";
 
@@ -37,37 +38,35 @@ const pendingNode: ProductMapNode = {
 };
 
 describe("ProductStatusBadge", () => {
-  it("labels released with evidence as 已上线", () => {
-    render(<ProductStatusBadge node={releasedNode} />);
-    expect(screen.getByText(/已上线/)).toBeTruthy();
-    expect(screen.getByText(/有证据/)).toBeTruthy();
+  it("labels released with evidence as Released", () => {
+    renderWithI18n(<ProductStatusBadge node={releasedNode} />);
+    expect(screen.getByText(/Released/)).toBeTruthy();
+    expect(screen.getByText(/has evidence/)).toBeTruthy();
   });
 
-  it("labels evidence-less node as 待确认", () => {
-    render(<ProductStatusBadge node={pendingNode} />);
-    expect(screen.getByText(/待确认/)).toBeTruthy();
+  it("labels evidence-less node as Pending confirmation", () => {
+    renderWithI18n(<ProductStatusBadge node={pendingNode} />);
+    expect(screen.getByText(/Pending confirmation/)).toBeTruthy();
   });
 });
 
 describe("ProductNodeDetail", () => {
-  const sourceLabels = { pmo: "PMO 上线状态", code_repo: "代码仓库" };
-
   it("shows live evidence for a released code_repo node", () => {
-    render(<ProductNodeDetail node={releasedNode} statusSourceLabel={sourceLabels} />);
+    renderWithI18n(<ProductNodeDetail node={releasedNode} />);
     expect(screen.getByText("Multica")).toBeTruthy();
-    expect(screen.getByText(/代码仓库/)).toBeTruthy();
+    expect(screen.getByText(/Code repository/)).toBeTruthy();
     expect(screen.getByText(/gitlab.sy.soyoung.com/)).toBeTruthy();
   });
 
-  it("shows 待确认 and does not claim live for a node with no evidence", () => {
-    render(<ProductNodeDetail node={pendingNode} statusSourceLabel={sourceLabels} />);
+  it("shows pending confirmation and does not claim live for a node with no evidence", () => {
+    renderWithI18n(<ProductNodeDetail node={pendingNode} />);
     expect(screen.getByText("院务系统")).toBeTruthy();
-    expect(screen.getAllByText(/待确认/).length).toBeGreaterThan(0);
-    expect(screen.queryByText(/已上线/)).toBeNull();
+    expect(screen.getAllByText(/Pending confirmation/).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/Released/)).toBeNull();
   });
 
   it("shows an empty-state placeholder when no node is selected", () => {
-    render(<ProductNodeDetail node={null} statusSourceLabel={sourceLabels} />);
-    expect(screen.getByText(/选择左侧产品节点查看详情/)).toBeTruthy();
+    renderWithI18n(<ProductNodeDetail node={null} />);
+    expect(screen.getByText(/Select a product node on the left/)).toBeTruthy();
   });
 });

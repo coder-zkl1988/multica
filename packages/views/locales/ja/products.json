@@ -1,0 +1,23 @@
+{
+  "tree_title": "プロダクトツリー",
+  "empty_tree": "プロダクトノードはまだありません",
+  "select_node_hint": "左のプロダクトノードを選択して詳細を表示",
+  "meta_line": "slug: {{slug}} · 状態ソース: {{source}}",
+  "refs_title": "関連プロジェクト / 要件",
+  "refs_empty": "追跡リンクはまだありません（プロジェクトがワークスペースに入るとバックフィルされます）",
+  "evidence_title": "リリース状態のエビデンス",
+  "evidence_pending": "確認待ち — PMO / コードリポジトリのエビデンスなしに Issue ステータスだけでリリース済みと判断しません",
+  "updated_at": "更新日時: {{time}}",
+  "editors_suffix": " · 編集者: {{ids}}",
+  "status": {
+    "dev": "開発中",
+    "pending_release": "リリース予定",
+    "pending_confirmation": "確認待ち",
+    "released": "リリース済み"
+  },
+  "status_source": {
+    "pmo": "PMO リリース状況",
+    "code_repo": "コードリポジトリ"
+  },
+  "evidence_suffix": " · エビデンスあり"
+}

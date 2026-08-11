@@ -15,6 +15,7 @@ import enInbox from "./en/inbox.json";
 import enWorkspace from "./en/workspace.json";
 import enProjects from "./en/projects.json";
 import enPmo from "./en/pmo.json";
+import enProducts from "./en/products.json";
 import enAutopilots from "./en/autopilots.json";
 import enSkills from "./en/skills.json";
 import enChat from "./en/chat.json";
@@ -42,6 +43,7 @@ import zhHansInbox from "./zh-Hans/inbox.json";
 import zhHansWorkspace from "./zh-Hans/workspace.json";
 import zhHansProjects from "./zh-Hans/projects.json";
 import zhHansPmo from "./zh-Hans/pmo.json";
+import zhHansProducts from "./zh-Hans/products.json";
 import zhHansAutopilots from "./zh-Hans/autopilots.json";
 import zhHansSkills from "./zh-Hans/skills.json";
 import zhHansChat from "./zh-Hans/chat.json";
@@ -69,6 +71,7 @@ import koInbox from "./ko/inbox.json";
 import koWorkspace from "./ko/workspace.json";
 import koProjects from "./ko/projects.json";
 import koPmo from "./ko/pmo.json";
+import koProducts from "./ko/products.json";
 import koAutopilots from "./ko/autopilots.json";
 import koSkills from "./ko/skills.json";
 import koChat from "./ko/chat.json";
@@ -96,6 +99,7 @@ import jaInbox from "./ja/inbox.json";
 import jaWorkspace from "./ja/workspace.json";
 import jaProjects from "./ja/projects.json";
 import jaPmo from "./ja/pmo.json";
+import jaProducts from "./ja/products.json";
 import jaAutopilots from "./ja/autopilots.json";
 import jaSkills from "./ja/skills.json";
 import jaChat from "./ja/chat.json";
@@ -129,6 +133,7 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     workspace: enWorkspace,
     projects: enProjects,
     pmo: enPmo,
+    products: enProducts,
     autopilots: enAutopilots,
     skills: enSkills,
     chat: enChat,
@@ -158,6 +163,7 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     workspace: zhHansWorkspace,
     projects: zhHansProjects,
     pmo: zhHansPmo,
+    products: zhHansProducts,
     autopilots: zhHansAutopilots,
     skills: zhHansSkills,
     chat: zhHansChat,
@@ -187,6 +193,7 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     workspace: koWorkspace,
     projects: koProjects,
     pmo: koPmo,
+    products: koProducts,
     autopilots: koAutopilots,
     skills: koSkills,
     chat: koChat,
@@ -216,6 +223,7 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     workspace: jaWorkspace,
     projects: jaProjects,
     pmo: jaPmo,
+    products: jaProducts,
     autopilots: jaAutopilots,
     skills: jaSkills,
     chat: jaChat,

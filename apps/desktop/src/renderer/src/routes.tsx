@@ -21,6 +21,7 @@ import { AttachmentPreviewRoute } from "./pages/attachment-preview-page";
 import { IssuesPage } from "@multica/views/issues/components";
 import { ProjectsPage } from "@multica/views/projects/components";
 import { PMOConfigDetailPage, PMOListPage } from "@multica/views/pmo";
+import { ProductMapPage } from "@multica/views/products";
 import { DashboardPage } from "@multica/views/dashboard";
 import { AutopilotsPage } from "@multica/views/autopilots/components";
 import { MyIssuesPage } from "@multica/views/my-issues";
@@ -211,6 +212,11 @@ export const appRoutes: RouteObject[] = [
             path: "pmo/:configId",
             element: <PMOConfigDetailPage />,
             handle: { title: "Requirements" },
+          },
+          {
+            path: "products",
+            element: <ProductMapPage />,
+            handle: { title: "Products" },
           },
           { path: "designs", element: <DesignsPage />, handle: { title: "Designs" } },
           { path: "tests", element: <TestCasesPage />, handle: { title: "Tests" } },
