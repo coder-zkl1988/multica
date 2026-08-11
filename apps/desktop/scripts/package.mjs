@@ -408,9 +408,17 @@ function main() {
     process.exit(viteResult.status ?? 1);
   }
 
-  // Step 2: derive the version that should be written into the app.
-  const version = deriveVersion();
-  if (version) {
+  // Step 2: derive the version that should be written into the app. CI
+  // releases pin it explicitly via MULTICA_DESKTOP_VERSION so the dispatch
+  // version wins even when an older `v*` tag sits at the same commit (git
+  // describe would otherwise prefer the lowest tag and mislabel the build).
+  const explicitVersion = process.env.MULTICA_DESKTOP_VERSION?.trim();
+  const version = explicitVersion || deriveVersion();
+  if (explicitVersion) {
+    console.log(
+      `[package] Desktop version → ${version} (explicit MULTICA_DESKTOP_VERSION)`,
+    );
+  } else if (version) {
     console.log(`[package] Desktop version → ${version} (from git describe)`);
   } else {
     console.warn(

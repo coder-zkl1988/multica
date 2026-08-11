@@ -169,6 +169,7 @@ jobs:
           VITE_WS_URL: wss://iworker.soyoung.com/ws
           VITE_APP_URL: https://iworker.soyoung.com
           VITE_DESKTOP_RELEASE_REPOSITORY: ${{ github.repository }}
+          MULTICA_DESKTOP_VERSION: ${{ needs.validate.outputs.version }}
           APPLE_ID: ${{ matrix.target == 'mac' && secrets.APPLE_ID || '' }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ matrix.target == 'mac' && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
           APPLE_TEAM_ID: ${{ matrix.target == 'mac' && env.PERSONAL_APPLE_TEAM_ID || '' }}

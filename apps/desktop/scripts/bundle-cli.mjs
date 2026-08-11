@@ -106,7 +106,10 @@ async function exists(p) {
 }
 
 if (hasGo()) {
+  // CI passes MULTICA_DESKTOP_VERSION so the bundled CLI reports the same
+  // version as the app even when git describe would pick an older tag.
   const version =
+    process.env.MULTICA_DESKTOP_VERSION?.trim() ||
     git("describe", "--tags", "--match", "v[0-9]*", "--always", "--dirty") ||
     "dev";
   const commit = git("rev-parse", "--short", "HEAD") || "unknown";
