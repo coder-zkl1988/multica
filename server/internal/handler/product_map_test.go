@@ -29,8 +29,8 @@ func seedProductMapFixture(t *testing.T, editorUserID string) (yuanwuID, multica
 	}
 	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM project WHERE id = $1`, projectID) })
 
-	if err := testPool.QueryRow(ctx, `INSERT INTO issue (workspace_id, title, status, project_id) VALUES ($1, $2, 'done', $3) RETURNING id`,
-		testWorkspaceID, "fixture issue done-alone", projectID).Scan(&issueID); err != nil {
+	if err := testPool.QueryRow(ctx, `INSERT INTO issue (workspace_id, title, status, project_id, creator_type, creator_id) VALUES ($1, $2, 'done', $3, 'member', $4) RETURNING id`,
+		testWorkspaceID, "fixture issue done-alone", projectID, testUserID).Scan(&issueID); err != nil {
 		t.Fatalf("seed fixture issue: %v", err)
 	}
 	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, issueID) })
