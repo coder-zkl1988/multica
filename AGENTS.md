@@ -54,6 +54,26 @@ make test             # Go tests
 make check            # Full verification pipeline
 ```
 
+### 远端部署更新流程
+
+> 只写流程，不含地址 / 账号 / 密钥。具体连接方式按本机 ssh 配置获取。
+
+1. **拉代码**（远端仓库 git main 分支）
+   - 优先直连 GitHub：`git fetch --progress --prune origin main`
+   - 直连不稳时走离线 bundle：先 `git bundle verify <bundle>`，再 `git fetch <bundle> refs/remotes/<remote>/main:refs/remotes/origin/main`
+2. **校验**：`git rev-parse origin/main` 必须等于目标合并提交 sha；`git merge-base --is-ancestor HEAD origin/main` 确认可快进
+3. **回滚保障**
+   - 建回滚分支：`git branch backup/pre-deploy-<时间戳>-<旧sha前9位>`
+   - 备份数据库：用 `postgres:17-alpine` 容器跑 `pg_dump -Fc` 到备份目录（容器只挂 DATABASE_URL）
+4. **快进合并 + 校验 compose**：`git merge --ff-only origin/main`；`docker compose ... config --quiet`
+5. **构建**：`docker compose --env-file .env -f docker-compose.selfhost.yml -f docker-compose.selfhost.build.yml -f .env.compose.cloud.yml build backend frontend docs`
+6. **打回滚镜像**：把当前运行容器 commit 成 `multica-backend:rollback-<旧sha>` / `multica-web:rollback-<旧sha>` / `multica-docs:rollback-<旧sha>`
+7. **起服务 + 健康检查**
+   - `docker compose --env-file .env -f docker-compose.selfhost.yml -f docker-compose.selfhost.build.yml -f .env.compose.cloud.yml up -d --no-build`
+   - 检查 `/readyz`、`/health`、前端 :3000、docs 容器内 :4000
+   - 后端日志：migration / ERR / FTL / panic / daemon heartbeat
+   - caddy 与 multica-iworker.service 状态；20s 后稳定性复检、磁盘、回滚产物清单
+
 See CLAUDE.md for the authoritative rules and common commands.
 See CLAUDE.md for the complete command reference.
 
