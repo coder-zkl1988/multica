@@ -27,16 +27,39 @@ func TestParsePMOSnapshotRejectsIncompleteSnapshot(t *testing.T) {
 	}
 }
 
-func TestParsePMOSnapshotRejectsNonJSONAndTrailingContent(t *testing.T) {
+func TestParsePMOSnapshotAcceptsProseAndFenceWrappedJSON(t *testing.T) {
+	// Agents wrap the snapshot in prose or a Markdown fence often enough that
+	// strict-only parsing fails real runs ("invalid character 'D' ..."). The
+	// first balanced JSON object is extracted; surrounding text is ignored.
 	tests := map[string]string{
-		"prose":          "Here is the snapshot: " + validPMOSnapshotJSON(),
-		"markdown fence": "```json\n" + validPMOSnapshotJSON() + "\n```",
-		"trailing JSON":  validPMOSnapshotJSON() + `{}`,
+		"prose prefix":    "Done! Here is the snapshot:\n" + validPMOSnapshotJSON(),
+		"markdown fence":  "```json\n" + validPMOSnapshotJSON() + "\n```",
+		"fence and prose": "Sure:\n```json\n" + validPMOSnapshotJSON() + "\n```\nThat is all.",
+	}
+	for name, raw := range tests {
+		t.Run(name, func(t *testing.T) {
+			got, err := ParsePMOSnapshot(raw)
+			if err != nil {
+				t.Fatalf("expected parse success, got %v", err)
+			}
+			if got.Parent.Key != "EXT-P-001" || got.Children[0].NumericID != 1002 {
+				t.Fatalf("wrapped snapshot was not parsed: %#v", got)
+			}
+		})
+	}
+}
+
+func TestParsePMOSnapshotRejectsTrailingJSON(t *testing.T) {
+	// A valid snapshot followed by another JSON blob stays rejected: the
+	// parser must never silently drop a second object.
+	tests := map[string]string{
+		"bare":              validPMOSnapshotJSON() + `{}`,
+		"wrapped with leak": "```json\n" + validPMOSnapshotJSON() + "\n```\n{\"leak\":true}",
 	}
 	for name, raw := range tests {
 		t.Run(name, func(t *testing.T) {
 			if _, err := ParsePMOSnapshot(raw); err == nil {
-				t.Fatal("expected parse error")
+				t.Fatal("expected trailing JSON rejection")
 			}
 		})
 	}

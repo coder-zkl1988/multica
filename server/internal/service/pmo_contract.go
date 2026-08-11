@@ -88,7 +88,23 @@ func ParsePMOSnapshot(output string) (PMOSnapshot, error) {
 		return PMOSnapshot{}, errors.New("pmo snapshot is not valid UTF-8")
 	}
 
-	dec := json.NewDecoder(strings.NewReader(output))
+	raw := output
+	// Agents wrap the JSON in prose or a Markdown fence often enough that
+	// strict-only parsing turns a cosmetic deviation into a hard run failure
+	// ("decode pmo snapshot: invalid character 'D' looking for beginning of
+	// value"). Only when the output does not already begin with '{' do we fall
+	// back to extracting the first balanced JSON object; output that starts as
+	// JSON stays strict, so a valid snapshot followed by a trailing JSON blob
+	// is still rejected (and cannot smuggle content past the parser).
+	if !strings.HasPrefix(strings.TrimSpace(output), "{") {
+		extracted, err := extractPMOSnapshotJSONObject(output)
+		if err != nil {
+			return PMOSnapshot{}, err
+		}
+		raw = extracted
+	}
+
+	dec := json.NewDecoder(strings.NewReader(raw))
 	dec.DisallowUnknownFields()
 	var snapshot PMOSnapshot
 	if err := dec.Decode(&snapshot); err != nil {
@@ -101,6 +117,48 @@ func ParsePMOSnapshot(output string) (PMOSnapshot, error) {
 		return PMOSnapshot{}, err
 	}
 	return snapshot.normalize(), nil
+}
+
+// extractPMOSnapshotJSONObject returns the first balanced JSON object in the
+// agent output, skipping any leading prose or Markdown fence. The content
+// after the object must not contain another '{' (a second JSON blob), so the
+// one-object contract holds outside the strict-prefix path too.
+func extractPMOSnapshotJSONObject(output string) (string, error) {
+	start := strings.IndexByte(output, '{')
+	if start < 0 {
+		return "", errors.New("pmo snapshot output contains no JSON object")
+	}
+	depth := 0
+	inString := false
+	escaped := false
+	for i := start; i < len(output); i++ {
+		c := output[i]
+		if inString {
+			if escaped {
+				escaped = false
+			} else if c == '\\' {
+				escaped = true
+			} else if c == '"' {
+				inString = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inString = true
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				if strings.Contains(output[i+1:], "{") {
+					return "", errors.New("pmo snapshot contains trailing JSON")
+				}
+				return output[start : i+1], nil
+			}
+		}
+	}
+	return "", errors.New("pmo snapshot JSON object is unbalanced")
 }
 
 func requirePMOJSONEOF(dec *json.Decoder) error {
