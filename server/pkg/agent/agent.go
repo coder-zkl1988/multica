@@ -228,6 +228,7 @@ type Config struct {
 	CLIVersion     string            // detected version paired with ExecutablePath; observation only, never used to choose behavior
 	Env            map[string]string // extra environment variables
 	Logger         *slog.Logger
+	WorkDir        string // task working directory; file-access gate clamps to it
 	TaskID         string
 	RuntimeID      string
 	DaemonVersion  string

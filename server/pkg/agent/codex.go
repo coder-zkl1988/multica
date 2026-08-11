@@ -2492,6 +2492,13 @@ func (c *codexClient) handleServerRequest(raw map[string]json.RawMessage) {
 			c.respond(id, map[string]any{"decision": "decline"})
 			return
 		}
+		if denied, rule := agentguard.DeniedFileRequest(raw["params"], c.cfg.WorkDir); denied {
+			if c.cfg.Logger != nil {
+				c.cfg.Logger.Warn("codex: privacy gate declined out-of-workspace command", "rule", rule)
+			}
+			c.respond(id, map[string]any{"decision": "decline"})
+			return
+		}
 		c.respond(id, map[string]any{"decision": "accept"})
 	case "item/fileChange/requestApproval", "applyPatchApproval":
 		if denied, rule := agentguard.DeniedRequest(raw["params"]); denied {
@@ -2503,7 +2510,7 @@ func (c *codexClient) handleServerRequest(raw map[string]json.RawMessage) {
 		}
 		c.respond(id, map[string]any{"decision": "accept"})
 	case "item/permissions/requestApproval":
-		c.respond(id, codexPermissionsApprovalResponse(raw["params"], c.cfg.Logger))
+		c.respond(id, codexPermissionsApprovalResponse(raw["params"], c.cfg.WorkDir, c.cfg.Logger))
 	case "mcpServer/elicitation/request":
 		if denied, rule := agentguard.DeniedRequest(raw["params"]); denied {
 			if c.cfg.Logger != nil {
@@ -2531,7 +2538,7 @@ func (c *codexClient) handleServerRequest(raw map[string]json.RawMessage) {
 // understand. A parse failure and any dropped key are logged so that a future
 // app-server protocol that adds a new permission shape is visible in daemon
 // logs instead of being silently narrowed away.
-func codexPermissionsApprovalResponse(params json.RawMessage, logger *slog.Logger) map[string]any {
+func codexPermissionsApprovalResponse(params json.RawMessage, workDir string, logger *slog.Logger) map[string]any {
 	var payload struct {
 		Permissions map[string]any `json:"permissions"`
 	}
@@ -2543,9 +2550,13 @@ func codexPermissionsApprovalResponse(params json.RawMessage, logger *slog.Logge
 	var dropped []string
 	for key, value := range payload.Permissions {
 		switch key {
-		case "network", "fileSystem":
+		case "network":
 			if value != nil {
 				granted[key] = value
+			}
+		case "fileSystem":
+			if value != nil {
+				granted[key] = clampFileSystemScope(value, workDir)
 			}
 		default:
 			dropped = append(dropped, key)
@@ -2560,6 +2571,35 @@ func codexPermissionsApprovalResponse(params json.RawMessage, logger *slog.Logge
 		"permissions": granted,
 		"scope":       "turn",
 	}
+}
+
+// clampFileSystemScope narrows an approval reply's fileSystem read/write lists
+// to the task workspace so the auto-grant cannot hand the agent the whole
+// disk or another user's directory. An empty workspace leaves the scope
+// untouched (callers without a workspace keep existing behavior).
+func clampFileSystemScope(value any, workDir string) any {
+	scope, ok := value.(map[string]any)
+	if !ok || workDir == "" {
+		return value
+	}
+	for _, dir := range []string{"read", "write"} {
+		paths, ok := scope[dir].([]any)
+		if !ok {
+			continue
+		}
+		kept := make([]any, 0, len(paths))
+		for _, p := range paths {
+			ps, ok := p.(string)
+			if !ok {
+				continue
+			}
+			if denied, _ := agentguard.DeniedPath(ps, workDir); !denied {
+				kept = append(kept, ps)
+			}
+		}
+		scope[dir] = kept
+	}
+	return scope
 }
 
 func (c *codexClient) handleNotification(raw map[string]json.RawMessage) {

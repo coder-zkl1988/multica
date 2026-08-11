@@ -324,6 +324,7 @@ func TestCodexPermissionsApprovalResponseDropsUnknownKeysAndLogs(t *testing.T) {
 
 	resp := codexPermissionsApprovalResponse(
 		json.RawMessage(`{"permissions":{"network":{"enabled":true},"gpu":{"enabled":true}}}`),
+		"",
 		logger,
 	)
 
@@ -351,7 +352,7 @@ func TestCodexPermissionsApprovalResponseMalformedParamsLogs(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, nil))
 
-	resp := codexPermissionsApprovalResponse(json.RawMessage(`{"permissions":"not-an-object"}`), logger)
+	resp := codexPermissionsApprovalResponse(json.RawMessage(`{"permissions":"not-an-object"}`), "", logger)
 
 	if resp["scope"] != "turn" {
 		t.Fatalf("expected scope=turn, got %v", resp["scope"])
@@ -5563,5 +5564,75 @@ func TestCodexResumeOverflowErrorMatchesLiveFailureText(t *testing.T) {
 
 	if !CodexResumeOverflowError(result.Error) {
 		t.Fatalf("predicate missed the error the backend actually produced: %q", result.Error)
+	}
+}
+
+func TestCodexPermissionsApprovalClampsFileSystemToWorkspace(t *testing.T) {
+	t.Parallel()
+
+	c, fs, _ := newTestCodexClient(t)
+	c.cfg.WorkDir = "/tmp/repo"
+
+	c.handleLine(`{"jsonrpc":"2.0","id":30,"method":"item/permissions/requestApproval","params":{"permissions":{"fileSystem":{"read":["/","/tmp/repo","/Users/alice/Documents/work"],"write":["/etc","/tmp/repo"]}}}}`)
+
+	lines := fs.Lines()
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 response, got %d", len(lines))
+	}
+	var resp map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	permissions := resp["result"].(map[string]any)["permissions"].(map[string]any)
+	fsScope := permissions["fileSystem"].(map[string]any)
+	read := fsScope["read"].([]any)
+	write := fsScope["write"].([]any)
+	if len(read) != 1 || read[0] != "/tmp/repo" {
+		t.Fatalf("fileSystem.read = %#v, want [\"/tmp/repo\"]", read)
+	}
+	if len(write) != 1 || write[0] != "/tmp/repo" {
+		t.Fatalf("fileSystem.write = %#v, want [\"/tmp/repo\"]", write)
+	}
+}
+
+func TestCodexDeclinesCommandOutsideWorkspace(t *testing.T) {
+	t.Parallel()
+
+	c, fs, _ := newTestCodexClient(t)
+	c.cfg.WorkDir = "/tmp/repo"
+
+	c.handleLine(`{"jsonrpc":"2.0","id":31,"method":"item/commandExecution/requestApproval","params":{"command":"cat /Users/alice/Documents/work/c.txt"}}`)
+
+	lines := fs.Lines()
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 response, got %d", len(lines))
+	}
+	var resp map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp["result"].(map[string]any)["decision"] != "decline" {
+		t.Fatalf("expected decision=decline for out-of-workspace command, got %v", resp["result"])
+	}
+}
+
+func TestCodexAcceptsCommandInsideWorkspace(t *testing.T) {
+	t.Parallel()
+
+	c, fs, _ := newTestCodexClient(t)
+	c.cfg.WorkDir = "/tmp/repo"
+
+	c.handleLine(`{"jsonrpc":"2.0","id":32,"method":"item/commandExecution/requestApproval","params":{"command":"cat src/a.go"}}`)
+
+	lines := fs.Lines()
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 response, got %d", len(lines))
+	}
+	var resp map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp["result"].(map[string]any)["decision"] != "accept" {
+		t.Fatalf("expected decision=accept for in-workspace command, got %v", resp["result"])
 	}
 }

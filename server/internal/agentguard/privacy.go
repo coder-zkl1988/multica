@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -167,4 +168,152 @@ func AllowedInheritedEnvKey(key string) bool {
 	default:
 		return false
 	}
+}
+
+// fsEscapesGateReason is the stable rule identifier for commands or permission
+// scopes that touch files outside the task workspace.
+const fsEscapesGateReason = "filesystem_escape"
+
+// DeniedFileAccess rejects commands whose path arguments (quoted or unquoted)
+// reach outside the task workspace. The Codex sandbox is deliberately
+// permissive on macOS/Linux (see execenv/codex_sandbox.go), so the approval
+// channel is the only enforceable boundary: a command like
+// `cat /Users/alice/Documents/work/c.txt` must never run at all, not merely be
+// redacted after the fact.
+func DeniedFileAccess(command, workspace string) (bool, string) {
+	for _, token := range pathTokens(command) {
+		if denied, reason := deniedPathToken(token, workspace); denied {
+			return true, reason
+		}
+	}
+	return false, ""
+}
+
+// pathTokens splits a shell command into argument tokens, unwrapping quotes.
+// A quoted argument may itself be a small command line (zsh -lc 'cat /etc/passwd'),
+// so each token is further split on whitespace to keep escapes from hiding
+// inside quotes.
+func pathTokens(command string) []string {
+	var tokens []string
+	for i := 0; i < len(command); {
+		c := command[i]
+		if c == ' ' || c == '\t' || c == '\n' || c == '\r' {
+			i++
+			continue
+		}
+		var raw string
+		if c == '"' || c == '\'' {
+			end := strings.IndexByte(command[i+1:], c)
+			if end < 0 {
+				break
+			}
+			raw = command[i+1 : i+1+end]
+			i += end + 2
+		} else {
+			start := i
+			for i < len(command) && !strings.ContainsRune(" \t\n\r\"'", rune(command[i])) {
+				i++
+			}
+			raw = command[start:i]
+		}
+		tokens = append(tokens, strings.Fields(raw)...)
+	}
+	return tokens
+}
+
+func deniedPathToken(token, workspace string) (bool, string) {
+	if strings.HasPrefix(token, "file:") {
+		token = strings.TrimPrefix(token, "file:")
+		if strings.HasPrefix(token, "//") {
+			token = token[1:] // file:///abs -> /abs
+		}
+	}
+	if strings.HasPrefix(token, "~") {
+		return true, fsEscapesGateReason
+	}
+	return DeniedPath(token, workspace)
+}
+
+// DeniedPath reports whether a single path escapes the task workspace.
+// Relative paths are resolved against the workspace, so `../` segments and
+// absolute paths outside it are denied while in-workspace paths stay allowed.
+func DeniedPath(path, workspace string) (bool, string) {
+	clean := filepath.Clean(path)
+	if !filepath.IsAbs(clean) {
+		if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+			return true, fsEscapesGateReason
+		}
+		if workspace == "" {
+			return false, ""
+		}
+		clean = filepath.Join(workspace, clean)
+	}
+	if workspace == "" {
+		return true, fsEscapesGateReason
+	}
+	rel, err := filepath.Rel(filepath.Clean(workspace), clean)
+	if err != nil {
+		return true, fsEscapesGateReason
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return true, fsEscapesGateReason
+	}
+	return false, ""
+}
+
+// DeniedFileRequest recursively examines JSON-RPC request parameters, like
+// DeniedRequest, but for commands that touch files outside the workspace.
+func DeniedFileRequest(raw json.RawMessage, workspace string) (bool, string) {
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return false, ""
+	}
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return false, ""
+	}
+	return deniedFileValue(value, workspace, 0)
+}
+
+func deniedFileValue(value any, workspace string, depth int) (bool, string) {
+	if depth >= 32 {
+		return true, "request_depth_limit"
+	}
+	switch typed := value.(type) {
+	case string:
+		return DeniedFileAccess(typed, workspace)
+	case []any:
+		for _, item := range typed {
+			if denied, reason := deniedFileValue(item, workspace, depth+1); denied {
+				return true, reason
+			}
+		}
+	case map[string]any:
+		for _, item := range typed {
+			if denied, reason := deniedFileValue(item, workspace, depth+1); denied {
+				return true, reason
+			}
+		}
+	}
+	return false, ""
+}
+
+// ClampFileSystemScope keeps only permission paths inside the task workspace,
+// so an approval reply cannot grant read/write over the whole disk or another
+// user's directory. An empty workspace is left untouched so callers without a
+// workspace keep their existing behavior.
+func ClampFileSystemScope(read, write []string, workspace string) ([]string, []string) {
+	return clampScope(read, workspace), clampScope(write, workspace)
+}
+
+func clampScope(paths []string, workspace string) []string {
+	if workspace == "" {
+		return paths
+	}
+	out := make([]string, 0, len(paths))
+	for _, p := range paths {
+		if denied, _ := DeniedPath(p, workspace); !denied {
+			out = append(out, p)
+		}
+	}
+	return out
 }

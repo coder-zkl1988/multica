@@ -6274,6 +6274,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		RuntimeID:      task.RuntimeID,
 		DaemonVersion:  d.cfg.CLIVersion,
 		CodexVersion:   codexVersion,
+		WorkDir:        env.WorkDir,
 		BuiltinRuntime: !usesCustomProfileCommand,
 	})
 	if err != nil {

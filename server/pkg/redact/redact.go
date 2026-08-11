@@ -73,6 +73,13 @@ var patterns = []secretPattern{
 	// Connection strings with embedded passwords
 	{regexp.MustCompile(`(?i)(?:postgres|mysql|mongodb|redis|amqp)(?:ql)?://[^:\s]+:[^@\s]+@`), "[REDACTED CONNECTION STRING]@"},
 
+	// Personal data fields (phone numbers, salary). These are commonly the
+	// payload of a scraped or leaked file and are not secret by shape, so
+	// key-name matching is the only reliable signal. CJK field names are
+	// matched explicitly because the generic credential pattern below only
+	// matches ASCII keys.
+	{regexp.MustCompile(`(?i)(["']?[^\s=:]*?(?:phonenumber|phone|mobile|telephone|手机号|电话号码|电话|工资|薪资|月薪|salary|income)[^\s=:]*?["']?\s*[=:]\s*)(?:"[^"]*"|'[^']*'|\[[^\]]*\]|[^\s,;}\]]+)`), `${1}` + credentialPlaceholder},
+
 	// Any assignment whose field name identifies a token or credential. This
 	// also catches custom names such as CUSTOM_SESSION_TOKEN and JSON fields.
 	{regexp.MustCompile(`(?i)(["']?[A-Za-z0-9_.-]*(?:token|secret|password|passwd|api[_-]?key|access[_-]?key|private[_-]?key|credential|database_url|db_url|redis_url)[A-Za-z0-9_.-]*["']?\s*[=:]\s*)(?:"[^"]*"|'[^']*'|\[[^\]]*\]|[^\s,;}\]]+)`), `${1}` + credentialPlaceholder},

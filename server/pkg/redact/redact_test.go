@@ -536,3 +536,26 @@ func TestInputMapRedactsAnyTokenNamedField(t *testing.T) {
 		t.Fatalf("input map was mutated: %#v", input)
 	}
 }
+
+func TestRedactPersonalDataFields(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]string{
+		"phonenumber=10086":        "10086",
+		"手机号=13800138000":          "13800138000",
+		"电话号码=010-12345678":       "010-12345678",
+		"工资=100":                   "100",
+		"薪资=25000":                 "25000",
+		"salary=25000":              "25000",
+		"PHONE_NUMBER=13800138000": "13800138000",
+	}
+	for input, leaked := range cases {
+		got := Text(input)
+		if strings.Contains(got, leaked) {
+			t.Fatalf("personal data not redacted in %q: %s", input, got)
+		}
+		if !strings.Contains(got, "[REDACTED CREDENTIAL]") {
+			t.Fatalf("expected placeholder in %q, got: %s", input, got)
+		}
+	}
+}
