@@ -1,17 +1,20 @@
 /**
- * PMOPage state coverage.
+ * PMOConfigDetailPage (/pmo/:configId) state coverage.
  *
  * The page is tested through real DOM assertions with only the data and
- * primitive layers mocked (hooks + UI components). No framework routing
- * mocks — navigation goes through the @multica/core modals store, and i18n
- * resolves through the real RESOURCES bundle.
+ * primitive layers mocked (hooks + UI components). The config id is read
+ * from the real NavigationProvider adapter's pathname; row/back navigation
+ * is asserted against the adapter's push. i18n resolves through the real
+ * RESOURCES bundle. The Tabs mock is CONTROLLED (only the active panel
+ * mounts, mirroring the real Base UI tabs), so tab-switching is exercised.
  */
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { renderWithI18n } from "../test/i18n";
+import { NavigationProvider, type NavigationAdapter } from "../navigation";
 import type { PMOConfig, PMORun } from "@multica/core/types";
-import { PMOPage } from "./pmo-page";
+import { PMOConfigDetailPage } from "./pmo-config-detail-page";
 
 // ---------------------------------------------------------------------------
 // Fixtures — fictional only (no company names, domains, real identifiers).
@@ -32,12 +35,6 @@ const CONFIG: PMOConfig = {
   created_at: "2026-08-01T00:00:00Z",
   updated_at: "2026-08-01T00:00:00Z",
 };
-
-const APPLIED_CONFIG: PMOConfig = {
-  ...CONFIG,
-  last_applied_at: "2026-08-02T00:00:00Z",
-};
-void APPLIED_CONFIG;
 
 const PREVIEW_DIFF = {
   entities: [
@@ -126,16 +123,15 @@ const startRunMutate = vi.fn();
 const applyRunMutate = vi.fn();
 const setMappingMutate = vi.fn();
 const updateConfigMutate = vi.fn();
-const createConfigMutate = vi.fn();
-const deleteConfigMutate = vi.fn();
+const push = vi.fn();
 
 vi.mock("@multica/core/pmo/mutations", () => ({
   useStartPMORun: () => ({ mutate: startRunMutate, isPending: false }),
   useApplyPMORun: () => ({ mutate: applyRunMutate, isPending: false }),
   useSetPMOAssigneeMapping: () => ({ mutate: setMappingMutate, isPending: false }),
   useUpdatePMOConfig: () => ({ mutate: updateConfigMutate, isPending: false }),
-  useCreatePMOConfig: () => ({ mutate: createConfigMutate, isPending: false }),
-  useDeletePMOConfig: () => ({ mutate: deleteConfigMutate, isPending: false }),
+  useCreatePMOConfig: () => ({ mutate: vi.fn(), isPending: false }),
+  useDeletePMOConfig: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
 vi.mock("@multica/core/pmo/queries", () => ({
@@ -156,12 +152,11 @@ vi.mock("@multica/core/agents", () => ({
   isAgentRuntimeBound: (agent: { runtime_bound?: boolean }) => agent.runtime_bound !== false,
 }));
 
-// Callable-store pattern: tests drive getState().modal / open() through the
-// hoisted store; the page only calls getState().open(...) as the plan snippet
-// requires.
-const modalState = { modal: null as string | null, open: vi.fn((name: string) => { modalState.modal = name; }) };
-vi.mock("@multica/core/modals", () => ({
-  useModalStore: { getState: () => modalState },
+vi.mock("@multica/core/paths", () => ({
+  useWorkspacePaths: () => ({
+    pmo: () => "/ws-1/pmo",
+    pmoConfigDetail: (id: string) => `/ws-1/pmo/${id}`,
+  }),
 }));
 
 // Query results controlled per test.
@@ -185,11 +180,18 @@ vi.mock("@tanstack/react-query", () => ({
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 
 // Keep the ui primitives as light DOM so the state logic is what is under test.
-vi.mock("@multica/ui/components/ui/button", () => ({
-  Button: ({ children, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement> & { children?: React.ReactNode }) => (
-    <button {...props}>{children}</button>
-  ),
-}));
+// Button preserves its `render` prop (a real AppLink) so link-style buttons
+// (e.g. the not-found back link) stay clickable and navigable.
+vi.mock("@multica/ui/components/ui/button", async () => {
+  const React = await import("react");
+  return {
+    Button: ({ children, render, ...props }: {
+      children?: React.ReactNode;
+      render?: React.ReactElement;
+      [key: string]: unknown;
+    }) => (render ? React.cloneElement(render, undefined, children) : <button {...props}>{children}</button>),
+  };
+});
 vi.mock("@multica/ui/components/ui/badge", () => ({
   Badge: ({ children }: { children?: React.ReactNode }) => <span>{children}</span>,
 }));
@@ -208,7 +210,6 @@ vi.mock("@multica/ui/components/ui/switch", () => ({
       aria-checked={checked}
       disabled={disabled}
       onClick={() => onCheckedChange?.(!checked)}
-      // eslint-disable-next-line react/jsx-no-undef
       {...rest}
     />
   ),
@@ -227,15 +228,6 @@ vi.mock("@multica/ui/components/ui/native-select", () => ({
     <option {...props}>{children}</option>
   ),
 }));
-vi.mock("@multica/ui/components/ui/select", () => ({
-  Select: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
-  SelectTrigger: ({ children, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement>) => (
-    <button type="button" {...props}>{children}</button>
-  ),
-  SelectValue: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
-  SelectContent: () => null,
-  SelectItem: () => null,
-}));
 vi.mock("@multica/ui/components/ui/dialog", () => ({
   Dialog: ({ open, children }: { open?: boolean; children?: React.ReactNode }) => (open ? <>{children}</> : null),
   DialogContent: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
@@ -244,24 +236,62 @@ vi.mock("@multica/ui/components/ui/dialog", () => ({
   DialogTitle: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
   DialogDescription: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
 }));
-vi.mock("@multica/ui/components/ui/tabs", () => ({
-  Tabs: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
-  TabsList: ({ children }: { children?: React.ReactNode }) => <div role="tablist">{children}</div>,
-  TabsTrigger: ({ value, children, onClick }: { value: string; children?: React.ReactNode; onClick?: () => void }) => (
-    <button type="button" role="tab" aria-selected={value === "preview"} onClick={onClick}>{children}</button>
-  ),
-  TabsContent: ({ value, children }: { value: string; children?: React.ReactNode }) => (
-    <div role="tabpanel" data-value={value}>{children}</div>
-  ),
-}));
 vi.mock("@multica/ui/components/ui/tooltip", () => ({
   Tooltip: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
   TooltipTrigger: ({ render }: { render?: React.ReactElement }) => (render ?? null),
   TooltipContent: () => null,
 }));
+
+// Controlled Tabs mock: only the active panel mounts, mirroring the real
+// Base UI tabs. The trigger click calls onValueChange so the page's own tab
+// state drives which panel renders.
+vi.mock("@multica/ui/components/ui/tabs", async () => {
+  const React = await import("react");
+  const TabContext = React.createContext<{
+    value: string;
+    onValueChange?: (value: string) => void;
+  }>({ value: "" });
+  return {
+    Tabs: ({ value, onValueChange, children }: {
+      value?: string;
+      onValueChange?: (value: string) => void;
+      children?: React.ReactNode;
+    }) => (
+      <TabContext.Provider value={{ value: value ?? "", onValueChange }}>
+        {children}
+      </TabContext.Provider>
+    ),
+    TabsList: ({ children }: { children?: React.ReactNode }) => (
+      <div role="tablist">{children}</div>
+    ),
+    TabsTrigger: ({ value, children }: { value: string; children?: React.ReactNode }) => {
+      const ctx = React.useContext(TabContext);
+      return (
+        <button
+          type="button"
+          role="tab"
+          aria-selected={ctx.value === value}
+          onClick={() => ctx.onValueChange?.(value)}
+        >
+          {children}
+        </button>
+      );
+    },
+    TabsContent: ({ value, children }: { value: string; children?: React.ReactNode }) => {
+      const ctx = React.useContext(TabContext);
+      if (ctx.value !== value) return null;
+      return (
+        <div role="tabpanel" data-value={value}>{children}</div>
+      );
+    },
+  };
+});
 vi.mock("../layout/collection-page", () => ({
   CollectionPageHeader: ({ children, actions }: { children?: React.ReactNode; actions?: React.ReactNode }) => (
     <header>{children}{actions}</header>
+  ),
+  CollectionPageHeaderAction: ({ label, onClick }: { label?: React.ReactNode; onClick?: () => void }) => (
+    <button type="button" onClick={onClick}>{label}</button>
   ),
   CollectionPageState: ({ title, description, actions }: {
     title?: React.ReactNode;
@@ -276,13 +306,21 @@ vi.mock("../layout/collection-page", () => ({
   ),
 }));
 
-const renderPage = () => renderWithI18n(<PMOPage />);
-
-// The Tabs mock keeps every panel mounted (settings-page test pattern), so
-// statuses and counts can appear in both Preview and History — scope the
-// preview-specific assertions to the Preview panel.
-const previewPanel = () =>
-  document.querySelector<HTMLElement>('[role="tabpanel"][data-value="preview"]') as HTMLElement;
+function renderPage() {
+  const adapter: NavigationAdapter = {
+    pathname: "/ws-1/pmo/cfg-1",
+    push,
+    replace: vi.fn(),
+    back: vi.fn(),
+    searchParams: new URLSearchParams(),
+    getShareableUrl: (path) => path,
+  };
+  return renderWithI18n(
+    <NavigationProvider value={adapter}>
+      <PMOConfigDetailPage />
+    </NavigationProvider>,
+  );
+}
 
 function previewConfig(overrides: Partial<PMOConfig> = {}) {
   queryState.configs = { data: [{ ...CONFIG, ...overrides }], isPending: false, isError: false, isSuccess: true };
@@ -296,45 +334,40 @@ function errorConfigs() {
   queryState.configs = { data: undefined, isPending: false, isError: true, isSuccess: false };
 }
 
+function noConfig() {
+  queryState.configs = { data: [], isPending: false, isError: false, isSuccess: true };
+}
+
 function setRuns(runs: PMORun[]) {
   queryState.runs = { data: runs, isPending: false, isError: false, isSuccess: true };
 }
 
+const previewPanel = () =>
+  document.querySelector<HTMLElement>('[role="tabpanel"][data-value="preview"]') as HTMLElement;
+
 beforeEach(() => {
   queryState.configs = { data: [], isPending: false, isError: false, isSuccess: false };
   queryState.runs = { data: [], isPending: false, isError: false, isSuccess: false };
-  modalState.modal = null;
-  modalState.open.mockClear();
   startRunMutate.mockClear();
   applyRunMutate.mockClear();
   setMappingMutate.mockClear();
   updateConfigMutate.mockClear();
-  createConfigMutate.mockClear();
-  deleteConfigMutate.mockClear();
+  push.mockClear();
 });
 
-describe("PMOPage loading and empty states", () => {
+describe("PMOConfigDetailPage routing and states", () => {
+  it("reads the config id from the pathname and renders the config name", () => {
+    previewConfig();
+    setRuns([]);
+    renderPage();
+    // Breadcrumb leaf shows the matched config name.
+    expect(screen.getByText("Platform requirements")).toBeInTheDocument();
+  });
+
   it("renders skeletons while configs load", () => {
     loadingConfigs();
     const { container } = renderPage();
     expect(container.querySelectorAll('[data-testid="skeleton"]').length).toBeGreaterThan(0);
-  });
-
-  it("shows the empty config state when the workspace has no configs", () => {
-    queryState.configs = { data: [], isPending: false, isError: false, isSuccess: true };
-    renderPage();
-    expect(screen.getByText("No sync config yet")).toBeInTheDocument();
-  });
-
-  it("opens the create dialog from the empty state", () => {
-    // Regression: the empty-state CTA opens the same dialog the main view
-    // hosts — it must be mounted in the empty branch too, or the click is dead.
-    queryState.configs = { data: [], isPending: false, isError: false, isSuccess: true };
-    renderPage();
-    fireEvent.click(screen.getByRole("button", { name: "New sync config" }));
-    expect(screen.getByLabelText("Name")).toBeInTheDocument();
-    expect(screen.getByLabelText("Agent")).toBeInTheDocument();
-    expect(screen.getByLabelText("External root key")).toBeInTheDocument();
   });
 
   it("shows the error state when the config list fails", () => {
@@ -342,14 +375,25 @@ describe("PMOPage loading and empty states", () => {
     renderPage();
     expect(screen.getByText("Failed to load sync configs.")).toBeInTheDocument();
   });
+
+  it("shows the not-found state with a back link when the config id is unknown", () => {
+    noConfig();
+    renderPage();
+    expect(screen.getByText("Sync config not found")).toBeInTheDocument();
+    expect(screen.getByText("This config may have been deleted.")).toBeInTheDocument();
+    const backLink = screen.getByRole("link", { name: "Back to requirements" });
+    expect(backLink).toHaveAttribute("href", "/ws-1/pmo");
+    fireEvent.click(backLink);
+    expect(push).toHaveBeenCalledWith("/ws-1/pmo");
+  });
 });
 
-describe("PMOPage preview tab", () => {
+describe("PMOConfigDetailPage preview tab", () => {
   it("renders a preview_ready manual run's field-level diff", () => {
     previewConfig();
     setRuns([makeRun()]);
     renderPage();
-    // EXT-P-001 shows both in the diff rows and the assignee references.
+    // EXT-P-001 appears once per diff row for that entity (title + status).
     expect(screen.getAllByText("EXT-P-001").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("New external title")).toBeInTheDocument();
     expect(screen.getByText("New local title")).toBeInTheDocument();
@@ -363,13 +407,18 @@ describe("PMOPage preview tab", () => {
     expect(screen.getByText("No preview yet")).toBeInTheDocument();
   });
 
-  it("renders a failed run with a retry action", () => {
+  it("shows a compact failure banner with retry while keeping the page visible", () => {
     previewConfig();
     setRuns([makeRun({ status: "failed", error_code: "agent_unavailable", error_message: "agent unreachable" })]);
     renderPage();
+    // Banner present.
     expect(screen.getByText("The last run failed")).toBeInTheDocument();
-    const failures = screen.getAllByText((content) => content.includes("agent_unavailable"));
-    expect(failures.length).toBeGreaterThan(0);
+    expect(screen.getByText(/agent_unavailable/)).toBeInTheDocument();
+    // The rest of the page (config context + tabs + filters) stays visible.
+    expect(screen.getByRole("switch")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /Preview/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "All" })).toBeInTheDocument();
+    // Retry triggers a new run.
     fireEvent.click(screen.getByRole("button", { name: "Retry run" }));
     expect(startRunMutate).toHaveBeenCalledWith(CONFIG.id, expect.anything());
   });
@@ -386,9 +435,7 @@ describe("PMOPage preview tab", () => {
     previewConfig();
     setRuns([makeRun({ status: "applied", applied_at: "2026-08-03T00:02:00Z", summary: { created: 1, incoming_fields: 2, conflicts_resolved: 1 } })]);
     renderPage();
-    // "Applied" appears both in the preview status line and the history tab
-    // badge — the tabs mock keeps every panel mounted.
-    expect(screen.getAllByText("Applied").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("Applied")).toBeInTheDocument();
     const preview = previewPanel();
     expect(preview.textContent).toContain("1 create");
     expect(preview.textContent).toContain("2 incoming fields");
@@ -427,22 +474,13 @@ describe("PMOPage preview tab", () => {
     renderPage();
     fireEvent.click(screen.getByRole("button", { name: "Conflicts" }));
     expect(screen.getByText("New external title")).toBeInTheDocument();
-    // The incoming-only status row is filtered out under "Conflicts".
+    // The incoming-only status/task rows are filtered out under "Conflicts".
     expect(screen.queryByText("Incoming")).toBeNull();
-  });
-
-  it("opens existing create workflows", async () => {
-    previewConfig();
-    setRuns([makeRun()]);
-    renderPage();
-    fireEvent.click(screen.getByRole("button", { name: "New project" }));
-    expect(modalState.modal).toBe("create-project");
-    fireEvent.click(screen.getByRole("button", { name: /New issue/ }));
-    expect(modalState.modal).toBe("create-issue");
+    expect(screen.queryByText("New task title")).toBeNull();
   });
 });
 
-describe("PMOPage assignee tab", () => {
+describe("PMOConfigDetailPage assignee tab", () => {
   it("lists unresolved external owners with member selection", () => {
     previewConfig();
     setRuns([makeRun()]);
@@ -460,7 +498,7 @@ describe("PMOPage assignee tab", () => {
   });
 });
 
-describe("PMOPage header controls", () => {
+describe("PMOConfigDetailPage header controls", () => {
   it("keeps the schedule switch disabled until last_applied_at exists", () => {
     previewConfig({ last_applied_at: null });
     setRuns([makeRun()]);
@@ -483,7 +521,7 @@ describe("PMOPage header controls", () => {
     );
   });
 
-  it("triggers a manual sync", () => {
+  it("triggers a manual sync from the header", () => {
     previewConfig();
     setRuns([]);
     renderPage();
@@ -495,12 +533,41 @@ describe("PMOPage header controls", () => {
     previewConfig();
     setRuns([makeRun()]);
     renderPage();
-    const rootKeyInput = screen.getByLabelText("External root key");
+    const rootKeyInput = screen.getByLabelText("External root key") as HTMLInputElement;
     fireEvent.change(rootKeyInput, { target: { value: "EXT-P-002" } });
     fireEvent.blur(rootKeyInput);
     expect(updateConfigMutate).toHaveBeenCalledWith(
       expect.objectContaining({ root_external_key: "EXT-P-002" }),
       expect.anything(),
     );
+  });
+
+  it("locks the root key editor once the config has been applied", () => {
+    previewConfig({ last_applied_at: "2026-08-02T00:00:00Z" });
+    setRuns([makeRun()]);
+    renderPage();
+    const rootKeyInput = screen.getByLabelText("External root key") as HTMLInputElement;
+    expect(rootKeyInput).toBeDisabled();
+  });
+});
+
+describe("PMOConfigDetailPage history tab", () => {
+  it("shows the empty history state when there are no runs", () => {
+    previewConfig();
+    setRuns([]);
+    renderPage();
+    fireEvent.click(screen.getByRole("tab", { name: /Run history/ }));
+    expect(screen.getByText("No runs yet")).toBeInTheDocument();
+  });
+
+  it("renders run rows with status, trigger and timestamp", () => {
+    previewConfig();
+    setRuns([makeRun(), makeRun({ id: "run-2", status: "failed", error_code: "sync_error", error_message: "boom" })]);
+    renderPage();
+    fireEvent.click(screen.getByRole("tab", { name: /Run history/ }));
+    expect(screen.getByText("Preview ready")).toBeInTheDocument();
+    expect(screen.getByText("Failed")).toBeInTheDocument();
+    expect(screen.getAllByText("Manual").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText(/sync_error/)).toBeInTheDocument();
   });
 });

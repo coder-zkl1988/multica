@@ -33,6 +33,13 @@
     "last_run": "Last run",
     "next_run": "Next run",
     "last_applied": "Last applied",
+    "open": "Open",
+    "never": "Never",
+    "schedule_on": "On",
+    "schedule_off": "Off",
+    "not_found_title": "Sync config not found",
+    "not_found_description": "This config may have been deleted.",
+    "back_to_list": "Back to requirements",
     "toast_saved": "Config saved."
   },
   "tabs": {

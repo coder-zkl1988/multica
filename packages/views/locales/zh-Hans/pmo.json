@@ -33,6 +33,13 @@
     "last_run": "上次运行",
     "next_run": "下次运行",
     "last_applied": "上次应用",
+    "open": "打开",
+    "never": "从未",
+    "schedule_on": "已开启",
+    "schedule_off": "已关闭",
+    "not_found_title": "同步配置不存在",
+    "not_found_description": "该配置可能已被删除。",
+    "back_to_list": "返回需求管理",
     "toast_saved": "配置已保存"
   },
   "tabs": {

@@ -1,14 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { ClipboardList, FolderPlus, RefreshCw, Settings2, SquarePen } from "lucide-react";
+import { CircleAlert, ClipboardList, RefreshCw } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { pmoConfigsOptions, pmoRunsOptions } from "@multica/core/pmo/queries";
 import {
   useApplyPMORun,
-  useCreatePMOConfig,
-  useDeletePMOConfig,
   useSetPMOAssigneeMapping,
   useStartPMORun,
   useUpdatePMOConfig,
@@ -16,7 +14,7 @@ import {
 import { useWorkspaceId } from "@multica/core/hooks";
 import { memberListOptions, agentListOptions } from "@multica/core/workspace/queries";
 import { isAgentRuntimeBound } from "@multica/core/agents";
-import { useModalStore } from "@multica/core/modals";
+import { useWorkspacePaths } from "@multica/core/paths";
 import type {
   MemberWithUser,
   PMOApplyChoice,
@@ -25,23 +23,17 @@ import type {
   PMORun,
 } from "@multica/core/types";
 import { cn } from "@multica/ui/lib/utils";
-import { Button } from "@multica/ui/components/ui/button";
+import { Alert, AlertAction, AlertDescription, AlertTitle } from "@multica/ui/components/ui/alert";
 import { Badge } from "@multica/ui/components/ui/badge";
+import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
-import { Switch } from "@multica/ui/components/ui/switch";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { Spinner } from "@multica/ui/components/ui/spinner";
+import { Switch } from "@multica/ui/components/ui/switch";
 import {
   NativeSelect,
   NativeSelectOption,
 } from "@multica/ui/components/ui/native-select";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@multica/ui/components/ui/select";
 import {
   Dialog,
   DialogContent,
@@ -56,223 +48,34 @@ import {
   TabsList,
   TabsTrigger,
 } from "@multica/ui/components/ui/tabs";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@multica/ui/components/ui/tooltip";
-import {
-  CollectionPageHeader,
-  CollectionPageState,
-} from "../layout/collection-page";
+import { CollectionPageState } from "../layout/collection-page";
+import { BreadcrumbHeader } from "../layout/breadcrumb-header";
+import { PageHeader } from "../layout/page-header";
+import { AppLink, useNavigation } from "../navigation";
 import { useT } from "../i18n";
+import {
+  conflictId,
+  formatDateTime,
+  historyCounts,
+  latestRun,
+  parseDiffView,
+  SummaryChip,
+  TruncatedValue,
+  RUN_STATUS_ACTIVE,
+  type DiffFieldRow,
+  type DiffFilter,
+} from "./pmo-diff";
 
-// ---------------------------------------------------------------------------
-// Run diff view model.
-//
-// `diff` / `summary` arrive as backend-owned JSONB (typed as `unknown` in
-// @multica/core/types). The shapes below mirror server/internal/service/pmo_diff.go
-// and the apply summary in pmo_apply.go; parsing is defensive so a malformed
-// or future payload renders as an empty preview instead of crashing.
-// ---------------------------------------------------------------------------
-
-type FieldDecision = "unchanged" | "incoming" | "local_only" | "converged" | "conflict";
-type EntityAction = "create" | "update" | "unchanged" | "external_removed";
-
-type DiffFilter =
-  | "all"
-  | "creates"
-  | "updates"
-  | "local_only"
-  | "conflicts"
-  | "external_removed"
-  | "unresolved";
-
-interface DiffFieldRow {
-  entityKey: string;
-  externalType: string;
-  action: EntityAction;
-  field: string;
-  baselineExternal: unknown;
-  baselineLocal: unknown;
-  external: unknown;
-  local: unknown;
-  decision: FieldDecision;
-}
-
-interface DiffWarning {
-  externalId: string;
-  displayName: string;
-  externalKey: string;
-  field: string;
-}
-
-interface DiffView {
-  rows: DiffFieldRow[];
-  conflicts: string[];
-  warnings: DiffWarning[];
-  summary: Record<string, number> | null;
-}
-
-function asString(value: unknown): string {
-  return typeof value === "string" ? value : "";
-}
-
-function parseEntityAction(value: unknown): EntityAction {
-  return value === "create" || value === "update" || value === "external_removed"
-    ? value
-    : "unchanged";
-}
-
-function parseDecision(value: unknown): FieldDecision {
-  return value === "incoming" || value === "local_only" || value === "converged" || value === "conflict"
-    ? value
-    : "unchanged";
-}
-
-function parseDiffView(raw: unknown): DiffView | null {
-  if (!raw || typeof raw !== "object") return null;
-  const source = raw as Record<string, unknown>;
-  const entities = Array.isArray(source.entities) ? source.entities : [];
-  const rows: DiffFieldRow[] = [];
-  const conflicts: string[] = [];
-  for (const entry of entities) {
-    if (!entry || typeof entry !== "object") continue;
-    const entity = entry as Record<string, unknown>;
-    const externalType = asString(entity.external_type);
-    const entityKey = asString(entity.external_key);
-    const action = parseEntityAction(entity.action);
-    const fields = entity.fields && typeof entity.fields === "object"
-      ? (entity.fields as Record<string, unknown>)
-      : {};
-    for (const [field, diff] of Object.entries(fields)) {
-      if (!diff || typeof diff !== "object") continue;
-      const d = diff as Record<string, unknown>;
-      const decision = parseDecision(d.decision);
-      rows.push({
-        entityKey,
-        externalType,
-        action,
-        field,
-        baselineExternal: d.baseline_external ?? null,
-        baselineLocal: d.baseline_local ?? null,
-        external: d.external ?? null,
-        local: d.local ?? null,
-        decision,
-      });
-      if (decision === "conflict") conflicts.push(`${entity.external_type ?? ""}:${entityKey}:${field}`);
-    }
-  }
-  const warnings: DiffWarning[] = [];
-  if (Array.isArray(source.warnings)) {
-    for (const entry of source.warnings) {
-      if (!entry || typeof entry !== "object") continue;
-      const w = entry as Record<string, unknown>;
-      if (asString(w.code) !== "unresolved_assignee") continue;
-      warnings.push({
-        externalId: asString(w.external_id),
-        displayName: asString(w.display_name),
-        externalKey: asString(w.external_key),
-        field: asString(w.field),
-      });
-    }
-  }
-  const summary = source.summary && typeof source.summary === "object"
-    ? (source.summary as Record<string, number>)
-    : null;
-  return { rows, conflicts, warnings, summary };
-}
-
-function conflictId(row: DiffFieldRow): string {
-  return `${row.externalType}:${row.entityKey}:${row.field}`;
-}
-
-/** The most recent run in a config's history, independent of list order. */
-function latestRun(runs: PMORun[]): PMORun | null {
-  return [...runs].sort((a, b) => (a.created_at < b.created_at ? 1 : -1))[0] ?? null;
-}
-
-/**
- * Apply counts live on `run.summary`; preview_ready runs have only the diff's
- * `summary`. Prefer whichever the run state can actually hold.
- */
-function historyCounts(runEntry: PMORun): Record<string, number> | null {
-  const fromSummary = (runEntry.summary && typeof runEntry.summary === "object"
-    ? (runEntry.summary as Record<string, number>)
-    : null);
-  if (fromSummary) {
-    return {
-      creates: fromSummary.created ?? 0,
-      incoming_fields: fromSummary.incoming_fields ?? 0,
-      conflicts_resolved: fromSummary.conflicts_resolved ?? 0,
-      conflicts_pending: fromSummary.conflicts_pending ?? 0,
-      unresolved_assignees: fromSummary.unresolved_assignees ?? 0,
-    };
-  }
-  const diff = runEntry.diff && typeof runEntry.diff === "object"
-    ? ((runEntry.diff as Record<string, unknown>).summary as Record<string, number> | undefined)
-    : null;
-  return diff ?? null;
-}
-
-const RUN_STATUS_ACTIVE = new Set(["queued", "running"]);
-
-function formatDateTime(value: string | null): string {
-  if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  return new Intl.DateTimeFormat(undefined, { dateStyle: "short", timeStyle: "short" }).format(date);
-}
-
-/** One count label chip, skipping zeros. */
-function SummaryChip({
-  label,
-  count,
-}: {
-  label: (count: number) => string;
-  count: number | undefined;
-}) {
-  if (!count) return null;
-  return (
-    <span className="rounded bg-muted px-1.5 py-0.5 text-caption text-muted-foreground whitespace-nowrap">
-      {label(count)}
-    </span>
-  );
-}
-
-function TruncatedValue({ value }: { value: unknown }) {
-  const text = value === null || value === undefined ? "" : String(value);
-  if (!text) return <span className="text-muted-foreground">—</span>;
-  return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <span className="block max-w-full min-w-0 truncate text-body" title={text}>
-            {text}
-          </span>
-        }
-      />
-      <TooltipContent side="top" className="max-w-80 break-words">
-        {text}
-      </TooltipContent>
-    </Tooltip>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Page
-// ---------------------------------------------------------------------------
-
-export function PMOPage() {
+export function PMOConfigDetailPage() {
   const { t } = useT("pmo");
   const wsId = useWorkspaceId();
+  const p = useWorkspacePaths();
+  const { pathname } = useNavigation();
+  const configId = pathname.split("/").pop() ?? "";
 
   const configsQuery = useQuery(pmoConfigsOptions(wsId));
   const configs: PMOConfig[] = configsQuery.data ?? [];
-
-  const [selectedConfigId, setSelectedConfigId] = useState<string>("");
-  const configId = selectedConfigId || configs[0]?.id || "";
-  const config = configs.find((c) => c.id === configId) ?? configs[0] ?? null;
+  const config = configs.find((c) => c.id === configId) ?? null;
 
   const activeConfigId = config?.id ?? "";
   const runsListQuery = useQuery({
@@ -292,19 +95,12 @@ export function PMOPage() {
   const startRun = useStartPMORun();
   const applyRun = useApplyPMORun();
   const setMapping = useSetPMOAssigneeMapping();
-  const createConfig = useCreatePMOConfig();
   const updateConfig = useUpdatePMOConfig();
-  const deleteConfig = useDeletePMOConfig();
 
   const [tab, setTab] = useState<"preview" | "assignees" | "history">("preview");
   const [filter, setFilter] = useState<DiffFilter>("all");
   const [selections, setSelections] = useState<Record<string, PMOApplyChoice>>({});
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [formName, setFormName] = useState("");
-  const [formAgentId, setFormAgentId] = useState("");
-  const [formRootKey, setFormRootKey] = useState("");
-  const [confirmDelete, setConfirmDelete] = useState(false);
   const [rootKeyDraft, setRootKeyDraft] = useState("");
 
   // The inline root-key editor follows the selected config; reset on switch.
@@ -330,7 +126,10 @@ export function PMOPage() {
   };
 
   const handleChoice = (row: DiffFieldRow, choice: PMOApplyChoice) => {
-    setSelections((prev) => ({ ...prev, [conflictId(row)]: choice }));
+    setSelections((prev) => ({
+      ...prev,
+      [conflictId(row)]: choice,
+    }));
   };
 
   const handleApply = () => {
@@ -393,42 +192,6 @@ export function PMOPage() {
     );
   };
 
-  const openCreateDialog = () => {
-    setFormName("");
-    setFormAgentId("");
-    setFormRootKey("");
-    setConfirmDelete(false);
-    setDialogOpen(true);
-  };
-
-  const handleFormSave = () => {
-    const name = formName.trim();
-    const rootKey = formRootKey.trim();
-    if (!name || !formAgentId || !rootKey) return;
-    createConfig.mutate(
-      { name, agent_id: formAgentId, root_external_key: rootKey },
-      {
-        onSuccess: () => {
-          setDialogOpen(false);
-          toast.success(t(($) => $.config.toast_saved));
-        },
-        onError: () => toast.error(t(($) => $.config.save_failed)),
-      },
-    );
-  };
-
-  const handleDelete = () => {
-    if (!config) return;
-    if (!confirmDelete) {
-      setConfirmDelete(true);
-      return;
-    }
-    deleteConfig.mutate(config.id, {
-      onSuccess: () => setDialogOpen(false),
-      onError: () => toast.error(t(($) => $.config.save_failed)),
-    });
-  };
-
   const activeAgents = useMemo(() => agents.filter((a) => !a.archived_at), [agents]);
 
   const filteredRows = useMemo(() => {
@@ -457,95 +220,17 @@ export function PMOPage() {
 
   // ------------------------------------------------------------------ states
 
-  // Hoisted so EVERY return that offers the create action mounts the dialog —
-  // the empty-configs early return opens it from its CollectionPageState CTA.
-  const createConfigDialog = (
-    <Dialog open={dialogOpen} onOpenChange={(open) => setDialogOpen(open)}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>{t(($) => $.config.create)}</DialogTitle>
-          <DialogDescription>{t(($) => $.subtitle)}</DialogDescription>
-        </DialogHeader>
-        <div className="space-y-3 py-2">
-          <div className="space-y-1">
-            <label className="text-caption text-muted-foreground" htmlFor="pmo-config-name">
-              {t(($) => $.config.name_label)}
-            </label>
-            <Input
-              id="pmo-config-name"
-              value={formName}
-              onChange={(e) => setFormName(e.target.value)}
-              placeholder={t(($) => $.config.name_placeholder)}
-            />
-          </div>
-          <div className="space-y-1">
-            <label className="text-caption text-muted-foreground" htmlFor="pmo-config-agent">
-              {t(($) => $.config.agent_label)}
-            </label>
-            <NativeSelect
-              id="pmo-config-agent"
-              className="w-full"
-              value={formAgentId}
-              onChange={(e) => setFormAgentId(e.target.value)}
-            >
-              <NativeSelectOption value="" disabled>
-                {t(($) => $.config.agent_placeholder)}
-              </NativeSelectOption>
-              {activeAgents.map((agent) => (
-                <NativeSelectOption key={agent.id} value={agent.id} disabled={!isAgentRuntimeBound(agent)}>
-                  {agent.name}
-                </NativeSelectOption>
-              ))}
-            </NativeSelect>
-          </div>
-          <div className="space-y-1">
-            <label className="text-caption text-muted-foreground" htmlFor="pmo-config-root-key">
-              {t(($) => $.config.root_key_label)}
-            </label>
-            <Input
-              id="pmo-config-root-key"
-              className="font-mono"
-              value={formRootKey}
-              onChange={(e) => setFormRootKey(e.target.value)}
-              placeholder={t(($) => $.config.root_key_placeholder)}
-            />
-          </div>
-        </div>
-        <DialogFooter>
-          {config ? (
-            <Button variant="destructive" size="sm" onClick={handleDelete}>
-              {confirmDelete ? t(($) => $.config.delete_confirm) : t(($) => $.config.delete)}
-            </Button>
-          ) : null}
-          <Button variant="outline" size="sm" onClick={() => setDialogOpen(false)}>
-            {t(($) => $.config.cancel)}
-          </Button>
-          <Button size="sm" onClick={handleFormSave} disabled={!formName.trim() || !formAgentId || !formRootKey.trim() || createConfig.isPending}>
-            {createConfig.isPending ? <Spinner className="size-3.5" /> : null}
-            {t(($) => $.config.save)}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-
   if (configsQuery.isPending) {
-    return (
-      <div className="flex min-h-0 flex-1 flex-col">
-        <CollectionPageHeader icon={ClipboardList} title={t(($) => $.title)} description={t(($) => $.subtitle)} />
-        <div className="mx-auto w-full max-w-6xl space-y-3 px-4 py-4 sm:px-6">
-          <Skeleton className="h-9 w-3/4" />
-          <Skeleton className="h-8 w-full" />
-          <Skeleton className="h-64 w-full" />
-        </div>
-      </div>
-    );
+    return <ConfigDetailSkeleton />;
   }
 
   if (configsQuery.isError) {
     return (
       <div className="flex min-h-0 flex-1 flex-col">
-        <CollectionPageHeader icon={ClipboardList} title={t(($) => $.title)} description={t(($) => $.subtitle)} />
+        <BreadcrumbHeader
+          segments={[{ href: p.pmo(), label: t(($) => $.title) }]}
+          leaf={<h1 className="text-body font-medium text-foreground">{t(($) => $.title)}</h1>}
+        />
         <CollectionPageState
           icon={ClipboardList}
           tone="destructive"
@@ -555,21 +240,23 @@ export function PMOPage() {
     );
   }
 
-  if (configs.length === 0) {
+  if (!config) {
     return (
       <div className="flex min-h-0 flex-1 flex-col">
-        <CollectionPageHeader icon={ClipboardList} title={t(($) => $.title)} description={t(($) => $.subtitle)} />
+        <BreadcrumbHeader
+          segments={[{ href: p.pmo(), label: t(($) => $.title) }]}
+          leaf={<h1 className="text-body font-medium text-foreground">{t(($) => $.title)}</h1>}
+        />
         <CollectionPageState
           icon={ClipboardList}
-          title={t(($) => $.config.empty_title)}
-          description={t(($) => $.config.empty_description)}
+          title={t(($) => $.config.not_found_title)}
+          description={t(($) => $.config.not_found_description)}
           actions={
-            <Button size="sm" onClick={openCreateDialog}>
-              {t(($) => $.config.create)}
+            <Button size="sm" variant="outline" render={<AppLink href={p.pmo()} />} nativeButton={false}>
+              {t(($) => $.config.back_to_list)}
             </Button>
           }
         />
-        {createConfigDialog}
       </div>
     );
   }
@@ -585,21 +272,6 @@ export function PMOPage() {
       <Spinner className="size-3.5" />
       {t(($) => $.preview.loading)}
     </div>
-  ) : run.status === "failed" ? (
-    <CollectionPageState
-      icon={ClipboardList}
-      tone="destructive"
-      title={t(($) => $.preview.run_failed_title)}
-      description={run.error_code ? `${run.error_code}${run.error_message ? ` — ${run.error_message}` : ""}` : t(($) => $.history.error_redacted)}
-      actions={
-        <div className="flex flex-col items-center gap-1">
-          <Button size="sm" variant="outline" onClick={handleSyncNow} disabled={startRun.isPending}>
-            {t(($) => $.preview.retry)}
-          </Button>
-          <span className="text-caption text-muted-foreground">{t(($) => $.preview.retry_hint)}</span>
-        </div>
-      }
-    />
   ) : run.status === "applied" || run.status === "applied_with_review" ? (
     <div className="space-y-2 px-4 py-8">
       <p className="text-body font-medium">
@@ -702,73 +374,33 @@ export function PMOPage() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <CollectionPageHeader
-        icon={ClipboardList}
-        title={t(($) => $.title)}
-        description={t(($) => $.subtitle)}
+      <BreadcrumbHeader
+        segments={[{ href: p.pmo(), label: t(($) => $.title) }]}
+        leaf={
+          <h1 className="min-w-0 text-body font-medium text-foreground">
+            <TruncatedValue value={config.name} />
+          </h1>
+        }
         actions={
-          <>
-            <Button
-              size="icon"
-              variant="outline"
-              onClick={handleSyncNow}
-              disabled={!config || runActive || startRun.isPending}
-              aria-label={t(($) => $.actions.sync_now)}
-            >
-              {startRun.isPending ? <Spinner className="size-4" /> : <RefreshCw className="size-4" />}
-            </Button>
-            <Button
-              size="icon"
-              variant="outline"
-              onClick={() => useModalStore.getState().open("create-project")}
-              aria-label={t(($) => $.actions.new_project)}
-            >
-              <FolderPlus className="size-4" />
-            </Button>
-            <Button
-              size="icon"
-              variant="outline"
-              onClick={() => useModalStore.getState().open("create-issue")}
-              aria-label={t(($) => $.actions.new_issue)}
-            >
-              <SquarePen className="size-4" />
-            </Button>
-          </>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={handleSyncNow}
+            disabled={runActive || startRun.isPending}
+          >
+            {startRun.isPending ? <Spinner className="size-3.5" /> : <RefreshCw className="size-3.5" />}
+            {t(($) => $.actions.sync_now)}
+          </Button>
         }
       />
 
       <div className="mx-auto w-full max-w-6xl px-4 pb-8 sm:px-6">
-        {/* Header controls */}
+        {/* Config context */}
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b py-3">
-          <Select
-            items={configs.map((c) => ({ label: c.name, value: c.id }))}
-            value={activeConfigId}
-            onValueChange={(next) => {
-              if (next) setSelectedConfigId(next);
-            }}
-          >
-            <SelectTrigger size="sm" className="max-w-52" aria-label={t(($) => $.config.selector_label)}>
-              <SelectValue>{config?.name}</SelectValue>
-            </SelectTrigger>
-            <SelectContent align="start">
-              {configs.map((c) => (
-                <SelectItem key={c.id} value={c.id}>
-                  {c.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-
-          <Button size="sm" variant="ghost" onClick={openCreateDialog} aria-label={t(($) => $.config.new)}>
-            <Settings2 className="size-3.5" />
-            {t(($) => $.config.new)}
-          </Button>
-
           <NativeSelect
             className="w-44"
-            value={config?.agent_id ?? ""}
+            value={config.agent_id}
             onChange={(event) => {
-              if (!config) return;
               updateConfig.mutate(
                 {
                   id: config.id,
@@ -804,6 +436,7 @@ export function PMOPage() {
                   (e.target as HTMLInputElement).blur();
                 }
               }}
+              disabled={Boolean(config.last_applied_at)}
               aria-label={t(($) => $.config.root_key_label)}
             />
           </div>
@@ -811,8 +444,8 @@ export function PMOPage() {
           <div className="flex items-center gap-1.5">
             <Switch
               size="sm"
-              checked={config?.schedule_enabled ?? false}
-              disabled={!config || !config.last_applied_at}
+              checked={config.schedule_enabled}
+              disabled={!config.last_applied_at}
               onCheckedChange={handleScheduleToggle}
               aria-label={t(($) => $.config.schedule)}
             />
@@ -828,10 +461,10 @@ export function PMOPage() {
           </div>
         </div>
 
-        {!config?.last_applied_at && (
+        {!config.last_applied_at && (
           <p className="pt-2 text-caption text-muted-foreground">{t(($) => $.config.schedule_guard)}</p>
         )}
-        {config?.schedule_enabled && (
+        {config.schedule_enabled && (
           <p className="pt-2 text-caption text-muted-foreground">{t(($) => $.config.schedule_hint)}</p>
         )}
 
@@ -853,6 +486,25 @@ export function PMOPage() {
           </TabsList>
 
           <TabsContent value="preview">
+            {run?.status === "failed" && (
+              <div className="pt-3">
+                <Alert variant="destructive">
+                  <CircleAlert className="size-4" />
+                  <AlertTitle>{t(($) => $.preview.run_failed_title)}</AlertTitle>
+                  <AlertDescription>
+                    {run.error_code
+                      ? `${run.error_code}${run.error_message ? ` — ${run.error_message}` : ""}`
+                      : t(($) => $.history.error_redacted)}
+                  </AlertDescription>
+                  <AlertAction>
+                    <Button size="sm" variant="outline" onClick={handleSyncNow} disabled={startRun.isPending}>
+                      {startRun.isPending ? <Spinner className="size-3.5" /> : null}
+                      {t(($) => $.preview.retry)}
+                    </Button>
+                  </AlertAction>
+                </Alert>
+              </div>
+            )}
             <div className="flex flex-wrap items-center justify-between gap-2 py-3">
               <div className="flex flex-wrap items-center gap-1" role="group" aria-label={t(($) => $.filters.label)}>
                 {(
@@ -924,7 +576,7 @@ export function PMOPage() {
                             className="w-44"
                             defaultValue=""
                             onChange={(event) => {
-                              if (!config || !event.target.value) return;
+                              if (!event.target.value) return;
                               setMapping.mutate(
                                 { configId: config.id, externalKey: warning.externalId, memberId: event.target.value },
                                 { onError: () => toast.error(t(($) => $.assignees.save_failed)) },
@@ -1038,9 +690,22 @@ export function PMOPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+    </div>
+  );
+}
 
-      {/* Create / edit config dialog */}
-      {createConfigDialog}
+// Initial-load skeleton — mirrors the breadcrumb + content column layout of
+// the loaded page so the swap to real content doesn't shift layout.
+function ConfigDetailSkeleton() {
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <PageHeader className="px-5">
+        <Skeleton className="h-5 w-48" />
+      </PageHeader>
+      <div className="mx-auto w-full max-w-6xl space-y-3 px-4 py-4 sm:px-6">
+        <Skeleton className="h-9 w-full" />
+        <Skeleton className="h-64 w-full" />
+      </div>
     </div>
   );
 }

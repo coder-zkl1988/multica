@@ -20,7 +20,7 @@ import {
 import { AttachmentPreviewRoute } from "./pages/attachment-preview-page";
 import { IssuesPage } from "@multica/views/issues/components";
 import { ProjectsPage } from "@multica/views/projects/components";
-import { PMOPage } from "@multica/views/pmo";
+import { PMOConfigDetailPage, PMOListPage } from "@multica/views/pmo";
 import { DashboardPage } from "@multica/views/dashboard";
 import { AutopilotsPage } from "@multica/views/autopilots/components";
 import { MyIssuesPage } from "@multica/views/my-issues";
@@ -204,7 +204,12 @@ export const appRoutes: RouteObject[] = [
           },
           {
             path: "pmo",
-            element: <PMOPage />,
+            element: <PMOListPage />,
+            handle: { title: "Requirements" },
+          },
+          {
+            path: "pmo/:configId",
+            element: <PMOConfigDetailPage />,
             handle: { title: "Requirements" },
           },
           { path: "designs", element: <DesignsPage />, handle: { title: "Designs" } },

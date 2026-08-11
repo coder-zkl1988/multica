@@ -33,6 +33,13 @@
     "last_run": "最終実行",
     "next_run": "次回実行",
     "last_applied": "最終適用",
+    "open": "開く",
+    "never": "なし",
+    "schedule_on": "オン",
+    "schedule_off": "オフ",
+    "not_found_title": "同期設定が見つかりません",
+    "not_found_description": "この設定は削除された可能性があります。",
+    "back_to_list": "要件管理に戻る",
     "toast_saved": "設定を保存しました。"
   },
   "tabs": {
