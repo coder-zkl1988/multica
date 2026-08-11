@@ -4063,3 +4063,39 @@ func TestHermesBackendIgnoresRefusalOnFreshSession(t *testing.T) {
 		t.Error("ResumeRejected = true, want false on a fresh session")
 	}
 }
+
+func TestHermesClientPrivacyGateDeniesFileEscapePermissionRequest(t *testing.T) {
+	t.Parallel()
+
+	w := &bufferWriter{}
+	c := &hermesClient{
+		cfg:     Config{Logger: slog.Default(), WorkDir: "/tmp/repo"},
+		stdin:   w,
+		pending: make(map[int]*pendingRPC),
+	}
+
+	c.handleLine(`{"jsonrpc":"2.0","id":44,"method":"session/request_permission","params":{"sessionId":"ses_1","options":[{"optionId":"allow_once","kind":"allow_once"},{"optionId":"deny","kind":"reject_once"}],"toolCall":{"toolCallId":"tc_1","title":"run: cat /etc/passwd","content":[{"type":"text","text":"cat /etc/passwd"}]}}}`)
+
+	got := w.String()
+	var resp struct {
+		Result *struct {
+			Outcome struct {
+				Outcome  string `json:"outcome"`
+				OptionID string `json:"optionId"`
+			} `json:"outcome"`
+		} `json:"result"`
+		Error *struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(got)), &resp); err != nil {
+		t.Fatalf("reply is not valid JSON: %q err=%v", got, err)
+	}
+	if resp.Error != nil {
+		t.Fatalf("unexpected JSON-RPC error reply: %+v", resp.Error)
+	}
+	if resp.Result == nil || resp.Result.Outcome.OptionID != "deny" {
+		t.Fatalf("expected reject_once deny for file escape, got %+v", resp.Result)
+	}
+}

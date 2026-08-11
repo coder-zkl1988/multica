@@ -449,6 +449,12 @@ func (b *codebuddyBackend) handleControlRequest(msg codebuddySDKMessage, stdin i
 	if !denied {
 		denied, rule = agentguard.DeniedRequest(req.Input)
 	}
+	// File-access gate: refuse tool uses whose paths escape the task
+	// workspace. Empty WorkDir skips the gate (fail-open by design for
+	// callers without a workspace); the daemon always sets it.
+	if !denied && b.cfg.WorkDir != "" {
+		denied, rule = agentguard.DeniedFileRequest(req.Input, b.cfg.WorkDir)
+	}
 	behavior := "allow"
 	if denied {
 		behavior = "deny"

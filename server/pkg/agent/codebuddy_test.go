@@ -553,3 +553,36 @@ func TestCodebuddyHandleControlRequestApprovesInCodebuddyShape(t *testing.T) {
 		t.Fatalf("expected the original tool input to be preserved, got %v", updatedInput["command"])
 	}
 }
+
+func TestCodebuddyHandleControlRequestDeniesFileAccessOutsideWorkspace(t *testing.T) {
+	t.Parallel()
+
+	b := &codebuddyBackend{cfg: Config{Logger: slog.Default(), WorkDir: "/tmp/repo"}}
+
+	var written bytes.Buffer
+
+	msg := codebuddySDKMessage{
+		Type:      "control_request",
+		RequestID: "perm_1730000000000_3",
+		Request: mustMarshal(t, codebuddyControlRequestPayload{
+			Subtype:  "can_use_tool",
+			ToolName: "Bash",
+			Input:    mustMarshal(t, map[string]any{"command": "cat /etc/passwd"}),
+		}),
+	}
+
+	b.handleControlRequest(msg, &written)
+
+	var resp map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(written.Bytes()), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	respInner := resp["response"].(map[string]any)
+	innerResp := respInner["response"].(map[string]any)
+	if innerResp["allowed"] != false {
+		t.Fatalf("expected allowed=false for out-of-workspace command, got %v", innerResp["allowed"])
+	}
+	if innerResp["behavior"] != "deny" {
+		t.Fatalf("expected behavior deny for out-of-workspace command, got %v", innerResp["behavior"])
+	}
+}

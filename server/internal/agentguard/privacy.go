@@ -231,6 +231,21 @@ func deniedPathToken(token, workspace string) (bool, string) {
 	if strings.HasPrefix(token, "~") {
 		return true, fsEscapesGateReason
 	}
+	// Shell expansion: a token mixing a variable or command substitution with
+	// a path separator cannot be resolved statically and may reach outside the
+	// workspace (`cat $HOME/Documents/c.txt`). Bare $HOME is denied too, for
+	// parity with the ~ rule; `echo $PATH` (no path separator) stays allowed.
+	if strings.HasPrefix(token, "$") || strings.HasPrefix(token, "`") {
+		if strings.Contains(token, "/") || strings.HasPrefix(token, "$HOME") || strings.HasPrefix(token, "${HOME") {
+			return true, fsEscapesGateReason
+		}
+	}
+	// Variable assignments (FOO=$HOME/.ssh/...) hide the expansion after '='.
+	if i := strings.IndexByte(token, '='); i >= 0 {
+		if denied, reason := deniedPathToken(token[i+1:], workspace); denied {
+			return true, reason
+		}
+	}
 	return DeniedPath(token, workspace)
 }
 
@@ -311,9 +326,30 @@ func clampScope(paths []string, workspace string) []string {
 	}
 	out := make([]string, 0, len(paths))
 	for _, p := range paths {
-		if denied, _ := DeniedPath(p, workspace); !denied {
-			out = append(out, p)
+		if denied, _ := DeniedPath(p, workspace); denied {
+			continue
 		}
+		if isBareGlobScope(p) {
+			continue
+		}
+		out = append(out, p)
 	}
 	return out
+}
+
+// isBareGlobScope reports whether a scope entry is a glob with no concrete
+// path segment (`**`, `*`, `**/*`) — a grant a sandbox treats as
+// "everywhere". In-workspace globs like `packages/**` keep a concrete prefix
+// and stay allowed.
+func isBareGlobScope(p string) bool {
+	trimmed := strings.TrimSpace(p)
+	if trimmed == "" {
+		return false
+	}
+	for _, segment := range strings.Split(trimmed, string(filepath.Separator)) {
+		if segment != "*" && segment != "**" {
+			return false
+		}
+	}
+	return true
 }

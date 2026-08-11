@@ -89,7 +89,7 @@ var patterns = []secretPattern{
 	{regexp.MustCompile(`(?i)((?:payment[_ -]?pin|card[_ -]?pin|cvv2?|cvc2?|otp|one[_ -]?time[_ -]?password|verification[_ -]?code|recovery[_ -]?code|支付密码|交易密码|银行卡密码|信用卡密码|解锁密码|锁屏密码)\s*[=:]\s*)(?:"[^"]*"|'[^']*'|[^\s,;}\]]+)`), `${1}` + credentialPlaceholder},
 }
 
-var secretFieldNamePattern = regexp.MustCompile(`(?i)(?:token|secret|password|passwd|api[_-]?key|apikey|access[_-]?key|private[_-]?key|credential|authorization|payment[_-]?pin|card[_-]?pin|cvv|cvc|otp|verification[_-]?code|recovery[_-]?code)`)
+var secretFieldNamePattern = regexp.MustCompile(`(?i)(?:token|secret|password|passwd|api[_-]?key|apikey|access[_-]?key|private[_-]?key|credential|authorization|payment[_-]?pin|card[_-]?pin|cvv|cvc|otp|verification[_-]?code|recovery[_-]?code|phonenumber|phone|mobile|telephone|手机号|电话号码|电话|工资|薪资|月薪|salary|income)`)
 
 // maxRedactDepth bounds the walk in redactValue. Tool inputs are decoded from
 // daemon-supplied JSON, so nesting depth is attacker-influenced; without a

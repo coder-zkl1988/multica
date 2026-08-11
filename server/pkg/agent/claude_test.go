@@ -1380,3 +1380,63 @@ func TestClaudeHandleControlRequestDeniesPrivacySensitiveTool(t *testing.T) {
 		t.Fatalf("expected behavior deny for privacy-sensitive command, got %v", innerResp["behavior"])
 	}
 }
+
+func TestClaudeHandleControlRequestDeniesFileAccessOutsideWorkspace(t *testing.T) {
+	t.Parallel()
+
+	b := &claudeBackend{cfg: Config{Logger: slog.Default(), WorkDir: "/tmp/repo"}}
+
+	var written bytes.Buffer
+
+	msg := claudeSDKMessage{
+		Type:      "control_request",
+		RequestID: "req-100",
+		Request: mustMarshal(t, claudeControlRequestPayload{
+			Subtype:  "tool_use",
+			ToolName: "Bash",
+			Input:    mustMarshal(t, map[string]any{"command": "cat /etc/passwd"}),
+		}),
+	}
+
+	b.handleControlRequest(msg, &written)
+
+	var resp map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(written.Bytes()), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	respInner := resp["response"].(map[string]any)
+	innerResp := respInner["response"].(map[string]any)
+	if innerResp["behavior"] != "deny" {
+		t.Fatalf("expected behavior deny for out-of-workspace command, got %v", innerResp["behavior"])
+	}
+}
+
+func TestClaudeHandleControlRequestAllowsFileAccessInsideWorkspace(t *testing.T) {
+	t.Parallel()
+
+	b := &claudeBackend{cfg: Config{Logger: slog.Default(), WorkDir: "/tmp/repo"}}
+
+	var written bytes.Buffer
+
+	msg := claudeSDKMessage{
+		Type:      "control_request",
+		RequestID: "req-101",
+		Request: mustMarshal(t, claudeControlRequestPayload{
+			Subtype:  "tool_use",
+			ToolName: "Bash",
+			Input:    mustMarshal(t, map[string]any{"command": "cat /tmp/repo/src/a.go"}),
+		}),
+	}
+
+	b.handleControlRequest(msg, &written)
+
+	var resp map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(written.Bytes()), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	respInner := resp["response"].(map[string]any)
+	innerResp := respInner["response"].(map[string]any)
+	if innerResp["behavior"] != "allow" {
+		t.Fatalf("expected behavior allow for in-workspace command, got %v", innerResp["behavior"])
+	}
+}

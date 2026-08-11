@@ -2508,6 +2508,13 @@ func (c *codexClient) handleServerRequest(raw map[string]json.RawMessage) {
 			c.respond(id, map[string]any{"decision": "decline"})
 			return
 		}
+		if denied, rule := agentguard.DeniedFileRequest(raw["params"], c.cfg.WorkDir); denied {
+			if c.cfg.Logger != nil {
+				c.cfg.Logger.Warn("codex: privacy gate declined out-of-workspace file change", "rule", rule)
+			}
+			c.respond(id, map[string]any{"decision": "decline"})
+			return
+		}
 		c.respond(id, map[string]any{"decision": "accept"})
 	case "item/permissions/requestApproval":
 		c.respond(id, codexPermissionsApprovalResponse(raw["params"], c.cfg.WorkDir, c.cfg.Logger))

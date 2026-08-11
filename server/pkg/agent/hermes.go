@@ -925,11 +925,17 @@ func (c *hermesClient) handleAgentRequest(raw map[string]json.RawMessage) {
 	switch method {
 	case "session/request_permission":
 		// Privacy gate: if the permission request would reach local private
-		// data (a command, tool input, or MCP config inside the params),
-		// never grant it. Deny exactly this action when the agent offered a
-		// single-use reject option; otherwise fail closed with a protocol
-		// error rather than fabricate an un-offered id.
-		if denied, rule := agentguard.DeniedRequest(raw["params"]); denied {
+		// data (a command, tool input, a file outside the workspace, or MCP
+		// config inside the params), never grant it. Deny exactly this action
+		// when the agent offered a single-use reject option; otherwise fail
+		// closed with a protocol error rather than fabricate an un-offered id.
+		denied, rule := agentguard.DeniedRequest(raw["params"])
+		// File-access gate: empty WorkDir skips it (fail-open by design for
+		// callers without a workspace); the daemon always sets it.
+		if !denied && c.cfg.WorkDir != "" {
+			denied, rule = agentguard.DeniedFileRequest(raw["params"], c.cfg.WorkDir)
+		}
+		if denied {
 			if optionID, ok := selectACPDenyOption(raw["params"]); ok {
 				resp = acpSelectedResponse(rawID, optionID)
 				c.cfg.Logger.Warn("privacy gate denied agent permission request", "method", method, "rule", rule, "optionId", optionID)

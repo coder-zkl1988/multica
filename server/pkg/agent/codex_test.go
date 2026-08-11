@@ -5636,3 +5636,41 @@ func TestCodexAcceptsCommandInsideWorkspace(t *testing.T) {
 		t.Fatalf("expected decision=accept for in-workspace command, got %v", resp["result"])
 	}
 }
+
+func TestCodexHandleServerRequestDeclinesFileChangeOutsideWorkspace(t *testing.T) {
+	t.Parallel()
+
+	c, fs, _ := newTestCodexClient(t)
+	c.cfg.WorkDir = "/tmp/repo"
+
+	c.handleLine(`{"jsonrpc":"2.0","id":31,"method":"applyPatchApproval","params":{"path":"/etc/passwd","diff":"+root:x:0:0"}}`)
+
+	lines := fs.Lines()
+	var resp map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	result := resp["result"].(map[string]any)
+	if result["decision"] != "decline" {
+		t.Fatalf("expected decision=decline for out-of-workspace patch path, got %v", result["decision"])
+	}
+}
+
+func TestCodexHandleServerRequestAcceptsFileChangeInsideWorkspace(t *testing.T) {
+	t.Parallel()
+
+	c, fs, _ := newTestCodexClient(t)
+	c.cfg.WorkDir = "/tmp/repo"
+
+	c.handleLine(`{"jsonrpc":"2.0","id":32,"method":"applyPatchApproval","params":{"path":"/tmp/repo/src/a.go","diff":"+new"}}`)
+
+	lines := fs.Lines()
+	var resp map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	result := resp["result"].(map[string]any)
+	if result["decision"] != "accept" {
+		t.Fatalf("expected decision=accept for in-workspace patch path, got %v", result["decision"])
+	}
+}

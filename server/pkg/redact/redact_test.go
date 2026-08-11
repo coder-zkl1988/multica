@@ -543,10 +543,10 @@ func TestRedactPersonalDataFields(t *testing.T) {
 	cases := map[string]string{
 		"phonenumber=10086":        "10086",
 		"手机号=13800138000":          "13800138000",
-		"电话号码=010-12345678":       "010-12345678",
+		"电话号码=010-12345678":        "010-12345678",
 		"工资=100":                   "100",
 		"薪资=25000":                 "25000",
-		"salary=25000":              "25000",
+		"salary=25000":             "25000",
 		"PHONE_NUMBER=13800138000": "13800138000",
 	}
 	for input, leaked := range cases {
@@ -557,5 +557,25 @@ func TestRedactPersonalDataFields(t *testing.T) {
 		if !strings.Contains(got, "[REDACTED CREDENTIAL]") {
 			t.Fatalf("expected placeholder in %q, got: %s", input, got)
 		}
+	}
+}
+
+func TestInputMapRedactsPersonalDataFields(t *testing.T) {
+	t.Parallel()
+	input := map[string]any{
+		"phonenumber": "10086",
+		"工资":          "100",
+		"salary":      "25000",
+		"phone":       "13800138000",
+		"备注":          "keep me",
+	}
+	got := InputMap(input)
+	for _, key := range []string{"phonenumber", "工资", "salary", "phone"} {
+		if got[key] != credentialPlaceholder {
+			t.Fatalf("%s field not redacted: %#v", key, got[key])
+		}
+	}
+	if got["备注"] != "keep me" {
+		t.Fatalf("non-secret field was altered: %#v", got["备注"])
 	}
 }
