@@ -1,0 +1,95 @@
+name: CD Deploy on PR Merge
+
+# 只在「合并 PR 到 main」时触发，普通 push 不触发。
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+permissions:
+  contents: read
+  actions: write # 用于 dispatch fork-desktop-release.yml
+
+concurrency:
+  # 全局串行：同一时间只跑一个合并部署，避免两台机器上 git/compose 竞争。
+  group: cd-deploy
+  cancel-in-progress: false
+
+jobs:
+  # 判断本次合并是否动了桌面端/共享包（决定要不要自动发桌面版）。
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      desktop: ${{ steps.filter.outputs.desktop }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect desktop-relevant changes
+        id: filter
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          if git diff --name-only "$BASE_SHA" "$MERGE_SHA" | grep -qE \
+            '^(apps/desktop|packages/views|packages/core|packages/ui|apps/mobile|packages/tsconfig|packages/eslint-config|pnpm-lock\.yaml)(/|$)'; then
+            echo "desktop=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "desktop=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # 在 28/91 上部署 web/后端：self-hosted runner 执行通用部署脚本。
+  # DEPLOY_DIR 由各机器 runner 本地 .env 提供（机器配置，不进仓库）。
+  deploy:
+    if: github.event.pull_request.merged == true
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [multica-91, multica-28]
+    runs-on: [self-hosted, "${{ matrix.runner }}"]
+    env:
+      TARGET_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+    steps:
+      - name: Checkout merged code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 0
+
+      - name: Run remote deploy
+        shell: bash
+        run: bash scripts/remote-deploy.sh
+
+  # 桌面端：直接复用现有 fork-desktop-release.yml（打包+签名+发布 Release），
+  # 客户端更新源从这里拿 latest*.yml，不重复造打包步骤。
+  desktop-release:
+    if: github.event.pull_request.merged == true && needs.changes.outputs.desktop == 'true'
+    needs: changes
+    runs-on: ubuntu-latest
+    steps:
+      - name: Derive next desktop version
+        id: version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          latest=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 \
+            --json tagName --jq '.[].tagName' \
+            | grep '^desktop-v' | sed 's/^desktop-v//' | sort -V | tail -1 || true)
+          if [[ "$latest" =~ ^([0-9]+\.[0-9]+\.[0-9]+)-sso\.([0-9]+)$ ]]; then
+            version="${BASH_REMATCH[1]}-sso.$((10#${BASH_REMATCH[2]} + 1))"
+          elif [[ "$latest" =~ ^([0-9]+\.[0-9]+)\.([0-9]+)$ ]]; then
+            version="${BASH_REMATCH[1]}.$((10#${BASH_REMATCH[2]} + 1))-sso.1"
+          else
+            version="0.1.0-sso.1"
+          fi
+          echo "derived_version=$version (from $latest)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch fork desktop release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh workflow run fork-desktop-release.yml --repo "$GITHUB_REPOSITORY" \
+            -f version="${{ steps.version.outputs.version }}" -f prerelease=true
