@@ -1789,6 +1789,11 @@ SELECT * FROM agent_task_queue
 WHERE issue_id = $1
 ORDER BY created_at DESC;
 
+-- name: ListTasksByChatSession :many
+SELECT * FROM agent_task_queue
+WHERE chat_session_id = $1
+ORDER BY created_at DESC;
+
 -- name: UpdateAgentStatus :one
 UPDATE agent SET status = $2, updated_at = now()
 WHERE id = $1

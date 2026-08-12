@@ -221,6 +221,7 @@
     "archive": "Archive",
     "unarchive": "Unarchive",
     "archived_title": "Archived",
+    "copy_session_id": "Copy session ID",
     "row_actions_aria": "Chat actions"
   },
   "header": {

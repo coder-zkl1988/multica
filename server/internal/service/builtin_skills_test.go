@@ -595,6 +595,15 @@ func TestRuntimesAndReposSkillCoversClaimAndCheckoutChain(t *testing.T) {
 		"local_directory",
 		"Runtime and repo commands affect active agent execution",
 		"references/runtimes-and-repos-source-map.md",
+		"Web Chat Session Inspection",
+		"multica chat session get <session-id> --output json",
+		"multica chat session messages <session-id> --output json",
+		"multica chat session pending-task <session-id> --output json",
+		"multica chat session tasks <session-id> --output json",
+		"multica chat session task-messages <session-id> --task <task-id> --output json",
+		"multica chat session send <session-id> --content",
+		"chat thread` reads external channel integrations rather than Web Chat sessions",
+		"session id is not an authorization token",
 		// An agent reads this to know whether its checkout can be committed to.
 		// Codex on Linux and Windows gets task-local Git metadata; every other
 		// runtime gets a linked worktree (multica-ai/multica#2925, #6449).

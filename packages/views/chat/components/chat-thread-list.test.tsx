@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { I18nProvider } from "@multica/core/i18n/react";
 import type { Agent, ChatSession } from "@multica/core/types";
 import enChat from "../../locales/en/chat.json";
@@ -17,6 +17,19 @@ import enIssues from "../../locales/en/issues.json";
 
 const setActiveSession = vi.fn();
 const archiveMutate = vi.fn();
+const { copyTextMock, toastSuccessMock, toastErrorMock } = vi.hoisted(() => ({
+  copyTextMock: vi.fn(),
+  toastSuccessMock: vi.fn(),
+  toastErrorMock: vi.fn(),
+}));
+
+vi.mock("sonner", () => ({
+  toast: { success: toastSuccessMock, error: toastErrorMock },
+}));
+
+vi.mock("@multica/ui/lib/clipboard", () => ({
+  copyText: copyTextMock,
+}));
 
 vi.mock("../../common/actor-avatar", () => ({
   ActorAvatar: ({ actorId }: { actorId: string }) => (
@@ -179,6 +192,10 @@ describe("ChatThreadList compact row menu", () => {
   beforeEach(() => {
     setActiveSession.mockClear();
     archiveMutate.mockClear();
+    copyTextMock.mockReset();
+    toastSuccessMock.mockClear();
+    toastErrorMock.mockClear();
+    copyTextMock.mockResolvedValue(true);
   });
 
   const openRowMenu = (index: number) =>
@@ -210,6 +227,32 @@ describe("ChatThreadList compact row menu", () => {
     openRowMenu(0);
 
     expect(onSelectSession).not.toHaveBeenCalled();
+  });
+
+  it("copies the row's session id without selecting the row", async () => {
+    const { onSelectSession } = renderList(null);
+
+    openRowMenu(1);
+    fireEvent.click(await screen.findByRole("menuitem", { name: enChat.list.copy_session_id }));
+
+    expect(copyTextMock).toHaveBeenCalledWith("s2");
+    expect(onSelectSession).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(toastSuccessMock).toHaveBeenCalledWith(enChat.message_list.copied_toast),
+    );
+  });
+
+  it("shows failure feedback when copying the session id fails", async () => {
+    copyTextMock.mockResolvedValue(false);
+    renderList(null);
+
+    openRowMenu(0);
+    fireEvent.click(await screen.findByRole("menuitem", { name: enChat.list.copy_session_id }));
+
+    expect(copyTextMock).toHaveBeenCalledWith("s1");
+    await waitFor(() =>
+      expect(toastErrorMock).toHaveBeenCalledWith(enChat.message_list.copy_failed_toast),
+    );
   });
 
   it("stays reachable on a wide viewport that cannot hover", () => {

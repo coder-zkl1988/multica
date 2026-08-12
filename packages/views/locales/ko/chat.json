@@ -217,6 +217,7 @@
     "archive": "보관",
     "unarchive": "보관 해제",
     "archived_title": "보관됨",
+    "copy_session_id": "세션 ID 복사",
     "row_actions_aria": "채팅 작업"
   },
   "header": {
