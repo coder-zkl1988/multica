@@ -267,14 +267,14 @@ func prepareOpenclawConfig(envRoot, workDir string, opts OpenclawConfigPrep) (Op
 	// tuning still flows through.
 	snapshotPath := ""
 	if hasManagedMcp && exists {
-		resolved, ferr := openclawResolvedFullConfig(bin, timeout)
+		resolved, ferr := openclawResolvedFullConfig(activePath)
 		if ferr != nil {
 			return OpenclawConfigResult{}, fmt.Errorf("read openclaw resolved config: %w", ferr)
 		}
 		if resolved == nil {
-			// CLI reports the file exists but `config get --json` returned
-			// nothing structured. Treat as no user-config-to-strip: the
-			// wrapper will carry managed mcp.servers as the sole source.
+			// Active config file exists but is empty. Treat as no
+			// user-config-to-strip: the wrapper will carry managed
+			// mcp.servers as the sole source.
 			exists = false
 			activePath = ""
 		} else {
@@ -772,31 +772,35 @@ func isOpenclawConfigFileUnsupported(err error) bool {
 		(strings.Contains(msg, "unknown") && strings.Contains(msg, "config") && strings.Contains(msg, "file"))
 }
 
-// openclawResolvedFullConfig fetches the user's fully resolved openclaw
-// config via `openclaw config get --json` (no key path — root). The CLI's
-// loader handles JSON5 / $include / env-substitution and emits a flat JSON
-// object, which is what we need to write a sanitized snapshot that the
-// wrapper can $include without inheriting the user's `mcp.servers`.
+// openclawResolvedFullConfig reads the user's active openclaw config file
+// so the managed-mcp_config snapshot can strip `mcp.servers` while
+// preserving everything else (model providers, auth, gateway tuning).
 //
-// Returns (nil, nil) when the CLI prints empty / null output for the root
-// — interpreted as "no resolvable user config" by the caller, which then
-// falls through to the fresh-install code path. Any other failure
-// surfaces as an error so the daemon fails closed instead of silently
-// degrading to a leaky non-strict wrapper.
-func openclawResolvedFullConfig(bin string, timeout time.Duration) (map[string]any, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	out, err := openclawExec(ctx, bin, "config", "get", "--json")
+// We read the file directly instead of asking the CLI for the root config:
+// newer OpenClaw CLIs require a dot path on `config get <path>` and expose
+// no "dump the whole resolved config" form, and `config get` output is
+// redacted (secrets never print) — either would break the snapshot's job of
+// carrying the user's real API keys into the task wrapper. The daemon
+// already knows the active path from `openclaw config file`, and OpenClaw's
+// loader re-applies runtime defaults and env substitution when it
+// `$include`s the snapshot, so the authored file is the right source.
+//
+// Plain JSON only: a JSON5 or `$include`-bearing config cannot be stripped
+// safely here, and the preparer fails closed rather than writing a leaky
+// snapshot. Returns (nil, nil) for an empty file — interpreted as "no
+// resolvable user config", falling through to the fresh-install path.
+func openclawResolvedFullConfig(activePath string) (map[string]any, error) {
+	data, err := os.ReadFile(activePath)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("read openclaw active config %s: %w", activePath, err)
 	}
-	trimmed := strings.TrimSpace(out)
-	if trimmed == "" || trimmed == "null" {
+	trimmed := strings.TrimSpace(string(data))
+	if trimmed == "" {
 		return nil, nil
 	}
 	var cfg map[string]any
 	if err := json.Unmarshal([]byte(trimmed), &cfg); err != nil {
-		return nil, fmt.Errorf("parse `openclaw config get --json` output: %w", err)
+		return nil, fmt.Errorf("parse openclaw active config %s (managed mcp_config snapshot requires plain JSON; JSON5/`$include` configs unsupported): %w", activePath, err)
 	}
 	return cfg, nil
 }
