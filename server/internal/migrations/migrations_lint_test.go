@@ -15,6 +15,67 @@ import (
 
 const maxLegacyMigrationPrefix = 148
 
+// Fork migration numbering discipline (full rule in CLAUDE.md「Database and
+// Migration Rules」): this repo is a fork that merges multica-ai/multica
+// regularly, and both sides advancing the same counter is how the 255–279 and
+// 281–284 prefix collisions happened (280 is a fork gap-fill, not a collision). New fork-local migrations take prefixes from
+// forkMigrationPrefixStart (800) upward; never take the next number after
+// upstream's latest.
+const forkMigrationPrefixStart = 800
+
+// lastUpstreamMigrationPrefix is the highest prefix owned by multica-ai/multica
+// upstream at the fork's most recent upstream merge. Bump it in the
+// upstream-sync PR whenever upstream adds migrations, so the range between it
+// and forkMigrationPrefixStart stays empty except for the pre-existing fork
+// migrations recorded in existingForkMigrationPrefixes.
+//
+// Known limitation: a new fork migration that picks a prefix inside an upstream
+// numbering gap would pass this check; the uniqueness test still catches it
+// once upstream owns that number. The realistic violation (anything between
+// lastUpstreamMigrationPrefix and 800) is rejected below.
+const lastUpstreamMigrationPrefix = 284
+
+// existingForkMigrationPrefixes are fork-local migrations that were applied to
+// production before the 800+ rule; they keep their numbers forever because the
+// runner keys schema_migrations on the full stem and a rename would re-apply
+// them. Never add new entries here — new fork migrations use 800+.
+var existingForkMigrationPrefixes = map[string]bool{
+	"280": true, // 280_test_case
+	"285": true, // 285_test_case_repo_case_index
+	"286": true, // 286_test_case_repo_resource_index
+	"287": true, // 287_test_case_module_index
+	"288": true, // 288_test_generation
+	"289": true, // 289_test_generation_job_workspace_index
+	"290": true, // 290_test_generation_job_agent_task_index
+	"291": true, // 291_test_generation_job_project_status_index
+	"292": true, // 292_test_generation_plan_live_index
+	"293": true, // 293_test_case_proposal_target_index
+	"294": true, // 294_test_case_proposal_job_index
+	"295": true, // 295_test_run
+	"296": true, // 296_test_plan_project_index
+	"297": true, // 297_test_plan_case_order_index
+	"298": true, // 298_test_run_project_index
+	"299": true, // 299_test_run_agent_task_index
+	"300": true, // 300_test_run_source_index
+	"301": true, // 301_test_run_case_order_index
+	"302": true, // 302_test_run_case_timeline_index
+	"303": true, // 303_attachment_test_run_case_index
+	"304": true, // 304_test_capability_key_index
+	"305": true, // 305_test_capability_kind_index
+	"306": true, // 306_pmo_sync_tables
+	"307": true, // 307_pmo_sync_config_id_index
+	"308": true, // 308_pmo_sync_run_id_index
+	"309": true, // 309_pmo_sync_link_id_index
+	"310": true, // 310_pmo_sync_primary_keys
+	"311": true, // 311_pmo_sync_config_root_index
+	"312": true, // 312_pmo_sync_run_history_index
+	"313": true, // 313_pmo_sync_run_active_index
+	"314": true, // 314_pmo_sync_run_agent_task_index
+	"315": true, // 315_pmo_sync_link_identity_index
+	"316": true, // 316_project_created_by
+	"317": true, // 317_product_map
+}
+
 var legacyDuplicateMigrationStems = map[string][]string{
 	"020": {"020_issue_number", "020_task_session"},
 	"026": {"026_comment_reactions", "026_task_messages"},
@@ -136,6 +197,51 @@ func TestMigrationNumericPrefixesStayUniqueAfterLegacySet(t *testing.T) {
 
 		if len(stems) > 1 {
 			t.Errorf("migration prefix %s is reused by %v; use the next unique prefix instead", prefix, stems)
+		}
+	}
+}
+
+func TestNewForkMigrationsUseReservedRange(t *testing.T) {
+	stemsByPrefix := migrationStemsByPrefix(t)
+
+	for prefix, stems := range stemsByPrefix {
+		n, err := strconv.Atoi(prefix)
+		if err != nil {
+			t.Fatalf("parse migration prefix %q: %v", prefix, err)
+		}
+
+		if n >= forkMigrationPrefixStart {
+			continue // fork-reserved range
+		}
+		if isKnownLegacyPrefix(prefix) {
+			continue // frozen legacy range 001-148
+		}
+		if existingForkMigrationPrefixes[prefix] {
+			continue // pre-existing fork migration, keeps its number
+		}
+		if _, ok := mergedDuplicateMigrationStems[prefix]; ok {
+			continue // recorded upstream/fork collision, both already applied
+		}
+		if n <= lastUpstreamMigrationPrefix {
+			continue // merged in from multica-ai/multica upstream
+		}
+
+		t.Errorf("migration prefix %s is below the fork-reserved range %d: %v; either a new fork-local migration used a non-reserved prefix (use %d+) or upstream added migrations past lastUpstreamMigrationPrefix=%d (bump it in the sync PR)", prefix, forkMigrationPrefixStart, stems, forkMigrationPrefixStart, lastUpstreamMigrationPrefix)
+	}
+}
+
+func TestExistingForkMigrationPrefixesExist(t *testing.T) {
+	files := migrationFilesForLint(t, "*.up.sql")
+	seen := make(map[string]bool)
+	for _, file := range files {
+		stem := strings.TrimSuffix(filepath.Base(file), ".up.sql")
+		if match := migrationPrefixPattern.FindStringSubmatch(stem); match != nil {
+			seen[match[1]] = true
+		}
+	}
+	for prefix := range existingForkMigrationPrefixes {
+		if !seen[prefix] {
+			t.Errorf("existingForkMigrationPrefixes records prefix %s but no migration file with that prefix exists; remove the stale entry", prefix)
 		}
 	}
 }
