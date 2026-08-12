@@ -40,7 +40,9 @@
     "not_found_title": "同期設定が見つかりません",
     "not_found_description": "この設定は削除された可能性があります。",
     "back_to_list": "要件管理に戻る",
-    "toast_saved": "設定を保存しました。"
+    "toast_saved": "設定を保存しました。",
+    "delete_success": "設定を削除しました。",
+    "delete_failed": "設定の削除に失敗しました。"
   },
   "tabs": {
     "preview": "プレビュー",

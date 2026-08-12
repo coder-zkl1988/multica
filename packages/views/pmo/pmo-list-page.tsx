@@ -1,11 +1,11 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { ClipboardList, Plus } from "lucide-react";
+import { ClipboardList, Plus, Trash2 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { pmoConfigsOptions } from "@multica/core/pmo/queries";
-import { useCreatePMOConfig } from "@multica/core/pmo/mutations";
+import { useCreatePMOConfig, useDeletePMOConfig } from "@multica/core/pmo/mutations";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { agentListOptions } from "@multica/core/workspace/queries";
 import { isAgentRuntimeBound } from "@multica/core/agents";
@@ -29,6 +29,16 @@ import {
   DialogTitle,
 } from "@multica/ui/components/ui/dialog";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@multica/ui/components/ui/alert-dialog";
+import {
   CollectionPageHeader,
   CollectionPageState,
 } from "../layout/collection-page";
@@ -44,7 +54,7 @@ import { formatDateTime, TruncatedValue } from "./pmo-diff";
 // ---------------------------------------------------------------------------
 
 /** Table header cell, mirroring the tests library list. */
-function Th({ children }: { children: React.ReactNode }) {
+function Th({ children }: { children?: React.ReactNode }) {
   return <th className="px-3 py-2 text-left font-normal">{children}</th>;
 }
 
@@ -64,8 +74,10 @@ export function PMOListPage() {
   }, [agents]);
 
   const createConfig = useCreatePMOConfig();
+  const deleteConfig = useDeletePMOConfig();
 
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<PMOConfig | null>(null);
   const [formName, setFormName] = useState("");
   const [formAgentId, setFormAgentId] = useState("");
   const [formRootKey, setFormRootKey] = useState("");
@@ -91,6 +103,19 @@ export function PMOListPage() {
         onError: () => toast.error(t(($) => $.config.save_failed)),
       },
     );
+  };
+
+  const handleDelete = (config: PMOConfig) => {
+    deleteConfig.mutate(config.id, {
+      onSuccess: () => {
+        setDeleteTarget(null);
+        toast.success(t(($) => $.config.delete_success));
+      },
+      onError: () => {
+        setDeleteTarget(null);
+        toast.error(t(($) => $.config.delete_failed));
+      },
+    });
   };
 
   const activeAgents = useMemo(() => agents.filter((a) => !a.archived_at), [agents]);
@@ -164,6 +189,28 @@ export function PMOListPage() {
     </Dialog>
   );
 
+  const deleteConfigDialog = (
+    <AlertDialog
+      open={deleteTarget !== null}
+      onOpenChange={(open) => {
+        if (!open) setDeleteTarget(null);
+      }}
+    >
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{t(($) => $.config.delete_confirm)}</AlertDialogTitle>
+          <AlertDialogDescription>{deleteTarget?.name ?? ""}</AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>{t(($) => $.config.cancel)}</AlertDialogCancel>
+          <AlertDialogAction variant="destructive" onClick={() => deleteTarget && handleDelete(deleteTarget)}>
+            {t(($) => $.config.delete)}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+
   const header = (
     <CollectionPageHeader
       icon={ClipboardList}
@@ -193,6 +240,7 @@ export function PMOListPage() {
                 <Th>{t(($) => $.config.schedule)}</Th>
                 <Th>{t(($) => $.config.last_run)}</Th>
                 <Th>{t(($) => $.config.last_applied)}</Th>
+                <Th />
               </tr>
             </thead>
             <tbody>
@@ -215,6 +263,9 @@ export function PMOListPage() {
                   </td>
                   <td className="px-3 py-2">
                     <Skeleton className="h-3 w-16" />
+                  </td>
+                  <td className="px-3 py-2">
+                    <Skeleton className="size-8" />
                   </td>
                 </tr>
               ))}
@@ -270,6 +321,7 @@ export function PMOListPage() {
               <Th>{t(($) => $.config.schedule)}</Th>
               <Th>{t(($) => $.config.last_run)}</Th>
               <Th>{t(($) => $.config.last_applied)}</Th>
+              <Th />
             </tr>
           </thead>
           <tbody>
@@ -309,12 +361,23 @@ export function PMOListPage() {
                     {formatDateTime(config.last_applied_at) || t(($) => $.config.never)}
                   </span>
                 </td>
+                <td className="px-3 py-2 text-right">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label={t(($) => $.config.delete)}
+                    onClick={() => setDeleteTarget(config)}
+                  >
+                    <Trash2 className="size-4" />
+                  </Button>
+                </td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
       {createConfigDialog}
+      {deleteConfigDialog}
     </div>
   );
 }

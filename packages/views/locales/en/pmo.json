@@ -40,7 +40,9 @@
     "not_found_title": "Sync config not found",
     "not_found_description": "This config may have been deleted.",
     "back_to_list": "Back to requirements",
-    "toast_saved": "Config saved."
+    "toast_saved": "Config saved.",
+    "delete_success": "Config deleted.",
+    "delete_failed": "Deleting the config failed."
   },
   "tabs": {
     "preview": "Preview",
