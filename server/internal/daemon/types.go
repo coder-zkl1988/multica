@@ -113,7 +113,7 @@ type Task struct {
 	TestGenerationContext             string                 `json:"test_generation_context,omitempty"`
 	TestRunContext                    string                 `json:"test_run_context,omitempty"`
 	DesignSystemProfileAnalyzeContext string                 `json:"design_system_profile_analyze_context,omitempty"`
-	PMOSyncContext                    string                 `json:"pmo_sync_context,omitempty"` // raw PMO sync context JSONB (workspace + run id + strict acquisition prompt)
+	PMOSyncContext                    json.RawMessage        `json:"pmo_sync_context,omitempty"` // raw PMO sync context JSONB (workspace + run id + strict acquisition prompt)
 	HandoffNote                       string                 `json:"handoff_note,omitempty"`     // assignment handoff instruction; rendered into the opening prompt + issue_context.md
 
 	SquadID               string `json:"squad_id,omitempty"`                // when the picker was a squad, the squad's UUID; Agent is still the resolved leader

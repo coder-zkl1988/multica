@@ -172,11 +172,11 @@ func buildPMOSyncPrompt(task Task) string {
 
 // pmoSyncPromptFromContext extracts the acquisition prompt from the raw
 // PMO sync context JSONB. Returns "" when the context is malformed.
-func pmoSyncPromptFromContext(raw string) string {
+func pmoSyncPromptFromContext(raw []byte) string {
 	var payload struct {
 		Prompt string `json:"prompt"`
 	}
-	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+	if err := json.Unmarshal(raw, &payload); err != nil {
 		return ""
 	}
 	return strings.TrimSpace(payload.Prompt)
