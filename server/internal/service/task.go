@@ -4949,6 +4949,13 @@ func (s *TaskService) enqueueRerunTask(ctx context.Context, issue db.Issue, agen
 // failed agent task. No-op for non-PMO contexts; FailPMOSyncRun's status
 // guard (queued/running only) makes repeat calls safe. Error text is bounded
 // via BoundPMORunError — agent payload never reaches the run row.
+//
+// The run update is not atomic with the task failure: a crash between the two
+// leaves the run "running" until a later failure path routes back here. There
+// is no sweeper for stale running runs today.
+// ponytail: non-atomic run/task failure — window is a single statement and
+// self-heals on the next failure path; add a stale-running-run sweeper (age +
+// no active task) only if manual resyncs start hitting ErrPMOActiveRun again.
 func (s *TaskService) markPMOSyncRunFailedForTask(ctx context.Context, task db.AgentTaskQueue) {
 	pmoCtx, ok := ParsePMOSyncContext(task.Context)
 	if !ok {
@@ -4966,15 +4973,15 @@ func (s *TaskService) markPMOSyncRunFailedForTask(ctx context.Context, task db.A
 	if task.FailureReason.Valid && task.FailureReason.String != "" {
 		code = task.FailureReason.String
 	}
-	msg := ""
+	var errMsg pgtype.Text
 	if task.Error.Valid {
-		msg = task.Error.String
+		errMsg = pgtype.Text{String: BoundPMORunError(task.Error.String), Valid: true}
 	}
 	if _, err := s.Queries.FailPMOSyncRun(ctx, db.FailPMOSyncRunParams{
 		ID:           runID,
 		WorkspaceID:  workspaceID,
 		ErrorCode:    pgtype.Text{String: code, Valid: true},
-		ErrorMessage: pgtype.Text{String: BoundPMORunError(msg), Valid: true},
+		ErrorMessage: errMsg,
 	}); err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		slog.Warn("handle failed tasks: mark pmo run failed",
 			"task_id", util.UUIDToString(task.ID), "run_id", pmoCtx.RunID, "error", err)
