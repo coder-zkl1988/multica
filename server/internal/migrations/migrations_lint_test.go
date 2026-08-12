@@ -155,6 +155,18 @@ var mergedDuplicateMigrationStems = map[string][]string{
 	"284": {"284_task_owner_row_fence", "284_test_case_revision_case_index"},
 }
 
+// legacyFKMigrations records already-applied migrations that create database
+// foreign keys / cascading deletes, grandfathered before the no-FK rule. New
+// migrations must never be added here — database relationships must be
+// resolved in application code (CLAUDE.md「Database and Migration Rules」).
+var legacyFKMigrations = map[string]bool{}
+
+// legacyNonConcurrentIndexMigrations records already-applied migrations that
+// build indexes with plain CREATE INDEX (not CONCURRENTLY) and/or pack
+// multiple statements into one file, grandfathered before the rule. New
+// migrations must never be added here.
+var legacyNonConcurrentIndexMigrations = map[string]bool{}
+
 var migrationPrefixPattern = regexp.MustCompile(`^(\d+)_`)
 
 func TestMigrationFilesHaveMatchingDirections(t *testing.T) {
@@ -258,6 +270,73 @@ func TestNewMigrationPrefixesStartAfterLegacyRange(t *testing.T) {
 			t.Errorf("migration prefix %s is in the frozen legacy range 001-%03d: %v; new migrations must start at %03d", prefix, maxLegacyMigrationPrefix, stems, maxLegacyMigrationPrefix+1)
 		}
 	}
+}
+
+var fkKeywordPattern = regexp.MustCompile(`\bREFERENCES\b|\bFOREIGN\s+KEY\b`)
+
+func TestNoForeignKeysOutsideLegacySet(t *testing.T) {
+	files := migrationFilesForLint(t, "*.up.sql")
+	for _, file := range files {
+		stem := strings.TrimSuffix(filepath.Base(file), ".up.sql")
+		if legacyFKMigrations[stem] {
+			continue
+		}
+		upper := strings.ToUpper(stripSQLComments(readMigrationForLint(t, filepath.Base(file))))
+		if fkKeywordPattern.MatchString(upper) {
+			t.Errorf("%s must not create foreign keys (REFERENCES/FOREIGN KEY); resolve relationships in application code. If this is an already-applied legacy migration, record it in legacyFKMigrations", stem)
+		}
+	}
+}
+
+func TestIndexesUseConcurrentlyOutsideLegacySet(t *testing.T) {
+	files := migrationFilesForLint(t, "*.up.sql")
+	for _, file := range files {
+		stem := strings.TrimSuffix(filepath.Base(file), ".up.sql")
+		if legacyNonConcurrentIndexMigrations[stem] {
+			continue
+		}
+		sql := strings.TrimSpace(stripSQLComments(readMigrationForLint(t, filepath.Base(file))))
+		upper := strings.ToUpper(sql)
+		if !strings.Contains(upper, "CREATE INDEX") && !strings.Contains(upper, "CREATE UNIQUE INDEX") {
+			continue // not an index migration
+		}
+		if !strings.Contains(upper, "CREATE UNIQUE INDEX CONCURRENTLY") &&
+			!strings.Contains(upper, "CREATE INDEX CONCURRENTLY") {
+			t.Errorf("%s must create its index concurrently (CREATE [UNIQUE] INDEX CONCURRENTLY); see CLAUDE.md", stem)
+		}
+		if strings.Count(sql, ";") != 1 {
+			t.Errorf("%s must contain one statement; each concurrent index build needs its own single-statement migration file", stem)
+		}
+	}
+}
+
+// stripSQLComments removes SQL line (--) and block (/* */) comments so lint
+// rules only see executable statements, not prose that happens to mention
+// keywords like "references", "preferences" or "index". Heuristic only; a
+// literal containing -- or /* would be misread, which no migration here does.
+func stripSQLComments(sql string) string {
+	var b strings.Builder
+	b.Grow(len(sql))
+	i := 0
+	for i < len(sql) {
+		if i+1 < len(sql) && sql[i] == '-' && sql[i+1] == '-' {
+			for i < len(sql) && sql[i] != '\n' {
+				i++
+			}
+			continue
+		}
+		if i+1 < len(sql) && sql[i] == '/' && sql[i+1] == '*' {
+			i += 2
+			for i+1 < len(sql) && !(sql[i] == '*' && sql[i+1] == '/') {
+				i++
+			}
+			i += 2
+			continue
+		}
+		b.WriteByte(sql[i])
+		i++
+	}
+	return b.String()
 }
 
 func readMigrationForLint(t *testing.T, name string) string {
