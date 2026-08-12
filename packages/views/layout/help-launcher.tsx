@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowUpRight, BookOpen, CircleHelp, Download, History, MessageCircle } from "lucide-react";
+import { ArrowUpRight, BookOpen, CircleHelp, Download, History, MessageCircle, RefreshCw } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -12,17 +12,47 @@ import {
 } from "@multica/ui/components/ui/dropdown-menu";
 import { useModalStore } from "@multica/core/modals";
 import { useConfigStore } from "@multica/core/config";
+import { toast } from "sonner";
 import { DISCORD_URL, DiscordIcon } from "./discord";
 import { useDownloadPageUrl } from "./use-download-page-url";
 import { useT } from "../i18n";
 
-const DOCS_URL = "https://multica.ai/docs";
-const CHANGELOG_URL = "https://multica.ai/changelog";
+const DOCS_URL = "https://github.com/coder-zkl1988/multica";
+const CHANGELOG_URL = "https://github.com/coder-zkl1988/multica/releases";
+
+// Mirror of apps/desktop/src/shared/updater-types.ts ManualUpdateCheckResult.
+// Kept local so @multica/views stays free of app-layer imports.
+type UpdateCheckResult =
+  | {
+      ok: true;
+      currentVersion: string;
+      latestVersion: string;
+      available: boolean;
+    }
+  | { ok: false; error: string };
 
 export function HelpLauncher() {
   const { t } = useT("layout");
   const serverVersion = useConfigStore((state) => state.serverVersion);
   const downloadUrl = useDownloadPageUrl();
+
+  const checkForUpdates = async () => {
+    const updater = (window as Window & {
+      updater?: { checkForUpdates: () => Promise<UpdateCheckResult> };
+    }).updater;
+    if (!updater) return;
+    const result = await updater.checkForUpdates();
+    if (!result.ok) {
+      toast.error(result.error);
+      return;
+    }
+    toast.success(
+      result.available
+        ? t(($) => $.help.update_ready, { version: result.latestVersion })
+        : t(($) => $.help.up_to_date),
+    );
+  };
+
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
@@ -84,6 +114,12 @@ export function HelpLauncher() {
           <MessageCircle className="h-3.5 w-3.5" />
           {t(($) => $.help.feedback)}
         </DropdownMenuItem>
+        {typeof window !== "undefined" && "updater" in window && (
+          <DropdownMenuItem onClick={() => void checkForUpdates()}>
+            <RefreshCw className="h-3.5 w-3.5" />
+            {t(($) => $.help.check_for_updates)}
+          </DropdownMenuItem>
+        )}
         {serverVersion && (
           <>
             <DropdownMenuSeparator />

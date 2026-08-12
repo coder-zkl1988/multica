@@ -1,6 +1,5 @@
 import { render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { configStore } from "@multica/core/config";
+import { describe, expect, it, vi } from "vitest";
 import enLayout from "../locales/en/layout.json";
 import { DownloadClientsRow } from "./download-clients-row";
 
@@ -12,27 +11,12 @@ vi.mock("../i18n", () => ({
   }),
 }));
 
-afterEach(() => {
-  configStore.getState().setDaemonConfig({});
-});
-
 describe("DownloadClientsRow", () => {
-  it("links to the configured app origin's /download page", () => {
-    configStore
-      .getState()
-      .setDaemonConfig({ daemonAppUrl: "https://app.example.com/" });
+  it("links to the fixed iworker download page", () => {
     render(<DownloadClientsRow />);
     const link = screen.getByText("Download apps").closest("a");
-    expect(link).toHaveAttribute("href", "https://app.example.com/download");
+    expect(link).toHaveAttribute("href", "https://iworker.soyoung.com/download");
     expect(link).toHaveAttribute("target", "_blank");
-  });
-
-  it("degrades to a same-origin /download link before config resolves", () => {
-    render(<DownloadClientsRow />);
-    expect(screen.getByText("Download apps").closest("a")).toHaveAttribute(
-      "href",
-      "/download",
-    );
   });
 
   // The row replaced a dismissible promo; as the only in-app path to the

@@ -38,6 +38,9 @@
     "download_clients": "アプリをダウンロード",
     "discord": "Discord",
     "feedback": "フィードバック",
+    "check_for_updates": "更新を確認",
+    "update_ready": "バージョン {{version}} のダウンロード準備ができました",
+    "up_to_date": "最新の状態です",
     "server_version": "サーバーバージョン {{version}}"
   },
   "workspace_loader": {

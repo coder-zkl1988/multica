@@ -38,6 +38,9 @@
     "download_clients": "下载客户端",
     "discord": "Discord",
     "feedback": "反馈",
+    "check_for_updates": "检查更新",
+    "update_ready": "新版本 {{version}} 已准备好下载",
+    "up_to_date": "已是最新版本",
     "server_version": "服务器版本 {{version}}"
   },
   "workspace_loader": {

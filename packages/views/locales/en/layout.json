@@ -38,6 +38,9 @@
     "download_clients": "Download apps",
     "discord": "Discord",
     "feedback": "Feedback",
+    "check_for_updates": "Check for updates",
+    "update_ready": "Update {{version}} is ready to download",
+    "up_to_date": "You're up to date",
     "server_version": "Server version {{version}}"
   },
   "workspace_loader": {

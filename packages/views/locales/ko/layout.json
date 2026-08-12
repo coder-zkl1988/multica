@@ -38,6 +38,9 @@
     "download_clients": "앱 다운로드",
     "discord": "Discord",
     "feedback": "피드백",
+    "check_for_updates": "업데이트 확인",
+    "update_ready": "버전 {{version}} 다운로드 준비 완료",
+    "up_to_date": "최신 버전입니다",
     "server_version": "서버 버전 {{version}}"
   },
   "workspace_loader": {
