@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -12,26 +11,6 @@ import (
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
-
-// maxPMORunErrorBytes bounds the error text persisted on a failed
-// pmo_sync_run row. Genuine failure reasons are short; an unbounded agent
-// payload must never reach this column (see boundPMORunError callers).
-const maxPMORunErrorBytes = 200
-
-// boundPMORunError truncates a failure/error message to the run row's byte
-// bound, trimming any partial trailing rune the cut leaves behind. Every
-// caller passes ONLY validation or transport error text — never agent output,
-// snapshot content, or external identities — because the stored value is
-// surfaced to workspace members.
-func boundPMORunError(msg string) string {
-	if len(msg) > maxPMORunErrorBytes {
-		msg = msg[:maxPMORunErrorBytes]
-		for len(msg) > 0 && !utf8.ValidString(msg) {
-			msg = msg[:len(msg)-1]
-		}
-	}
-	return msg
-}
 
 // failPMOSyncRunForTask marks the run owning a failed PMO sync agent task as
 // failed with the given error code. Redacted + bounded: errorMsg must be
@@ -52,7 +31,7 @@ func (h *Handler) failPMOSyncRunForTask(ctx context.Context, pmoCtx service.PMOS
 		ID:           runID,
 		WorkspaceID:  workspaceID,
 		ErrorCode:    pgtype.Text{String: errorCode, Valid: true},
-		ErrorMessage: pgtype.Text{String: boundPMORunError(errorMsg), Valid: true},
+		ErrorMessage: pgtype.Text{String: service.BoundPMORunError(errorMsg), Valid: true},
 	}); err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		slog.Warn("pmo sync failure: mark run failed",
 			"run_id", pmoCtx.RunID, "error_code", errorCode, "error", err)
@@ -110,7 +89,7 @@ func (h *Handler) pmoAutoApplyScheduledRun(ctx context.Context, pmoCtx service.P
 		return
 	}
 	if _, err := h.PMOService.ApplyRun(ctx, workspaceID, run.ID, nil); err != nil {
-		bounded := boundPMORunError(err.Error())
+		bounded := service.BoundPMORunError(err.Error())
 		slog.Warn("pmo sync auto-apply failed; run kept preview_ready for review",
 			"task_id", taskID, "run_id", pmoCtx.RunID, "error", bounded)
 		if _, perr := h.Queries.SetPMOSyncRunPreviewError(ctx, db.SetPMOSyncRunPreviewErrorParams{

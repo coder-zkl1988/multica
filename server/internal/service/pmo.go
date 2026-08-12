@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -15,6 +16,26 @@ import (
 )
 
 const PMOSyncContextType = "pmo_sync"
+
+// MaxPMORunErrorBytes bounds the error text persisted on a failed
+// pmo_sync_run row. Genuine failure reasons are short; an unbounded agent
+// payload must never reach this column (see BoundPMORunError callers).
+const MaxPMORunErrorBytes = 200
+
+// BoundPMORunError truncates a failure/error message to the run row's byte
+// bound, trimming any partial trailing rune the cut leaves behind. Every
+// caller passes ONLY validation or transport error text — never agent output,
+// snapshot content, or external identities — because the stored value is
+// surfaced to workspace members.
+func BoundPMORunError(msg string) string {
+	if len(msg) > MaxPMORunErrorBytes {
+		msg = msg[:MaxPMORunErrorBytes]
+		for len(msg) > 0 && !utf8.ValidString(msg) {
+			msg = msg[:len(msg)-1]
+		}
+	}
+	return msg
+}
 
 var (
 	ErrPMOActiveRun          = errors.New("pmo sync already has an active run")

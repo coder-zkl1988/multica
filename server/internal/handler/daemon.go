@@ -3255,7 +3255,7 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 			if pmoErr != nil {
 				// Validation text only — never the raw output. Bounded before
 				// it reaches the task row, the run row, or this response.
-				bounded := boundPMORunError(pmoErr.Error())
+				bounded := service.BoundPMORunError(pmoErr.Error())
 				slog.Warn("pmo sync completion: invalid snapshot output", "task_id", taskID, "error", bounded)
 				failedTask, failErr := h.TaskService.FailTask(r.Context(), parseUUID(taskID), bounded, req.SessionID, req.WorkDir, "pmo_invalid_output", req.SessionRolloutMissing, req.RetiredSessionID)
 				if failErr != nil {

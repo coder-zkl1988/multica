@@ -318,3 +318,38 @@ func TestFailPMOSyncTaskMarksRunFailed(t *testing.T) {
 		t.Fatalf("error_message kept unbounded tail: %q", errorMessage)
 	}
 }
+
+// TestRecoverOrphanedPMOSyncTaskFailsRun covers the daemon-restart recovery
+// path: a PMO sync task that was running when its daemon died must fail the
+// owning run, not leave it stuck "running" (which blocks the next manual sync
+// via ErrPMOActiveRun). The /fail and /complete handlers already propagate;
+// the orphan-recovery path (RecoverOrphanedTasks) previously did not.
+func TestRecoverOrphanedPMOSyncTaskFailsRun(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	config := createPMOConfigForTest(t)
+	run := startPMORunForTest(t, config.ID)
+	taskID := *run.AgentTaskID
+
+	// Bind the task to the test runtime and mark it running, as if the
+	// previous daemon incarnation was executing it when it died.
+	if _, err := testPool.Exec(context.Background(),
+		`UPDATE agent_task_queue SET runtime_id = $1, status = 'running', started_at = now() WHERE id = $2`,
+		testRuntimeID, taskID); err != nil {
+		t.Fatalf("bind pmo task to runtime: %v", err)
+	}
+
+	req := newDaemonTokenRequest("POST", "/api/daemon/runtimes/"+testRuntimeID+"/tasks/recover-orphans", nil, testWorkspaceID, "pmo-recover")
+	req = withURLParam(req, "runtimeId", testRuntimeID)
+	w := httptest.NewRecorder()
+	testHandler.RecoverOrphanedTasks(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("RecoverOrphanedTasks: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	status, code, msg, _ := pmoRunRowForTest(t, run.ID)
+	if status != "failed" || code != "runtime_recovery" {
+		t.Fatalf("run = %q/%q, want failed/runtime_recovery (msg %q)", status, code, msg)
+	}
+}

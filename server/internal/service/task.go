@@ -4944,6 +4944,43 @@ func (s *TaskService) enqueueRerunTask(ctx context.Context, issue db.Issue, agen
 // All callers that surface a task as failed — sweepers, FailTask,
 // recover-orphans — funnel through here so the same UI-consistency
 // guarantees apply on every code path.
+
+// markPMOSyncRunFailedForTask fails the PMO sync run owning a terminally
+// failed agent task. No-op for non-PMO contexts; FailPMOSyncRun's status
+// guard (queued/running only) makes repeat calls safe. Error text is bounded
+// via BoundPMORunError — agent payload never reaches the run row.
+func (s *TaskService) markPMOSyncRunFailedForTask(ctx context.Context, task db.AgentTaskQueue) {
+	pmoCtx, ok := ParsePMOSyncContext(task.Context)
+	if !ok {
+		return
+	}
+	runID, err := util.ParseUUID(pmoCtx.RunID)
+	if err != nil {
+		return
+	}
+	workspaceID, err := util.ParseUUID(pmoCtx.WorkspaceID)
+	if err != nil {
+		return
+	}
+	code := "agent_failed"
+	if task.FailureReason.Valid && task.FailureReason.String != "" {
+		code = task.FailureReason.String
+	}
+	msg := ""
+	if task.Error.Valid {
+		msg = task.Error.String
+	}
+	if _, err := s.Queries.FailPMOSyncRun(ctx, db.FailPMOSyncRunParams{
+		ID:           runID,
+		WorkspaceID:  workspaceID,
+		ErrorCode:    pgtype.Text{String: code, Valid: true},
+		ErrorMessage: pgtype.Text{String: BoundPMORunError(msg), Valid: true},
+	}); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		slog.Warn("handle failed tasks: mark pmo run failed",
+			"task_id", util.UUIDToString(task.ID), "run_id", pmoCtx.RunID, "error", err)
+	}
+}
+
 func (s *TaskService) HandleFailedTasks(ctx context.Context, tasks []db.AgentTaskQueue) int {
 	if len(tasks) == 0 {
 		return 0
@@ -4977,6 +5014,16 @@ func (s *TaskService) HandleFailedTasks(ctx context.Context, tasks []db.AgentTas
 			if t.IssueID.Valid {
 				retriedIssues[util.UUIDToString(t.IssueID)] = true
 			}
+		} else {
+			// PMO sync failure propagation: a PMO sync task that terminally
+			// failed (no auto-retry was created — PMO tasks carry no issue or
+			// chat link, so retryEligible is never true) must fail its owning
+			// run, or the run stays "running" forever and blocks the next
+			// manual sync (ErrPMOActiveRun). RecoverOrphanedTasks and the
+			// runtime sweeper both land here, which is why the /fail and
+			// /complete handlers also stay in sync: the FailPMOSyncRun status
+			// guard makes the repeated call a no-op.
+			s.markPMOSyncRunFailedForTask(ctx, t)
 		}
 
 		failureReason := "agent_error"
