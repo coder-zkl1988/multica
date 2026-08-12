@@ -106,6 +106,7 @@ export function PMOListPage() {
   };
 
   const handleDelete = (config: PMOConfig) => {
+    if (deleteConfig.isPending) return;
     deleteConfig.mutate(config.id, {
       onSuccess: () => {
         setDeleteTarget(null);
@@ -202,8 +203,12 @@ export function PMOListPage() {
           <AlertDialogDescription>{deleteTarget?.name ?? ""}</AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel>{t(($) => $.config.cancel)}</AlertDialogCancel>
-          <AlertDialogAction variant="destructive" onClick={() => deleteTarget && handleDelete(deleteTarget)}>
+          <AlertDialogCancel disabled={deleteConfig.isPending}>{t(($) => $.config.cancel)}</AlertDialogCancel>
+          <AlertDialogAction
+            variant="destructive"
+            disabled={deleteConfig.isPending}
+            onClick={() => deleteTarget && handleDelete(deleteTarget)}
+          >
             {t(($) => $.config.delete)}
           </AlertDialogAction>
         </AlertDialogFooter>
@@ -365,7 +370,7 @@ export function PMOListPage() {
                   <Button
                     variant="ghost"
                     size="icon"
-                    aria-label={t(($) => $.config.delete)}
+                    aria-label={`${t(($) => $.config.delete)}: ${config.name}`}
                     onClick={() => setDeleteTarget(config)}
                   >
                     <Trash2 className="size-4" />
