@@ -5,7 +5,7 @@
   "meta_line": "slug: {{slug}} · 状态来源: {{source}}",
   "refs_title": "关联项目 / 需求",
   "refs_empty": "暂无追溯链接（项目进入工作区后回填）",
-  "evidence_title": "上线状态证据",
+  "evidence_title": "证据",
   "evidence_pending": "待确认 —— 无 PMO / 代码仓库证据时不以 Issue 状态推断上线",
   "updated_at": "更新时间: {{time}}",
   "editors_suffix": " · 产品编辑人: {{ids}}",

@@ -5,7 +5,7 @@
   "meta_line": "slug: {{slug}} · 状態ソース: {{source}}",
   "refs_title": "関連プロジェクト / 要件",
   "refs_empty": "追跡リンクはまだありません（プロジェクトがワークスペースに入るとバックフィルされます）",
-  "evidence_title": "リリース状態のエビデンス",
+  "evidence_title": "エビデンス",
   "evidence_pending": "確認待ち — PMO / コードリポジトリのエビデンスなしに Issue ステータスだけでリリース済みと判断しません",
   "updated_at": "更新日時: {{time}}",
   "editors_suffix": " · 編集者: {{ids}}",
