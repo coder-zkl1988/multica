@@ -1,0 +1,92 @@
+---
+title: Deployment Surfaces and Runtime Updates
+description: Decide whether a change requires Web, Backend, Desktop, or local CLI daemon deployment.
+---
+
+Multica ships several independent artifacts. Do not choose a deployment surface only from the source directory. First determine:
+
+> Which process runs the code, and which artifact starts that process.
+
+This matters especially under `server/`, which contains both the central Backend and code compiled into the local `multica` CLI daemon.
+
+## Deployment matrix
+
+| Change or execution location | Artifact to deploy |
+| --- | --- |
+| Browser UI, Next.js routes, or platform wiring | Web frontend |
+| API, database access, central scheduling, or server authentication | Backend |
+| Electron main process, Desktop-only UI, or IPC | Desktop |
+| `server/internal/daemon/**`, `server/internal/agentguard/**`, providers, or execution environment | Runtime CLI; ship it with Desktop when Desktop manages the daemon |
+| A standalone daemon started by systemd or a similar service | Update the CLI separately and restart the service |
+| `packages/core`, `packages/ui`, or `packages/views` | Deploy every client that consumes the change, often Web, Desktop, or both |
+
+One feature can cross several surfaces. The Backend may create a task, while workspace preparation, privacy instruction injection, provider startup, and local tool execution happen in the daemon that claims it.
+
+## Investigation workflow
+
+1. Identify the daemon that actually claimed the task. Do not infer it from the client that created the issue.
+2. Inspect daemon logs for `picked task`, `runtime_id`, `daemon_version`, and `codex lifecycle phase=spawn`.
+3. Identify the executable used by the running process, then run the version command against that exact path:
+
+   ```bash
+   ps aux | grep '[m]ultica daemon'
+   /path/to/actual/multica version --output json
+   ```
+
+   The CLI found on `PATH` may differ from the binary used by a Desktop bundle or service `ExecStart`.
+4. Check `launched_by`. A value of `desktop` means Desktop manages the daemon; an empty value usually means a standalone CLI daemon.
+5. Compare the binary commit and build time with the target fix. Updated source on a host does not prove that the running binary was rebuilt or restarted.
+6. Determine whether the process came from a Desktop bundle, managed CLI, standalone release, manual path, or service `ExecStart`, then update that artifact.
+
+## Desktop Runtime boundary
+
+Desktop resolves the local CLI in this order:
+
+1. bundled CLI shipped inside the Desktop app;
+2. managed CLI in Desktop user data;
+3. downloaded CLI release;
+4. CLI found on `PATH`.
+
+A valid bundled CLI wins. Desktop starts it with `MULTICA_LAUNCHED_BY=desktop`. A Desktop-managed daemon skips CLI self-update and rejects central Runtime Update requests, directing users to update Desktop instead.
+
+Therefore, for local daemon behavior:
+
+- Web-only deployment has no effect;
+- Backend-only deployment has no effect;
+- publishing only a standalone CLI release does not replace an existing bundled CLI;
+- publishing Desktop with a newly bundled CLI is the supported update path;
+- manually replacing the bundled binary is suitable only for temporary verification.
+
+A production Desktop package should build `server/cmd/multica` from the current repository and add it to the application bundle. If Go is unavailable, the packaging script skips compilation and may bundle a previously built binary from `server/bin`; when no usable binary exists, Desktop downloads a CLI release at runtime. Before release, confirm that the CLI build succeeded and that the bundled CLI binary commit contains the intended change. See:
+
+```text
+apps/desktop/src/main/daemon-manager.ts
+apps/desktop/scripts/package.mjs
+apps/desktop/scripts/bundle-cli.mjs
+```
+
+## Standalone daemon boundary
+
+A daemon started directly by systemd, launchd, or the command line is not managed by Desktop. To update it:
+
+1. build or download the new `multica` CLI;
+2. replace the exact binary used by the service `ExecStart`;
+3. restart the service;
+4. confirm the restart in startup logs, then run `version --output json` against the exact binary path from step 2.
+
+Starting a daemon with `--no-auto-update` disables periodic release checks and automatic release downloads, but the daemon may still accept a central Runtime Update. If its on-disk executable is replaced manually, the normally enabled auto-reload path may also restart into the new binary once the daemon is idle. Regardless of the channel, updating source files or the central Backend alone does not change the code already loaded by the running process; verify that the new binary was actually adopted.
+
+## Example: a privacy instruction fix appears ineffective
+
+`server/internal/agentguard/privacy.go` defines the privacy instruction, and `server/internal/daemon/daemon.go` injects it before the local Runtime starts an agent. Although these files are under `server/`, this path is compiled into the `multica` CLI rather than supplied dynamically by the central Backend for every task.
+
+In one investigation, a Desktop Runtime claimed the task, but its binary commit predated the fix that allowed reading an explicitly provided Feishu PRD link. Deploying Web and Backend could not change the old bundled instruction. The fix required a Desktop release containing the new CLI, followed by verification of the binary commit on the execution computer.
+
+## Pre-release checklist
+
+- [ ] Which process runs the changed code?
+- [ ] Which executable is that process actually using?
+- [ ] Does its binary commit include the change?
+- [ ] Is the Runtime Desktop-managed or standalone?
+- [ ] Was the correct artifact updated, and were required processes restarted?
+- [ ] Do logs and version output confirm that the new version is running?

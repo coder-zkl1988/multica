@@ -1,0 +1,130 @@
+---
+title: 发布面与 Runtime 更新
+description: 判断一项修改应发布 Web、Backend、Desktop，还是执行任务的本机 CLI daemon。
+---
+
+Multica 的代码会进入多个独立 artifact。判断一项修改如何生效时，不要只看源码目录；先确认：
+
+> 代码最终在哪个进程中运行，以及该进程从哪个 artifact 启动。
+
+尤其是 `server/`：它既包含中央 Backend，也包含会编译进本机 `multica` CLI 的 daemon 代码。修改了 `server/` 不等于只需要发布 Backend。
+
+## 发布面矩阵
+
+| 修改或运行位置 | 需要发布的 artifact |
+| --- | --- |
+| 浏览器 UI、Next.js route 或平台 wiring | Web frontend |
+| API、数据库访问、中央调度、服务端鉴权 | Backend |
+| Electron 主进程、Desktop 专属 UI 或 IPC | Desktop |
+| `server/internal/daemon/**`、`server/internal/agentguard/**`、provider、exec environment | Runtime CLI；由 Desktop 托管时需随 Desktop 发布 |
+| systemd 等方式启动的独立 daemon | 单独更新 CLI，并重启对应 service |
+| `packages/core`、`packages/ui`、`packages/views` | 发布所有实际引用改动的客户端，通常是 Web、Desktop 或两者 |
+
+同一条功能链路可能跨越多个发布面。例如 Backend 创建 task，但 task 的工作区准备、隐私指令注入、provider 启动和本机工具执行都可能发生在领取 task 的 daemon 中。
+
+## 判断流程
+
+### 1. 找到实际执行 Runtime
+
+先确认 task 被哪台 daemon 领取，不要根据 issue 是从 Web 还是 Desktop 创建来推断执行位置。优先检查 daemon 日志中的：
+
+```text
+picked task
+runtime_id
+daemon_version
+codex lifecycle phase=spawn
+```
+
+### 2. 确认实际二进制
+
+在执行机上检查正在运行的进程及版本：
+
+```bash
+ps aux | grep '[m]ultica daemon'
+/path/to/actual/multica version --output json
+```
+
+先确认进程的 executable path，再对该路径执行版本命令。`PATH` 中的 `multica` 不一定等于 Desktop 或 service 当前实际运行的二进制。
+
+### 3. 判断由谁管理
+
+检查进程环境或启动配置中的 `launched_by`：
+
+- `desktop`：daemon 由 Multica Desktop 管理；
+- 空值：通常是用户或 systemd 直接启动的独立 CLI daemon。
+
+### 4. 对照构建提交
+
+把 daemon 报告的 binary commit、构建时间与目标修复提交对照。部署机上的源码已更新，不代表已运行的二进制也已重新构建和重启。
+
+### 5. 选择更新渠道
+
+确定该进程来自 Desktop 安装包、独立 CLI release、手动安装路径还是 systemd 的 `ExecStart`，再更新对应 artifact。
+
+## Desktop Runtime 的更新边界
+
+Desktop 启动本机 daemon 时，CLI 选择顺序是：
+
+1. Desktop 安装包内置的 bundled CLI；
+2. Desktop user data 中的 managed CLI；
+3. 下载并安装固定 CLI release；
+4. `PATH` 中的 CLI。
+
+bundled CLI 存在且可用时始终优先。Desktop 启动它时会设置：
+
+```text
+MULTICA_LAUNCHED_BY=desktop
+```
+
+由 Desktop 管理的 daemon 会跳过 CLI 自更新，也会拒绝中央服务端下发的 Runtime Update，提示通过更新 Desktop 升级 CLI。因此，修改本机 daemon 行为后：
+
+- 只发布 Web：不会生效；
+- 只发布 Backend：不会生效；
+- 只发布独立 CLI release：已有 bundled CLI 的 Desktop 不会自动采用；
+- 发布包含新 bundled CLI 的 Desktop：正式生效；
+- 手动替换安装包内 CLI：只适合临时验证，不是正式发布方式。
+
+正式 Desktop 打包应从当前仓库编译 `server/cmd/multica`，再将二进制放入安装包。若构建环境缺少 Go，打包脚本会跳过编译，并可能打入之前已有的 `server/bin` 二进制；若不存在可用二进制，Desktop 会在运行时下载 CLI release。因此发布前必须确认 CLI 构建成功，并验证 bundled CLI 的 binary commit 包含目标修改。相关实现位于：
+
+```text
+apps/desktop/src/main/daemon-manager.ts
+apps/desktop/scripts/package.mjs
+apps/desktop/scripts/bundle-cli.mjs
+```
+
+## 独立 daemon 的更新边界
+
+systemd、launchd 或命令行直接启动的 daemon 不受 Desktop 管理。更新这类 Runtime 时需要：
+
+1. 构建或下载新的 `multica` CLI；
+2. 替换 service 的 `ExecStart` 实际使用的二进制；
+3. 重启 service；
+4. 从启动日志确认重启成功，并对第 2 步的实际二进制路径执行 `version --output json` 验证版本。
+
+如果启动参数包含 `--no-auto-update`，daemon 会关闭定期检查以及自动拉取 release，但仍可能响应中央服务端下发的 Runtime Update。若磁盘上的实际二进制被手动替换，默认启用的 auto-reload 也可能在 daemon 空闲时重启到新版本。无论使用哪种渠道，仅更新部署目录中的源码或中央 Backend 都不会改变当前已加载的代码；必须验证新二进制已经被采用。
+
+## 案例：隐私指令修复未生效
+
+出现下面这类提示时：
+
+```text
+限制：运行时的高优先级隐私边界禁止读取本地用户的飞书数据……
+```
+
+先查指令由哪个进程注入。在当前实现中：
+
+- `server/internal/agentguard/privacy.go` 定义隐私指令；
+- `server/internal/daemon/daemon.go` 在本机 Runtime 启动 agent 前注入该指令。
+
+这段代码虽然位于 `server/`，但它编译进 `multica` CLI，不是由中央 Backend 在每次请求时动态提供。
+
+一次实际排查中，task 由 Desktop Runtime 领取；该 Runtime 的 binary commit 早于“允许读取用户明确提供的飞书 PRD 链接”的修复提交。因此 Web 和 Backend 即使已经部署新代码，旧 Desktop bundled CLI 仍会注入旧隐私指令。正确处理是发布包含新 CLI 的 Desktop，并在执行机确认新 binary commit 后重新运行 task。
+
+## 发布前检查
+
+- [ ] 修改最终运行在哪个进程？
+- [ ] 这个进程实际加载的是哪个 executable？
+- [ ] binary commit 是否包含目标修改？
+- [ ] Runtime 是 Desktop 托管还是独立 daemon？
+- [ ] 是否更新了正确 artifact，并重启了需要重启的进程？
+- [ ] 是否从日志和版本输出验证了新版本正在运行？
