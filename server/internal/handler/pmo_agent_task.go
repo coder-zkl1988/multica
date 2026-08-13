@@ -106,19 +106,23 @@ func (h *Handler) pmoAutoApplyScheduledRun(ctx context.Context, pmoCtx service.P
 
 // storePMOSyncRunPreview persists a validated snapshot as the run's preview:
 // normalized source snapshot + diff + summary, status → preview_ready,
-// completed_at stamped. The diff runs against empty local state: Task 5
-// stores the preview only and never touches projects or issues — the
-// three-way apply against canonical entities lands in Task 6.
+// completed_at stamped. The diff runs against empty local state (Task 5
+// stores the preview only and never touches projects or issues), but resolved
+// workspace-email assignee mappings are injected before the diff is stored.
 func (h *Handler) storePMOSyncRunPreview(ctx context.Context, qtx *db.Queries, pmoCtx service.PMOSyncContext, snapshot service.PMOSnapshot) error {
-	sourceSnapshot, diffJSON, summaryJSON, err := service.PreparePMOSyncRunPreview(snapshot)
-	if err != nil {
-		return err
-	}
 	runID, err := util.ParseUUID(pmoCtx.RunID)
 	if err != nil {
 		return err
 	}
 	workspaceID, err := util.ParseUUID(pmoCtx.WorkspaceID)
+	if err != nil {
+		return err
+	}
+	assigneeMappings, err := service.ResolvePMOAssigneeMappings(ctx, qtx, workspaceID, snapshot, nil)
+	if err != nil {
+		return err
+	}
+	sourceSnapshot, diffJSON, summaryJSON, err := service.PreparePMOSyncRunPreview(snapshot, assigneeMappings)
 	if err != nil {
 		return err
 	}

@@ -201,13 +201,18 @@ func (s *PMOService) applySnapshotInTx(
 	if err != nil {
 		return result, fmt.Errorf("pmo apply: load links: %w", err)
 	}
-	assigneeMappings := map[string]string{}
+	explicitAssigneeMappings := map[string]string{}
 	byIdentity := map[string]db.PmoSyncLink{}
 	for _, link := range linkRows {
 		byIdentity[link.ExternalType+"\x00"+link.ExternalKey] = link
 		if link.ExternalType == pmoExternalTypeAssignee && link.LocalID.Valid {
-			assigneeMappings[link.ExternalKey] = util.UUIDToString(link.LocalID)
+			explicitAssigneeMappings[link.ExternalKey] = util.UUIDToString(link.LocalID)
 		}
+	}
+
+	assigneeMappings, err := ResolvePMOAssigneeMappings(ctx, qtx, workspaceID, snapshot, explicitAssigneeMappings)
+	if err != nil {
+		return result, err
 	}
 
 	// Apply always re-reads CURRENT local values so a local edit made after
@@ -332,7 +337,7 @@ func (s *PMOService) applySnapshotInTx(
 	// mapped or not, so the mapping queue lists exactly the outstanding
 	// identities. Never infer a member by display name — only explicit
 	// SetAssigneeMapping resolves local_id.
-	if err := s.upsertAssigneeLinks(ctx, qtx, workspaceID, run.ConfigID, snapshot, byIdentity); err != nil {
+	if err := s.upsertAssigneeLinks(ctx, qtx, workspaceID, run.ConfigID, snapshot, byIdentity, assigneeMappings); err != nil {
 		return result, err
 	}
 	result.summary.UnresolvedAssignees = len(diff.Warnings)
@@ -876,23 +881,8 @@ func requirementIdentity(entity PMOEntityDiff, requirements map[string]PMORequir
 
 // upsertAssigneeLinks ensures one assignee link row per external owner in
 // the snapshot, preserving any existing explicit member mapping.
-func (s *PMOService) upsertAssigneeLinks(ctx context.Context, qtx *db.Queries, workspaceID, configID pgtype.UUID, snapshot PMOSnapshot, byIdentity map[string]db.PmoSyncLink) error {
-	owners := map[string]*PMOExternalOwner{}
-	addOwner := func(o *PMOExternalOwner) {
-		if o != nil && o.ExternalID != "" {
-			owners[o.ExternalID] = o
-		}
-	}
-	addOwner(snapshot.Parent.Owner)
-	for _, child := range snapshot.Children {
-		addOwner(child.Owner)
-		for i := range child.Tasks {
-			addOwner(child.Tasks[i].Owner)
-		}
-	}
-	for i := range snapshot.Tasks {
-		addOwner(snapshot.Tasks[i].Owner)
-	}
+func (s *PMOService) upsertAssigneeLinks(ctx context.Context, qtx *db.Queries, workspaceID, configID pgtype.UUID, snapshot PMOSnapshot, byIdentity map[string]db.PmoSyncLink, assigneeMappings map[string]string) error {
+	owners := pmoSnapshotOwners(snapshot)
 
 	for externalID, owner := range owners {
 		identity := pmoExternalTypeAssignee + "\x00" + externalID
@@ -908,9 +898,19 @@ func (s *PMOService) upsertAssigneeLinks(ctx context.Context, qtx *db.Queries, w
 			BaselineLocal:    localJSON,
 			ExternalMetadata: []byte(`{}`),
 		}
+		// Explicit mappings (and any already-persisted local mapping) win;
+		// automatic email matches only fill links that have no local_id yet.
 		if existing.ID.Valid && existing.LocalID.Valid {
 			params.LocalType = existing.LocalType
 			params.LocalID = existing.LocalID
+		} else if userID := assigneeMappings[externalID]; userID != "" {
+			localID, err := util.ParseUUID(userID)
+			if err != nil {
+				return fmt.Errorf("pmo assignee mapping for %q is not a UUID: %w", externalID, err)
+			}
+			localJSON, _ = json.Marshal(map[string]any{"member_id": userID})
+			params.LocalType = pgtype.Text{String: pmoLocalTypeMember, Valid: true}
+			params.LocalID = localID
 		}
 		if _, err := qtx.UpsertPMOSyncLink(ctx, params); err != nil {
 			return err

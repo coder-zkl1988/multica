@@ -36,6 +36,8 @@ func TestBuildPromptPMOSyncStrictAndClean(t *testing.T) {
 		"You are running as a PMO requirement sync agent",
 		"Return JSON only",
 		"EXT-P-001",
+		"owner.external_id",
+		"@soyoung.com",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("PMO prompt missing %q:\n%s", want, out)

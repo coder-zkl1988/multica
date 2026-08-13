@@ -393,11 +393,49 @@ describe("PMOConfigDetailPage preview tab", () => {
     previewConfig();
     setRuns([makeRun()]);
     renderPage();
-    // EXT-P-001 appears once per diff row for that entity (title + status).
-    expect(screen.getAllByText("EXT-P-001").length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText("New external title")).toBeInTheDocument();
+    // Entity name is the primary text; the stable external key is secondary.
+    expect(screen.getAllByTestId("pmo-entity-name").map((node) => node.textContent)).toEqual(
+      expect.arrayContaining(["New external title", "New task title"]),
+    );
+    expect(screen.getAllByTestId("pmo-entity-key").map((node) => node.textContent)).toEqual(
+      expect.arrayContaining(["EXT-P-001", "TASK-001"]),
+    );
     expect(screen.getByText("New local title")).toBeInTheDocument();
-    expect(screen.getByText("TASK-001")).toBeInTheDocument();
+  });
+
+  it("falls back to the stable external key when no title is present", () => {
+    previewConfig();
+    setRuns([makeRun({
+      diff: {
+        entities: [
+          {
+            external_type: "task",
+            external_key: "task-d46ba80ebcc030c3",
+            local_type: "issue",
+            local_id: "issue-2",
+            action: "create",
+            fields: {
+              title: {
+                baseline_external: null,
+                baseline_local: null,
+                external: null,
+                local: null,
+                decision: "incoming",
+              },
+            },
+          },
+        ],
+        warnings: [],
+        summary: { creates: 1, incoming_fields: 1, local_only_fields: 0, converged_fields: 0, conflicts: 0, external_removed: 0, unresolved_assignees: 0 },
+      },
+    })]);
+    renderPage();
+    expect(screen.getAllByTestId("pmo-entity-name").map((node) => node.textContent)).toEqual(
+      expect.arrayContaining(["task-d46ba80ebcc030c3"]),
+    );
+    expect(screen.getAllByTestId("pmo-entity-key").map((node) => node.textContent)).toEqual(
+      expect.arrayContaining(["task-d46ba80ebcc030c3"]),
+    );
   });
 
   it("shows an empty preview when there are no runs", () => {
@@ -473,7 +511,7 @@ describe("PMOConfigDetailPage preview tab", () => {
     setRuns([makeRun()]);
     renderPage();
     fireEvent.click(screen.getByRole("button", { name: "Conflicts" }));
-    expect(screen.getByText("New external title")).toBeInTheDocument();
+    expect(screen.getAllByText("New external title").length).toBeGreaterThan(0);
     // The incoming-only status/task rows are filtered out under "Conflicts".
     expect(screen.queryByText("Incoming")).toBeNull();
     expect(screen.queryByText("New task title")).toBeNull();

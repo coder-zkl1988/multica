@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -113,6 +114,33 @@ func parsePGUUID(t *testing.T, s string) pgtype.UUID {
 		t.Fatalf("parse uuid %q: %v", s, err)
 	}
 	return u
+}
+
+// addPMOApplyMember inserts a user with a corporate @soyoung.com email and a
+// workspace member row, returning the user id for auto-mapping assertions.
+func addPMOApplyMember(t *testing.T, f pmoApplyFixture, account string) pgtype.UUID {
+	t.Helper()
+	ctx := context.Background()
+	email := strings.ToLower(account) + "@soyoung.com"
+	var userID string
+	if err := f.pool.QueryRow(ctx,
+		`INSERT INTO "user" (name, email) VALUES ('PMO Apply Email Member', $1) RETURNING id`,
+		email,
+	).Scan(&userID); err != nil {
+		t.Fatalf("create pmo apply email user: %v", err)
+	}
+	if _, err := f.pool.Exec(ctx,
+		`INSERT INTO member (workspace_id, user_id, role) VALUES ($1, $2, 'member')`,
+		f.workspaceID, userID,
+	); err != nil {
+		t.Fatalf("create pmo apply email member: %v", err)
+	}
+	id := parsePGUUID(t, userID)
+	t.Cleanup(func() {
+		_, _ = f.pool.Exec(context.Background(), `DELETE FROM member WHERE workspace_id = $1 AND user_id = $2`, f.workspaceID, userID)
+		_, _ = f.pool.Exec(context.Background(), `DELETE FROM "user" WHERE id = $1`, userID)
+	})
+	return id
 }
 
 // pmoApplyTask builds one external requirement/task map for snapshot fixtures.
@@ -631,6 +659,69 @@ func TestApplyPMORunUnresolvedAndMappedAssignees(t *testing.T) {
 	mapped := pmoLinkByExternal(t, f, "assignee", "EXT-U-001")
 	if mapped.LocalType.String != "member" || mapped.LocalID != f.ownerID {
 		t.Fatalf("assignee mapping link = %+v", mapped)
+	}
+}
+
+func TestApplyPMORunAutoMapsBareOwnerIDByWorkspaceEmail(t *testing.T) {
+	f := newPMOApplyFixture(t)
+	ctx := context.Background()
+	memberID := addPMOApplyMember(t, f, "yanmeichen")
+
+	owner := map[string]any{"external_id": "YanMeiChen", "display_name": "Yan Mei Chen"}
+	parent := pmoRequirement("EXT-P-001", "P-001", "Auto Map Project", "planned", "planned", 1)
+	parent["owner"] = owner
+	child := pmoChildWithTasks(t, "EXT-I-001", "I-001", "Auto Mapped Child", "todo", 2)
+	child["owner"] = owner
+
+	snapshot := buildPMOSnapshotJSON(t, parent, []map[string]any{child}, nil)
+	run := seedPMOPreview(t, f, snapshot)
+	applied, err := f.svc.ApplyRun(ctx, f.workspaceID, run.ID, nil)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if applied.Status != "applied" {
+		t.Fatalf("status = %q, want applied", applied.Status)
+	}
+
+	childLink := pmoLinkByExternal(t, f, "requirement", "EXT-I-001")
+	issue := issueByID(t, f.pool, childLink.LocalID)
+	if issue.AssigneeID != memberID || issue.AssigneeType.String != "member" {
+		t.Fatalf("issue assignee = %v/%q, want member %v", issue.AssigneeID, issue.AssigneeType.String, memberID)
+	}
+	assigneeLink := pmoLinkByExternal(t, f, "assignee", "YanMeiChen")
+	if assigneeLink.LocalType.String != "member" || assigneeLink.LocalID != memberID {
+		t.Fatalf("assignee link = %+v, want member %v", assigneeLink, memberID)
+	}
+}
+
+func TestApplyPMORunKeepsExplicitAssigneeMappingOverEmailMatch(t *testing.T) {
+	f := newPMOApplyFixture(t)
+	ctx := context.Background()
+	_ = addPMOApplyMember(t, f, "yanmeichen")
+
+	owner := map[string]any{"external_id": "yanmeichen", "display_name": "Yan Mei Chen"}
+	parent := pmoRequirement("EXT-P-001", "P-001", "Explicit Wins Project", "planned", "planned", 1)
+	parent["owner"] = owner
+	child := pmoChildWithTasks(t, "EXT-I-001", "I-001", "Explicit Wins Child", "todo", 2)
+	child["owner"] = owner
+
+	snapshot := buildPMOSnapshotJSON(t, parent, []map[string]any{child}, nil)
+	if _, err := f.svc.SetAssigneeMapping(ctx, f.workspaceID, f.configID, "yanmeichen", f.ownerID); err != nil {
+		t.Fatalf("SetAssigneeMapping: %v", err)
+	}
+	run := seedPMOPreview(t, f, snapshot)
+	if _, err := f.svc.ApplyRun(ctx, f.workspaceID, run.ID, nil); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+
+	childLink := pmoLinkByExternal(t, f, "requirement", "EXT-I-001")
+	issue := issueByID(t, f.pool, childLink.LocalID)
+	if issue.AssigneeID != f.ownerID || issue.AssigneeType.String != "member" {
+		t.Fatalf("issue assignee = %v/%q, want explicit member %v", issue.AssigneeID, issue.AssigneeType.String, f.ownerID)
+	}
+	assigneeLink := pmoLinkByExternal(t, f, "assignee", "yanmeichen")
+	if assigneeLink.LocalType.String != "member" || assigneeLink.LocalID != f.ownerID {
+		t.Fatalf("assignee link = %+v, want explicit member %v", assigneeLink, f.ownerID)
 	}
 }
 

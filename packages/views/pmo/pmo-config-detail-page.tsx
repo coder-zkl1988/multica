@@ -316,9 +316,13 @@ export function PMOConfigDetailPage() {
                 className={cn("border-b last:border-b-0", rowConflicted && "bg-warning/5")}
               >
                 <td className="px-3 py-1.5 align-top">
-                  <TruncatedValue value={row.entityKey} />
+                  <div data-testid="pmo-entity-name">
+                    <TruncatedValue value={row.entityName} />
+                  </div>
                   <span className="block text-micro text-muted-foreground">
                     {row.externalType === "requirement" ? t(($) => $.entities.requirement) : row.externalType === "task" ? t(($) => $.entities.task) : row.externalType}
+                    {" · "}
+                    <span data-testid="pmo-entity-key" className="font-mono">{row.entityKey}</span>
                   </span>
                 </td>
                 <td className="max-w-36 px-3 py-1.5 align-top">

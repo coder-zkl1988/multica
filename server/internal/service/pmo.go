@@ -70,16 +70,16 @@ func ParsePMOSyncContext(contextJSON []byte) (PMOSyncContext, bool) {
 
 // PreparePMOSyncRunPreview serializes a validated snapshot into the columns
 // StorePMOSyncRunPreview persists: the normalized source snapshot plus a
-// three-way diff and its summary. Task 5 has no linked canonical entities
-// yet (the apply logic lands in Task 6), so the diff runs against empty
-// local state — every snapshot entity reads as a create proposal and the
-// preview changes no projects or issues.
-func PreparePMOSyncRunPreview(snapshot PMOSnapshot) (sourceSnapshot, diffJSON, summaryJSON []byte, err error) {
+// three-way diff and its summary. The preview runs against empty local state
+// (every snapshot entity reads as a create proposal and no projects or issues
+// are changed), but already carries resolved assignee mappings so the stored
+// diff and unresolved warnings reflect workspace email matches.
+func PreparePMOSyncRunPreview(snapshot PMOSnapshot, assigneeMappings map[string]string) (sourceSnapshot, diffJSON, summaryJSON []byte, err error) {
 	sourceSnapshot, err = json.Marshal(snapshot)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("marshal pmo source snapshot: %w", err)
 	}
-	diff := DiffPMOSnapshot(PMODiffInput{Snapshot: snapshot})
+	diff := DiffPMOSnapshot(PMODiffInput{Snapshot: snapshot, AssigneeMappings: assigneeMappings})
 	diffJSON, err = json.Marshal(diff)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("marshal pmo diff: %w", err)
@@ -309,6 +309,10 @@ func BuildPMOSyncPrompt(rootExternalKey string) string {
 Return JSON only: one object, with no Markdown fence or prose.
 Use exactly this structure:
 {"schema_version":"1","snapshot_complete":true,"parent_requirement":{"key":"","display_number":"","numeric_id":1,"title":"","description":"","source_status":"","status":"planned","owner":null,"start_date":null,"due_date":null,"workload":null},"child_requirements":[{"key":"","display_number":"","numeric_id":2,"title":"","description":"","source_status":"","status":"todo","owner":null,"start_date":null,"due_date":null,"workload":null,"tasks":[]}],"tasks":[]}
-Each owner is null or {"external_id":"","display_name":""}. Each task contains task_id, scheme_id, title, description, source_status, status, owner, start_date, due_date, workload, and updated_at.
+Each owner is null or {"external_id":"","display_name":""}.
+Set owner.external_id to the owner's corporate email whenever it is available.
+If the source exposes only a bare corporate account such as yanmeichen, return yanmeichen@soyoung.com.
+Do not concatenate the account with the display name, and do not infer an email from a person's displayed name.
+Each task contains task_id, scheme_id, title, description, source_status, status, owner, start_date, due_date, workload, and updated_at.
 Project status must be one of planned, in_progress, paused, completed, cancelled. Issue and task status must be one of backlog, todo, in_progress, in_review, done, blocked, cancelled. Dates use YYYY-MM-DD and updated_at uses RFC3339. Set snapshot_complete to true only when the snapshot is complete.`, keyJSON)
 }
