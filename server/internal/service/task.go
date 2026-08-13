@@ -5785,6 +5785,9 @@ func (s *TaskService) ResolveTaskWorkspaceID(ctx context.Context, task db.AgentT
 	if pc, ok := s.parseProjectDesignSystemTaskContext(task); ok {
 		return pc.WorkspaceID
 	}
+	if dc, ok := s.parseDesignDocumentTaskWorkspaceContext(task); ok {
+		return dc.WorkspaceID
+	}
 	if pmoCtx, ok := s.parsePMOSyncContext(task); ok {
 		return pmoCtx.WorkspaceID
 	}
@@ -6089,6 +6092,22 @@ func (s *TaskService) parseProjectDesignSystemTaskContext(task db.AgentTaskQueue
 		return ProjectDesignSystemTaskContext{}, false
 	}
 	return pc, true
+}
+
+type designDocumentTaskWorkspaceContext struct {
+	Type        string `json:"type"`
+	WorkspaceID string `json:"workspace_id"`
+}
+
+func (s *TaskService) parseDesignDocumentTaskWorkspaceContext(task db.AgentTaskQueue) (designDocumentTaskWorkspaceContext, bool) {
+	if task.ChatSessionID.Valid || task.AutopilotRunID.Valid || len(task.Context) == 0 {
+		return designDocumentTaskWorkspaceContext{}, false
+	}
+	var value designDocumentTaskWorkspaceContext
+	if json.Unmarshal(task.Context, &value) != nil || value.Type != "design_document_task" || value.WorkspaceID == "" {
+		return designDocumentTaskWorkspaceContext{}, false
+	}
+	return value, true
 }
 
 // parsePMOSyncContext reports whether this task is a PMO sync task. PMO sync

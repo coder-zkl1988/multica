@@ -27,7 +27,7 @@ func (s *attachmentClaimingStorage) GetReader(ctx context.Context, key string) (
 	return reader, err
 }
 
-func TestCreateDesignDocumentAgentTaskPersistsDeferredTaskInputWithoutPrematureSnapshot(t *testing.T) {
+func TestCreateDesignDocumentAgentTaskQueuesA3InputWithoutPrematureSnapshot(t *testing.T) {
 	projectID := createProjectForDesignTest(t, "A2 task project")
 	issueID := createIssueForDesignTest(t, "Customer detail page", projectID)
 	agentID := handlerTestAgentID(t)
@@ -49,7 +49,7 @@ func TestCreateDesignDocumentAgentTaskPersistsDeferredTaskInputWithoutPrematureS
 	if err := json.NewDecoder(w.Body).Decode(&created); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if created.ID == "" || created.InputSnapshotID != nil || created.Status != "deferred" {
+	if created.ID == "" || created.InputSnapshotID != nil || created.Status != "queued" || created.RepositoryGrounding != "pending" {
 		t.Fatalf("unexpected response: %+v", created)
 	}
 	t.Cleanup(func() {
@@ -58,18 +58,20 @@ func TestCreateDesignDocumentAgentTaskPersistsDeferredTaskInputWithoutPrematureS
 	})
 
 	var status, contextType, inputRequirement, groundingState string
+	var executionReady bool
 	var fireAt any
 	var snapshotCount int
 	if err := testPool.QueryRow(context.Background(), `
 		SELECT task.status, task.context->>'type', task.context#>>'{input,requirement}',
 		       task.context#>>'{input,repository_grounding}', task.fire_at,
+		       COALESCE((task.context->>'execution_ready')::boolean, false),
 		       (SELECT count(*) FROM design_document_input_snapshot WHERE task_id = task.id)
 		FROM agent_task_queue AS task
 		WHERE task.id = $1
-	`, created.ID).Scan(&status, &contextType, &inputRequirement, &groundingState, &fireAt, &snapshotCount); err != nil {
+	`, created.ID).Scan(&status, &contextType, &inputRequirement, &groundingState, &fireAt, &executionReady, &snapshotCount); err != nil {
 		t.Fatalf("load task input: %v", err)
 	}
-	if status != "deferred" || contextType != "design_document_task" || fireAt != nil {
+	if status != "queued" || contextType != "design_document_task" || fireAt != nil || !executionReady {
 		t.Fatalf("task state = %s/%s fire_at=%v", status, contextType, fireAt)
 	}
 	if inputRequirement != "Design a customer detail page with history and follow-up actions." || groundingState != "pending" {
@@ -85,6 +87,51 @@ func TestCreateDesignDocumentAgentTaskPersistsDeferredTaskInputWithoutPrematureS
 	}
 	if documentCount != 0 {
 		t.Fatalf("design document count = %d, want 0 before A4", documentCount)
+	}
+}
+
+func TestCreateDesignDocumentAgentTaskRequiresExplicitUnavailableMode(t *testing.T) {
+	projectID := createProjectForDesignTest(t, "A3 unavailable project")
+	agentID := handlerTestAgentID(t)
+
+	w := httptest.NewRecorder()
+	testHandler.CreateDesignDocumentAgentTask(w, newRequest("POST", "/api/design-documents/agent-tasks?workspace_id="+testWorkspaceID, map[string]any{
+		"project_id": projectID, "agent_id": agentID, "requirement": "Design without repository access.",
+		"repository_grounding_mode": "unavailable",
+	}))
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("create status = %d, body = %s", w.Code, w.Body.String())
+	}
+	var created DesignDocumentAgentTaskResponse
+	if err := json.NewDecoder(w.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM design_document_input_snapshot WHERE task_id = $1`, created.ID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, created.ID)
+	})
+	if created.Status != "queued" || created.RepositoryGrounding != "unavailable" {
+		t.Fatalf("created task = %+v", created)
+	}
+	var grounding string
+	var snapshots int
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT context#>>'{input,repository_grounding}',
+		       (SELECT count(*) FROM design_document_input_snapshot WHERE task_id = agent_task_queue.id)
+		FROM agent_task_queue WHERE id = $1
+	`, created.ID).Scan(&grounding, &snapshots); err != nil {
+		t.Fatal(err)
+	}
+	if grounding != "unavailable" || snapshots != 0 {
+		t.Fatalf("grounding=%q snapshots=%d", grounding, snapshots)
+	}
+
+	bad := httptest.NewRecorder()
+	testHandler.CreateDesignDocumentAgentTask(bad, newRequest("POST", "/api/design-documents/agent-tasks?workspace_id="+testWorkspaceID, map[string]any{
+		"project_id": projectID, "agent_id": agentID, "requirement": "Bad mode", "repository_grounding_mode": "automatic",
+	}))
+	if bad.Code != http.StatusBadRequest {
+		t.Fatalf("bad mode status = %d, body = %s", bad.Code, bad.Body.String())
 	}
 }
 
@@ -145,6 +192,67 @@ func TestCreateDesignDocumentAgentTaskSnapshotsAndProtectsAttachments(t *testing
 		t.Fatalf("protected object was deleted: %v", err)
 	}
 	_ = reader.Close()
+}
+
+func TestRetryDesignDocumentTaskWithoutRepositoryPreservesPinnedAttachments(t *testing.T) {
+	projectID := createProjectForDesignTest(t, "A3 retry attachment project")
+	agentID := handlerTestAgentID(t)
+	body := []byte("retry reference bytes")
+	store := &mockStorage{}
+	attachmentID := seedPreviewAttachment(t, store, "design-input/retry.png", "retry.png", "image/png", body)
+	previousStorage := testHandler.Storage
+	testHandler.Storage = store
+	t.Cleanup(func() { testHandler.Storage = previousStorage })
+
+	originalID := createDesignDocumentTaskForInputTest(t, projectID, agentID, attachmentID)
+	if _, err := testPool.Exec(context.Background(), `
+		UPDATE agent_task_queue
+		SET status = 'failed', failure_reason = 'design_document_repository_unavailable', completed_at = now()
+		WHERE id = $1
+	`, originalID); err != nil {
+		t.Fatal(err)
+	}
+
+	w := httptest.NewRecorder()
+	testHandler.CreateDesignDocumentAgentTask(w, newRequest("POST", "/api/design-documents/agent-tasks?workspace_id="+testWorkspaceID, map[string]any{
+		"project_id": projectID, "agent_id": agentID, "requirement": "Use the reference.",
+		"repository_grounding_mode": "unavailable", "retry_task_id": originalID,
+	}))
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("retry status = %d, body = %s", w.Code, w.Body.String())
+	}
+	var retried DesignDocumentAgentTaskResponse
+	if err := json.NewDecoder(w.Body).Decode(&retried); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, retried.ID)
+	})
+
+	var boundTaskID, attachmentSourceTaskID, pinnedDigest, rerunOfTaskID string
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT attachment.task_id::text,
+		       retry.context#>>'{input,attachment_source_task_id}',
+		       retry.context#>>'{input,attachments,0,sha256}',
+		       retry.rerun_of_task_id::text
+		FROM attachment
+		JOIN agent_task_queue AS retry ON retry.id = $2
+		WHERE attachment.id = $1
+	`, attachmentID, retried.ID).Scan(&boundTaskID, &attachmentSourceTaskID, &pinnedDigest, &rerunOfTaskID); err != nil {
+		t.Fatal(err)
+	}
+	wantDigest := fmt.Sprintf("sha256:%x", sha256.Sum256(body))
+	if boundTaskID != originalID || attachmentSourceTaskID != originalID || rerunOfTaskID != originalID || pinnedDigest != wantDigest {
+		t.Fatalf("retry provenance = bound=%s source=%s rerun=%s digest=%s", boundTaskID, attachmentSourceTaskID, rerunOfTaskID, pinnedDigest)
+	}
+
+	download := httptest.NewRecorder()
+	req := newDaemonTokenRequest(http.MethodGet, "/api/daemon/tasks/"+retried.ID+"/design-document/attachments/"+attachmentID, nil, testWorkspaceID, "daemon-1")
+	req = withURLParams(req, "taskId", retried.ID, "attachmentId", attachmentID)
+	testHandler.DownloadDesignDocumentTaskAttachment(download, req)
+	if download.Code != http.StatusOK || download.Body.String() != string(body) {
+		t.Fatalf("retry attachment download status=%d body=%q", download.Code, download.Body.String())
+	}
 }
 
 func TestCreateDesignDocumentAgentTaskRollsBackWhenAttachmentIsClaimedAfterPreflight(t *testing.T) {

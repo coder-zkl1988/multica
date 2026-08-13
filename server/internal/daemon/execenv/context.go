@@ -175,6 +175,9 @@ func writeContextFiles(workDir, provider string, ctx TaskContextForEnv, manifest
 	if err := writeProjectDesignSystemContext(workDir, ctx, manifest); err != nil {
 		return fmt.Errorf("write project design system context: %w", err)
 	}
+	if err := writeDesignDocumentContext(workDir, ctx, manifest); err != nil {
+		return fmt.Errorf("write Design Document context: %w", err)
+	}
 
 	if len(ctx.AgentSkills) > 0 {
 		// Hermes materializes skills into its per-task HERMES_HOME/skills during
@@ -205,6 +208,99 @@ func writeContextFiles(workDir, provider string, ctx TaskContextForEnv, manifest
 	}
 
 	return nil
+}
+
+func writeDesignDocumentContext(workDir string, ctx TaskContextForEnv, manifest *sidecarManifest) error {
+	if strings.TrimSpace(ctx.DesignDocumentContext) == "" {
+		return nil
+	}
+	var task map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(ctx.DesignDocumentContext), &task); err != nil {
+		return fmt.Errorf("decode task context: %w", err)
+	}
+	var discriminator, operation string
+	var executionReady bool
+	if json.Unmarshal(task["type"], &discriminator) != nil || discriminator != "design_document_task" ||
+		json.Unmarshal(task["operation"], &operation) != nil || operation != "first_generation" ||
+		json.Unmarshal(task["execution_ready"], &executionReady) != nil || !executionReady {
+		return errors.New("invalid Design Document task context")
+	}
+	root := filepath.Join(workDir, ".agent_context", "design_document")
+	contextDir := filepath.Join(root, "context")
+	inputDir := filepath.Join(contextDir, "input-snapshots")
+	factsDir := filepath.Join(contextDir, "repository-facts")
+	designSystemDir := filepath.Join(contextDir, "design-system")
+	referenceDir := filepath.Join(root, "reference")
+	workDirPath := filepath.Join(root, "work")
+	for _, dir := range []string{inputDir, factsDir, designSystemDir, referenceDir, workDirPath} {
+		if err := recordMkdirAll(dir, 0o755, manifest); err != nil {
+			return err
+		}
+	}
+	taskJSON, err := json.MarshalIndent(task, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode Design Document task context: %w", err)
+	}
+	if err := recordWriteFile(filepath.Join(contextDir, "task.json"), taskJSON, 0o444, manifest); err != nil {
+		return err
+	}
+	input := task["input"]
+	if len(input) == 0 || string(input) == "null" {
+		return errors.New("Design Document task input is required")
+	}
+	if err := recordWriteFile(filepath.Join(inputDir, "pending.json"), input, 0o444, manifest); err != nil {
+		return err
+	}
+	if err := recordWriteFile(filepath.Join(factsDir, "checkout.json"), []byte(`{"schema_version":"multica.design-document-checkout/v1","repositories":[]}`), 0o444, manifest); err != nil {
+		return err
+	}
+	var snapshot struct {
+		Attachments  json.RawMessage `json:"attachments"`
+		DesignSystem json.RawMessage `json:"design_system"`
+	}
+	if err := json.Unmarshal(input, &snapshot); err != nil {
+		return fmt.Errorf("decode Design Document task input: %w", err)
+	}
+	binding := snapshot.DesignSystem
+	if len(binding) == 0 || string(binding) == "null" {
+		binding = []byte(`{}`)
+	}
+	if err := recordWriteFile(filepath.Join(designSystemDir, "binding.json"), binding, 0o444, manifest); err != nil {
+		return err
+	}
+	attachments := snapshot.Attachments
+	if len(attachments) == 0 || string(attachments) == "null" {
+		attachments = []byte(`[]`)
+	}
+	if err := recordWriteFile(filepath.Join(referenceDir, "index.json"), attachments, 0o444, manifest); err != nil {
+		return err
+	}
+	return stampV2ReadOnly(contextDir, inputDir, factsDir, designSystemDir, referenceDir)
+}
+
+// WriteDesignDocumentRepositoryFacts atomically replaces the daemon-owned
+// checkout receipt and reseals its directory before the Agent starts.
+func WriteDesignDocumentRepositoryFacts(workDir string, data []byte) error {
+	dir := filepath.Join(workDir, ".agent_context", "design_document", "context", "repository-facts")
+	if !isRealDirectory(dir) {
+		return errors.New("Design Document repository facts directory is missing or unsafe")
+	}
+	if err := os.Chmod(dir, 0o755); err != nil {
+		return err
+	}
+	defer func() { _ = os.Chmod(dir, 0o555) }()
+	path := filepath.Join(dir, "checkout.json")
+	info, err := os.Lstat(path)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return errors.New("Design Document checkout receipt is missing or unsafe")
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, data, 0o444); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0o444)
 }
 
 func writeProjectDesignSystemContext(workDir string, ctx TaskContextForEnv, manifest *sidecarManifest) error {
@@ -495,23 +591,31 @@ func RestoreV2SidecarWritability(workdir string) error {
 	// nothing legitimate to chmod below a planted symlink, and
 	// the caller can surface the leftover tree via os.RemoveAll's
 	// own error.
-	ancestors := []string{
-		filepath.Join(workdir, ".agent_context"),
-		filepath.Join(workdir, ".agent_context", "project_design_system"),
+	agentContext := filepath.Join(workdir, ".agent_context")
+	if !isRealDirectory(agentContext) {
+		return nil
 	}
-	for _, path := range ancestors {
-		if !isRealDirectory(path) {
-			return nil
+	projectRoot := filepath.Join(agentContext, "project_design_system")
+	if isRealDirectory(projectRoot) {
+		for _, name := range v2SidecarDirNames {
+			dir := filepath.Join(projectRoot, name)
+			if !isRealDirectory(dir) {
+				continue
+			}
+			if err := os.Chmod(dir, 0o755); err != nil {
+				return fmt.Errorf("restore V2 sidecar writability on %s: %w", dir, err)
+			}
 		}
 	}
-	root := ancestors[1]
-	for _, name := range v2SidecarDirNames {
-		dir := filepath.Join(root, name)
-		if !isRealDirectory(dir) {
-			continue
-		}
-		if err := os.Chmod(dir, 0o755); err != nil {
-			return fmt.Errorf("restore V2 sidecar writability on %s: %w", dir, err)
+	designRoot := filepath.Join(agentContext, "design_document")
+	if isRealDirectory(designRoot) {
+		for _, relative := range []string{"context", "context/input-snapshots", "context/repository-facts", "context/design-system", "reference", "reference/attachments"} {
+			dir := filepath.Join(designRoot, filepath.FromSlash(relative))
+			if isRealDirectory(dir) {
+				if err := os.Chmod(dir, 0o755); err != nil {
+					return fmt.Errorf("restore Design Document sidecar writability on %s: %w", dir, err)
+				}
+			}
 		}
 	}
 	return nil
@@ -1474,6 +1578,9 @@ func renderIssueContext(provider string, ctx TaskContextForEnv) string {
 	if ctx.ProjectDesignSystemContext != "" {
 		return renderProjectDesignSystemContext()
 	}
+	if ctx.DesignDocumentContext != "" {
+		return renderDesignDocumentContext()
+	}
 	if ctx.PMOSyncContext != "" {
 		return renderPMOSyncContext(ctx)
 	}
@@ -1506,6 +1613,10 @@ func renderIssueContext(provider string, ctx TaskContextForEnv) string {
 
 func renderProjectDesignSystemContext() string {
 	return "# Project Design System\n\nRead `.agent_context/project_design_system/task.json` before designing. Write the completed package to `$MULTICA_OUTPUT_DIR`.\n"
+}
+
+func renderDesignDocumentContext() string {
+	return "# Design Document\n\nRead `.agent_context/design_document/context/task.json` and the immutable context/reference trees before designing. Write the complete staged package to `$MULTICA_OUTPUT_DIR`.\n"
 }
 
 // renderQuickCreateContext renders issue_context.md for quick-create tasks.

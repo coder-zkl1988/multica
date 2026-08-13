@@ -149,6 +149,9 @@ func buildPromptBody(task Task, provider string) string {
 		}
 		return buildProjectDesignSystemPrompt()
 	}
+	if len(task.DesignDocumentContext) > 0 {
+		return buildDesignDocumentPrompt()
+	}
 	if len(task.PMOSyncContext) > 0 {
 		return buildPMOSyncPrompt(task)
 	}
@@ -166,6 +169,22 @@ func buildPromptBody(task Task, provider string) string {
 	fmt.Fprintf(&b, "Start by running `multica issue get %s --output json` to understand your task, then complete it.\n", task.IssueID)
 	fmt.Fprintf(&b, "For comment history, follow the rule in your runtime workflow file (assignment-triggered tasks treat the read as mandatory). Scan the threads first with `multica issue comment list %s --roots-only --summary --compact --output json`, then expand only what matters with `--thread <thread-id> --tail 30`. For `--since` incremental polling, pagination, and folding, see `multica issue comment list --help`.\n", task.IssueID)
 	return b.String()
+}
+
+func buildDesignDocumentPrompt() string {
+	return `You are running as a Design Document designer for a Multica workspace.
+
+Read .agent_context/design_document/context/task.json first. Treat every file under context/ and reference/ as immutable input. Read repository-facts/checkout.json and inspect only the listed repository checkouts. Distinguish repository facts from inferences and record conflicts, missing facts, and uncertainty.
+
+Write repository-grounding.json to .agent_context/design_document/work/. Produce the complete first-generation package in $MULTICA_OUTPUT_DIR: brief.json, coverage.json, prototype/index.html, prototype/styles.css, prototype/app.js, and optional local assets. Do not create manifest.json; the platform owns manifest generation in A4. The prototype must be complete, offline, and use no remote resources, network APIs, credentials, absolute local paths, service workers, or external commands.
+
+Use this exact grounding shape, with all arrays present:
+{"schema_version":"multica.design-document-grounding/v1","status":"available","repositories":[{"id":"repository-1","checkout_path":"repositories/repository-1","commit_sha":"<checkout commit>","ref":"<optional ref>","status_sha256":"sha256:<checkout status digest>","tree_sha256":"sha256:<checkout tree digest>","files":[{"id":"source-1","path":"relative/source/path","sha256":"sha256:<file digest>","kind":"page"}]}],"facts":[{"id":"fact-1","kind":"route","statement":"Evidence-backed statement","source_file_ids":["source-1"]}],"conflicts":[],"missing":[],"warnings":[]}
+
+Copy checkout identity fields exactly from repository-facts/checkout.json. Facts require source files; only a clearly marked inference may use "inference":true with no source. If task.json records repository_grounding as unavailable, do not invent evidence: write status unavailable, empty repositories/facts/conflicts/missing arrays, and at least one warning that coverage is not source-grounded.
+
+Do not modify any repository checkout. Do not call Multica write commands, change Issue state, post comments, delegate, spawn sub-agents, or leave follow-up work. Use .agent_context/design_document/work only for intermediate files. Before finishing, read back every staged file and verify the package is complete. Final stdout is only a short completion summary; staged files are authoritative.
+`
 }
 
 func buildProjectDesignSystemRepositoryAnalysisPrompt() string {

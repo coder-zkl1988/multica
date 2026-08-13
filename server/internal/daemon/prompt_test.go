@@ -1573,6 +1573,36 @@ func TestBuildPromptProjectDesignSystemGenerate(t *testing.T) {
 	}
 }
 
+func TestBuildPromptDesignDocumentFirstGeneration(t *testing.T) {
+	task := Task{IssueID: "issue-1", DesignDocumentContext: json.RawMessage(`{"type":"design_document_task","operation":"first_generation","execution_ready":true,"input":{}}`)}
+	prompt := BuildPrompt(task, "opencode")
+	for _, want := range []string{
+		"Design Document designer",
+		".agent_context/design_document/context/task.json",
+		"repository-facts/checkout.json",
+		"brief.json",
+		"coverage.json",
+		"prototype/index.html",
+		"repository-grounding.json",
+		`"schema_version":"multica.design-document-grounding/v1"`,
+		`"status":"available"`,
+		`repository_grounding as unavailable`,
+		`empty repositories/facts/conflicts/missing arrays`,
+		"$MULTICA_OUTPUT_DIR",
+		"Do not create manifest.json",
+		"Do not modify any repository checkout",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("Design Document prompt missing %q\n--- prompt ---\n%s", want, prompt)
+		}
+	}
+	for _, forbidden := range []string{"multica issue get", "multica issue status", "multica issue comment add"} {
+		if strings.Contains(prompt, forbidden) {
+			t.Fatalf("Design Document prompt contains issue workflow %q\n--- prompt ---\n%s", forbidden, prompt)
+		}
+	}
+}
+
 func TestBuildPromptProjectDesignSystemRepositoryAnalysisUsesMarkerContract(t *testing.T) {
 	prompt := BuildPrompt(projectDesignSystemPromptTask(t, "repository_analysis"), "opencode")
 	for _, want := range []string{

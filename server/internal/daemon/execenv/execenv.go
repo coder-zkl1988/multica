@@ -176,6 +176,7 @@ type TaskContextForEnv struct {
 	DesignRestoreContext              string // non-empty for Gallery Native restore execution tasks
 	DesignSystemProfileAnalyzeContext string // non-empty for UI specification profile analysis tasks
 	ProjectDesignSystemContext        string // non-empty for project design-system generation tasks
+	DesignDocumentContext             string // non-empty for Design Document grounding/generation tasks
 	PMOSyncContext                    string // non-empty for PMO requirement sync tasks (prompt-only, no issue checkout)
 	HandoffNote                       string // assignment handoff instruction; rendered into issue_context.md (MUL-3375)
 	IsSquadLeader                     bool   // true when THIS TASK runs the agent in the squad-leader role (may exit silently on no_action); derived from the claim's is_leader_task / squad_id, never sniffed from instructions text (MUL-5811)
@@ -336,9 +337,13 @@ func Prepare(params PrepareParams, logger *slog.Logger) (*Environment, error) {
 	workDir := filepath.Join(envRoot, "workdir")
 	scratchDirs := []string{filepath.Join(envRoot, "output"), filepath.Join(envRoot, "logs")}
 	outputDir := ""
-	if params.Task.ProjectDesignSystemContext != "" {
+	if params.Task.ProjectDesignSystemContext != "" || params.Task.DesignDocumentContext != "" {
 		var err error
-		outputDir, err = filepath.Abs(filepath.Join(envRoot, "output", "project-design-system"))
+		outputName := "project-design-system"
+		if params.Task.DesignDocumentContext != "" {
+			outputName = "design-document"
+		}
+		outputDir, err = filepath.Abs(filepath.Join(envRoot, "output", outputName))
 		if err != nil {
 			return nil, fmt.Errorf("execenv: resolve project design system output directory: %w", err)
 		}
@@ -595,9 +600,13 @@ func Reuse(params ReuseParams, logger *slog.Logger) *Environment {
 		LocalDirectory: params.LocalDirectory,
 		logger:         logger,
 	}
-	if params.Task.ProjectDesignSystemContext != "" && rootDir != "" {
+	if (params.Task.ProjectDesignSystemContext != "" || params.Task.DesignDocumentContext != "") && rootDir != "" {
 		var err error
-		env.OutputDir, err = filepath.Abs(filepath.Join(rootDir, "output", "project-design-system"))
+		outputName := "project-design-system"
+		if params.Task.DesignDocumentContext != "" {
+			outputName = "design-document"
+		}
+		env.OutputDir, err = filepath.Abs(filepath.Join(rootDir, "output", outputName))
 		if err != nil {
 			logger.Warn("execenv: resolve project design system output dir on reuse failed", "error", err)
 			return nil

@@ -383,6 +383,7 @@ type AgentTaskResponse struct {
 	DesignSystemProfileAnalyzeContext json.RawMessage        `json:"design_system_profile_analyze_context,omitempty"`     // typed context for UI specification profile analysis tasks
 	TemplateBlueprintAnalyzeContext   json.RawMessage        `json:"design_template_blueprint_analyze_context,omitempty"` // typed context for template Blueprint analysis tasks
 	ProjectDesignSystemContext        json.RawMessage        `json:"project_design_system_context,omitempty"`             // typed context for project design-system generation tasks
+	DesignDocumentContext             json.RawMessage        `json:"design_document_context,omitempty"`                   // typed context for Design Document grounding/generation tasks
 	PMOSyncContext                    json.RawMessage        `json:"pmo_sync_context,omitempty"`                          // typed context for PMO requirement sync tasks (workspace + run id + acquisition prompt)
 	HandoffNote                       string                 `json:"handoff_note,omitempty"`                              // assignment handoff instruction; rendered into the run's opening prompt + issue_context.md (omitempty so old daemons ignore it)
 	SquadID                           string                 `json:"squad_id,omitempty"`                                  // for quick-create tasks where the picker was a squad; Agent is still the resolved leader

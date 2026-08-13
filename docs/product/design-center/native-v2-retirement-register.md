@@ -61,6 +61,14 @@
 - 证据：`native-design-phase-a2-validation.md`；新 client/handler/UI 测试断言专用 API，旧 `/api/design-drafts/agent-tasks` 未被新 surface 调用。
 - 下一次复核：A4/A5 形成完整 Document 资产和用户工作区后，按消费者逐条复核；本阶段不停止旧写入、不删历史数据。
 
+### 2026-08-13 Phase A A3 复核
+
+- 状态变化：无。
+- 触达范围：Design Document task 已进入本地 daemon，通过 task-owned workspace 完成有界只读仓库 Grounding，并原子形成唯一 input snapshot；显式无仓库重试创建新 task，不复活旧 task。
+- 保留原因：A3 只完成输入与执行环境，不生成 `manifest.json`、archive、Audit/Preview 回执、document/revision 或 draft/saved 指针；旧页面草稿链仍是现有资产消费者。
+- 证据：`native-design-phase-a3-validation.md`；Design Document handler live PostgreSQL、daemon/execenv/prompt、Core/Views、race/vet/build 和源 checkout 零修改回归。
+- 下一次复核：A4 形成首个通过 Audit/Preview 的不可变 Design Document revision 后，再按真实消费者评估旧页面生成入口；本阶段无删除授权。
+
 `feature/fengchen-fixed-v2` 只保留为取消的独立 Phase B 路线 checkpoint，不合入 `feature/fengchen`，不作为实现基线，也不计入产品或退役进度。
 
 后续条目使用以下模板追加：

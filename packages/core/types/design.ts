@@ -604,6 +604,8 @@ export interface CreateDesignDocumentAgentTaskRequest {
   requirement: string;
   target_platform?: "web" | "mobile" | "cross_platform";
   attachment_ids?: string[];
+  repository_grounding_mode?: "required" | "unavailable";
+  retry_task_id?: string;
 }
 
 export interface DesignDocumentAgentTask {
@@ -619,6 +621,7 @@ export interface DesignDocumentAgentTask {
   agent_name: string;
   requirement: string;
   target_platform?: string;
+  repository_grounding?: "pending" | "available" | "unavailable";
   status: string;
   wait_reason?: string;
   error?: string;

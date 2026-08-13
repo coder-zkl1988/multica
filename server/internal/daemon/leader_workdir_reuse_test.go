@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
@@ -96,6 +97,14 @@ func TestShouldReusePriorWorkdirNonLeaderReusesUnchanged(t *testing.T) {
 	task.PriorWorkDir = filepath.Join(root, "anything", "workdir")
 	if !shouldReusePriorWorkdir(task, nil, root) {
 		t.Fatal("non-leader task must reuse its prior workdir without any provenance requirement")
+	}
+}
+
+func TestShouldReusePriorWorkdirDesignDocumentStartsTaskOwnedWorkspace(t *testing.T) {
+	t.Parallel()
+	task := Task{PriorWorkDir: filepath.Join(t.TempDir(), "prior", "workdir"), DesignDocumentContext: json.RawMessage(`{"type":"design_document_task"}`)}
+	if shouldReusePriorWorkdir(task, nil, t.TempDir()) {
+		t.Fatal("Design Document task must not reuse another task's workspace")
 	}
 }
 

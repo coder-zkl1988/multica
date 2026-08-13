@@ -1254,6 +1254,7 @@ export const DesignDocumentAgentTaskSchema = z.object({
   agent_name: z.string().default(""),
   requirement: z.string().default(""),
   target_platform: z.string().optional(),
+  repository_grounding: z.enum(["pending", "available", "unavailable"]).optional(),
   status: z.string(),
   wait_reason: z.string().optional(),
   error: z.string().optional(),

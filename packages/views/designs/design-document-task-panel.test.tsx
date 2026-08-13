@@ -79,4 +79,24 @@ describe("DesignDocumentTaskPanel", () => {
     expect(screen.queryByLabelText("项目")).not.toBeInTheDocument();
     expect(mocks.list).toHaveBeenCalledWith({ project_id: "project-2" });
   });
+
+  it("creates a new explicit unavailable task only after the user retries", async () => {
+    const user = userEvent.setup();
+    mocks.list.mockResolvedValue({ tasks: [{
+      id: "failed-1", workspace_id: "workspace-1", project_id: "project-1", project_title: "CRM",
+      agent_id: "agent-1", agent_name: "Designer", issue_id: "issue-1", requirement: "Customer detail",
+      target_platform: "web", status: "failed", failure_reason: "design_document_repository_unavailable",
+      created_at: "2026-08-13T00:00:00Z", last_activity_at: "2026-08-13T00:00:00Z",
+    }] });
+    mocks.create.mockResolvedValue({ id: "retry-1", project_id: "project-1", status: "queued" });
+
+    renderWithClient(<DesignDocumentTaskPanel projects={projects} agents={agents} />);
+    const retry = await screen.findByRole("button", { name: "不使用仓库继续" });
+    expect(mocks.create).not.toHaveBeenCalled();
+    await user.click(retry);
+    expect(mocks.create).toHaveBeenCalledWith({
+      project_id: "project-1", agent_id: "agent-1", issue_id: "issue-1", requirement: "Customer detail",
+      target_platform: "web", repository_grounding_mode: "unavailable", retry_task_id: "failed-1",
+    });
+  });
 });

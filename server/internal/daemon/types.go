@@ -3,6 +3,7 @@ package daemon
 import (
 	"encoding/json"
 
+	"github.com/multica-ai/multica/server/internal/designdocument"
 	"github.com/multica-ai/multica/server/internal/designpreview"
 	"github.com/multica-ai/multica/server/internal/projectdesignsystem"
 	"github.com/multica-ai/multica/server/internal/runtimeapps"
@@ -117,6 +118,7 @@ type Task struct {
 	DesignSystemProfileAnalyzeContext json.RawMessage        `json:"design_system_profile_analyze_context,omitempty"`
 	TemplateBlueprintAnalyzeContext   json.RawMessage        `json:"design_template_blueprint_analyze_context,omitempty"`
 	ProjectDesignSystemContext        json.RawMessage        `json:"project_design_system_context,omitempty"`
+	DesignDocumentContext             json.RawMessage        `json:"design_document_context,omitempty"`
 	PMOSyncContext                    json.RawMessage        `json:"pmo_sync_context,omitempty"` // raw PMO sync context JSONB (workspace + run id + strict acquisition prompt)
 	HandoffNote                       string                 `json:"handoff_note,omitempty"`     // assignment handoff instruction; rendered into the opening prompt + issue_context.md
 
@@ -278,10 +280,11 @@ type TaskResult struct {
 	SessionRolloutMissing bool `json:"-"`
 	// RetiredSessionID identifies an unresumable session that must no longer
 	// be selected after any terminal outcome, including successful completion.
-	RetiredSessionID             string                             `json:"-"`
-	Usage                        []TaskUsageEntry                   `json:"usage,omitempty"` // per-model token usage
-	ProjectDesignSystemArtifacts *ProjectDesignSystemArtifacts      `json:"-"`               // legacy three-file inline payload; collected for non-V2 tasks only
-	ProjectDesignSystemPackage   *ProjectDesignSystemPackageReceipt `json:"-"`               // V2-native package receipt (archive + audit + preview); populated only on the V2 path
+	RetiredSessionID             string                              `json:"-"`
+	Usage                        []TaskUsageEntry                    `json:"usage,omitempty"` // per-model token usage
+	ProjectDesignSystemArtifacts *ProjectDesignSystemArtifacts       `json:"-"`               // legacy three-file inline payload; collected for non-V2 tasks only
+	ProjectDesignSystemPackage   *ProjectDesignSystemPackageReceipt  `json:"-"`               // V2-native package receipt (archive + audit + preview); populated only on the V2 path
+	DesignDocumentGrounding      *designdocument.RepositoryGrounding `json:"-"`               // validated A3 grounding receipt; no local paths or source contents
 }
 
 // ProjectDesignSystemArtifacts is the legacy inline three-file payload the

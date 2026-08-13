@@ -20,6 +20,10 @@ func TestResolveTaskWorkspaceIDProjectDesignSystemContext(t *testing.T) {
 			name:    "project design system context",
 			context: `{"type":"project_design_system_task","workspace_id":"00000000-0000-0000-0000-000000000001"}`,
 		},
+		{
+			name:    "Design Document context",
+			context: `{"type":"design_document_task","workspace_id":"00000000-0000-0000-0000-000000000001"}`,
+		},
 	}
 
 	service := &TaskService{}

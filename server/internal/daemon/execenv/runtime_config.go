@@ -417,7 +417,7 @@ func CleanupRuntimeConfig(workDir, provider string) error {
 // legacy verbose brief; the flag has been retired (MUL-4297) and the slim brief
 // is now the only path.
 func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
-	if ctx.ProjectDesignSystemContext != "" {
+	if ctx.ProjectDesignSystemContext != "" || ctx.DesignDocumentContext != "" {
 		return buildMetaSkillContentFull(provider, ctx)
 	}
 	return buildMetaSkillContentSlim(provider, ctx)
@@ -599,7 +599,7 @@ func buildMetaSkillContentFull(provider string, ctx TaskContextForEnv) string {
 	// issue (comment-triggered or assignment-triggered). Chat / quick-create /
 	// run-only autopilot don't carry an issue id and would just generate a
 	// failed `metadata list` call on every entry.
-	hasIssueContext := ctx.ChatSessionID == "" && ctx.QuickCreatePrompt == "" && ctx.UIDraftCreateContext == "" && ctx.DesignRestoreContext == "" && ctx.DesignSystemProfileAnalyzeContext == "" && ctx.ProjectDesignSystemContext == "" && ctx.AutopilotRunID == ""
+	hasIssueContext := ctx.ChatSessionID == "" && ctx.QuickCreatePrompt == "" && ctx.UIDraftCreateContext == "" && ctx.DesignRestoreContext == "" && ctx.DesignSystemProfileAnalyzeContext == "" && ctx.ProjectDesignSystemContext == "" && ctx.DesignDocumentContext == "" && ctx.AutopilotRunID == ""
 	if hasIssueContext {
 		b.WriteString("## Issue Metadata\n\n")
 		b.WriteString("Each issue carries a small KV `metadata` bag — a high-signal scratchpad where agents pin the handful of facts that future runs on this same issue will look up over and over (the PR URL, the deploy URL, what we're blocked on). It is NOT a place to record every fact you discover — that's what comments and the description are for. Most runs write **zero** new keys; that's the expected case, not a failure.\n\n")
@@ -661,6 +661,12 @@ func buildMetaSkillContentFull(provider string, ctx TaskContextForEnv) string {
 		b.WriteString("- Do NOT call `multica issue get`, `multica issue status`, or `multica issue comment add` for this task.\n")
 		b.WriteString("- Do NOT modify repositories, call Figma, or upload design files.\n")
 		b.WriteString("- Write `DESIGN.md`, `tokens.css`, and `components.html` to `MULTICA_OUTPUT_DIR`.\n\n")
+	} else if ctx.DesignDocumentContext != "" {
+		b.WriteString("**This task creates a Native V2 Design Document.** Read `.agent_context/design_document/context/task.json`; ignore the default Issue workflow.\n\n")
+		b.WriteString("Hard guardrails:\n")
+		b.WriteString("- Do NOT call `multica issue get`, `multica issue status`, or `multica issue comment add`.\n")
+		b.WriteString("- Treat `context/` and `reference/` as read-only and do not modify repository checkouts.\n")
+		b.WriteString("- Write the complete staged package to `MULTICA_OUTPUT_DIR`; do not create `manifest.json`.\n\n")
 	} else if ctx.AutopilotRunID != "" {
 		// Autopilot run_only task: no issue exists, so the agent must not
 		// follow the assignment/comment workflow.
@@ -739,7 +745,7 @@ func buildMetaSkillContentFull(provider string, ctx TaskContextForEnv) string {
 	// `done`, and the agent has nothing to do or avoid on that path.
 	// Section is skipped for chat, quick-create, and run-only autopilot
 	// runs (no parent/child semantics there).
-	if ctx.IssueID != "" && ctx.ChatSessionID == "" && ctx.QuickCreatePrompt == "" && ctx.UIDraftCreateContext == "" && ctx.DesignRestoreContext == "" && ctx.DesignSystemProfileAnalyzeContext == "" && ctx.ProjectDesignSystemContext == "" && ctx.AutopilotRunID == "" {
+	if ctx.IssueID != "" && ctx.ChatSessionID == "" && ctx.QuickCreatePrompt == "" && ctx.UIDraftCreateContext == "" && ctx.DesignRestoreContext == "" && ctx.DesignSystemProfileAnalyzeContext == "" && ctx.ProjectDesignSystemContext == "" && ctx.DesignDocumentContext == "" && ctx.AutopilotRunID == "" {
 		b.WriteString("## Sub-issue Creation\n\n")
 		b.WriteString("**Choosing `--status` when creating sub-issues.** `--status todo` = **start now** (the default — an agent assignee fires immediately). `--status backlog` = **wait** (assignee is set but no trigger fires; promote later with `multica issue status <child-id> todo`). Parallel children: all `--status todo`. Strict serial Step 1→2→3: only Step 1 is `todo`; Steps 2/3 are `--status backlog` from the start, promoted in turn.\n\n")
 	}
@@ -831,6 +837,8 @@ func buildMetaSkillContentFull(provider string, ctx TaskContextForEnv) string {
 		b.WriteString("- Include `profile_json`, `analysis_errors`, and `summary`.\n")
 	case ctx.ProjectDesignSystemContext != "":
 		b.WriteString("This is a project design system task. The platform reads the three files from `MULTICA_OUTPUT_DIR`; final stdout is only a short completion summary.\n")
+	case ctx.DesignDocumentContext != "":
+		b.WriteString("This is a Design Document task. The platform reads the staged package from `MULTICA_OUTPUT_DIR`; final stdout is only a short completion summary.\n")
 	default:
 		if ctx.IsSquadLeader {
 			b.WriteString("⚠️ **Final results MUST be delivered via `multica issue comment add`** — unless your outcome is `no_action`. When you evaluate a trigger and decide no action is needed, calling `multica squad activity <issue-id> no_action --reason \"...\"` alone is sufficient; you MUST exit without posting any comment. DO NOT post a comment that announces no_action, acknowledges another agent, or says you are exiting silently — such comments are noise. For all other outcomes (`action`, `failed`), a comment is still mandatory.\n\n")

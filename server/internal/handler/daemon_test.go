@@ -5388,6 +5388,75 @@ func TestClaimProjectDesignSystemRepositoryAnalysisReturnsProjectResources(t *te
 	}
 }
 
+func TestClaimDesignDocumentTaskUsesTypedContextAndProjectResources(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	projectID := createProjectForDesignTest(t, "A3 claim project")
+	issueID := createIssueForDesignTest(t, "A3 claim issue", projectID)
+	agentID, runtimeID := createProjectDesignSystemAgent(t, "online")
+	const repositoryURL = "https://github.com/example/design-document-source"
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO project_resource (project_id, workspace_id, resource_type, resource_ref, position)
+		VALUES ($1, $2, 'github_repo', $3::jsonb, 0)
+	`, projectID, testWorkspaceID, `{"url":"`+repositoryURL+`","ref":"release"}`); err != nil {
+		t.Fatalf("create project resource: %v", err)
+	}
+	contextJSON, err := json.Marshal(map[string]any{
+		"type": designDocumentTaskContextType, "task_protocol": designDocumentTaskSchema,
+		"operation": "first_generation", "execution_ready": true,
+		"workspace_id": testWorkspaceID, "project_id": projectID, "agent_id": agentID, "issue_id": issueID,
+		"input": map[string]any{"schema_version": designDocumentInputSchema, "repository_grounding": "pending", "requirement": "Design the customer page."},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var taskID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, context)
+		VALUES ($1, $2, $3, 'queued', 0, $4::jsonb) RETURNING id
+	`, agentID, runtimeID, issueID, contextJSON).Scan(&taskID); err != nil {
+		t.Fatalf("create design document task: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
+
+	w := httptest.NewRecorder()
+	req := newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/tasks/claim", nil, testWorkspaceID, "design-document-claim")
+	req = withURLParam(req, "runtimeId", runtimeID)
+	testHandler.ClaimTaskByRuntime(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("claim status = %d, body = %s", w.Code, w.Body.String())
+	}
+	var response struct {
+		Task *struct {
+			ID                    string                `json:"id"`
+			WorkspaceID           string                `json:"workspace_id"`
+			ProjectID             string                `json:"project_id"`
+			Repos                 []RepoData            `json:"repos"`
+			ProjectResources      []ProjectResourceData `json:"project_resources"`
+			DesignDocumentContext json.RawMessage       `json:"design_document_context"`
+			TriggerCommentID      *string               `json:"trigger_comment_id"`
+		} `json:"task"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Task == nil || response.Task.ID != taskID || response.Task.WorkspaceID != testWorkspaceID || response.Task.ProjectID != projectID {
+		t.Fatalf("claim identity = %+v", response.Task)
+	}
+	if response.Task.TriggerCommentID != nil || string(response.Task.DesignDocumentContext) == "" {
+		t.Fatalf("claim trigger/context = %#v/%s", response.Task.TriggerCommentID, response.Task.DesignDocumentContext)
+	}
+	if len(response.Task.Repos) != 1 || response.Task.Repos[0].URL != repositoryURL || response.Task.Repos[0].Ref != "release" || len(response.Task.ProjectResources) != 1 {
+		t.Fatalf("claim repositories = %+v resources=%+v", response.Task.Repos, response.Task.ProjectResources)
+	}
+	var got map[string]any
+	if json.Unmarshal(response.Task.DesignDocumentContext, &got) != nil || got["type"] != designDocumentTaskContextType {
+		t.Fatalf("typed context = %s", response.Task.DesignDocumentContext)
+	}
+}
+
 // TestAckTaskCancelled verifies the cancel-ack endpoint settles a deferred
 // chat finalization (marker claimed, Stopped. row written for a transcript
 // that filled in late) and keeps the anti-enumeration shape of

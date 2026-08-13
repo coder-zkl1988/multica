@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/multica-ai/multica/server/internal/designdocument"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -159,6 +160,28 @@ func TestClientCompleteTaskOmitsProjectDesignSystemArtifactsWhenNil(t *testing.T
 	}
 	if _, exists := payload["project_design_system_artifacts"]; exists {
 		t.Fatal("ordinary completion included project_design_system_artifacts")
+	}
+}
+
+func TestClientCompleteTaskSerializesDesignDocumentGrounding(t *testing.T) {
+	grounding := designdocument.RepositoryGrounding{
+		SchemaVersion: designdocument.GroundingSchemaVersion, Status: designdocument.GroundingUnavailable,
+		Repositories: []designdocument.GroundedRepository{}, Facts: []designdocument.GroundingFact{},
+		Conflicts: []designdocument.GroundingObservation{}, Missing: []designdocument.GroundingObservation{}, Warnings: []string{"Repository unavailable."},
+	}
+	var payload map[string]json.RawMessage
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	if err := NewClient(srv.URL).CompleteTask(context.Background(), "task-1", "done", "", "", "", nil, nil, &grounding); err != nil {
+		t.Fatal(err)
+	}
+	var got designdocument.RepositoryGrounding
+	if err := json.Unmarshal(payload["design_document_grounding"], &got); err != nil || got.Status != designdocument.GroundingUnavailable {
+		t.Fatalf("grounding = %+v, err=%v", got, err)
 	}
 }
 

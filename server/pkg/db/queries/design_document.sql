@@ -1,15 +1,14 @@
--- name: CreateDeferredDesignDocumentAgentTask :one
+-- name: CreateDesignDocumentAgentTask :one
 INSERT INTO agent_task_queue (
     id, agent_id, runtime_id, issue_id, status, priority, context, wait_reason,
     originator_user_id, accountable_user_id, originator_source,
-    trigger_evidence_kind, trigger_evidence_ref_id
+    trigger_evidence_kind, trigger_evidence_ref_id, rerun_of_task_id
 )
 SELECT
     sqlc.arg('id'), sqlc.arg('agent_id'), sqlc.arg('runtime_id'),
-    sqlc.narg('issue_id'), 'deferred', 0, sqlc.arg('context'),
-    'Design generation starts after repository grounding is available',
+    sqlc.narg('issue_id'), 'queued', 0, sqlc.arg('context'), NULL,
     sqlc.arg('originator_user_id'), sqlc.arg('originator_user_id'),
-    'direct_human', 'design_document_task', sqlc.arg('id')
+    'direct_human', 'design_document_task', sqlc.arg('id'), sqlc.narg('rerun_of_task_id')
 WHERE lock_task_owner_rows(
     sqlc.arg('agent_id'), sqlc.narg('issue_id'), sqlc.arg('runtime_id')
 )
@@ -85,6 +84,7 @@ SELECT
     agent.name AS agent_name,
     COALESCE(task.context -> 'input' ->> 'requirement', '')::text AS requirement,
     COALESCE(task.context -> 'input' ->> 'target_platform', '')::text AS target_platform,
+    COALESCE(task.context -> 'input' ->> 'repository_grounding', '')::text AS repository_grounding,
     task.status,
     task.wait_reason,
     task.error,
@@ -113,6 +113,21 @@ WHERE agent.workspace_id = sqlc.arg('workspace_id')
   )
 ORDER BY task.created_at DESC, task.id
 LIMIT sqlc.arg('limit_count');
+
+-- name: SetDesignDocumentTaskInputSnapshot :execrows
+UPDATE agent_task_queue
+SET context = jsonb_set(
+    jsonb_set(
+        jsonb_set(context, '{input}', sqlc.arg('input')::jsonb, false),
+        '{input_snapshot_id}', to_jsonb(sqlc.arg('input_snapshot_id')::text), true
+    ),
+    '{input_snapshot_sha256}', to_jsonb(sqlc.arg('input_snapshot_sha256')::text), true
+)
+WHERE id = sqlc.arg('id')
+  AND agent_id = sqlc.arg('agent_id')
+  AND status = 'completed'
+  AND context ->> 'type' = 'design_document_task'
+  AND context ->> 'operation' = 'first_generation';
 
 -- name: GetDesignDocumentInputSnapshotInProject :one
 SELECT *

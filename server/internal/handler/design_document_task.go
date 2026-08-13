@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/projectdesignsystem"
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -31,35 +32,38 @@ const (
 var errDesignDocumentAttachmentConflict = errors.New("design task attachments changed")
 
 type CreateDesignDocumentAgentTaskRequest struct {
-	ProjectID      string   `json:"project_id"`
-	AgentID        string   `json:"agent_id"`
-	IssueID        string   `json:"issue_id"`
-	Requirement    string   `json:"requirement"`
-	TargetPlatform string   `json:"target_platform"`
-	AttachmentIDs  []string `json:"attachment_ids"`
+	ProjectID               string   `json:"project_id"`
+	AgentID                 string   `json:"agent_id"`
+	IssueID                 string   `json:"issue_id"`
+	Requirement             string   `json:"requirement"`
+	TargetPlatform          string   `json:"target_platform"`
+	AttachmentIDs           []string `json:"attachment_ids"`
+	RepositoryGroundingMode string   `json:"repository_grounding_mode"`
+	RetryTaskID             string   `json:"retry_task_id"`
 }
 
 type DesignDocumentAgentTaskResponse struct {
-	ID              string  `json:"id"`
-	InputSnapshotID *string `json:"input_snapshot_id,omitempty"`
-	WorkspaceID     string  `json:"workspace_id"`
-	ProjectID       string  `json:"project_id"`
-	ProjectTitle    string  `json:"project_title"`
-	IssueID         *string `json:"issue_id,omitempty"`
-	IssueNumber     *int32  `json:"issue_number,omitempty"`
-	IssueTitle      *string `json:"issue_title,omitempty"`
-	AgentID         string  `json:"agent_id"`
-	AgentName       string  `json:"agent_name"`
-	Requirement     string  `json:"requirement"`
-	TargetPlatform  string  `json:"target_platform,omitempty"`
-	Status          string  `json:"status"`
-	WaitReason      string  `json:"wait_reason,omitempty"`
-	Error           string  `json:"error,omitempty"`
-	FailureReason   string  `json:"failure_reason,omitempty"`
-	CreatedAt       string  `json:"created_at"`
-	StartedAt       *string `json:"started_at,omitempty"`
-	CompletedAt     *string `json:"completed_at,omitempty"`
-	LastActivityAt  string  `json:"last_activity_at"`
+	ID                  string  `json:"id"`
+	InputSnapshotID     *string `json:"input_snapshot_id,omitempty"`
+	WorkspaceID         string  `json:"workspace_id"`
+	ProjectID           string  `json:"project_id"`
+	ProjectTitle        string  `json:"project_title"`
+	IssueID             *string `json:"issue_id,omitempty"`
+	IssueNumber         *int32  `json:"issue_number,omitempty"`
+	IssueTitle          *string `json:"issue_title,omitempty"`
+	AgentID             string  `json:"agent_id"`
+	AgentName           string  `json:"agent_name"`
+	Requirement         string  `json:"requirement"`
+	TargetPlatform      string  `json:"target_platform,omitempty"`
+	RepositoryGrounding string  `json:"repository_grounding,omitempty"`
+	Status              string  `json:"status"`
+	WaitReason          string  `json:"wait_reason,omitempty"`
+	Error               string  `json:"error,omitempty"`
+	FailureReason       string  `json:"failure_reason,omitempty"`
+	CreatedAt           string  `json:"created_at"`
+	StartedAt           *string `json:"started_at,omitempty"`
+	CompletedAt         *string `json:"completed_at,omitempty"`
+	LastActivityAt      string  `json:"last_activity_at"`
 }
 
 type DesignDocumentAgentTaskListResponse struct {
@@ -75,18 +79,19 @@ type designDocumentTaskAttachment struct {
 }
 
 type designDocumentTaskSnapshot struct {
-	SchemaVersion       string                          `json:"schema_version"`
-	TaskProtocol        string                          `json:"task_protocol"`
-	OutputSchema        string                          `json:"output_schema"`
-	Requirement         string                          `json:"requirement"`
-	Workspace           designDocumentTaskEntity        `json:"workspace"`
-	Project             designDocumentTaskEntity        `json:"project"`
-	Issue               *designDocumentTaskIssue        `json:"issue,omitempty"`
-	Agent               designDocumentTaskEntity        `json:"agent"`
-	TargetPlatform      string                          `json:"target_platform,omitempty"`
-	Attachments         []designDocumentTaskAttachment  `json:"attachments"`
-	DesignSystem        *designDocumentTaskDesignSystem `json:"design_system,omitempty"`
-	RepositoryGrounding string                          `json:"repository_grounding"`
+	SchemaVersion          string                          `json:"schema_version"`
+	TaskProtocol           string                          `json:"task_protocol"`
+	OutputSchema           string                          `json:"output_schema"`
+	Requirement            string                          `json:"requirement"`
+	Workspace              designDocumentTaskEntity        `json:"workspace"`
+	Project                designDocumentTaskEntity        `json:"project"`
+	Issue                  *designDocumentTaskIssue        `json:"issue,omitempty"`
+	Agent                  designDocumentTaskEntity        `json:"agent"`
+	TargetPlatform         string                          `json:"target_platform,omitempty"`
+	Attachments            []designDocumentTaskAttachment  `json:"attachments"`
+	DesignSystem           *designDocumentTaskDesignSystem `json:"design_system,omitempty"`
+	RepositoryGrounding    string                          `json:"repository_grounding"`
+	AttachmentSourceTaskID string                          `json:"attachment_source_task_id,omitempty"`
 }
 
 type designDocumentTaskEntity struct {
@@ -192,36 +197,58 @@ func (h *Handler) CreateDesignDocumentAgentTask(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusBadRequest, "target_platform must be web, mobile, or cross_platform")
 		return
 	}
-
-	attachmentIDs, attachments, err := h.snapshotDesignDocumentTaskAttachments(r, workspaceID, userUUID, req.AttachmentIDs)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	designSystem, err := h.designDocumentTaskSavedDesignSystem(r, workspaceID, projectID)
-	if err != nil {
-		writeError(w, http.StatusUnprocessableEntity, err.Error())
+	groundingMode := strings.TrimSpace(req.RepositoryGroundingMode)
+	if groundingMode == "" || groundingMode == "required" {
+		groundingMode = "pending"
+	} else if groundingMode != "unavailable" {
+		writeError(w, http.StatusBadRequest, "repository_grounding_mode must be required or unavailable")
 		return
 	}
 
-	snapshot := designDocumentTaskSnapshot{
-		SchemaVersion: designDocumentInputSchema, TaskProtocol: designDocumentTaskSchema,
-		OutputSchema: "multica.design-document/v1", Requirement: requirement,
-		Workspace:      designDocumentTaskEntity{ID: uuidToString(workspaceID)},
-		Project:        designDocumentTaskEntity{ID: uuidToString(project.ID), Title: project.Title, Description: project.Description.String},
-		Agent:          designDocumentTaskEntity{ID: uuidToString(agent.ID), Name: agent.Name, Description: agent.Description},
-		TargetPlatform: platform, Attachments: attachments, DesignSystem: designSystem,
-		RepositoryGrounding: "pending",
-	}
-	if issue != nil {
-		snapshot.Issue = &designDocumentTaskIssue{
-			ID: uuidToString(issue.ID), Number: issue.Number, Title: issue.Title,
-			Description: issue.Description.String, AcceptanceCriteria: issue.AcceptanceCriteria,
+	attachmentIDs, attachments := []pgtype.UUID{}, []designDocumentTaskAttachment{}
+	var designSystem *designDocumentTaskDesignSystem
+	var rerunOfTaskID pgtype.UUID
+	var snapshot designDocumentTaskSnapshot
+	if strings.TrimSpace(req.RetryTaskID) != "" {
+		if groundingMode != "unavailable" || len(req.AttachmentIDs) != 0 {
+			writeError(w, http.StatusBadRequest, "repository retry must use unavailable mode and the original attachments")
+			return
+		}
+		rerunOfTaskID, snapshot, err = h.designDocumentRetryInput(r, workspaceID, projectID, issueID, agent.ID, userUUID, requirement, platform, req.RetryTaskID)
+		if err != nil {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+	} else {
+		attachmentIDs, attachments, err = h.snapshotDesignDocumentTaskAttachments(r, workspaceID, userUUID, req.AttachmentIDs)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		designSystem, err = h.designDocumentTaskSavedDesignSystem(r, workspaceID, projectID)
+		if err != nil {
+			writeError(w, http.StatusUnprocessableEntity, err.Error())
+			return
+		}
+		snapshot = designDocumentTaskSnapshot{
+			SchemaVersion: designDocumentInputSchema, TaskProtocol: designDocumentTaskSchema,
+			OutputSchema: "multica.design-document/v1", Requirement: requirement,
+			Workspace:      designDocumentTaskEntity{ID: uuidToString(workspaceID)},
+			Project:        designDocumentTaskEntity{ID: uuidToString(project.ID), Title: project.Title, Description: project.Description.String},
+			Agent:          designDocumentTaskEntity{ID: uuidToString(agent.ID), Name: agent.Name, Description: agent.Description},
+			TargetPlatform: platform, Attachments: attachments, DesignSystem: designSystem,
+			RepositoryGrounding: groundingMode,
+		}
+		if issue != nil {
+			snapshot.Issue = &designDocumentTaskIssue{
+				ID: uuidToString(issue.ID), Number: issue.Number, Title: issue.Title,
+				Description: issue.Description.String, AcceptanceCriteria: issue.AcceptanceCriteria,
+			}
 		}
 	}
 	taskContext, err := json.Marshal(map[string]any{
 		"type": designDocumentTaskContextType, "task_protocol": designDocumentTaskSchema,
-		"operation": "first_generation", "execution_ready": false, "input": snapshot,
+		"operation": "first_generation", "execution_ready": true, "input": snapshot,
 		"requester_id": userID, "workspace_id": uuidToString(workspaceID),
 		"project_id": uuidToString(projectID), "issue_id": uuidToString(issueID),
 		"agent_id": uuidToString(agentID), "target_platform": platform,
@@ -239,9 +266,9 @@ func (h *Handler) CreateDesignDocumentAgentTask(w http.ResponseWriter, r *http.R
 	}
 	defer tx.Rollback(r.Context())
 	queries := h.Queries.WithTx(tx)
-	task, err := queries.CreateDeferredDesignDocumentAgentTask(r.Context(), db.CreateDeferredDesignDocumentAgentTaskParams{
+	task, err := queries.CreateDesignDocumentAgentTask(r.Context(), db.CreateDesignDocumentAgentTaskParams{
 		ID: taskID, AgentID: agent.ID, RuntimeID: agent.RuntimeID, IssueID: issueID,
-		Context: taskContext, OriginatorUserID: userUUID,
+		Context: taskContext, OriginatorUserID: userUUID, RerunOfTaskID: rerunOfTaskID,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -264,15 +291,123 @@ func (h *Handler) CreateDesignDocumentAgentTask(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusInternalServerError, "failed to save design task")
 		return
 	}
+	h.TaskService.NotifyTaskEnqueued(r.Context(), task)
 
 	writeJSON(w, http.StatusAccepted, DesignDocumentAgentTaskResponse{
 		ID:          uuidToString(task.ID),
 		WorkspaceID: uuidToString(workspaceID), ProjectID: uuidToString(projectID), ProjectTitle: project.Title,
 		IssueID: optionalUUIDString(issueID), AgentID: uuidToString(agent.ID), AgentName: agent.Name,
-		Requirement: requirement, TargetPlatform: platform, Status: task.Status,
+		Requirement: requirement, TargetPlatform: platform, RepositoryGrounding: groundingMode, Status: task.Status,
 		WaitReason: task.WaitReason.String, CreatedAt: timestampToString(task.CreatedAt),
 		LastActivityAt: timestampToString(task.CreatedAt),
 	})
+}
+
+func (h *Handler) designDocumentRetryInput(r *http.Request, workspaceID, projectID, issueID, agentID, userID pgtype.UUID, requirement, platform, rawTaskID string) (pgtype.UUID, designDocumentTaskSnapshot, error) {
+	sourceID, err := parseUUIDValue(strings.TrimSpace(rawTaskID))
+	if err != nil {
+		return pgtype.UUID{}, designDocumentTaskSnapshot{}, errors.New("invalid retry task id")
+	}
+	source, err := h.Queries.GetAgentTask(r.Context(), sourceID)
+	if err != nil || source.AgentID != agentID || source.IssueID != issueID || source.OriginatorUserID != userID ||
+		source.Status != "failed" || source.FailureReason.String != "design_document_repository_unavailable" {
+		return pgtype.UUID{}, designDocumentTaskSnapshot{}, errors.New("repository retry source is unavailable")
+	}
+	var contextValue struct {
+		Type           string                     `json:"type"`
+		Operation      string                     `json:"operation"`
+		ExecutionReady bool                       `json:"execution_ready"`
+		WorkspaceID    string                     `json:"workspace_id"`
+		ProjectID      string                     `json:"project_id"`
+		AgentID        string                     `json:"agent_id"`
+		IssueID        string                     `json:"issue_id"`
+		Input          designDocumentTaskSnapshot `json:"input"`
+	}
+	if json.Unmarshal(source.Context, &contextValue) != nil || contextValue.Type != designDocumentTaskContextType || contextValue.Operation != "first_generation" || !contextValue.ExecutionReady ||
+		contextValue.WorkspaceID != uuidToString(workspaceID) || contextValue.ProjectID != uuidToString(projectID) || contextValue.AgentID != uuidToString(agentID) || contextValue.IssueID != uuidToString(issueID) ||
+		contextValue.Input.Requirement != requirement || contextValue.Input.TargetPlatform != platform || contextValue.Input.RepositoryGrounding != "pending" || contextValue.Input.AttachmentSourceTaskID != "" ||
+		validateDesignDocumentTaskInputIdentity(contextValue.Input, contextValue.WorkspaceID, contextValue.ProjectID, contextValue.AgentID, issueID) != nil {
+		return pgtype.UUID{}, designDocumentTaskSnapshot{}, errors.New("repository retry input changed")
+	}
+	if err := h.verifyDesignDocumentRetryAttachments(r, workspaceID, sourceID, contextValue.Input.Attachments); err != nil {
+		return pgtype.UUID{}, designDocumentTaskSnapshot{}, err
+	}
+	contextValue.Input.RepositoryGrounding = "unavailable"
+	contextValue.Input.AttachmentSourceTaskID = uuidToString(sourceID)
+	return sourceID, contextValue.Input, nil
+}
+
+func (h *Handler) verifyDesignDocumentRetryAttachments(r *http.Request, workspaceID, sourceTaskID pgtype.UUID, attachments []designDocumentTaskAttachment) error {
+	if len(attachments) > maxDesignDocumentAttachments || (len(attachments) > 0 && h.Storage == nil) {
+		return errors.New("repository retry attachments are unavailable")
+	}
+	var total int64
+	for _, expected := range attachments {
+		id, err := parseUUIDValue(expected.ID)
+		if err != nil || expected.SizeBytes < 0 || expected.SizeBytes > maxDesignDocumentAttachmentBytes-total || !validDesignDocumentDigest(expected.SHA256) {
+			return errors.New("repository retry attachments are invalid")
+		}
+		total += expected.SizeBytes
+		attachment, err := h.Queries.GetAttachment(r.Context(), db.GetAttachmentParams{ID: id, WorkspaceID: workspaceID})
+		if err != nil || attachment.TaskID != sourceTaskID || attachment.Filename != expected.Filename || attachment.ContentType != expected.ContentType || attachment.SizeBytes != expected.SizeBytes {
+			return errors.New("repository retry attachments changed")
+		}
+		reader, err := h.Storage.GetReader(r.Context(), h.Storage.KeyFromURL(attachment.Url))
+		if err != nil {
+			return errors.New("repository retry attachments are unavailable")
+		}
+		hasher := sha256.New()
+		readBytes, copyErr := io.Copy(hasher, io.LimitReader(reader, expected.SizeBytes+1))
+		closeErr := reader.Close()
+		if copyErr != nil || closeErr != nil || readBytes != expected.SizeBytes || "sha256:"+hex.EncodeToString(hasher.Sum(nil)) != expected.SHA256 {
+			return errors.New("repository retry attachments changed")
+		}
+	}
+	return nil
+}
+
+func validateDesignDocumentTaskInputIdentity(input designDocumentTaskSnapshot, workspaceID, projectID, agentID string, issueID pgtype.UUID) error {
+	if input.SchemaVersion != designDocumentInputSchema || input.TaskProtocol != designDocumentTaskSchema || input.OutputSchema != "multica.design-document/v1" ||
+		strings.TrimSpace(input.Requirement) == "" || len(input.Requirement) > maxDesignDocumentRequirement ||
+		(input.TargetPlatform != "" && input.TargetPlatform != "web" && input.TargetPlatform != "mobile" && input.TargetPlatform != "cross_platform") ||
+		(input.RepositoryGrounding != "pending" && input.RepositoryGrounding != "unavailable") || input.Attachments == nil {
+		return errors.New("Design Document task input is invalid")
+	}
+	if input.Workspace.ID != workspaceID || input.Project.ID != projectID || input.Agent.ID != agentID {
+		return errors.New("Design Document task input identity is invalid")
+	}
+	if issueID.Valid {
+		if input.Issue == nil || input.Issue.ID != uuidToString(issueID) {
+			return errors.New("Design Document task input identity is invalid")
+		}
+	} else if input.Issue != nil {
+		return errors.New("Design Document task input identity is invalid")
+	}
+	if len(input.Attachments) > maxDesignDocumentAttachments {
+		return errors.New("Design Document task attachments are invalid")
+	}
+	seen := make(map[string]struct{}, len(input.Attachments))
+	var total int64
+	for _, attachment := range input.Attachments {
+		if _, err := parseUUIDValue(attachment.ID); err != nil || strings.TrimSpace(attachment.Filename) == "" || strings.TrimSpace(attachment.ContentType) == "" ||
+			attachment.SizeBytes < 0 || attachment.SizeBytes > maxDesignDocumentAttachmentBytes-total || !validDesignDocumentDigest(attachment.SHA256) {
+			return errors.New("Design Document task attachments are invalid")
+		}
+		if _, exists := seen[attachment.ID]; exists {
+			return errors.New("Design Document task attachments are invalid")
+		}
+		seen[attachment.ID] = struct{}{}
+		total += attachment.SizeBytes
+	}
+	if input.DesignSystem != nil {
+		if _, err := parseUUIDValue(input.DesignSystem.ID); err != nil {
+			return errors.New("Design Document task design system is invalid")
+		}
+		if _, err := parseUUIDValue(input.DesignSystem.SourceTaskID); err != nil || !validDesignDocumentDigest(input.DesignSystem.ContentDigest) {
+			return errors.New("Design Document task design system is invalid")
+		}
+	}
+	return nil
 }
 
 func (h *Handler) ListDesignDocumentAgentTasks(w http.ResponseWriter, r *http.Request) {
@@ -395,7 +530,7 @@ func (h *Handler) designDocumentTaskSavedDesignSystem(r *http.Request, workspace
 	if err != nil {
 		return nil, errors.New("failed to load project design system")
 	}
-	pkg, err := h.Queries.GetProjectDesignSystemPackageBySlot(r.Context(), db.GetProjectDesignSystemPackageBySlotParams{DesignSystemID: system.ID, Slot: "saved"})
+	pkg, err := h.Queries.GetProjectDesignSystemPackageBySlot(r.Context(), db.GetProjectDesignSystemPackageBySlotParams{DesignSystemID: system.ID, Slot: "saved", WorkspaceID: workspaceID})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -405,7 +540,8 @@ func (h *Handler) designDocumentTaskSavedDesignSystem(r *http.Request, workspace
 	var manifest struct {
 		ContentDigest string `json:"content_digest"`
 	}
-	if !pkg.SourceTaskID.Valid || json.Unmarshal(pkg.Manifest, &manifest) != nil || !validDesignDocumentDigest(manifest.ContentDigest) {
+	if pkg.PackageSchema != projectdesignsystem.PackageSchemaV2 || !pkg.SourceTaskID.Valid || !pkg.ArchiveObjectKey.Valid ||
+		json.Unmarshal(pkg.Manifest, &manifest) != nil || !validDesignDocumentDigest(manifest.ContentDigest) {
 		return nil, errors.New("saved project design system is invalid")
 	}
 	return &designDocumentTaskDesignSystem{ID: uuidToString(system.ID), SourceTaskID: uuidToString(pkg.SourceTaskID), ContentDigest: manifest.ContentDigest}, nil
@@ -417,7 +553,7 @@ func designDocumentTaskResponse(row db.ListDesignDocumentAgentTasksRow) DesignDo
 		WorkspaceID: uuidToString(row.WorkspaceID), ProjectID: uuidToString(row.ProjectID), ProjectTitle: row.ProjectTitle,
 		IssueID: optionalUUIDString(row.IssueID), IssueNumber: optionalInt32(row.IssueNumber), IssueTitle: optionalTextString(row.IssueTitle),
 		AgentID: uuidToString(row.AgentID), AgentName: row.AgentName, Requirement: row.Requirement,
-		TargetPlatform: row.TargetPlatform, Status: row.Status, WaitReason: row.WaitReason.String,
+		TargetPlatform: row.TargetPlatform, RepositoryGrounding: row.RepositoryGrounding, Status: row.Status, WaitReason: row.WaitReason.String,
 		Error: row.Error.String, FailureReason: row.FailureReason.String,
 		CreatedAt: timestampToString(row.CreatedAt), StartedAt: timestampToPtr(row.StartedAt),
 		CompletedAt: timestampToPtr(row.CompletedAt), LastActivityAt: timestampToString(row.LastActivityAt),

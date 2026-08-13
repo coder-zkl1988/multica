@@ -51,6 +51,21 @@ func CollectDirectory(root string, expected Binding) (CollectedPackage, error) {
 	return CollectedPackage{Archive: archive, Manifest: validated.Manifest, Audit: validated.Audit}, nil
 }
 
+// ValidateStagingDirectory checks the complete agent-authored package surface
+// without generating manifest.json or running the A4 Audit/Preview gates.
+func ValidateStagingDirectory(root string) ([]FileEntry, error) {
+	files, err := designpackage.ReadDirectory(root, directoryLimits(), packagePolicy(false))
+	if err != nil {
+		return nil, mapSharedError(err)
+	}
+	for _, required := range []string{"brief.json", "coverage.json", "prototype/index.html", "prototype/styles.css", "prototype/app.js"} {
+		if _, ok := files[required]; !ok {
+			return nil, newError("staging_file_missing", required, "required agent-authored package file "+required+" is missing")
+		}
+	}
+	return buildIndex(files)
+}
+
 func ValidateArchive(archive []byte, expected Binding) (ValidatedPackage, error) {
 	if err := validateBinding(expected); err != nil {
 		return invalidValidated(err.code, err.path, err.message, "")

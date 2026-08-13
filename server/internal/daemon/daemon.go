@@ -26,6 +26,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/cli"
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 	"github.com/multica-ai/multica/server/internal/daemon/repocache"
+	"github.com/multica-ai/multica/server/internal/designdocument"
 	"github.com/multica-ai/multica/server/internal/selfexec"
 	"github.com/multica-ai/multica/server/pkg/agent"
 	"github.com/multica-ai/multica/server/pkg/redact"
@@ -203,6 +204,7 @@ type terminalTaskReport struct {
 	failureReason                string
 	projectDesignSystemArtifacts *ProjectDesignSystemArtifacts
 	projectDesignSystemPackage   *ProjectDesignSystemPackageReceipt
+	designDocumentGrounding      *designdocument.RepositoryGrounding
 	// sessionRolloutMissing is true when the daemon withheld this task's Codex
 	// session because its rollout was not in the store (MUL-5305). The server
 	// clears the resume pointer and flags the continuity gap for the next claim.
@@ -4927,6 +4929,7 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 			failureReason:                taskRunFailureReason(err),
 			projectDesignSystemArtifacts: result.ProjectDesignSystemArtifacts,
 			projectDesignSystemPackage:   result.ProjectDesignSystemPackage,
+			designDocumentGrounding:      result.DesignDocumentGrounding,
 			sessionRolloutMissing:        result.SessionRolloutMissing,
 			retiredSessionID:             result.RetiredSessionID,
 		}); failErr != nil {
@@ -5199,6 +5202,7 @@ func (d *Daemon) reportTaskResult(ctx context.Context, taskID string, result Tas
 			workDir:                      result.WorkDir,
 			projectDesignSystemArtifacts: result.ProjectDesignSystemArtifacts,
 			projectDesignSystemPackage:   result.ProjectDesignSystemPackage,
+			designDocumentGrounding:      result.DesignDocumentGrounding,
 			sessionRolloutMissing:        result.SessionRolloutMissing,
 			retiredSessionID:             result.RetiredSessionID,
 		})
@@ -5239,6 +5243,7 @@ func (d *Daemon) reportTaskResult(ctx context.Context, taskID string, result Tas
 			failureReason:                taskfailure.Classify(fallbackErrMsg).String(),
 			projectDesignSystemArtifacts: result.ProjectDesignSystemArtifacts,
 			projectDesignSystemPackage:   result.ProjectDesignSystemPackage,
+			designDocumentGrounding:      result.DesignDocumentGrounding,
 			sessionRolloutMissing:        result.SessionRolloutMissing,
 			retiredSessionID:             result.RetiredSessionID,
 		}); failErr != nil {
@@ -5273,6 +5278,7 @@ func (d *Daemon) reportTaskResult(ctx context.Context, taskID string, result Tas
 			failureReason:                failureReason,
 			projectDesignSystemArtifacts: result.ProjectDesignSystemArtifacts,
 			projectDesignSystemPackage:   result.ProjectDesignSystemPackage,
+			designDocumentGrounding:      result.DesignDocumentGrounding,
 			sessionRolloutMissing:        result.SessionRolloutMissing,
 			retiredSessionID:             result.RetiredSessionID,
 		}); err != nil {
@@ -5292,7 +5298,7 @@ func (d *Daemon) reportTerminalTask(parentCtx context.Context, report terminalTa
 
 	switch report.kind {
 	case terminalTaskReportComplete:
-		return d.client.CompleteTask(ctx, report.taskID, report.output, report.branchName, report.sessionID, report.workDir, report.projectDesignSystemArtifacts, report.projectDesignSystemPackage, report.sessionRolloutMissing, report.retiredSessionID)
+		return d.client.CompleteTask(ctx, report.taskID, report.output, report.branchName, report.sessionID, report.workDir, report.projectDesignSystemArtifacts, report.projectDesignSystemPackage, report.designDocumentGrounding, report.sessionRolloutMissing, report.retiredSessionID)
 	case terminalTaskReportFail:
 		return d.client.FailTask(ctx, report.taskID, report.errorMessage, report.sessionID, report.workDir, report.failureReason, report.sessionRolloutMissing, report.retiredSessionID)
 	default:
@@ -5333,6 +5339,9 @@ func gcMetaForTask(task Task) (execenv.GCMeta, bool) {
 		meta.Kind = execenv.GCKindPMOSync
 		meta.TaskID = task.ID
 	case len(task.ProjectDesignSystemContext) > 0:
+		meta.Kind = execenv.GCKindQuickCreate
+		meta.TaskID = task.ID
+	case len(task.DesignDocumentContext) > 0:
 		meta.Kind = execenv.GCKindQuickCreate
 		meta.TaskID = task.ID
 	default:
@@ -5449,7 +5458,7 @@ func gateResumeToReusedWorkdir(task *Task, taskCtx *execenv.TaskContextForEnv, e
 // function reads — the env-root provenance and the workdir task-context marker
 // — are written at Prepare time, so neither depends on completion ordering.
 func shouldReusePriorWorkdir(task Task, localAssignment *localDirectoryAssignment, workspacesRoot string) bool {
-	if task.PriorWorkDir == "" || localAssignment != nil {
+	if task.PriorWorkDir == "" || localAssignment != nil || len(task.DesignDocumentContext) > 0 {
 		return false
 	}
 	if !task.IsLeaderTask {
@@ -5959,6 +5968,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		DesignRestoreContext:              strings.TrimSpace(string(task.DesignRestoreContext)),
 		DesignSystemProfileAnalyzeContext: strings.TrimSpace(string(task.DesignSystemProfileAnalyzeContext)),
 		ProjectDesignSystemContext:        strings.TrimSpace(string(task.ProjectDesignSystemContext)),
+		DesignDocumentContext:             strings.TrimSpace(string(task.DesignDocumentContext)),
 		PMOSyncContext:                    string(task.PMOSyncContext),
 		HandoffNote:                       task.HandoffNote,
 		IsSquadLeader:                     taskIsSquadLeader(task),
@@ -6007,6 +6017,11 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// LocalWorkDir into execenv. handleTask already validated + locked the
 	// path for worker tasks; leader tasks intentionally skip the assignment.
 	localAssignment, _ := localDirectoryAssignmentForTask(task, d.cfg.DaemonID)
+	if len(task.DesignDocumentContext) > 0 {
+		// Design tasks snapshot local_directory into a task-owned clone. The
+		// outer task lock still protects the source while the clone is made.
+		localAssignment = nil
+	}
 	// Reuse intentionally skipped for local_directory tasks: the prior
 	// WorkDir is the user's own path (always present) but the reuse path
 	// loses the envRoot association the GC loop needs, and re-running
@@ -6205,6 +6220,26 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		}
 	}()
 
+	var designDocumentGrounding *designDocumentGroundingState
+	var designDocumentGroundingErr error
+	if len(task.DesignDocumentContext) > 0 {
+		if err := materializeDesignDocumentInputs(prepareCtx, task, env.WorkDir, d.client); err != nil {
+			designDocumentGroundingErr = fmt.Errorf("Design Document input unavailable: %w", err)
+		}
+		for _, repo := range task.Repos {
+			if designDocumentGroundingErr != nil {
+				break
+			}
+			if err := d.ensureRepoReady(prepareCtx, task.WorkspaceID, repo.URL); err != nil {
+				designDocumentGroundingErr = fmt.Errorf("repository unavailable: %w", err)
+				break
+			}
+		}
+		if designDocumentGroundingErr == nil {
+			designDocumentGrounding, designDocumentGroundingErr = prepareDesignDocumentGrounding(prepareCtx, task, env.WorkDir, d.cfg.DaemonID, d.repoCache, taskLog)
+		}
+	}
+
 	// Issue #3999 race A: now that env.WorkDir is on disk, transition the
 	// server-side state machine dispatched (or waiting_local_directory) →
 	// running. Calling StartTask before Prepare/Reuse let any consumer
@@ -6223,6 +6258,31 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	stopPrepareLease()
 	prepareComplete = true
 	cancelPrepare()
+	if designDocumentGroundingErr != nil {
+		failureReason := "design_document_repository_unavailable"
+		if strings.HasPrefix(designDocumentGroundingErr.Error(), "Design Document input unavailable:") {
+			failureReason = "design_document_input_unavailable"
+		}
+		return TaskResult{
+			Status: "blocked", Comment: designDocumentGroundingErr.Error(), WorkDir: env.WorkDir, EnvRoot: env.RootDir,
+			FailureReason: failureReason,
+		}, nil
+	}
+	if designDocumentGrounding != nil {
+		defer func() {
+			if returnErr != nil || taskResult.Status != "completed" {
+				return
+			}
+			receipt, err := finalizeDesignDocumentGrounding(designDocumentGrounding, env.WorkDir, env.OutputDir)
+			if err != nil {
+				taskResult.Status = "blocked"
+				taskResult.Comment = "Design Document grounding invalid: " + err.Error()
+				taskResult.FailureReason = "design_document_grounding_invalid"
+				return
+			}
+			taskResult.DesignDocumentGrounding = receipt
+		}()
+	}
 	_ = d.client.ReportProgress(ctx, task.ID, fmt.Sprintf("Launching %s", provider), 1, 2)
 
 	reused := gateResumeToReusedWorkdir(&task, &taskCtx, env.WorkDir, taskLog)
@@ -6310,7 +6370,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			}
 		}
 	}
-	if len(task.ProjectDesignSystemContext) > 0 && env.OutputDir != "" {
+	if (len(task.ProjectDesignSystemContext) > 0 || len(task.DesignDocumentContext) > 0) && env.OutputDir != "" {
 		agentEnv["MULTICA_OUTPUT_DIR"] = env.OutputDir
 	}
 	// Ensure the multica CLI is on PATH inside the agent's environment.

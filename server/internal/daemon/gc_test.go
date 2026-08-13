@@ -1903,6 +1903,14 @@ func TestGCMetaRecognizesProjectDesignSystemTask(t *testing.T) {
 	}
 }
 
+func TestGCMetaRecognizesDesignDocumentTask(t *testing.T) {
+	t.Parallel()
+	meta, ok := gcMetaForTask(Task{ID: "design-task-1", WorkspaceID: "workspace-1", DesignDocumentContext: json.RawMessage(`{"type":"design_document_task"}`)})
+	if !ok || meta.Kind != execenv.GCKindQuickCreate || meta.TaskID != "design-task-1" || meta.WorkspaceID != "workspace-1" {
+		t.Fatalf("Design Document GC meta = %+v, ok=%v", meta, ok)
+	}
+}
+
 // TestShouldCleanTaskDir_LocalDirectoryNeverClean confirms the GC loop
 // never removes the envRoot of a local_directory task even when the parent
 // issue is long-since done. Artifact-pattern cleanup is the most that

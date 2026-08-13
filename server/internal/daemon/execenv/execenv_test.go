@@ -529,6 +529,87 @@ func setProjectDesignSystemContextForTest(t *testing.T, ctx *TaskContextForEnv, 
 	field.SetString(raw)
 }
 
+func setDesignDocumentContextForTest(t *testing.T, ctx *TaskContextForEnv, raw string) {
+	t.Helper()
+	field := reflect.ValueOf(ctx).Elem().FieldByName("DesignDocumentContext")
+	if !field.IsValid() {
+		t.Fatal("TaskContextForEnv.DesignDocumentContext is missing")
+	}
+	field.SetString(raw)
+}
+
+func TestPrepareDesignDocumentWorkspaceIsBoundedAndReadOnly(t *testing.T) {
+	ctx := TaskContextForEnv{}
+	setDesignDocumentContextForTest(t, &ctx, `{
+		"type":"design_document_task",
+		"operation":"first_generation",
+		"execution_ready":true,
+		"input":{
+			"requirement":"Design a customer detail page",
+			"repository_grounding":"pending",
+			"attachments":[{"id":"attachment-1","filename":"reference.png","content_type":"image/png","size_bytes":12,"sha256":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}],
+			"design_system":{"revision_id":"revision-1","content_digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+		}
+	}`)
+	env, err := Prepare(PrepareParams{
+		WorkspacesRoot: t.TempDir(), WorkspaceID: "workspace-design-document",
+		TaskID: "task-design-document-12345678", Provider: "opencode", Task: ctx,
+	}, discardLogger())
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	defer func() {
+		if err := env.Cleanup(true); err != nil {
+			t.Errorf("cleanup Design Document environment: %v", err)
+		}
+	}()
+	if got, want := env.OutputDir, filepath.Join(env.RootDir, "output", "design-document"); got != want {
+		t.Fatalf("OutputDir = %q, want %q", got, want)
+	}
+	root := filepath.Join(env.WorkDir, ".agent_context", "design_document")
+	for _, path := range []string{
+		filepath.Join(root, "context", "task.json"),
+		filepath.Join(root, "context", "input-snapshots", "pending.json"),
+		filepath.Join(root, "context", "repository-facts", "checkout.json"),
+		filepath.Join(root, "context", "design-system", "binding.json"),
+		filepath.Join(root, "reference", "index.json"),
+	} {
+		info, statErr := os.Stat(path)
+		if statErr != nil || info.Mode().Perm() != 0o444 {
+			t.Fatalf("read-only file %s: mode=%v err=%v", path, info.Mode().Perm(), statErr)
+		}
+	}
+	for _, path := range []string{
+		filepath.Join(root, "context"),
+		filepath.Join(root, "context", "input-snapshots"),
+		filepath.Join(root, "context", "repository-facts"),
+		filepath.Join(root, "context", "design-system"),
+		filepath.Join(root, "reference"),
+	} {
+		info, statErr := os.Stat(path)
+		if statErr != nil || info.Mode().Perm() != 0o555 {
+			t.Fatalf("read-only directory %s: mode=%v err=%v", path, info.Mode().Perm(), statErr)
+		}
+	}
+	for _, path := range []string{filepath.Join(root, "work"), env.OutputDir} {
+		info, statErr := os.Stat(path)
+		if statErr != nil || !info.IsDir() || info.Mode().Perm()&0o200 == 0 {
+			t.Fatalf("writable directory %s: mode=%v err=%v", path, info.Mode().Perm(), statErr)
+		}
+	}
+	if err := WriteDesignDocumentRepositoryFacts(env.WorkDir, []byte(`{"schema_version":"multica.design-document-checkout/v1","repositories":[]}`)); err != nil {
+		t.Fatalf("write repository facts: %v", err)
+	}
+	updated, err := os.ReadFile(filepath.Join(root, "context", "repository-facts", "checkout.json"))
+	if err != nil || !strings.Contains(string(updated), "design-document-checkout") {
+		t.Fatalf("updated checkout facts = %q, err=%v", updated, err)
+	}
+	info, err := os.Stat(filepath.Join(root, "context", "repository-facts"))
+	if err != nil || info.Mode().Perm() != 0o555 {
+		t.Fatalf("repository facts were not resealed: mode=%v err=%v", info.Mode().Perm(), err)
+	}
+}
+
 func TestProjectDesignSystemContextWritesTaskAndBasePackageFiles(t *testing.T) {
 	envRoot := t.TempDir()
 	workDir := filepath.Join(envRoot, "workdir")

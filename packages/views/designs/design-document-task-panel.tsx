@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CircleStop, Clock3, FilePlus2, Loader2, Paperclip, Play, X } from "lucide-react";
+import { CircleStop, Clock3, FilePlus2, Loader2, Paperclip, Play, RotateCcw, X } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@multica/core/api";
 import { designKeys } from "@multica/core/designs/keys";
@@ -61,10 +61,10 @@ export function DesignDocumentTaskPanel({
     }),
     onSuccess: async (task) => {
       await queryClient.invalidateQueries({ queryKey: designKeys.documentTasks(wsId) });
-	  setRequirement("");
-	  setIssueId("");
-	  setAttachments([]);
-	  setSubmitError("");
+      setRequirement("");
+      setIssueId("");
+      setAttachments([]);
+      setSubmitError("");
       toast.success("设计任务已创建");
       onTaskCreated?.(task.project_id);
     },
@@ -82,6 +82,23 @@ export function DesignDocumentTaskPanel({
       toast.success("任务已停止");
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : "停止任务失败"),
+  });
+
+  const retryWithoutRepository = useMutation({
+    mutationFn: (task: DesignDocumentAgentTask) => api.createDesignDocumentAgentTask({
+      project_id: task.project_id,
+      agent_id: task.agent_id,
+      requirement: task.requirement,
+      ...(task.issue_id ? { issue_id: task.issue_id } : {}),
+      ...(task.target_platform ? { target_platform: task.target_platform as "web" | "mobile" | "cross_platform" } : {}),
+      repository_grounding_mode: "unavailable",
+      retry_task_id: task.id,
+    }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: designKeys.documentTasks(wsId) });
+      toast.success("已创建无仓库上下文的新任务");
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "重试失败"),
   });
 
   const handleFiles = async (files: FileList | null) => {
@@ -181,7 +198,7 @@ export function DesignDocumentTaskPanel({
           <div className="rounded-md border border-dashed px-4 py-8 text-center text-body text-muted-foreground">暂无设计任务</div>
         ) : (
           <div className="divide-y rounded-md border">
-            {taskRows.map((task) => <DesignTaskRow key={task.id} task={task} stopping={cancelTask.isPending && cancelTask.variables === task.id} onStop={() => cancelTask.mutate(task.id)} />)}
+            {taskRows.map((task) => <DesignTaskRow key={task.id} task={task} stopping={cancelTask.isPending && cancelTask.variables === task.id} retrying={retryWithoutRepository.isPending && retryWithoutRepository.variables?.id === task.id} onStop={() => cancelTask.mutate(task.id)} onRetry={() => retryWithoutRepository.mutate(task)} />)}
           </div>
         )}
       </section>
@@ -189,8 +206,9 @@ export function DesignDocumentTaskPanel({
   );
 }
 
-function DesignTaskRow({ task, stopping, onStop }: { task: DesignDocumentAgentTask; stopping: boolean; onStop: () => void }) {
+function DesignTaskRow({ task, stopping, retrying, onStop, onRetry }: { task: DesignDocumentAgentTask; stopping: boolean; retrying: boolean; onStop: () => void; onRetry: () => void }) {
   const active = ["queued", "dispatched", "running", "waiting_local_directory", "deferred"].includes(task.status);
+  const canRetryWithoutRepository = task.status === "failed" && task.failure_reason === "design_document_repository_unavailable";
   return (
     <article className="grid min-h-24 gap-3 p-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
       <div className="min-w-0">
@@ -212,7 +230,10 @@ function DesignTaskRow({ task, stopping, onStop }: { task: DesignDocumentAgentTa
         </div>
         {task.failure_reason || task.error || task.wait_reason ? <p className="mt-2 text-caption text-muted-foreground">{task.failure_reason || task.error || task.wait_reason}</p> : null}
       </div>
-      {active ? <Button size="sm" variant="outline" disabled={stopping} onClick={onStop}>{stopping ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CircleStop className="h-3.5 w-3.5" />}停止</Button> : null}
+      <div className="flex items-center gap-2">
+        {canRetryWithoutRepository ? <Button size="sm" variant="outline" disabled={retrying} onClick={onRetry}>{retrying ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}不使用仓库继续</Button> : null}
+        {active ? <Button size="sm" variant="outline" disabled={stopping} onClick={onStop}>{stopping ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CircleStop className="h-3.5 w-3.5" />}停止</Button> : null}
+      </div>
     </article>
   );
 }
