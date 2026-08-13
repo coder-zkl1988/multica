@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"math"
 	"strings"
 	"time"
@@ -88,20 +87,15 @@ func ParsePMOSnapshot(output string) (PMOSnapshot, error) {
 		return PMOSnapshot{}, errors.New("pmo snapshot is not valid UTF-8")
 	}
 
-	raw := output
-	// Agents wrap the JSON in prose or a Markdown fence often enough that
+	// Agents wrap the snapshot in prose or a Markdown fence often enough that
 	// strict-only parsing turns a cosmetic deviation into a hard run failure
 	// ("decode pmo snapshot: invalid character 'D' looking for beginning of
-	// value"). Only when the output does not already begin with '{' do we fall
-	// back to extracting the first balanced JSON object; output that starts as
-	// JSON stays strict, so a valid snapshot followed by a trailing JSON blob
-	// is still rejected (and cannot smuggle content past the parser).
-	if !strings.HasPrefix(strings.TrimSpace(output), "{") {
-		extracted, err := extractPMOSnapshotJSONObject(output)
-		if err != nil {
-			return PMOSnapshot{}, err
-		}
-		raw = extracted
+	// value"). Extract the first balanced JSON object wherever it appears;
+	// trailing prose after the object is tolerated, but a second JSON object
+	// is still rejected so nothing can smuggle content past the parser.
+	raw, err := extractPMOSnapshotJSONObject(output)
+	if err != nil {
+		return PMOSnapshot{}, err
 	}
 
 	dec := json.NewDecoder(strings.NewReader(raw))
@@ -110,9 +104,6 @@ func ParsePMOSnapshot(output string) (PMOSnapshot, error) {
 	if err := dec.Decode(&snapshot); err != nil {
 		return PMOSnapshot{}, fmt.Errorf("decode pmo snapshot: %w", err)
 	}
-	if err := requirePMOJSONEOF(dec); err != nil {
-		return PMOSnapshot{}, err
-	}
 	if err := snapshot.validate(); err != nil {
 		return PMOSnapshot{}, err
 	}
@@ -120,9 +111,9 @@ func ParsePMOSnapshot(output string) (PMOSnapshot, error) {
 }
 
 // extractPMOSnapshotJSONObject returns the first balanced JSON object in the
-// agent output, skipping any leading prose or Markdown fence. The content
-// after the object must not contain another '{' (a second JSON blob), so the
-// one-object contract holds outside the strict-prefix path too.
+// agent output, skipping any leading or trailing prose or Markdown fence. The
+// content after the object must not contain another '{' (a second JSON blob),
+// so the one-object contract holds everywhere.
 func extractPMOSnapshotJSONObject(output string) (string, error) {
 	start := strings.IndexByte(output, '{')
 	if start < 0 {
@@ -159,18 +150,6 @@ func extractPMOSnapshotJSONObject(output string) (string, error) {
 		}
 	}
 	return "", errors.New("pmo snapshot JSON object is unbalanced")
-}
-
-func requirePMOJSONEOF(dec *json.Decoder) error {
-	var trailing any
-	err := dec.Decode(&trailing)
-	if errors.Is(err, io.EOF) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("decode trailing pmo snapshot content: %w", err)
-	}
-	return errors.New("pmo snapshot contains trailing JSON")
 }
 
 func (s PMOSnapshot) validate() error {

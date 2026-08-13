@@ -49,6 +49,29 @@ func TestParsePMOSnapshotAcceptsProseAndFenceWrappedJSON(t *testing.T) {
 	}
 }
 
+func TestParsePMOSnapshotAcceptsTrailingProse(t *testing.T) {
+	// A valid snapshot that starts with '{' but appends trailing prose or a
+	// Markdown fence must still parse: the old strict-prefix path rejected any
+	// trailing non-JSON content ("decode trailing pmo snapshot content:
+	// invalid character 'D'/'â' ...").
+	tests := map[string]string{
+		"ascii trailing prose": validPMOSnapshotJSON() + "\n\nDone, please confirm.",
+		"non-ascii trailing":   validPMOSnapshotJSON() + "\n\n已生成 — 请确认",
+		"fence after object":   validPMOSnapshotJSON() + "\n```\n以上为快照…\n```",
+	}
+	for name, raw := range tests {
+		t.Run(name, func(t *testing.T) {
+			got, err := ParsePMOSnapshot(raw)
+			if err != nil {
+				t.Fatalf("expected parse success, got %v", err)
+			}
+			if got.Parent.Key != "EXT-P-001" {
+				t.Fatalf("trailing-prose snapshot was not parsed: %#v", got)
+			}
+		})
+	}
+}
+
 func TestParsePMOSnapshotRejectsTrailingJSON(t *testing.T) {
 	// A valid snapshot followed by another JSON blob stays rejected: the
 	// parser must never silently drop a second object.

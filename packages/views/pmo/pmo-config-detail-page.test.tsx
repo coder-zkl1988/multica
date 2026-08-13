@@ -124,6 +124,7 @@ const applyRunMutate = vi.fn();
 const setMappingMutate = vi.fn();
 const updateConfigMutate = vi.fn();
 const push = vi.fn();
+const transcriptButtonProps = vi.fn();
 
 vi.mock("@multica/core/pmo/mutations", () => ({
   useStartPMORun: () => ({ mutate: startRunMutate, isPending: false }),
@@ -178,6 +179,13 @@ vi.mock("@tanstack/react-query", () => ({
 }));
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
+
+vi.mock("../common/task-transcript", () => ({
+  TranscriptButton: (props: { task: { id: string }; agentName: string; isLive?: boolean; title?: string }) => {
+    transcriptButtonProps(props);
+    return <button aria-label={props.title}>{props.title}</button>;
+  },
+}));
 
 // Keep the ui primitives as light DOM so the state logic is what is under test.
 // Button preserves its `render` prop (a real AppLink) so link-style buttons
@@ -353,6 +361,7 @@ beforeEach(() => {
   setMappingMutate.mockClear();
   updateConfigMutate.mockClear();
   push.mockClear();
+  transcriptButtonProps.mockClear();
 });
 
 describe("PMOConfigDetailPage routing and states", () => {
@@ -607,5 +616,31 @@ describe("PMOConfigDetailPage history tab", () => {
     expect(screen.getByText("Failed")).toBeInTheDocument();
     expect(screen.getAllByText("Manual").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText(/sync_error/)).toBeInTheDocument();
+  });
+
+  it("shows a transcript button for runs with an agent task", () => {
+    previewConfig();
+    setRuns([makeRun({ agent_task_id: "task-1", status: "running" })]);
+    renderPage();
+    fireEvent.click(screen.getByRole("tab", { name: /Run history/ }));
+
+    expect(screen.getByRole("button", { name: "View execution log" })).toBeInTheDocument();
+    expect(transcriptButtonProps).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: expect.objectContaining({ id: "task-1", agent_id: "agent-1", status: "running" }),
+        agentName: "Example Agent",
+        isLive: true,
+        title: "View execution log",
+      }),
+    );
+  });
+
+  it("does not show a transcript button without an agent task", () => {
+    previewConfig();
+    setRuns([makeRun({ agent_task_id: null })]);
+    renderPage();
+    fireEvent.click(screen.getByRole("tab", { name: /Run history/ }));
+
+    expect(screen.queryByRole("button", { name: "View execution log" })).toBeNull();
   });
 });

@@ -135,6 +135,7 @@
     "error_redacted": "詳細は非表示",
     "trigger_manual": "手動",
     "trigger_scheduled": "定期",
+    "view_log": "実行ログを表示",
     "summary": {
       "creates_other": "作成 {{count}} 件",
       "incoming_fields_other": "外部からのフィールド {{count}} 件",

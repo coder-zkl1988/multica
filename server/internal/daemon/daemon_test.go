@@ -2312,6 +2312,41 @@ func TestExecuteAndDrain_FlushesTranscriptBeforeReturningResult(t *testing.T) {
 	}
 }
 
+// TestExecuteAndDrain_PreservesTranscriptOrder pins the backend's message
+// order even when buffered thinking/text is interrupted by tool events.
+func TestExecuteAndDrain_PreservesTranscriptOrder(t *testing.T) {
+	t.Parallel()
+
+	msgCh := make(chan agent.Message, 4)
+	msgCh <- agent.Message{Type: agent.MessageThinking, Content: "inspect"}
+	msgCh <- agent.Message{Type: agent.MessageToolUse, Tool: "bash", CallID: "call-1"}
+	msgCh <- agent.Message{Type: agent.MessageToolResult, Tool: "bash", CallID: "call-1", Output: "ok"}
+	msgCh <- agent.Message{Type: agent.MessageText, Content: "done"}
+	close(msgCh)
+	resultCh := make(chan agent.Result, 1)
+	resultCh <- agent.Result{Status: "completed", Output: "done"}
+
+	d, rec := newTranscriptRecorder(t)
+	_, _, err := d.executeAndDrain(context.Background(), sessionBackend{session: &agent.Session{
+		Messages: msgCh,
+		Result:   resultCh,
+	}}, "p", agent.ExecOptions{}, slog.Default(), "task-order", "", new(atomic.Int32))
+	if err != nil {
+		t.Fatalf("executeAndDrain: %v", err)
+	}
+
+	got := rec.snapshot()
+	want := []string{"thinking", "tool_use", "tool_result", "text"}
+	if len(got) != len(want) {
+		t.Fatalf("expected %d messages, got %d: %+v", len(want), len(got), got)
+	}
+	for i, typ := range want {
+		if got[i].Type != typ || got[i].Seq != i+1 {
+			t.Fatalf("message %d: expected type=%s seq=%d, got %+v", i, typ, i+1, got[i])
+		}
+	}
+}
+
 // TestExecuteAndDrain_SeqContinuesAcrossRetry pins the transcript's ordering
 // key: the server sorts a task's messages by seq alone, so a same-task resume
 // retry must keep numbering upwards instead of restarting at 1 and

@@ -12,6 +12,180 @@ import (
 	"time"
 )
 
+func TestOpenclawSessionTranscriptReadsOnlyLatestTurn(t *testing.T) {
+	t.Parallel()
+
+	stateDir := t.TempDir()
+	sessionDir := filepath.Join(stateDir, "agents", "main", "sessions")
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lines := []string{
+		`{"type":"message","message":{"role":"user","content":"old prompt"}}`,
+		`{"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","id":"old-call","name":"exec","input":{"command":"old"}}]}}`,
+		`{"type":"message","message":{"role":"toolResult","toolCallId":"old-call","toolName":"exec","content":[{"type":"text","text":"old output"}]}}`,
+		`{"type":"message","message":{"role":"user","content":"current prompt"}}`,
+		`{"type":"message","message":{"role":"assistant","content":[{"type":"thinking","thinking":"inspect current state"},{"type":"toolCall","id":"call-1","name":"exec","input":{"command":"pwd"}}]}}`,
+		`{"type":"message","message":{"role":"toolResult","toolCallId":"call-1","toolName":"exec","content":[{"type":"text","text":"/workspace"}]}}`,
+		`{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"final answer"}]}}`,
+	}
+	path := filepath.Join(sessionDir, "session-1.jsonl")
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	messages, err := readOpenclawSessionTranscript(stateDir, "main", "session-1", 0)
+	if err != nil {
+		t.Fatalf("readOpenclawSessionTranscript() error: %v", err)
+	}
+	if len(messages) != 3 {
+		t.Fatalf("messages: got %#v, want thinking + tool use + tool result", messages)
+	}
+	if messages[0].Type != MessageThinking || messages[0].Content != "inspect current state" {
+		t.Errorf("thinking: got %#v", messages[0])
+	}
+	if messages[1].Type != MessageToolUse || messages[1].Tool != "exec" || messages[1].CallID != "call-1" || messages[1].Input["command"] != "pwd" {
+		t.Errorf("tool use: got %#v", messages[1])
+	}
+	if messages[2].Type != MessageToolResult || messages[2].Tool != "exec" || messages[2].CallID != "call-1" || messages[2].Output != "/workspace" {
+		t.Errorf("tool result: got %#v", messages[2])
+	}
+}
+
+func TestOpenclawExecuteEmitsSessionTranscriptBeforeFinalText(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script fixture is POSIX-only")
+	}
+
+	stateDir := t.TempDir()
+	sessionDir := filepath.Join(stateDir, "agents", "main", "sessions")
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	transcript := strings.Join([]string{
+		`{"type":"message","message":{"role":"user","content":"current prompt"}}`,
+		`{"type":"message","message":{"role":"assistant","content":[{"type":"thinking","thinking":"inspect"},{"type":"toolCall","id":"call-1","name":"exec","input":{"command":"pwd"}}]}}`,
+		`{"type":"message","message":{"role":"toolResult","toolCallId":"call-1","toolName":"exec","content":[{"type":"text","text":"/workspace"}]}}`,
+		`{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"final answer"}]}}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(filepath.Join(sessionDir, "session-1.jsonl"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	fakePath := filepath.Join(t.TempDir(), "openclaw")
+	script := "#!/bin/sh\n" +
+		"if [ \"$1\" = \"--version\" ]; then\n" +
+		"  echo 'openclaw 2026.7.1'\n" +
+		"  exit 0\n" +
+		"fi\n" +
+		"cat >> \"$OPENCLAW_STATE_DIR/agents/main/sessions/session-1.jsonl\" <<'TRANSCRIPT'\n" +
+		transcript +
+		"TRANSCRIPT\n" +
+		"cat <<'JSON'\n" +
+		`{"payloads":[{"text":"final answer"}],"meta":{"durationMs":1,"agentMeta":{"sessionId":"session-1"}}}` + "\n" +
+		"JSON\n"
+	writeTestExecutable(t, fakePath, []byte(script))
+
+	backend, err := New("openclaw", Config{
+		ExecutablePath: fakePath,
+		Logger:         slog.Default(),
+		Env:            map[string]string{"OPENCLAW_STATE_DIR": stateDir},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := backend.Execute(context.Background(), "prompt", ExecOptions{
+		ResumeSessionID: "session-1",
+		Model:           "main",
+		Timeout:         5 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var messages []Message
+	for message := range session.Messages {
+		messages = append(messages, message)
+	}
+	result := <-session.Result
+	if result.Status != "completed" || result.Output != "final answer" {
+		t.Fatalf("result: got %#v", result)
+	}
+	if len(messages) != 4 {
+		t.Fatalf("messages: got %#v", messages)
+	}
+	wantTypes := []MessageType{MessageThinking, MessageToolUse, MessageToolResult, MessageText}
+	for i, want := range wantTypes {
+		if messages[i].Type != want {
+			t.Fatalf("message %d type: got %q, want %q; all=%#v", i, messages[i].Type, want, messages)
+		}
+	}
+	if messages[3].Content != "final answer" {
+		t.Errorf("final text: got %#v", messages[3])
+	}
+}
+
+func TestOpenclawExecuteDoesNotReplayPreviousTurnWhenSessionDoesNotAdvance(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script fixture is POSIX-only")
+	}
+
+	stateDir := t.TempDir()
+	sessionDir := filepath.Join(stateDir, "agents", "main", "sessions")
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	oldTranscript := strings.Join([]string{
+		`{"type":"message","message":{"role":"user","content":"old prompt"}}`,
+		`{"type":"message","message":{"role":"assistant","content":[{"type":"thinking","thinking":"old thinking"},{"type":"toolCall","id":"old-call","name":"exec","input":{"command":"old"}}]}}`,
+		`{"type":"message","message":{"role":"toolResult","toolCallId":"old-call","toolName":"exec","content":[{"type":"text","text":"old output"}]}}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(filepath.Join(sessionDir, "session-1.jsonl"), []byte(oldTranscript), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	fakePath := filepath.Join(t.TempDir(), "openclaw")
+	script := "#!/bin/sh\n" +
+		"if [ \"$1\" = \"--version\" ]; then\n" +
+		"  echo 'openclaw 2026.7.1'\n" +
+		"  exit 0\n" +
+		"fi\n" +
+		"cat <<'JSON'\n" +
+		`{"payloads":[{"text":"fallback answer"}],"meta":{"durationMs":1,"agentMeta":{"sessionId":"session-1"}}}` + "\n" +
+		"JSON\n"
+	writeTestExecutable(t, fakePath, []byte(script))
+
+	backend, err := New("openclaw", Config{
+		ExecutablePath: fakePath,
+		Logger:         slog.Default(),
+		Env:            map[string]string{"OPENCLAW_STATE_DIR": stateDir},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := backend.Execute(context.Background(), "prompt", ExecOptions{
+		ResumeSessionID: "session-1",
+		Model:           "main",
+		Timeout:         5 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var messages []Message
+	for message := range session.Messages {
+		messages = append(messages, message)
+	}
+	if result := <-session.Result; result.Status != "completed" {
+		t.Fatalf("result: got %#v", result)
+	}
+	if len(messages) != 1 || messages[0].Type != MessageText || messages[0].Content != "fallback answer" {
+		t.Fatalf("previous turn was replayed: %#v", messages)
+	}
+}
+
 func TestNewReturnsOpenclawBackend(t *testing.T) {
 	t.Parallel()
 	b, err := New("openclaw", Config{ExecutablePath: "/nonexistent/openclaw"})

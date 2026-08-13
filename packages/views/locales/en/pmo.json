@@ -135,6 +135,7 @@
     "error_redacted": "Details redacted",
     "trigger_manual": "Manual",
     "trigger_scheduled": "Scheduled",
+    "view_log": "View execution log",
     "summary": {
       "creates_one": "{{count}} create",
       "creates_other": "{{count}} creates",

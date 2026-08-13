@@ -7168,8 +7168,7 @@ func (d *Daemon) executeAndDrain(ctx context.Context, backend agent.Backend, pro
 		var batch []TaskMessageData
 		callIDToTool := map[string]string{}
 
-		flush := func() {
-			mu.Lock()
+		appendPendingLocked := func() {
 			if pendingThinking.Len() > 0 {
 				s := msgSeq.Add(1)
 				batch = append(batch, TaskMessageData{
@@ -7188,6 +7187,11 @@ func (d *Daemon) executeAndDrain(ctx context.Context, backend agent.Backend, pro
 				})
 				pendingText.Reset()
 			}
+		}
+
+		flush := func() {
+			mu.Lock()
+			appendPendingLocked()
 			toSend := batch
 			batch = nil
 			mu.Unlock()
@@ -7271,13 +7275,12 @@ func (d *Daemon) executeAndDrain(ctx context.Context, backend agent.Backend, pro
 					n := toolCount.Add(1)
 					inFlightTools.Add(1)
 					taskLog.Info(fmt.Sprintf("tool #%d: %s", n, msg.Tool))
+					mu.Lock()
+					appendPendingLocked()
 					if msg.CallID != "" {
-						mu.Lock()
 						callIDToTool[msg.CallID] = msg.Tool
-						mu.Unlock()
 					}
 					s := msgSeq.Add(1)
-					mu.Lock()
 					batch = append(batch, TaskMessageData{
 						Seq:  int(s),
 						Type: "tool_use",
@@ -7309,19 +7312,17 @@ func (d *Daemon) executeAndDrain(ctx context.Context, backend agent.Backend, pro
 							break
 						}
 					}
-					s := msgSeq.Add(1)
 					output := msg.Output
 					if len(output) > 8192 {
 						output = output[:8192]
 					}
+					mu.Lock()
+					appendPendingLocked()
 					toolName := msg.Tool
 					if toolName == "" && msg.CallID != "" {
-						mu.Lock()
 						toolName = callIDToTool[msg.CallID]
-						mu.Unlock()
 					}
-					taskLog.Info("tool_result observed", "seq", s, "tool", toolName, "call_id", msg.CallID)
-					mu.Lock()
+					s := msgSeq.Add(1)
 					batch = append(batch, TaskMessageData{
 						Seq:    int(s),
 						Type:   "tool_result",
@@ -7329,6 +7330,7 @@ func (d *Daemon) executeAndDrain(ctx context.Context, backend agent.Backend, pro
 						Output: output,
 					})
 					mu.Unlock()
+					taskLog.Info("tool_result observed", "seq", s, "tool", toolName, "call_id", msg.CallID)
 				case agent.MessageThinking:
 					if msg.Content != "" {
 						mu.Lock()
@@ -7344,8 +7346,9 @@ func (d *Daemon) executeAndDrain(ctx context.Context, backend agent.Backend, pro
 					}
 				case agent.MessageError:
 					taskLog.Error("agent error", "content", msg.Content)
-					s := msgSeq.Add(1)
 					mu.Lock()
+					appendPendingLocked()
+					s := msgSeq.Add(1)
 					batch = append(batch, TaskMessageData{
 						Seq:     int(s),
 						Type:    "error",
