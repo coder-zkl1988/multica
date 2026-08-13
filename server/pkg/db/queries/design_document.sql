@@ -1,3 +1,20 @@
+-- name: CreateDeferredDesignDocumentAgentTask :one
+INSERT INTO agent_task_queue (
+    id, agent_id, runtime_id, issue_id, status, priority, context, wait_reason,
+    originator_user_id, accountable_user_id, originator_source,
+    trigger_evidence_kind, trigger_evidence_ref_id
+)
+SELECT
+    sqlc.arg('id'), sqlc.arg('agent_id'), sqlc.arg('runtime_id'),
+    sqlc.narg('issue_id'), 'deferred', 0, sqlc.arg('context'),
+    'Design generation starts after repository grounding is available',
+    sqlc.arg('originator_user_id'), sqlc.arg('originator_user_id'),
+    'direct_human', 'design_document_task', sqlc.arg('id')
+WHERE lock_task_owner_rows(
+    sqlc.arg('agent_id'), sqlc.narg('issue_id'), sqlc.arg('runtime_id')
+)
+RETURNING *;
+
 -- name: CreateDesignDocumentInputSnapshot :one
 INSERT INTO design_document_input_snapshot (
     workspace_id, project_id, issue_id, task_id, agent_id, target_platform,
@@ -53,6 +70,49 @@ AND (
     )
 )
 RETURNING *;
+
+-- name: ListDesignDocumentAgentTasks :many
+SELECT
+    task.id,
+    snapshot.id AS input_snapshot_id,
+    project.workspace_id,
+    project.id AS project_id,
+    project.title AS project_title,
+    task.issue_id,
+    issue.number AS issue_number,
+    issue.title AS issue_title,
+    task.agent_id,
+    agent.name AS agent_name,
+    COALESCE(task.context -> 'input' ->> 'requirement', '')::text AS requirement,
+    COALESCE(task.context -> 'input' ->> 'target_platform', '')::text AS target_platform,
+    task.status,
+    task.wait_reason,
+    task.error,
+    task.failure_reason,
+    task.created_at,
+    task.started_at,
+    task.completed_at,
+    COALESCE(
+        (SELECT MAX(message.created_at) FROM task_message AS message WHERE message.task_id = task.id),
+        task.completed_at,
+        task.started_at,
+        task.created_at
+    ) AS last_activity_at
+FROM agent_task_queue AS task
+JOIN agent ON agent.id = task.agent_id
+JOIN project
+  ON project.id = (task.context ->> 'project_id')::uuid
+ AND project.workspace_id = sqlc.arg('workspace_id')
+LEFT JOIN design_document_input_snapshot AS snapshot ON snapshot.task_id = task.id
+LEFT JOIN issue ON issue.id = task.issue_id
+WHERE agent.workspace_id = sqlc.arg('workspace_id')
+  AND task.context ->> 'type' = 'design_document_task'
+  AND (
+      sqlc.narg('project_id')::uuid IS NULL
+      OR project.id = sqlc.narg('project_id')::uuid
+  )
+ORDER BY task.created_at DESC, task.id
+LIMIT sqlc.arg('limit_count');
 
 -- name: GetDesignDocumentInputSnapshotInProject :one
 SELECT *

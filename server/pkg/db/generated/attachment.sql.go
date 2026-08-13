@@ -11,6 +11,54 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const bindAttachmentsToDesignDocumentTask = `-- name: BindAttachmentsToDesignDocumentTask :many
+UPDATE attachment
+SET task_id = $1
+WHERE workspace_id = $2
+  AND uploader_type = 'member'
+  AND uploader_id = $3
+  AND issue_id IS NULL
+  AND comment_id IS NULL
+  AND chat_session_id IS NULL
+  AND chat_message_id IS NULL
+  AND task_id IS NULL
+  AND test_run_case_id IS NULL
+  AND id = ANY($4::uuid[])
+RETURNING id
+`
+
+type BindAttachmentsToDesignDocumentTaskParams struct {
+	TaskID        pgtype.UUID   `json:"task_id"`
+	WorkspaceID   pgtype.UUID   `json:"workspace_id"`
+	UploaderID    pgtype.UUID   `json:"uploader_id"`
+	AttachmentIds []pgtype.UUID `json:"attachment_ids"`
+}
+
+func (q *Queries) BindAttachmentsToDesignDocumentTask(ctx context.Context, arg BindAttachmentsToDesignDocumentTaskParams) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, bindAttachmentsToDesignDocumentTask,
+		arg.TaskID,
+		arg.WorkspaceID,
+		arg.UploaderID,
+		arg.AttachmentIds,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const bindChatAttachmentsToMessage = `-- name: BindChatAttachmentsToMessage :many
 UPDATE attachment
 SET chat_message_id = $1
@@ -139,8 +187,16 @@ func (q *Queries) CreateAttachment(ctx context.Context, arg CreateAttachmentPara
 	return i, err
 }
 
-const deleteAttachment = `-- name: DeleteAttachment :exec
-DELETE FROM attachment WHERE id = $1 AND workspace_id = $2
+const deleteAttachment = `-- name: DeleteAttachment :execrows
+DELETE FROM attachment
+WHERE attachment.id = $1
+  AND attachment.workspace_id = $2
+  AND NOT EXISTS (
+      SELECT 1
+      FROM agent_task_queue AS task
+      WHERE task.id = attachment.task_id
+        AND task.context ->> 'type' = 'design_document_task'
+  )
 `
 
 type DeleteAttachmentParams struct {
@@ -148,9 +204,12 @@ type DeleteAttachmentParams struct {
 	WorkspaceID pgtype.UUID `json:"workspace_id"`
 }
 
-func (q *Queries) DeleteAttachment(ctx context.Context, arg DeleteAttachmentParams) error {
-	_, err := q.db.Exec(ctx, deleteAttachment, arg.ID, arg.WorkspaceID)
-	return err
+func (q *Queries) DeleteAttachment(ctx context.Context, arg DeleteAttachmentParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteAttachment, arg.ID, arg.WorkspaceID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const detachAttachmentsFromUserChatMessageByTask = `-- name: DetachAttachmentsFromUserChatMessageByTask :many

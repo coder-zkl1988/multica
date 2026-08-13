@@ -5,6 +5,44 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe("ApiClient design document tasks", () => {
+  it("creates and lists tasks through the dedicated API", async () => {
+    const task = {
+      id: "task-1",
+      project_id: "project-1",
+      status: "deferred",
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(task), { status: 202, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ tasks: [task] }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new ApiClient("https://api.example.test");
+    await expect(client.createDesignDocumentAgentTask({
+      project_id: "project-1",
+      agent_id: "agent-1",
+      requirement: "Customer detail page",
+    })).resolves.toMatchObject(task);
+    await expect(client.listDesignDocumentAgentTasks({ project_id: "project-1" })).resolves.toEqual({ tasks: [expect.objectContaining(task)] });
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "https://api.example.test/api/design-documents/agent-tasks",
+      "https://api.example.test/api/design-documents/agent-tasks?project_id=project-1",
+    ]);
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: "POST", body: expect.stringContaining("Customer detail page") });
+  });
+
+  it("falls back safely for malformed task responses", async () => {
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 1 }), { status: 202, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ tasks: "invalid" }), { status: 200, headers: { "Content-Type": "application/json" } })));
+
+    const client = new ApiClient("https://api.example.test");
+    await expect(client.createDesignDocumentAgentTask({ project_id: "project-1", agent_id: "agent-1", requirement: "Page" })).resolves.toMatchObject({ id: "", status: "failed" });
+    await expect(client.listDesignDocumentAgentTasks()).resolves.toEqual({ tasks: [] });
+  });
+});
+
 describe("ApiClient pull-request response schema", () => {
   const validPR = {
     id: "pr-1",

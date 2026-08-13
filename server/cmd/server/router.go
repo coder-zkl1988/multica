@@ -1639,6 +1639,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			r.Get("/api/design-drafts", h.ListDesignDrafts)
 			r.Post("/api/design-drafts", h.CreateDesignDraft)
 			r.Post("/api/design-drafts/agent-tasks", h.CreateDesignDraftAgentTask)
+			r.Get("/api/design-documents/agent-tasks", h.ListDesignDocumentAgentTasks)
+			r.Post("/api/design-documents/agent-tasks", h.CreateDesignDocumentAgentTask)
 			r.Get("/api/design-drafts/{id}", h.GetDesignDraft)
 			r.Post("/api/design-drafts/{id}/materialize", h.MaterializeDesignDraft)
 			r.Get("/api/design-deliveries", h.ListDesignDeliveries)

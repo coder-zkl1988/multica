@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   getProjectDesignSystemForProject,
+  listDesignDocumentAgentTasks,
   listAgents,
   listDesignDrafts,
   listDesignFiles,
@@ -13,9 +14,11 @@ const {
   listDesignSystemProfiles,
   listDesignTemplates,
   listProjects,
+  listIssues,
   navigate,
 } = vi.hoisted(() => ({
   getProjectDesignSystemForProject: vi.fn(),
+  listDesignDocumentAgentTasks: vi.fn(),
   listAgents: vi.fn(),
   listDesignDrafts: vi.fn(),
   listDesignFiles: vi.fn(),
@@ -23,6 +26,7 @@ const {
   listDesignSystemProfiles: vi.fn(),
   listDesignTemplates: vi.fn(),
   listProjects: vi.fn(),
+  listIssues: vi.fn(),
   navigate: vi.fn(),
 }));
 
@@ -32,6 +36,7 @@ vi.mock("@multica/core/api", () => ({
     createFigmaImportConnection: vi.fn(),
     createProjectDesignSystem: vi.fn(),
     getProjectDesignSystemForProject,
+    listDesignDocumentAgentTasks,
     listAgents,
     listDesignDrafts,
     listDesignFiles,
@@ -39,6 +44,7 @@ vi.mock("@multica/core/api", () => ({
     listDesignSystemProfiles,
     listDesignTemplates,
     listProjects,
+    listIssues,
     uploadFile: vi.fn(),
   },
 }));
@@ -121,6 +127,8 @@ describe("DesignsPage", () => {
     listDesignSystemProfiles.mockReset();
     listDesignTemplates.mockReset();
     listProjects.mockReset();
+    listDesignDocumentAgentTasks.mockReset();
+    listIssues.mockReset();
     navigate.mockReset();
     listAgents.mockResolvedValue([]);
     listDesignDrafts.mockResolvedValue({ drafts: [], total: 0 });
@@ -129,6 +137,8 @@ describe("DesignsPage", () => {
     listDesignSystemProfiles.mockResolvedValue({ design_systems: [] });
     listDesignTemplates.mockResolvedValue({ templates: [], total: 0 });
     listProjects.mockResolvedValue({ projects: [{ id: "project-1", title: "CRM", description: "CRM 项目设计目标" }], total: 1 });
+    listDesignDocumentAgentTasks.mockResolvedValue({ tasks: [] });
+    listIssues.mockResolvedValue({ issues: [], total: 0 });
     getProjectDesignSystemForProject.mockResolvedValue({
       id: "",
       workspace_id: "ws-1",
@@ -162,7 +172,7 @@ describe("DesignsPage", () => {
 
     const homeTab = await screen.findByRole("tab", { name: "首页" });
     expect(homeTab).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByRole("tabpanel", { name: "首页" })).toBeEmptyDOMElement();
+    expect(within(screen.getByRole("tabpanel", { name: "首页" })).getByRole("heading", { name: "开始设计" })).toBeInTheDocument();
     expect(screen.queryByText("工作区设计资产")).not.toBeInTheDocument();
     expect(screen.queryByText("UI 规范")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /关闭.*首页/ })).not.toBeInTheDocument();
@@ -170,7 +180,7 @@ describe("DesignsPage", () => {
     await screen.findByRole("menuitem", { name: "staffrnapp" });
     expect(screen.queryByRole("tab", { name: "CRM" })).not.toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "staffrnapp" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("项目")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "打开项目" }));
     await user.click(screen.getByRole("menuitem", { name: "CRM" }));

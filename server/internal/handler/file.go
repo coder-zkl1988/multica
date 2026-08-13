@@ -1567,12 +1567,17 @@ func (h *Handler) DeleteAttachment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.Queries.DeleteAttachment(r.Context(), db.DeleteAttachmentParams{
+	deleted, err := h.Queries.DeleteAttachment(r.Context(), db.DeleteAttachmentParams{
 		ID:          att.ID,
 		WorkspaceID: att.WorkspaceID,
-	}); err != nil {
+	})
+	if err != nil {
 		slog.Error("failed to delete attachment", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to delete attachment")
+		return
+	}
+	if deleted == 0 {
+		writeError(w, http.StatusConflict, "attachment is part of a design task input")
 		return
 	}
 

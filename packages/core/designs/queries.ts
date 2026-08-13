@@ -180,3 +180,11 @@ export function designDraftDetailOptions(wsId: string, id: string) {
     queryFn: () => api.getDesignDraft(id),
   });
 }
+
+export function designDocumentTaskListOptions(wsId: string, projectId?: string) {
+  return queryOptions({
+    queryKey: designKeys.documentTasks(wsId, projectId),
+    queryFn: () => api.listDesignDocumentAgentTasks(projectId ? { project_id: projectId } : {}),
+    select: (data) => data.tasks,
+  });
+}

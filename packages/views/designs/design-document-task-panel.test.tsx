@@ -1,0 +1,82 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { type ReactNode } from "react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const mocks = vi.hoisted(() => ({
+  create: vi.fn(),
+  list: vi.fn(),
+  listIssues: vi.fn(),
+  upload: vi.fn(),
+}));
+
+vi.mock("@multica/core/api", () => ({
+  api: {
+    createDesignDocumentAgentTask: mocks.create,
+    listDesignDocumentAgentTasks: mocks.list,
+    listIssues: mocks.listIssues,
+    uploadFile: mocks.upload,
+    deleteAttachment: vi.fn(),
+    cancelTaskById: vi.fn(),
+  },
+}));
+
+vi.mock("@multica/core/hooks", () => ({ useWorkspaceId: () => "workspace-1" }));
+vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
+
+import { DesignDocumentTaskPanel } from "./design-document-task-panel";
+
+const projects = [
+  { id: "project-1", title: "CRM" },
+  { id: "project-2", title: "Billing" },
+] as never[];
+const agents = [{ id: "agent-1", name: "Designer", runtime_id: "runtime-1", archived_at: null }] as never[];
+
+function renderWithClient(ui: ReactNode) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+  return render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
+}
+
+describe("DesignDocumentTaskPanel", () => {
+  beforeEach(() => {
+    mocks.create.mockReset();
+    mocks.list.mockReset().mockResolvedValue({ tasks: [] });
+    mocks.listIssues.mockReset().mockResolvedValue({ issues: [], total: 0 });
+  });
+
+  it("opens the project only after the server accepts the task", async () => {
+    const user = userEvent.setup();
+    const created = vi.fn();
+    let reject = true;
+    mocks.create.mockImplementation(() => reject
+      ? Promise.reject(new Error("server rejected"))
+      : Promise.resolve({ id: "task-1", project_id: "project-1", status: "deferred" }));
+
+    renderWithClient(<DesignDocumentTaskPanel projects={projects} agents={agents} onTaskCreated={created} />);
+    await user.selectOptions(screen.getByLabelText("项目"), "project-1");
+    await user.selectOptions(screen.getByLabelText("Agent"), "agent-1");
+    await user.type(screen.getByLabelText("设计需求"), "Design a customer detail page");
+    await user.click(screen.getByRole("button", { name: "开始设计" }));
+
+    expect(await screen.findByDisplayValue("Design a customer detail page")).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("server rejected");
+    expect(created).not.toHaveBeenCalled();
+
+    reject = false;
+    await user.click(screen.getByRole("button", { name: "开始设计" }));
+    expect(created).toHaveBeenCalledWith("project-1");
+    expect(mocks.create).toHaveBeenLastCalledWith(expect.objectContaining({
+      project_id: "project-1",
+      agent_id: "agent-1",
+      requirement: "Design a customer detail page",
+    }));
+  });
+
+  it("fixes project scope in a project draft area", async () => {
+    renderWithClient(<DesignDocumentTaskPanel projects={projects} agents={agents} projectId="project-2" />);
+    expect(await screen.findByText("Billing")).toBeInTheDocument();
+    expect(screen.queryByLabelText("项目")).not.toBeInTheDocument();
+    expect(mocks.list).toHaveBeenCalledWith({ project_id: "project-2" });
+  });
+});

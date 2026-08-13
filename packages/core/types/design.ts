@@ -597,6 +597,42 @@ export interface CreateDesignDraftAgentTaskResponse {
   status: string;
 }
 
+export interface CreateDesignDocumentAgentTaskRequest {
+  project_id: string;
+  agent_id: string;
+  issue_id?: string;
+  requirement: string;
+  target_platform?: "web" | "mobile" | "cross_platform";
+  attachment_ids?: string[];
+}
+
+export interface DesignDocumentAgentTask {
+  id: string;
+  input_snapshot_id?: string;
+  workspace_id: string;
+  project_id: string;
+  project_title: string;
+  issue_id?: string;
+  issue_number?: number;
+  issue_title?: string;
+  agent_id: string;
+  agent_name: string;
+  requirement: string;
+  target_platform?: string;
+  status: string;
+  wait_reason?: string;
+  error?: string;
+  failure_reason?: string;
+  created_at: string;
+  started_at?: string;
+  completed_at?: string;
+  last_activity_at: string;
+}
+
+export interface ListDesignDocumentAgentTasksResponse {
+  tasks: DesignDocumentAgentTask[];
+}
+
 export interface DesignRestoreTask {
   id: string;
   workspace_id: string;

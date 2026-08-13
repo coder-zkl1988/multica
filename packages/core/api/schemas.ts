@@ -68,6 +68,8 @@ import type {
   User,
   WebhookDelivery,
   CreateDesignDraftAgentTaskResponse,
+  DesignDocumentAgentTask,
+  ListDesignDocumentAgentTasksResponse,
   DesignDelivery,
   DesignDraft,
   DesignDraftMaterializeResponse,
@@ -1238,6 +1240,48 @@ export const EMPTY_CREATE_DESIGN_DRAFT_AGENT_TASK_RESPONSE: CreateDesignDraftAge
   task_id: "",
   status: "failed",
 };
+
+export const DesignDocumentAgentTaskSchema = z.object({
+  id: z.string(),
+  input_snapshot_id: z.string().optional(),
+  workspace_id: z.string().default(""),
+  project_id: z.string(),
+  project_title: z.string().default(""),
+  issue_id: z.string().optional(),
+  issue_number: z.number().optional(),
+  issue_title: z.string().optional(),
+  agent_id: z.string().default(""),
+  agent_name: z.string().default(""),
+  requirement: z.string().default(""),
+  target_platform: z.string().optional(),
+  status: z.string(),
+  wait_reason: z.string().optional(),
+  error: z.string().optional(),
+  failure_reason: z.string().optional(),
+  created_at: z.string().default(""),
+  started_at: z.string().optional(),
+  completed_at: z.string().optional(),
+  last_activity_at: z.string().default(""),
+}).loose();
+
+export const ListDesignDocumentAgentTasksResponseSchema = z.object({
+  tasks: z.array(DesignDocumentAgentTaskSchema).default([]),
+}).loose();
+
+export const EMPTY_DESIGN_DOCUMENT_AGENT_TASK: DesignDocumentAgentTask = {
+  id: "",
+  workspace_id: "",
+  project_id: "",
+  project_title: "",
+  agent_id: "",
+  agent_name: "",
+  requirement: "",
+  status: "failed",
+  created_at: "",
+  last_activity_at: "",
+};
+
+export const EMPTY_LIST_DESIGN_DOCUMENT_AGENT_TASKS_RESPONSE: ListDesignDocumentAgentTasksResponse = { tasks: [] };
 
 export const DesignDraftMaterializeResponseSchema = z.object({
   draft: DesignDraftSchema,

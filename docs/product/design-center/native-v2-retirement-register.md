@@ -53,6 +53,14 @@
 - 证据：`native-design-phase-a1-validation.md`；V2 golden、daemon/handler 回归、GitNexus `detect_changes` 均已执行。
 - 下一次复核：后续产品切片真实迁移活动消费者并满足 DC-040 时，再新增具体 capability 条目；不能从名称 grep 推导状态。
 
+### 2026-08-13 Phase A A2 复核
+
+- 状态变化：无。
+- 触达范围：设计中心首页和项目“设计草稿”新增 Design Document task create/list；历史 PageSpec 草稿网格仍保留在 task 区之后。
+- 保留原因：A2 只替代新任务发起入口，尚未形成首个 Design Document、文档列表或 A3-A5 执行闭环；旧 `design_draft` / `semantic_pagespec` 仍有历史读取和其他入口消费者。
+- 证据：`native-design-phase-a2-validation.md`；新 client/handler/UI 测试断言专用 API，旧 `/api/design-drafts/agent-tasks` 未被新 surface 调用。
+- 下一次复核：A4/A5 形成完整 Document 资产和用户工作区后，按消费者逐条复核；本阶段不停止旧写入、不删历史数据。
+
 `feature/fengchen-fixed-v2` 只保留为取消的独立 Phase B 路线 checkpoint，不合入 `feature/fengchen`，不作为实现基线，也不计入产品或退役进度。
 
 后续条目使用以下模板追加：

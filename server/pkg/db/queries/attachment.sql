@@ -138,13 +138,36 @@ WHERE workspace_id = $2
   AND issue_id IS NULL
   AND id = ANY($3::uuid[]);
 
--- name: DeleteAttachment :exec
-DELETE FROM attachment WHERE id = $1 AND workspace_id = $2;
+-- name: DeleteAttachment :execrows
+DELETE FROM attachment
+WHERE attachment.id = $1
+  AND attachment.workspace_id = $2
+  AND NOT EXISTS (
+      SELECT 1
+      FROM agent_task_queue AS task
+      WHERE task.id = attachment.task_id
+        AND task.context ->> 'type' = 'design_document_task'
+  );
 
 -- name: ListAttachmentsByIDs :many
 SELECT * FROM attachment
 WHERE id = ANY(sqlc.arg(attachment_ids)::uuid[]) AND workspace_id = sqlc.arg(workspace_id)
 ORDER BY created_at ASC;
+
+-- name: BindAttachmentsToDesignDocumentTask :many
+UPDATE attachment
+SET task_id = sqlc.arg('task_id')
+WHERE workspace_id = sqlc.arg('workspace_id')
+  AND uploader_type = 'member'
+  AND uploader_id = sqlc.arg('uploader_id')
+  AND issue_id IS NULL
+  AND comment_id IS NULL
+  AND chat_session_id IS NULL
+  AND chat_message_id IS NULL
+  AND task_id IS NULL
+  AND test_run_case_id IS NULL
+  AND id = ANY(sqlc.arg('attachment_ids')::uuid[])
+RETURNING id;
 
 -- name: SetAttachmentTestRunCase :exec
 -- Tags an upload with the test-run case that produced it. Called after

@@ -6,7 +6,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api } from "@multica/core/api";
 import { designKeys } from "@multica/core/designs/keys";
-import { designDraftListOptions, designFileListOptions, designFolderListOptions, designSystemListOptions, designTemplateListOptions, projectDesignSystemByProjectOptions } from "@multica/core/designs/queries";
+import { designDocumentTaskListOptions, designDraftListOptions, designFileListOptions, designFolderListOptions, designSystemListOptions, designTemplateListOptions, projectDesignSystemByProjectOptions } from "@multica/core/designs/queries";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { agentListOptions } from "@multica/core/workspace/queries";
@@ -33,6 +33,7 @@ import { PageHeader } from "../layout/page-header";
 import { AppLink, useNavigation } from "../navigation";
 import { FigmaPluginDownload } from "./figma-plugin-download";
 import { ProjectDesignSystemWorkspace } from "./project-design-system-workspace";
+import { DesignDocumentTaskPanel } from "./design-document-task-panel";
 
 type ToolMenuState = { x: number; y: number; file: DesignFile } | null;
 type DraftDialogState = { template: DesignCatalogTemplate; title: string; requirement: string; slotValues: string; patch: string; agentId: string; prompt: string } | null;
@@ -294,6 +295,7 @@ export function DesignsPage({ figmaPluginDownloadUrl }: { figmaPluginDownloadUrl
   const selectedProjectId = activeWorkspaceTabId === DESIGN_HOME_TAB_ID ? "" : activeWorkspaceTabId;
   const { data: designSystems = [], isLoading: designSystemsLoading } = useQuery(designSystemListOptions(wsId, selectedProjectId || undefined));
   const { data: projectDesignSystem, isLoading: projectDesignSystemLoading } = useQuery(projectDesignSystemByProjectOptions(wsId, selectedProjectId));
+  const { data: projectDesignTasks = [] } = useQuery(designDocumentTaskListOptions(wsId, selectedProjectId || undefined));
   const figmaConnection = useMutation({
     mutationFn: () => api.createFigmaImportConnection(),
     onSuccess: (data) => setFigmaCode({ code: data.code, expiresAt: data.expires_at }),
@@ -632,7 +634,16 @@ export function DesignsPage({ figmaPluginDownloadUrl }: { figmaPluginDownloadUrl
         </div>
 
         {activeWorkspaceTabId === DESIGN_HOME_TAB_ID ? (
-          <div role="tabpanel" aria-label="首页" className="min-h-0 flex-1" />
+          <div role="tabpanel" aria-label="首页" className="min-h-0 flex-1 overflow-auto">
+            <DesignDocumentTaskPanel
+              projects={projects}
+              agents={agents}
+              onTaskCreated={(projectId) => {
+                openProjectTab(projectId);
+                setActiveTab("drafts");
+              }}
+            />
+          </div>
         ) : isLoading ? (
           <div className="space-y-2 p-4">
             {Array.from({ length: 5 }).map((_, index) => <Skeleton key={index} className="h-14 w-full" />)}
@@ -661,7 +672,7 @@ export function DesignsPage({ figmaPluginDownloadUrl }: { figmaPluginDownloadUrl
                 <TabsTrigger value="drafts" className="h-10 flex-none gap-2 px-1">
                   <ClipboardList className="h-3.5 w-3.5" />
                   <span>设计草稿</span>
-                  <Badge variant="secondary" className="h-4 min-w-4 rounded-full px-1 text-micro font-normal tabular-nums">{pendingDesignDrafts.length}</Badge>
+                  <Badge variant="secondary" className="h-4 min-w-4 rounded-full px-1 text-micro font-normal tabular-nums">{pendingDesignDrafts.length + projectDesignTasks.length}</Badge>
                 </TabsTrigger>
                 <TabsTrigger value="templates" className="h-10 flex-none gap-2 px-1">
                   <FileJson className="h-3.5 w-3.5" />
@@ -709,7 +720,9 @@ export function DesignsPage({ figmaPluginDownloadUrl }: { figmaPluginDownloadUrl
             </TabsContent>
 
             <TabsContent value="drafts" className="min-h-0 overflow-auto p-4">
-              <section className="space-y-3">
+              <DesignDocumentTaskPanel projects={projects} agents={agents} projectId={selectedProjectId} />
+              <section className="mx-auto mt-4 w-full max-w-5xl space-y-3 border-t pt-4">
+                <h2 className="text-body font-semibold">旧版设计草稿</h2>
                 {draftsLoading ? (
                   <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">{Array.from({ length: 4 }).map((_, index) => <Skeleton key={index} className="aspect-[4/3] w-full" />)}</div>
                 ) : filteredDrafts.length === 0 ? (

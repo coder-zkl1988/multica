@@ -34,6 +34,10 @@ vi.mock("@tanstack/react-query", () => ({
   },
 }));
 
+vi.mock("../../designs/design-document-task-panel", () => ({
+  DesignDocumentTaskPanel: () => <div>Project design task panel</div>,
+}));
+
 vi.mock("@multica/core/projects/queries", () => ({
   projectDetailOptions: () => ({ queryKey: ["project-detail"] }),
 }));
@@ -225,7 +229,7 @@ vi.mock("./project-due-date-picker", () => ({
 }));
 
 vi.mock("../../issues/surface/issue-surface", () => ({
-  IssueSurface: () => null,
+  IssueSurface: () => <div>Project issues surface</div>,
 }));
 
 vi.mock("../../layout/breadcrumb-header", () => ({
@@ -339,5 +343,18 @@ describe("ProjectDetail created-by row", () => {
     const row = screen.getByText("Created by").closest("div");
     expect(row).not.toBeNull();
     expect(row).toHaveTextContent("User One");
+  });
+});
+
+describe("ProjectDetail design drafts", () => {
+  it("opens the project-scoped design task area", async () => {
+    const user = userEvent.setup();
+    renderProjectDetail();
+
+    expect(screen.getByText("Project issues surface")).toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: "Design drafts" }));
+
+    expect(screen.getByText("Project design task panel")).toBeInTheDocument();
+    expect(screen.queryByText("Project issues surface")).not.toBeInTheDocument();
   });
 });

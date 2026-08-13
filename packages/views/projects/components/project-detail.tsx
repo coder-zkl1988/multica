@@ -2,7 +2,7 @@
 
 import { useMemo, useState, useCallback, useRef, useEffect } from "react";
 import { useDefaultLayout, usePanelRef } from "react-resizable-panels";
-import { Check, ChevronRight, Link2, MoreHorizontal, PanelRight, Pin, PinOff, Trash2, UserMinus } from "lucide-react";
+import { Check, ChevronRight, ClipboardList, Link2, ListTodo, MoreHorizontal, PanelRight, Pin, PinOff, Trash2, UserMinus } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { cn } from "@multica/ui/lib/utils";
 import { copyText } from "@multica/ui/lib/clipboard";
@@ -72,6 +72,7 @@ import {
 import { useT } from "../../i18n";
 import { useProjectStatusLabels, useProjectPriorityLabels } from "./labels";
 import { matchesPinyin } from "../../editor/extensions/pinyin-match";
+import { DesignDocumentTaskPanel } from "../../designs/design-document-task-panel";
 
 // ---------------------------------------------------------------------------
 // Property row — sidebar property display
@@ -149,6 +150,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
   const [propertiesOpen, setPropertiesOpen] = useState(true);
   const [progressOpen, setProgressOpen] = useState(true);
   const [descriptionOpen, setDescriptionOpen] = useState(true);
+  const [contentTab, setContentTab] = useState<"issues" | "design_drafts">("issues");
 
   // Sidebar panel
   const { defaultLayout, onLayoutChanged } = useDefaultLayout({
@@ -550,10 +552,21 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
             }
           />
 
-          <IssueSurface
-            scope={issueScope}
-            modes={["board", "list", "table", "swimlane", "gantt"]}
-          />
+          <div role="tablist" aria-label={t(($) => $.detail.content_tabs)} className="flex h-10 shrink-0 items-end gap-5 border-b px-4">
+            <button type="button" role="tab" aria-selected={contentTab === "issues"} className={cn("flex h-10 items-center gap-2 border-b-2 px-1 text-body", contentTab === "issues" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground")} onClick={() => setContentTab("issues")}>
+              <ListTodo className="h-3.5 w-3.5" />{t(($) => $.detail.content_issues)}
+            </button>
+            <button type="button" role="tab" aria-selected={contentTab === "design_drafts"} className={cn("flex h-10 items-center gap-2 border-b-2 px-1 text-body", contentTab === "design_drafts" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground")} onClick={() => setContentTab("design_drafts")}>
+              <ClipboardList className="h-3.5 w-3.5" />{t(($) => $.detail.content_design_drafts)}
+            </button>
+          </div>
+          {contentTab === "issues" ? (
+            <IssueSurface scope={issueScope} modes={["board", "list", "table", "swimlane", "gantt"]} />
+          ) : (
+            <div role="tabpanel" aria-label={t(($) => $.detail.content_design_drafts)} className="min-h-0 flex-1 overflow-auto">
+              <DesignDocumentTaskPanel projects={[project]} agents={agents} projectId={projectId} />
+            </div>
+          )}
           </div>
         </ResizablePanel>
         {!isMobile && <ResizableHandle />}

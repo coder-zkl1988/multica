@@ -184,6 +184,9 @@ import type {
   CancelDesignDeliveryRequest,
   CreateDesignDraftAgentTaskRequest,
   CreateDesignDraftAgentTaskResponse,
+  CreateDesignDocumentAgentTaskRequest,
+  DesignDocumentAgentTask,
+  ListDesignDocumentAgentTasksResponse,
   CreateDesignDraftRequest,
   CreateDesignDeliveryRequest,
   CreateDesignFileRequest,
@@ -446,6 +449,8 @@ import {
   DesignDraftSchema,
   DesignSystemProfileSchema,
   CreateDesignDraftAgentTaskResponseSchema,
+  DesignDocumentAgentTaskSchema,
+  ListDesignDocumentAgentTasksResponseSchema,
   ProjectDesignSystemSchema,
   ProjectDesignSystemPackagePreviewSchema,
   DesignRestoreTaskSchema,
@@ -455,6 +460,8 @@ import {
   EMPTY_DESIGN_DRAFT_MATERIALIZE_RESPONSE,
   EMPTY_DESIGN_SYSTEM_PROFILE,
   EMPTY_CREATE_DESIGN_DRAFT_AGENT_TASK_RESPONSE,
+  EMPTY_DESIGN_DOCUMENT_AGENT_TASK,
+  EMPTY_LIST_DESIGN_DOCUMENT_AGENT_TASKS_RESPONSE,
   EMPTY_PROJECT_DESIGN_SYSTEM,
   EMPTY_PROJECT_DESIGN_SYSTEM_PACKAGE_PREVIEW,
   EMPTY_DESIGN_RESTORE_TASK,
@@ -3508,6 +3515,31 @@ export class ApiClient {
       CreateDesignDraftAgentTaskResponseSchema,
       EMPTY_CREATE_DESIGN_DRAFT_AGENT_TASK_RESPONSE,
       { endpoint: "POST /api/design-drafts/agent-tasks" },
+    );
+  }
+
+  async createDesignDocumentAgentTask(data: CreateDesignDocumentAgentTaskRequest): Promise<DesignDocumentAgentTask> {
+    const raw = await this.fetch<unknown>("/api/design-documents/agent-tasks", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(
+      raw,
+      DesignDocumentAgentTaskSchema,
+      EMPTY_DESIGN_DOCUMENT_AGENT_TASK,
+      { endpoint: "POST /api/design-documents/agent-tasks" },
+    );
+  }
+
+  async listDesignDocumentAgentTasks(params: { project_id?: string } = {}): Promise<ListDesignDocumentAgentTasksResponse> {
+    const search = new URLSearchParams();
+    if (params.project_id) search.set("project_id", params.project_id);
+    const raw = await this.fetch<unknown>(`/api/design-documents/agent-tasks${search.size ? `?${search}` : ""}`);
+    return parseWithFallback(
+      raw,
+      ListDesignDocumentAgentTasksResponseSchema,
+      EMPTY_LIST_DESIGN_DOCUMENT_AGENT_TASKS_RESPONSE,
+      { endpoint: "GET /api/design-documents/agent-tasks" },
     );
   }
 

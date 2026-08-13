@@ -11,6 +11,99 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const createDeferredDesignDocumentAgentTask = `-- name: CreateDeferredDesignDocumentAgentTask :one
+INSERT INTO agent_task_queue (
+    id, agent_id, runtime_id, issue_id, status, priority, context, wait_reason,
+    originator_user_id, accountable_user_id, originator_source,
+    trigger_evidence_kind, trigger_evidence_ref_id
+)
+SELECT
+    $1, $2, $3,
+    $4, 'deferred', 0, $5,
+    'Design generation starts after repository grounding is available',
+    $6, $6,
+    'direct_human', 'design_document_task', $1
+WHERE lock_task_owner_rows(
+    $2, $4, $3
+)
+RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, handoff_note, prepare_lease_expires_at, squad_id, runtime_mcp_overlay, escalation_for_task_id, fire_at, originator_user_id, runtime_connected_apps, coalesced_comment_ids, delivered_comment_ids, chat_input_task_id, chat_finalize_deferred_at, originator_source, delegated_from_task_id, retry_of_task_id, rerun_of_task_id, rule_version_id, trigger_evidence_kind, trigger_evidence_ref_id, accountable_user_id, session_rollout_missing, retired_session_id, quick_actions_disabled, regenerate_quick_actions_for
+`
+
+type CreateDeferredDesignDocumentAgentTaskParams struct {
+	ID               pgtype.UUID `json:"id"`
+	AgentID          pgtype.UUID `json:"agent_id"`
+	RuntimeID        pgtype.UUID `json:"runtime_id"`
+	IssueID          pgtype.UUID `json:"issue_id"`
+	Context          []byte      `json:"context"`
+	OriginatorUserID pgtype.UUID `json:"originator_user_id"`
+}
+
+func (q *Queries) CreateDeferredDesignDocumentAgentTask(ctx context.Context, arg CreateDeferredDesignDocumentAgentTaskParams) (AgentTaskQueue, error) {
+	row := q.db.QueryRow(ctx, createDeferredDesignDocumentAgentTask,
+		arg.ID,
+		arg.AgentID,
+		arg.RuntimeID,
+		arg.IssueID,
+		arg.Context,
+		arg.OriginatorUserID,
+	)
+	var i AgentTaskQueue
+	err := row.Scan(
+		&i.ID,
+		&i.AgentID,
+		&i.IssueID,
+		&i.Status,
+		&i.Priority,
+		&i.DispatchedAt,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.Result,
+		&i.Error,
+		&i.CreatedAt,
+		&i.Context,
+		&i.RuntimeID,
+		&i.SessionID,
+		&i.WorkDir,
+		&i.TriggerCommentID,
+		&i.ChatSessionID,
+		&i.AutopilotRunID,
+		&i.Attempt,
+		&i.MaxAttempts,
+		&i.ParentTaskID,
+		&i.FailureReason,
+		&i.TriggerSummary,
+		&i.ForceFreshSession,
+		&i.IsLeaderTask,
+		&i.WaitReason,
+		&i.InitiatorUserID,
+		&i.HandoffNote,
+		&i.PrepareLeaseExpiresAt,
+		&i.SquadID,
+		&i.RuntimeMcpOverlay,
+		&i.EscalationForTaskID,
+		&i.FireAt,
+		&i.OriginatorUserID,
+		&i.RuntimeConnectedApps,
+		&i.CoalescedCommentIds,
+		&i.DeliveredCommentIds,
+		&i.ChatInputTaskID,
+		&i.ChatFinalizeDeferredAt,
+		&i.OriginatorSource,
+		&i.DelegatedFromTaskID,
+		&i.RetryOfTaskID,
+		&i.RerunOfTaskID,
+		&i.RuleVersionID,
+		&i.TriggerEvidenceKind,
+		&i.TriggerEvidenceRefID,
+		&i.AccountableUserID,
+		&i.SessionRolloutMissing,
+		&i.RetiredSessionID,
+		&i.QuickActionsDisabled,
+		&i.RegenerateQuickActionsFor,
+	)
+	return i, err
+}
+
 const createDesignDocumentInputSnapshot = `-- name: CreateDesignDocumentInputSnapshot :one
 INSERT INTO design_document_input_snapshot (
     workspace_id, project_id, issue_id, task_id, agent_id, target_platform,
@@ -382,6 +475,120 @@ func (q *Queries) GetDesignDocumentRevisionInProject(ctx context.Context, arg Ge
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const listDesignDocumentAgentTasks = `-- name: ListDesignDocumentAgentTasks :many
+SELECT
+    task.id,
+    snapshot.id AS input_snapshot_id,
+    project.workspace_id,
+    project.id AS project_id,
+    project.title AS project_title,
+    task.issue_id,
+    issue.number AS issue_number,
+    issue.title AS issue_title,
+    task.agent_id,
+    agent.name AS agent_name,
+    COALESCE(task.context -> 'input' ->> 'requirement', '')::text AS requirement,
+    COALESCE(task.context -> 'input' ->> 'target_platform', '')::text AS target_platform,
+    task.status,
+    task.wait_reason,
+    task.error,
+    task.failure_reason,
+    task.created_at,
+    task.started_at,
+    task.completed_at,
+    COALESCE(
+        (SELECT MAX(message.created_at) FROM task_message AS message WHERE message.task_id = task.id),
+        task.completed_at,
+        task.started_at,
+        task.created_at
+    ) AS last_activity_at
+FROM agent_task_queue AS task
+JOIN agent ON agent.id = task.agent_id
+JOIN project
+  ON project.id = (task.context ->> 'project_id')::uuid
+ AND project.workspace_id = $1
+LEFT JOIN design_document_input_snapshot AS snapshot ON snapshot.task_id = task.id
+LEFT JOIN issue ON issue.id = task.issue_id
+WHERE agent.workspace_id = $1
+  AND task.context ->> 'type' = 'design_document_task'
+  AND (
+      $2::uuid IS NULL
+      OR project.id = $2::uuid
+  )
+ORDER BY task.created_at DESC, task.id
+LIMIT $3
+`
+
+type ListDesignDocumentAgentTasksParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ProjectID   pgtype.UUID `json:"project_id"`
+	LimitCount  int32       `json:"limit_count"`
+}
+
+type ListDesignDocumentAgentTasksRow struct {
+	ID              pgtype.UUID        `json:"id"`
+	InputSnapshotID pgtype.UUID        `json:"input_snapshot_id"`
+	WorkspaceID     pgtype.UUID        `json:"workspace_id"`
+	ProjectID       pgtype.UUID        `json:"project_id"`
+	ProjectTitle    string             `json:"project_title"`
+	IssueID         pgtype.UUID        `json:"issue_id"`
+	IssueNumber     pgtype.Int4        `json:"issue_number"`
+	IssueTitle      pgtype.Text        `json:"issue_title"`
+	AgentID         pgtype.UUID        `json:"agent_id"`
+	AgentName       string             `json:"agent_name"`
+	Requirement     string             `json:"requirement"`
+	TargetPlatform  string             `json:"target_platform"`
+	Status          string             `json:"status"`
+	WaitReason      pgtype.Text        `json:"wait_reason"`
+	Error           pgtype.Text        `json:"error"`
+	FailureReason   pgtype.Text        `json:"failure_reason"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	StartedAt       pgtype.Timestamptz `json:"started_at"`
+	CompletedAt     pgtype.Timestamptz `json:"completed_at"`
+	LastActivityAt  pgtype.Timestamptz `json:"last_activity_at"`
+}
+
+func (q *Queries) ListDesignDocumentAgentTasks(ctx context.Context, arg ListDesignDocumentAgentTasksParams) ([]ListDesignDocumentAgentTasksRow, error) {
+	rows, err := q.db.Query(ctx, listDesignDocumentAgentTasks, arg.WorkspaceID, arg.ProjectID, arg.LimitCount)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListDesignDocumentAgentTasksRow{}
+	for rows.Next() {
+		var i ListDesignDocumentAgentTasksRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.InputSnapshotID,
+			&i.WorkspaceID,
+			&i.ProjectID,
+			&i.ProjectTitle,
+			&i.IssueID,
+			&i.IssueNumber,
+			&i.IssueTitle,
+			&i.AgentID,
+			&i.AgentName,
+			&i.Requirement,
+			&i.TargetPlatform,
+			&i.Status,
+			&i.WaitReason,
+			&i.Error,
+			&i.FailureReason,
+			&i.CreatedAt,
+			&i.StartedAt,
+			&i.CompletedAt,
+			&i.LastActivityAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listDesignDocumentRevisionsInProject = `-- name: ListDesignDocumentRevisionsInProject :many
