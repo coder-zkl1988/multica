@@ -322,3 +322,18 @@ func TestClampFileSystemScopeDropsBareGlobs(t *testing.T) {
 		}
 	}
 }
+
+func TestPrivacyInstructionAuthorizesUserProvidedDocuments(t *testing.T) {
+	t.Parallel()
+
+	instruction := PrivacyInstruction()
+	for _, want := range []string{
+		"explicitly provided or linked by the user",
+		"authorized document/wiki/mind-map collaboration scope",
+		"may be read",
+	} {
+		if !strings.Contains(strings.ToLower(instruction), want) {
+			t.Fatalf("privacy instruction must authorize user-provided documents, missing %q: %s", want, instruction)
+		}
+	}
+}
