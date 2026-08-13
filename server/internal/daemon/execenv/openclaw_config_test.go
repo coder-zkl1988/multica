@@ -1,6 +1,7 @@
 package execenv
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -55,6 +56,28 @@ func (s *openclawCLIStub) exec(_ context.Context, bin string, args ...string) (s
 		return "", fmt.Errorf("openclawCLIStub: unexpected args %q", key)
 	}
 	return resp.stdout, resp.err
+}
+
+// calledWithArgs reports whether the stub saw a call whose argv exactly
+// matches want. Used to assert the preparer no longer invokes the pathless
+// `config get --json` form.
+func (s *openclawCLIStub) calledWithArgs(want ...string) bool {
+	for _, c := range s.calls {
+		if len(c.args) != len(want) {
+			continue
+		}
+		match := true
+		for i := range want {
+			if c.args[i] != want[i] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true
+		}
+	}
+	return false
 }
 
 func mustReadJSON(t *testing.T, path string) map[string]any {
@@ -865,6 +888,73 @@ func TestPrepareOpenclawConfigStrictReplacesUserMcpServers(t *testing.T) {
 	if result.IncludeRoot != "" {
 		t.Errorf("IncludeRoot = %q, want empty (snapshot lives in envRoot, no cross-dir include)", result.IncludeRoot)
 	}
+	if stub.calledWithArgs("config", "get", "--json") {
+		t.Error("managed-MCP path invoked pathless `config get --json`; OpenClaw 2026.7.1 requires a path")
+	}
+}
+
+// TestPrepareOpenclawConfigConfigGetPathRequired reproduces OpenClaw
+// 2026.7.1, where `openclaw config get` requires a dot path and the pathless
+// `--json` root dump exits with "Missing required argument \"path\"".
+// A managed mcp_config task must still prepare successfully by reading the
+// active config file directly instead of invoking the pathless command.
+func TestPrepareOpenclawConfigConfigGetPathRequired(t *testing.T) {
+	envRoot := t.TempDir()
+	workDir := filepath.Join(envRoot, "workdir")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatalf("mkdir workdir: %v", err)
+	}
+
+	userCfgPath := filepath.Join(t.TempDir(), "openclaw.json")
+	userCfg := `{
+		"mcp": {"servers": {"global_one": {"command": "/bin/echo"}}},
+		"gateway": {"port": 18789},
+		"providers": {"anthropic": {"apiKey": "sk-user-secret"}}
+	}`
+	if err := os.WriteFile(userCfgPath, []byte(userCfg), 0o600); err != nil {
+		t.Fatalf("write user cfg: %v", err)
+	}
+
+	stub := installOpenclawStub(t, map[string]openclawResponse{
+		"config file":                   {stdout: userCfgPath},
+		"config get agents.list --json": {stdout: "null"},
+		"config get --json": {err: errors.New(`openclaw config get --json: exit status 1 (stderr: Missing required argument "path".
+Try: openclaw config get --help)`)},
+	})
+	mcpConfig := json.RawMessage(`{"mcpServers": {"managed_only": {"command": "uvx", "args": ["m"]}}}`)
+
+	result, err := prepareOpenclawConfig(envRoot, workDir, OpenclawConfigPrep{
+		OpenclawBin: stub.bin,
+		McpConfig:   mcpConfig,
+	})
+	if err != nil {
+		t.Fatalf("prepareOpenclawConfig: %v", err)
+	}
+
+	got := mustReadJSON(t, result.ConfigPath)
+	include, _ := got["$include"].([]any)
+	if len(include) != 1 {
+		t.Fatalf("$include = %v, want sanitized snapshot", got["$include"])
+	}
+	snapshotPath, _ := include[0].(string)
+	if snapshotPath == userCfgPath {
+		t.Fatalf("$include still points at live user config %q", userCfgPath)
+	}
+	snap := mustReadJSON(t, snapshotPath)
+	if _, leaked := snap["mcp"]; leaked {
+		t.Errorf("snapshot still carries user mcp block: %v", snap["mcp"])
+	}
+	mcp, _ := got["mcp"].(map[string]any)
+	servers, _ := mcp["servers"].(map[string]any)
+	if _, ok := servers["managed_only"]; !ok {
+		t.Errorf("managed_only missing from wrapper servers: %v", servers)
+	}
+	if _, leaked := servers["global_one"]; leaked {
+		t.Errorf("global_one leaked: %v", servers)
+	}
+	if stub.calledWithArgs("config", "get", "--json") {
+		t.Error("preparer invoked pathless `config get --json`; OpenClaw 2026.7.1 requires a path")
+	}
 }
 
 // TestPrepareOpenclawConfigStrictPreservesNonServerMcpKeys — Elon's
@@ -1134,6 +1224,223 @@ func TestPrepareOpenclawConfigFailsClosedOnResolvedConfigError(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(envRoot, openclawUserSnapshotFile)); !os.IsNotExist(err) {
 		t.Errorf("snapshot exists after fail-closed: %v", err)
+	}
+}
+
+// TestPrepareOpenclawConfigFailsClosedOnInclude — a user config that pulls
+// another file via `$include` cannot be snapshotted safely: after we strip
+// the top-level `mcp.servers`, OpenClaw would still load the included file's
+// `mcp.servers`, leaking user globals. Fail closed instead.
+func TestPrepareOpenclawConfigFailsClosedOnInclude(t *testing.T) {
+	envRoot := t.TempDir()
+	workDir := filepath.Join(envRoot, "workdir")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatalf("mkdir workdir: %v", err)
+	}
+	userCfgPath := filepath.Join(t.TempDir(), "openclaw.json")
+	userCfg := `{"$include": ["./included.json"], "providers": {"anthropic": {"apiKey": "sk-user-secret"}}}`
+	if err := os.WriteFile(userCfgPath, []byte(userCfg), 0o600); err != nil {
+		t.Fatalf("write user cfg: %v", err)
+	}
+	stub := installOpenclawStub(t, map[string]openclawResponse{
+		"config file":                   {stdout: userCfgPath},
+		"config get agents.list --json": {stdout: "null"},
+	})
+	mcpConfig := json.RawMessage(`{"mcpServers": {"managed_only": {"command": "uvx"}}}`)
+
+	_, err := prepareOpenclawConfig(envRoot, workDir, OpenclawConfigPrep{
+		OpenclawBin: stub.bin,
+		McpConfig:   mcpConfig,
+	})
+	if err == nil {
+		t.Fatal("prepareOpenclawConfig succeeded with $include config; expected fail closed")
+	}
+	if !strings.Contains(err.Error(), "$include") {
+		t.Errorf("error %q does not name $include", err.Error())
+	}
+}
+
+// TestPrepareOpenclawConfigFailsClosedOnNonObjectMcp — a `mcp` block that is
+// not an object (e.g. an env-substitution placeholder like
+// `"mcp": "${MCP_BLOCK}"`) cannot have `mcp.servers` stripped from it. Fail
+// closed instead of copying the placeholder into the snapshot.
+func TestPrepareOpenclawConfigFailsClosedOnNonObjectMcp(t *testing.T) {
+	envRoot := t.TempDir()
+	workDir := filepath.Join(envRoot, "workdir")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatalf("mkdir workdir: %v", err)
+	}
+	userCfgPath := filepath.Join(t.TempDir(), "openclaw.json")
+	userCfg := `{"mcp": "${MCP_BLOCK}", "providers": {"anthropic": {"apiKey": "sk-user-secret"}}}`
+	if err := os.WriteFile(userCfgPath, []byte(userCfg), 0o600); err != nil {
+		t.Fatalf("write user cfg: %v", err)
+	}
+	stub := installOpenclawStub(t, map[string]openclawResponse{
+		"config file":                   {stdout: userCfgPath},
+		"config get agents.list --json": {stdout: "null"},
+	})
+	mcpConfig := json.RawMessage(`{"mcpServers": {"managed_only": {"command": "uvx"}}}`)
+
+	_, err := prepareOpenclawConfig(envRoot, workDir, OpenclawConfigPrep{
+		OpenclawBin: stub.bin,
+		McpConfig:   mcpConfig,
+	})
+	if err == nil {
+		t.Fatal("prepareOpenclawConfig succeeded with non-object mcp; expected fail closed")
+	}
+	if !strings.Contains(err.Error(), "non-object `mcp`") {
+		t.Errorf("error %q does not name the non-object mcp block", err.Error())
+	}
+}
+
+// TestPrepareOpenclawConfigFailsClosedOnJSON5 — encoding/json cannot parse
+// JSON5 (comments, trailing commas, unquoted keys). The managed-MCP snapshot
+// must fail closed with a plain-JSON hint rather than degrade to the live
+// user file.
+func TestPrepareOpenclawConfigFailsClosedOnJSON5(t *testing.T) {
+	envRoot := t.TempDir()
+	workDir := filepath.Join(envRoot, "workdir")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatalf("mkdir workdir: %v", err)
+	}
+	userCfgPath := filepath.Join(t.TempDir(), "openclaw.json")
+	userCfg := `{
+		// JSON5 comment
+		"mcp": {"servers": {"global_one": {"command": "/bin/echo"}}},
+		"providers": {"anthropic": {"apiKey": "sk-user-secret"}},
+	}`
+	if err := os.WriteFile(userCfgPath, []byte(userCfg), 0o600); err != nil {
+		t.Fatalf("write user cfg: %v", err)
+	}
+	stub := installOpenclawStub(t, map[string]openclawResponse{
+		"config file":                   {stdout: userCfgPath},
+		"config get agents.list --json": {stdout: "null"},
+	})
+	mcpConfig := json.RawMessage(`{"mcpServers": {"managed_only": {"command": "uvx"}}}`)
+
+	_, err := prepareOpenclawConfig(envRoot, workDir, OpenclawConfigPrep{
+		OpenclawBin: stub.bin,
+		McpConfig:   mcpConfig,
+	})
+	if err == nil {
+		t.Fatal("prepareOpenclawConfig succeeded with JSON5 config; expected fail closed")
+	}
+	if !strings.Contains(err.Error(), "resolved config") || !strings.Contains(err.Error(), "plain JSON") {
+		t.Errorf("error %q does not name the plain-JSON requirement", err.Error())
+	}
+}
+
+// TestPrepareOpenclawConfigEmptyConfigFile — an existing but empty active
+// config is treated like a fresh install: no snapshot, no $include, managed
+// servers become the sole MCP definition.
+func TestPrepareOpenclawConfigEmptyConfigFile(t *testing.T) {
+	envRoot := t.TempDir()
+	workDir := filepath.Join(envRoot, "workdir")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatalf("mkdir workdir: %v", err)
+	}
+	userCfgPath := filepath.Join(t.TempDir(), "openclaw.json")
+	if err := os.WriteFile(userCfgPath, []byte(""), 0o600); err != nil {
+		t.Fatalf("write user cfg: %v", err)
+	}
+	stub := installOpenclawStub(t, map[string]openclawResponse{
+		"config file":                   {stdout: userCfgPath},
+		"config get agents.list --json": {stdout: "null"},
+	})
+	mcpConfig := json.RawMessage(`{"mcpServers": {"managed_only": {"command": "uvx", "args": ["m"]}}}`)
+
+	result, err := prepareOpenclawConfig(envRoot, workDir, OpenclawConfigPrep{
+		OpenclawBin: stub.bin,
+		McpConfig:   mcpConfig,
+	})
+	if err != nil {
+		t.Fatalf("prepareOpenclawConfig: %v", err)
+	}
+	got := mustReadJSON(t, result.ConfigPath)
+	mcp, ok := got["mcp"].(map[string]any)
+	if !ok {
+		t.Fatalf("wrapper missing mcp block: %v", got)
+	}
+	servers, _ := mcp["servers"].(map[string]any)
+	if _, ok := servers["managed_only"]; !ok {
+		t.Errorf("managed_only missing: %v", servers)
+	}
+	if _, present := got["$include"]; present {
+		t.Errorf("empty config should not emit $include: %v", got["$include"])
+	}
+	if _, err := os.Stat(filepath.Join(envRoot, openclawUserSnapshotFile)); !os.IsNotExist(err) {
+		t.Errorf("empty config wrote a snapshot (should not): %v", err)
+	}
+	if stub.calledWithArgs("config", "get", "--json") {
+		t.Error("preparer invoked pathless `config get --json`")
+	}
+}
+
+// TestOpenclawResolvedFullConfigErrorsDoNotLeakSecrets — both the $include
+// and parse-failure error paths must name the problem without echoing config
+// contents (which can carry API keys).
+func TestOpenclawResolvedFullConfigErrorsDoNotLeakSecrets(t *testing.T) {
+	secret := "sk-super-secret-123"
+
+	includePath := filepath.Join(t.TempDir(), "openclaw.json")
+	body := fmt.Sprintf(`{"$include": ["./included.json"], "providers": {"anthropic": {"apiKey": %q}}}`, secret)
+	if err := os.WriteFile(includePath, []byte(body), 0o600); err != nil {
+		t.Fatalf("write include cfg: %v", err)
+	}
+	_, err := openclawResolvedFullConfig(includePath)
+	if err == nil {
+		t.Fatal("expected $include config to fail closed")
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Errorf("$include error leaked secret: %v", err)
+	}
+
+	badPath := filepath.Join(t.TempDir(), "bad.json")
+	body = fmt.Sprintf(`{"providers": {"anthropic": {"apiKey": %q}} // comment`, secret)
+	if err := os.WriteFile(badPath, []byte(body), 0o600); err != nil {
+		t.Fatalf("write bad cfg: %v", err)
+	}
+	_, err = openclawResolvedFullConfig(badPath)
+	if err == nil {
+		t.Fatal("expected JSON5 config to fail closed")
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Errorf("parse error leaked secret: %v", err)
+	}
+}
+
+// TestPrepareOpenclawConfigLogDoesNotLeakSecrets — the preparer logs paths
+// and booleans, never config contents; a config carrying an API key must not
+// put that key into the structured log.
+func TestPrepareOpenclawConfigLogDoesNotLeakSecrets(t *testing.T) {
+	envRoot := t.TempDir()
+	workDir := filepath.Join(envRoot, "workdir")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatalf("mkdir workdir: %v", err)
+	}
+	secret := "sk-log-secret-123"
+	userCfgPath := filepath.Join(t.TempDir(), "openclaw.json")
+	userCfg := fmt.Sprintf(`{"mcp": {"servers": {"global_one": {"command": "/bin/echo"}}}, "providers": {"anthropic": {"apiKey": %q}}}`, secret)
+	if err := os.WriteFile(userCfgPath, []byte(userCfg), 0o600); err != nil {
+		t.Fatalf("write user cfg: %v", err)
+	}
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
+	stub := installOpenclawStub(t, map[string]openclawResponse{
+		"config file":                   {stdout: userCfgPath},
+		"config get agents.list --json": {stdout: "null"},
+	})
+	mcpConfig := json.RawMessage(`{"mcpServers": {"managed_only": {"command": "uvx"}}}`)
+
+	if _, err := prepareOpenclawConfig(envRoot, workDir, OpenclawConfigPrep{
+		OpenclawBin: stub.bin,
+		McpConfig:   mcpConfig,
+		Logger:      logger,
+	}); err != nil {
+		t.Fatalf("prepareOpenclawConfig: %v", err)
+	}
+	if strings.Contains(logBuf.String(), secret) {
+		t.Errorf("log leaked secret: %s", logBuf.String())
 	}
 }
 

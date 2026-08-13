@@ -278,7 +278,6 @@ func prepareOpenclawConfig(envRoot, workDir string, opts OpenclawConfigPrep) (Op
 			exists = false
 			activePath = ""
 		} else {
-			stripUserMcpServers(resolved)
 			snapBytes, merr := json.MarshalIndent(resolved, "", "  ")
 			if merr != nil {
 				return OpenclawConfigResult{}, fmt.Errorf("marshal openclaw user snapshot: %w", merr)
@@ -773,22 +772,25 @@ func isOpenclawConfigFileUnsupported(err error) bool {
 }
 
 // openclawResolvedFullConfig reads the user's active openclaw config file
-// so the managed-mcp_config snapshot can strip `mcp.servers` while
+// directly so the managed-mcp_config snapshot can strip `mcp.servers` while
 // preserving everything else (model providers, auth, gateway tuning).
 //
-// We read the file directly instead of asking the CLI for the root config:
-// newer OpenClaw CLIs require a dot path on `config get <path>` and expose
-// no "dump the whole resolved config" form, and `config get` output is
-// redacted (secrets never print) — either would break the snapshot's job of
-// carrying the user's real API keys into the task wrapper. The daemon
-// already knows the active path from `openclaw config file`, and OpenClaw's
-// loader re-applies runtime defaults and env substitution when it
-// `$include`s the snapshot, so the authored file is the right source.
+// We read the file instead of asking the CLI for the root config: newer
+// OpenClaw CLIs require a dot path on `config get <path>`, expose no
+// "dump the whole resolved config" form, and redact secrets on `config get`
+// output — any of those would break the snapshot's job of carrying the
+// user's real API keys into the task wrapper. The daemon already knows the
+// active path from `openclaw config file`, and OpenClaw's loader re-applies
+// runtime defaults, `$include`, and env substitution when it loads the
+// snapshot, so the authored file is the right source.
 //
-// Plain JSON only: a JSON5 or `$include`-bearing config cannot be stripped
-// safely here, and the preparer fails closed rather than writing a leaky
-// snapshot. Returns (nil, nil) for an empty file — interpreted as "no
-// resolvable user config", falling through to the fresh-install path.
+// Plain JSON only. JSON5 cannot be parsed with encoding/json, and a
+// top-level `$include` could reintroduce user `mcp.servers` after our strip,
+// so both fail closed with a clear error rather than writing a leaky
+// snapshot. A non-object `mcp` block (e.g. `"mcp": "${MCP_BLOCK}"`) is
+// likewise rejected because we can't strip `mcp.servers` from it. Returns
+// (nil, nil) for an empty file — interpreted as "no resolvable user config",
+// falling through to the fresh-install path.
 func openclawResolvedFullConfig(activePath string) (map[string]any, error) {
 	data, err := os.ReadFile(activePath)
 	if err != nil {
@@ -802,7 +804,33 @@ func openclawResolvedFullConfig(activePath string) (map[string]any, error) {
 	if err := json.Unmarshal([]byte(trimmed), &cfg); err != nil {
 		return nil, fmt.Errorf("parse openclaw active config %s (managed mcp_config snapshot requires plain JSON; JSON5/`$include` configs unsupported): %w", activePath, err)
 	}
+	if openclawHasInclude(cfg["$include"]) {
+		return nil, fmt.Errorf("openclaw active config %s uses $include; cannot safely strip mcp.servers across includes", activePath)
+	}
+	if raw, present := cfg["mcp"]; present && raw != nil {
+		if _, ok := raw.(map[string]any); !ok {
+			return nil, fmt.Errorf("openclaw active config %s has a non-object `mcp` block; cannot safely strip mcp.servers", activePath)
+		}
+	}
+	stripUserMcpServers(cfg)
 	return cfg, nil
+}
+
+// openclawHasInclude reports whether an authored openclaw config carries a
+// live `$include` directive. An empty string / empty array / null means no
+// include and is safe to snapshot; anything else means OpenClaw will pull in
+// another file whose `mcp.servers` we cannot strip.
+func openclawHasInclude(v any) bool {
+	switch t := v.(type) {
+	case nil:
+		return false
+	case string:
+		return strings.TrimSpace(t) != ""
+	case []any:
+		return len(t) > 0
+	default:
+		return true
+	}
 }
 
 // openclawResolvedAgentsList fetches the user's resolved per-agent list and
