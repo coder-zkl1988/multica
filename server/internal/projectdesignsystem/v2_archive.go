@@ -1,25 +1,20 @@
 package projectdesignsystem
 
 import (
-	"archive/zip"
 	"bytes"
 	"crypto/sha256"
-	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"hash"
 	"io"
 	"io/fs"
-	"os"
 	"path"
-	"path/filepath"
 	"reflect"
 	"sort"
-	"strconv"
 	"strings"
-	"time"
+
+	"github.com/multica-ai/multica/server/internal/designpackage"
 )
 
 type v2ArchiveError struct {
@@ -33,103 +28,24 @@ func (err *v2ArchiveError) Error() string {
 }
 
 func SnapshotDigest(raw json.RawMessage) (string, error) {
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.UseNumber()
-	var value any
-	if err := decoder.Decode(&value); err != nil {
-		return "", fmt.Errorf("decode input snapshot: %w", err)
-	}
-	if err := requireJSONEOF(decoder); err != nil {
-		return "", err
-	}
-	canonical, err := json.Marshal(value)
-	if err != nil {
-		return "", fmt.Errorf("encode input snapshot: %w", err)
-	}
-	return sha256String(canonical), nil
+	return designpackage.CanonicalJSONDigest(raw, "input snapshot")
 }
 
 func CollectV2Directory(root string, binding PackageBinding) (CollectedV2Package, error) {
 	if err := validateV2Binding(binding); err != nil {
 		return CollectedV2Package{}, err
 	}
-	rootInfo, err := os.Lstat(root)
+	files, err := designpackage.ReadDirectory(root, v2DirectoryLimits(), v2DirectoryPolicy())
 	if err != nil {
-		return CollectedV2Package{}, fmt.Errorf("inspect V2 package root: %w", err)
+		return CollectedV2Package{}, mapV2DirectoryError(err)
 	}
-	if rootInfo.Mode()&fs.ModeSymlink != 0 || !rootInfo.IsDir() {
-		return CollectedV2Package{}, errors.New("V2 package root must be a real directory")
-	}
-
-	files := make(map[string][]byte)
-	index := make([]ArtifactIndexEntry, 0)
-	seenFileInfo := make([]fs.FileInfo, 0)
-	var totalBytes int64
-	err = filepath.WalkDir(root, func(filePath string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if filePath == root {
-			return nil
-		}
-		relative, err := filepath.Rel(root, filePath)
+	index := make([]ArtifactIndexEntry, 0, len(files))
+	for name, contents := range files {
+		role, mediaType, _, err := classifyV2Artifact(name)
 		if err != nil {
-			return err
+			return CollectedV2Package{}, err
 		}
-		name := filepath.ToSlash(relative)
-		if entry.Type()&fs.ModeSymlink != 0 {
-			return archiveV2Error("archive_link_forbidden", name, "links are not allowed in a V2 package")
-		}
-		if entry.IsDir() {
-			return validateV2DirectoryPath(name)
-		}
-		info, err := entry.Info()
-		if err != nil {
-			return err
-		}
-		if !info.Mode().IsRegular() {
-			return archiveV2Error("archive_type_forbidden", name, "only regular files are allowed")
-		}
-		if hasMultipleHardlinks(info) {
-			return archiveV2Error("archive_hardlink_forbidden", name, "hardlinks are not allowed")
-		}
-		for _, previous := range seenFileInfo {
-			if os.SameFile(previous, info) {
-				return archiveV2Error("archive_hardlink_forbidden", name, "hardlinks are not allowed")
-			}
-		}
-		seenFileInfo = append(seenFileInfo, info)
-
-		role, mediaType, limit, err := classifyV2Artifact(name)
-		if err != nil {
-			return err
-		}
-		if info.Size() > limit {
-			return archiveV2Error("archive_file_too_large", name, "file exceeds its size limit")
-		}
-		contents, err := readBoundedFile(filePath, limit)
-		if err != nil {
-			return err
-		}
-		totalBytes += int64(len(contents))
-		if totalBytes > maxV2TotalBytes {
-			return archiveV2Error("archive_total_too_large", name, "package exceeds its uncompressed size limit")
-		}
-		files[name] = contents
-		index = append(index, ArtifactIndexEntry{
-			Path:      name,
-			Role:      role,
-			MediaType: mediaType,
-			SizeBytes: int64(len(contents)),
-			SHA256:    sha256Hex(contents),
-		})
-		if len(index)+1 > maxV2Files {
-			return archiveV2Error("archive_file_count_exceeded", name, "package contains too many files")
-		}
-		return nil
-	})
-	if err != nil {
-		return CollectedV2Package{}, err
+		index = append(index, ArtifactIndexEntry{Path: name, Role: role, MediaType: mediaType, SizeBytes: int64(len(contents)), SHA256: sha256Hex(contents)})
 	}
 	sort.Slice(index, func(left, right int) bool { return index[left].Path < index[right].Path })
 	previewTargets, err := DiscoverV2PreviewTargets(index)
@@ -254,196 +170,29 @@ func ReadV2Artifact(archive []byte, index []ArtifactIndexEntry, name string) ([]
 }
 
 func readAndIndexV2Archive(archive []byte) (map[string][]byte, []ArtifactIndexEntry, []byte, error) {
-	if err := preflightV2ArchiveEOCD(archive); err != nil {
-		return nil, nil, nil, err
-	}
-	reader, err := zip.NewReader(bytes.NewReader(archive), int64(len(archive)))
+	allFiles, err := designpackage.ReadArchive(archive, v2ArchiveLimits(), v2ArchivePolicy())
 	if err != nil {
-		return nil, nil, nil, archiveV2Error("archive_invalid", "", "archive is not a valid ZIP")
+		return nil, nil, nil, mapV2ArchiveError(err)
 	}
-	if len(reader.File) > maxV2Files {
-		return nil, nil, nil, archiveV2Error("archive_file_count_exceeded", "", "archive contains too many entries")
+	manifestJSON, exists := allFiles["manifest.json"]
+	if !exists {
+		return nil, nil, nil, archiveV2Error("manifest_missing", "manifest.json", "archive has no generated manifest")
 	}
-	artifactCapacity := len(reader.File)
-	if artifactCapacity > 0 {
-		artifactCapacity--
-	}
-	files := make(map[string][]byte, artifactCapacity)
-	index := make([]ArtifactIndexEntry, 0, artifactCapacity)
-	seen := make(map[string]struct{}, len(reader.File))
-	var manifestJSON []byte
-	var totalBytes int64
-	for _, entry := range reader.File {
-		name, err := validateV2ArchivePath(entry.Name)
+	files := make(map[string][]byte, len(allFiles)-1)
+	index := make([]ArtifactIndexEntry, 0, len(allFiles)-1)
+	for name, contents := range allFiles {
+		if name == "manifest.json" {
+			continue
+		}
+		role, mediaType, _, err := classifyV2Artifact(name)
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		if _, exists := seen[name]; exists {
-			return nil, nil, nil, archiveV2Error("archive_duplicate_path", name, "archive contains a duplicate path")
-		}
-		seen[name] = struct{}{}
-		mode := entry.Mode()
-		if entry.FileInfo().IsDir() || mode&fs.ModeSymlink != 0 || !mode.IsRegular() {
-			return nil, nil, nil, archiveV2Error("archive_type_forbidden", name, "archive entries must be regular files")
-		}
-		limit := int64(MaxDesignMDBytes)
-		role := "manifest"
-		mediaType := "application/json"
-		if name != "manifest.json" {
-			role, mediaType, limit, err = classifyV2Artifact(name)
-			if err != nil {
-				return nil, nil, nil, err
-			}
-		}
-		if entry.UncompressedSize64 > uint64(limit) {
-			return nil, nil, nil, archiveV2Error("archive_file_too_large", name, "archive entry exceeds its size limit")
-		}
-		stream, err := entry.Open()
-		if err != nil {
-			return nil, nil, nil, archiveV2Error("archive_entry_unreadable", name, "archive entry cannot be opened")
-		}
-		contents, readErr := io.ReadAll(io.LimitReader(stream, limit+1))
-		closeErr := stream.Close()
-		if readErr != nil || closeErr != nil {
-			return nil, nil, nil, archiveV2Error("archive_entry_unreadable", name, "archive entry cannot be read")
-		}
-		if int64(len(contents)) > limit || uint64(len(contents)) != entry.UncompressedSize64 {
-			return nil, nil, nil, archiveV2Error("archive_file_too_large", name, "archive entry has an invalid expanded size")
-		}
-		totalBytes += int64(len(contents))
-		if totalBytes > maxV2TotalBytes {
-			return nil, nil, nil, archiveV2Error("archive_total_too_large", name, "archive exceeds its uncompressed size limit")
-		}
-		if name == "manifest.json" {
-			manifestJSON = contents
-			continue
-		}
 		files[name] = contents
-		index = append(index, ArtifactIndexEntry{
-			Path:      name,
-			Role:      role,
-			MediaType: mediaType,
-			SizeBytes: int64(len(contents)),
-			SHA256:    sha256Hex(contents),
-		})
-	}
-	if manifestJSON == nil {
-		return nil, nil, nil, archiveV2Error("manifest_missing", "manifest.json", "archive has no generated manifest")
+		index = append(index, ArtifactIndexEntry{Path: name, Role: role, MediaType: mediaType, SizeBytes: int64(len(contents)), SHA256: sha256Hex(contents)})
 	}
 	sort.Slice(index, func(left, right int) bool { return index[left].Path < index[right].Path })
 	return files, index, manifestJSON, nil
-}
-
-func preflightV2ArchiveEOCD(archive []byte) error {
-	const (
-		eocdSignature         = 0x06054b50
-		centralFileSignature  = 0x02014b50
-		zip64Locator          = 0x07064b50
-		zip64ExtraTag         = 0x0001
-		eocdSize              = 22
-		centralFileHeaderSize = 46
-		maximumCommentBytes   = 65535
-	)
-	if len(archive) < eocdSize {
-		return archiveV2Error("archive_invalid", "", "archive is not a valid ZIP")
-	}
-	searchStart := len(archive) - (eocdSize + maximumCommentBytes)
-	if searchStart < 0 {
-		searchStart = 0
-	}
-	eocdOffset := -1
-	for offset := len(archive) - eocdSize; offset >= searchStart; offset-- {
-		if binary.LittleEndian.Uint32(archive[offset:offset+4]) != eocdSignature {
-			continue
-		}
-		commentLength := int(binary.LittleEndian.Uint16(archive[offset+20 : offset+22]))
-		commentEnd := offset + eocdSize + commentLength
-		if eocdOffset < 0 {
-			if commentEnd != len(archive) {
-				return archiveV2Error("archive_invalid", "", "archive has an invalid end record")
-			}
-			eocdOffset = offset
-			continue
-		}
-		if commentEnd == len(archive) {
-			return archiveV2Error("archive_invalid", "", "archive has ambiguous end records")
-		}
-	}
-	if eocdOffset < 0 {
-		return archiveV2Error("archive_invalid", "", "archive is not a valid ZIP")
-	}
-	eocd := archive[eocdOffset : eocdOffset+eocdSize]
-	diskNumber := binary.LittleEndian.Uint16(eocd[4:6])
-	centralDirectoryDisk := binary.LittleEndian.Uint16(eocd[6:8])
-	entriesOnDisk := binary.LittleEndian.Uint16(eocd[8:10])
-	totalEntries := binary.LittleEndian.Uint16(eocd[10:12])
-	centralDirectorySize := binary.LittleEndian.Uint32(eocd[12:16])
-	centralDirectoryOffset := binary.LittleEndian.Uint32(eocd[16:20])
-	if diskNumber == ^uint16(0) || centralDirectoryDisk == ^uint16(0) ||
-		entriesOnDisk == ^uint16(0) || totalEntries == ^uint16(0) ||
-		centralDirectorySize == ^uint32(0) || centralDirectoryOffset == ^uint32(0) ||
-		(eocdOffset >= 20 && binary.LittleEndian.Uint32(archive[eocdOffset-20:eocdOffset-16]) == zip64Locator) {
-		return archiveV2Error("archive_invalid", "", "ZIP64 archives are not supported")
-	}
-	if diskNumber != 0 || centralDirectoryDisk != 0 || entriesOnDisk != totalEntries {
-		return archiveV2Error("archive_invalid", "", "multi-disk ZIP archives are not supported")
-	}
-	if totalEntries > maxV2Files {
-		return archiveV2Error("archive_file_count_exceeded", "", "archive contains too many entries")
-	}
-	if uint64(centralDirectoryOffset)+uint64(centralDirectorySize) != uint64(eocdOffset) {
-		return archiveV2Error("archive_invalid", "", "archive central directory is out of bounds")
-	}
-
-	centralStart := int(centralDirectoryOffset)
-	centralEnd := eocdOffset
-	cursor := centralStart
-	actualEntries := 0
-	for cursor < centralEnd {
-		if centralEnd-cursor < centralFileHeaderSize || binary.LittleEndian.Uint32(archive[cursor:cursor+4]) != centralFileSignature {
-			return archiveV2Error("archive_invalid", "", "archive central directory is malformed")
-		}
-		compressedSize := binary.LittleEndian.Uint32(archive[cursor+20 : cursor+24])
-		uncompressedSize := binary.LittleEndian.Uint32(archive[cursor+24 : cursor+28])
-		nameLength := int(binary.LittleEndian.Uint16(archive[cursor+28 : cursor+30]))
-		extraLength := int(binary.LittleEndian.Uint16(archive[cursor+30 : cursor+32]))
-		commentLength := int(binary.LittleEndian.Uint16(archive[cursor+32 : cursor+34]))
-		startingDisk := binary.LittleEndian.Uint16(archive[cursor+34 : cursor+36])
-		localHeaderOffset := binary.LittleEndian.Uint32(archive[cursor+42 : cursor+46])
-		recordEnd := cursor + centralFileHeaderSize + nameLength + extraLength + commentLength
-		if recordEnd > centralEnd || startingDisk != 0 {
-			return archiveV2Error("archive_invalid", "", "archive central directory is malformed")
-		}
-		if compressedSize == ^uint32(0) || uncompressedSize == ^uint32(0) || localHeaderOffset == ^uint32(0) {
-			return archiveV2Error("archive_invalid", "", "ZIP64 archives are not supported")
-		}
-		extraOffset := cursor + centralFileHeaderSize + nameLength
-		extraEnd := extraOffset + extraLength
-		for extraOffset < extraEnd {
-			if extraEnd-extraOffset < 4 {
-				return archiveV2Error("archive_invalid", "", "archive central directory extra data is malformed")
-			}
-			tag := binary.LittleEndian.Uint16(archive[extraOffset : extraOffset+2])
-			fieldLength := int(binary.LittleEndian.Uint16(archive[extraOffset+2 : extraOffset+4]))
-			extraOffset += 4
-			if fieldLength > extraEnd-extraOffset {
-				return archiveV2Error("archive_invalid", "", "archive central directory extra data is malformed")
-			}
-			if tag == zip64ExtraTag {
-				return archiveV2Error("archive_invalid", "", "ZIP64 archives are not supported")
-			}
-			extraOffset += fieldLength
-		}
-		actualEntries++
-		if actualEntries > maxV2Files {
-			return archiveV2Error("archive_file_count_exceeded", "", "archive contains too many entries")
-		}
-		cursor = recordEnd
-	}
-	if cursor != centralEnd || actualEntries != int(totalEntries) {
-		return archiveV2Error("archive_invalid", "", "archive central directory metadata is inconsistent")
-	}
-	return nil
 }
 
 func classifyV2Artifact(name string) (string, string, int64, error) {
@@ -560,79 +309,140 @@ func validSHA256Reference(value string) bool {
 }
 
 func digestV2ArtifactIndex(index []ArtifactIndexEntry) string {
-	hasher := sha256.New()
-	for _, entry := range index {
-		writeV2DigestField(hasher, entry.Path)
-		writeV2DigestField(hasher, entry.MediaType)
-		writeV2DigestField(hasher, strconv.FormatInt(entry.SizeBytes, 10))
-		writeV2DigestField(hasher, entry.SHA256)
+	shared := make([]designpackage.IndexEntry, len(index))
+	for i, entry := range index {
+		shared[i] = designpackage.IndexEntry{
+			Path: entry.Path, MediaType: entry.MediaType, SizeBytes: entry.SizeBytes, SHA256: entry.SHA256,
+		}
 	}
-	return "sha256:" + hex.EncodeToString(hasher.Sum(nil))
-}
-
-func writeV2DigestField(hasher hash.Hash, value string) {
-	var length [8]byte
-	binary.BigEndian.PutUint64(length[:], uint64(len(value)))
-	_, _ = hasher.Write(length[:])
-	_, _ = io.WriteString(hasher, value)
+	return designpackage.DigestIndex(shared)
 }
 
 func buildDeterministicV2Archive(files map[string][]byte) ([]byte, error) {
-	names := make([]string, 0, len(files))
-	for name := range files {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	var output bytes.Buffer
-	writer := zip.NewWriter(&output)
-	fixedTime := time.Date(1980, time.January, 1, 0, 0, 0, 0, time.UTC)
-	for _, name := range names {
-		header := &zip.FileHeader{Name: name, Method: zip.Deflate}
-		header.SetMode(0o644)
-		header.SetModTime(fixedTime)
-		entry, err := writer.CreateHeader(header)
-		if err != nil {
-			return nil, fmt.Errorf("create V2 archive entry %q: %w", name, err)
-		}
-		if _, err := entry.Write(files[name]); err != nil {
-			return nil, fmt.Errorf("write V2 archive entry %q: %w", name, err)
-		}
-	}
-	if err := writer.Close(); err != nil {
-		return nil, fmt.Errorf("close V2 archive: %w", err)
-	}
-	return output.Bytes(), nil
-}
-
-func readBoundedFile(name string, limit int64) ([]byte, error) {
-	file, err := os.Open(name)
+	archive, err := designpackage.BuildDeterministicArchive(files, v2ArchiveLimits(), v2ArchivePolicy())
 	if err != nil {
-		return nil, err
+		var packageErr *designpackage.PackageError
+		if errors.As(err, &packageErr) && packageErr.Category == designpackage.ErrorCompressedTooLarge {
+			return nil, archiveV2Error("archive_compressed_too_large", "", "archive exceeds its compressed size limit")
+		}
+		return nil, mapV2ArchiveError(err)
 	}
-	contents, readErr := io.ReadAll(io.LimitReader(file, limit+1))
-	closeErr := file.Close()
-	if readErr != nil || closeErr != nil {
-		return nil, errors.Join(readErr, closeErr)
-	}
-	if int64(len(contents)) > limit {
-		return nil, archiveV2Error("archive_file_too_large", name, "file exceeds its size limit")
-	}
-	return contents, nil
+	return archive, nil
 }
 
-func hasMultipleHardlinks(info fs.FileInfo) bool {
-	value := reflect.ValueOf(info.Sys())
-	if !value.IsValid() {
-		return false
+func v2DirectoryLimits() designpackage.Limits {
+	return designpackage.Limits{MaxFiles: maxV2Files - 1, MaxFileBytes: maxV2FileBytes, MaxTotalBytes: maxV2TotalBytes}
+}
+
+func v2ArchiveLimits() designpackage.Limits {
+	return designpackage.Limits{MaxArchiveBytes: maxV2ArchiveBytes, MaxFiles: maxV2Files, MaxFileBytes: maxV2FileBytes, MaxTotalBytes: maxV2TotalBytes}
+}
+
+func v2DirectoryPolicy() designpackage.Policy {
+	return designpackage.Policy{Path: validateV2ArchivePath, Directory: validateV2DirectoryPath, File: v2ArtifactLimit}
+}
+
+func v2ArchivePolicy() designpackage.Policy {
+	return designpackage.Policy{Path: validateV2ArchivePath, File: v2ArchiveFileLimit}
+}
+
+func v2ArtifactLimit(name string) (int64, error) {
+	_, _, limit, err := classifyV2Artifact(name)
+	return limit, err
+}
+
+func v2ArchiveFileLimit(name string) (int64, error) {
+	if name == "manifest.json" {
+		return MaxDesignMDBytes, nil
 	}
-	if value.Kind() == reflect.Pointer {
-		value = value.Elem()
+	return v2ArtifactLimit(name)
+}
+
+func mapV2DirectoryError(err error) error {
+	var packageErr *designpackage.PackageError
+	if !errors.As(err, &packageErr) {
+		return err
 	}
-	if !value.IsValid() || value.Kind() != reflect.Struct {
-		return false
+	switch packageErr.Category {
+	case designpackage.ErrorRoot:
+		if packageErr.Cause != nil {
+			return fmt.Errorf("inspect V2 package root: %w", packageErr.Cause)
+		}
+		return errors.New("V2 package root must be a real directory")
+	case designpackage.ErrorPath:
+		return mapV2PathError(packageErr.Path)
+	case designpackage.ErrorLink:
+		return archiveV2Error("archive_link_forbidden", packageErr.Path, "links are not allowed in a V2 package")
+	case designpackage.ErrorHardlink:
+		return archiveV2Error("archive_hardlink_forbidden", packageErr.Path, "hardlinks are not allowed")
+	case designpackage.ErrorType:
+		return archiveV2Error("archive_type_forbidden", packageErr.Path, "only regular files are allowed")
+	case designpackage.ErrorFileCount:
+		return archiveV2Error("archive_file_count_exceeded", packageErr.Path, "package contains too many files")
+	case designpackage.ErrorFileTooLarge:
+		return archiveV2Error("archive_file_too_large", packageErr.Path, "file exceeds its size limit")
+	case designpackage.ErrorTotalTooLarge:
+		return archiveV2Error("archive_total_too_large", packageErr.Path, "package exceeds its uncompressed size limit")
+	default:
+		return err
 	}
-	field := value.FieldByName("Nlink")
-	return field.IsValid() && field.CanUint() && field.Uint() > 1
+}
+
+func mapV2ArchiveError(err error) error {
+	var packageErr *designpackage.PackageError
+	if !errors.As(err, &packageErr) {
+		return err
+	}
+	switch packageErr.Category {
+	case designpackage.ErrorCompressedTooLarge:
+		return archiveV2Error("archive_compressed_too_large", packageErr.Path, "archive is empty or exceeds its compressed size limit")
+	case designpackage.ErrorArchiveInvalid:
+		return archiveV2Error("archive_invalid", packageErr.Path, v2ArchiveInvalidMessage(packageErr.Message))
+	case designpackage.ErrorPath:
+		return mapV2PathError(packageErr.Path)
+	case designpackage.ErrorFileCount:
+		return archiveV2Error("archive_file_count_exceeded", packageErr.Path, "archive contains too many entries")
+	case designpackage.ErrorDuplicatePath:
+		return archiveV2Error("archive_duplicate_path", packageErr.Path, "archive contains a duplicate path")
+	case designpackage.ErrorType:
+		return archiveV2Error("archive_type_forbidden", packageErr.Path, "archive entries must be regular files")
+	case designpackage.ErrorFileTooLarge:
+		return archiveV2Error("archive_file_too_large", packageErr.Path, "archive entry exceeds its size limit")
+	case designpackage.ErrorTotalTooLarge:
+		return archiveV2Error("archive_total_too_large", packageErr.Path, "archive exceeds its uncompressed size limit")
+	case designpackage.ErrorUnreadable:
+		return archiveV2Error("archive_entry_unreadable", packageErr.Path, "archive entry cannot be read")
+	case designpackage.ErrorOpen:
+		return archiveV2Error("archive_entry_unreadable", packageErr.Path, "archive entry cannot be opened")
+	case designpackage.ErrorExpandedSize:
+		return archiveV2Error("archive_file_too_large", packageErr.Path, "archive entry has an invalid expanded size")
+	default:
+		return err
+	}
+}
+
+func mapV2PathError(name string) error {
+	if strings.HasPrefix(name, "~/") {
+		return archiveV2Error("archive_path_undeclared", name, "file is outside the V2 package contract")
+	}
+	return archiveV2Error("archive_path_invalid", name, "path must be a normalized relative slash path")
+}
+
+func v2ArchiveInvalidMessage(message string) string {
+	switch message {
+	case "archive is not a valid ZIP",
+		"archive has an invalid end record",
+		"archive has ambiguous end records",
+		"ZIP64 archives are not supported",
+		"multi-disk ZIP archives are not supported",
+		"archive central directory is out of bounds",
+		"archive central directory is malformed",
+		"archive central directory extra data is malformed",
+		"archive central directory metadata is inconsistent":
+		return message
+	default:
+		return "archive is not a valid ZIP"
+	}
 }
 
 func archiveV2Error(code, filePath, message string) error {

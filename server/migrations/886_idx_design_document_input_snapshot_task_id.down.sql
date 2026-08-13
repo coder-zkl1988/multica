@@ -1,0 +1,1 @@
+DROP INDEX CONCURRENTLY IF EXISTS idx_design_document_input_snapshot_task_id;

@@ -1,0 +1,6 @@
+ALTER TABLE design_document_revision DROP CONSTRAINT design_document_revision_input_snapshot_id_key;
+ALTER TABLE design_document_revision DROP CONSTRAINT design_document_revision_source_task_id_key;
+ALTER TABLE design_document_input_snapshot DROP CONSTRAINT design_document_input_snapshot_task_id_key;
+ALTER TABLE design_document_revision DROP CONSTRAINT design_document_revision_pkey;
+ALTER TABLE design_document_input_snapshot DROP CONSTRAINT design_document_input_snapshot_pkey;
+ALTER TABLE design_document DROP CONSTRAINT design_document_pkey;

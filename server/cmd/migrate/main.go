@@ -87,6 +87,16 @@ var concurrentIndexCleanups = map[string]string{
 	"281_agent_workspace_id_keyset_index":                  "idx_agent_workspace_id_keyset",
 	"282_issue_workspace_id_keyset_index":                  "idx_issue_workspace_id_keyset",
 	"283_agent_runtime_workspace_id_keyset_index":          "idx_agent_runtime_workspace_id_keyset",
+	"879_idx_design_document_project":                       "idx_design_document_project",
+	"880_idx_design_document_issue":                         "idx_design_document_issue",
+	"881_idx_design_document_revision_document":             "idx_design_document_revision_document",
+	"882_idx_design_document_snapshot_project":              "idx_design_document_snapshot_project",
+	"883_idx_design_document_id":                            "idx_design_document_id",
+	"884_idx_design_document_input_snapshot_id":             "idx_design_document_input_snapshot_id",
+	"885_idx_design_document_revision_id":                   "idx_design_document_revision_id",
+	"886_idx_design_document_input_snapshot_task_id":        "idx_design_document_input_snapshot_task_id",
+	"887_idx_design_document_revision_source_task_id":       "idx_design_document_revision_source_task_id",
+	"888_idx_design_document_revision_input_snapshot_id":    "idx_design_document_revision_input_snapshot_id",
 }
 
 var preMigrationHooks = func() map[string]preMigrationHook {

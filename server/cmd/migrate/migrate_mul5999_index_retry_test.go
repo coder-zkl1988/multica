@@ -58,8 +58,28 @@ func TestConcurrentIndexCleanupsMatchTheirMigrations(t *testing.T) {
 		}
 	}
 
-	// The MUL-5999 batch specifically: every one of these builds an index the
-	// new teardown queries depend on, so none of them may lose its hook.
+	// The A1 Design Document batch specifically: every one of these builds an
+	// index that must retain its invalid-index cleanup hook.
+	for version, indexName := range map[string]string{
+		"879_idx_design_document_project":                    "idx_design_document_project",
+		"880_idx_design_document_issue":                      "idx_design_document_issue",
+		"881_idx_design_document_revision_document":          "idx_design_document_revision_document",
+		"882_idx_design_document_snapshot_project":           "idx_design_document_snapshot_project",
+		"883_idx_design_document_id":                         "idx_design_document_id",
+		"884_idx_design_document_input_snapshot_id":          "idx_design_document_input_snapshot_id",
+		"885_idx_design_document_revision_id":                "idx_design_document_revision_id",
+		"886_idx_design_document_input_snapshot_task_id":     "idx_design_document_input_snapshot_task_id",
+		"887_idx_design_document_revision_source_task_id":    "idx_design_document_revision_source_task_id",
+		"888_idx_design_document_revision_input_snapshot_id": "idx_design_document_revision_input_snapshot_id",
+	} {
+		if got := concurrentIndexCleanups[version]; got != indexName {
+			t.Errorf("%s: cleanup index = %q, want %q", version, got, indexName)
+		}
+		if preMigrationHooks[version] == nil {
+			t.Errorf("%s: no pre-migration hook registered", version)
+		}
+	}
+
 	for _, version := range []string{
 		"273_agent_task_queue_runtime_id_index",
 		"274_task_token_workspace_id_index",

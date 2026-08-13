@@ -573,6 +573,55 @@ type DesignDelivery struct {
 	AuditMetadata []byte             `json:"audit_metadata"`
 }
 
+type DesignDocument struct {
+	ID              pgtype.UUID        `json:"id"`
+	WorkspaceID     pgtype.UUID        `json:"workspace_id"`
+	ProjectID       pgtype.UUID        `json:"project_id"`
+	IssueID         pgtype.UUID        `json:"issue_id"`
+	Title           string             `json:"title"`
+	DraftRevisionID pgtype.UUID        `json:"draft_revision_id"`
+	SavedRevisionID pgtype.UUID        `json:"saved_revision_id"`
+	CreatedBy       pgtype.UUID        `json:"created_by"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+}
+
+type DesignDocumentInputSnapshot struct {
+	ID                        pgtype.UUID        `json:"id"`
+	WorkspaceID               pgtype.UUID        `json:"workspace_id"`
+	ProjectID                 pgtype.UUID        `json:"project_id"`
+	IssueID                   pgtype.UUID        `json:"issue_id"`
+	TaskID                    pgtype.UUID        `json:"task_id"`
+	AgentID                   pgtype.UUID        `json:"agent_id"`
+	TargetPlatform            pgtype.Text        `json:"target_platform"`
+	SchemaVersion             string             `json:"schema_version"`
+	Snapshot                  []byte             `json:"snapshot"`
+	SnapshotSha256            string             `json:"snapshot_sha256"`
+	BaseRevisionID            pgtype.UUID        `json:"base_revision_id"`
+	BaseContentDigest         pgtype.Text        `json:"base_content_digest"`
+	DesignSystemID            pgtype.UUID        `json:"design_system_id"`
+	DesignSystemSourceTaskID  pgtype.UUID        `json:"design_system_source_task_id"`
+	DesignSystemContentDigest pgtype.Text        `json:"design_system_content_digest"`
+	CreatedAt                 pgtype.Timestamptz `json:"created_at"`
+}
+
+type DesignDocumentRevision struct {
+	ID               pgtype.UUID        `json:"id"`
+	DocumentID       pgtype.UUID        `json:"document_id"`
+	WorkspaceID      pgtype.UUID        `json:"workspace_id"`
+	ProjectID        pgtype.UUID        `json:"project_id"`
+	InputSnapshotID  pgtype.UUID        `json:"input_snapshot_id"`
+	SourceTaskID     pgtype.UUID        `json:"source_task_id"`
+	BaseRevisionID   pgtype.UUID        `json:"base_revision_id"`
+	SchemaVersion    string             `json:"schema_version"`
+	Manifest         []byte             `json:"manifest"`
+	ArtifactIndex    []byte             `json:"artifact_index"`
+	ArchiveObjectKey string             `json:"archive_object_key"`
+	ContentDigest    string             `json:"content_digest"`
+	CreatedByAgentID pgtype.UUID        `json:"created_by_agent_id"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+}
+
 type DesignDraft struct {
 	ID                  pgtype.UUID        `json:"id"`
 	WorkspaceID         pgtype.UUID        `json:"workspace_id"`

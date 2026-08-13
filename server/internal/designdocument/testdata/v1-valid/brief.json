@@ -1,0 +1,31 @@
+{
+  "goal": "Make issue triage fast and predictable.",
+  "summary": "A focused workspace for reviewing and assigning incoming issues.",
+  "requirements": [
+    {"id": "req-triage", "name": "Triage issues", "description": "Review and assign an incoming issue."}
+  ],
+  "pages": [
+    {"id": "page-inbox", "name": "Issue inbox", "description": "Shows incoming issues.", "requirement_ids": ["req-triage"]}
+  ],
+  "subpages": [
+    {"id": "subpage-detail", "name": "Issue detail", "description": "Shows issue context.", "page_id": "page-inbox", "requirement_ids": ["req-triage"]}
+  ],
+  "states": [
+    {"id": "state-empty", "name": "Empty inbox", "description": "No issues remain.", "page_id": "page-inbox", "requirement_ids": ["req-triage"]}
+  ],
+  "overlays": [
+    {"id": "overlay-assign", "name": "Assign issue", "description": "Selects an assignee.", "page_id": "page-inbox", "requirement_ids": ["req-triage"]}
+  ],
+  "flows": [
+    {"id": "flow-triage", "name": "Triage issue", "description": "Open, review, and assign an issue.", "page_ids": ["page-inbox"], "state_ids": ["state-empty"], "overlay_ids": ["overlay-assign"], "requirement_ids": ["req-triage"]}
+  ],
+  "scenarios": [
+    {"id": "scenario-assign", "name": "Assign from inbox", "description": "A lead assigns an incoming issue.", "flow_ids": ["flow-triage"]}
+  ],
+  "accessibility": [
+    {"id": "a11y-keyboard", "name": "Keyboard navigation", "description": "All triage actions are keyboard reachable."}
+  ],
+  "non_goals": [
+    {"id": "non-goal-reporting", "name": "Reporting", "description": "Analytics are outside this revision."}
+  ]
+}

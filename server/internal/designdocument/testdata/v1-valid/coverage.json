@@ -1,0 +1,12 @@
+{
+  "requirements": [{"id": "coverage-req", "requirement_id": "req-triage", "evidence": "Issue inbox and assignment control."}],
+  "pages": [{"id": "coverage-page", "page_id": "page-inbox", "target_id": "main", "evidence": "Main preview renders the inbox."}],
+  "states": [{"id": "coverage-state", "state_id": "state-empty", "target_id": "main", "evidence": "Live status represents empty and updated states."}],
+  "overlays": [{"id": "coverage-overlay", "overlay_id": "overlay-assign", "target_id": "main", "evidence": "Assign button opens the assignment flow."}],
+  "flows": [{"id": "coverage-flow", "flow_id": "flow-triage", "target_id": "main", "evidence": "The primary interaction represents triage."}],
+  "design_system": [{"id": "coverage-ds", "evidence": "Uses native controls and local styles."}],
+  "interactions": [{"id": "coverage-interaction", "target_id": "main", "evidence": "Assign button updates the live region."}],
+  "template_residue": [{"id": "coverage-template", "evidence": "No placeholder or template content remains."}],
+  "uncovered": [],
+  "agent_self_check": {"completed": true, "notes": "References and offline behavior checked."}
+}

@@ -84,6 +84,26 @@ WITH cleared_design_files AS (
       )
     RETURNING design_file.id
 ),
+deleted_design_document_revisions AS (
+    DELETE FROM design_document_revision
+    WHERE design_document_revision.workspace_id = $2
+      AND design_document_revision.project_id = $1
+    RETURNING design_document_revision.id
+),
+deleted_design_document_snapshots AS (
+    DELETE FROM design_document_input_snapshot
+    WHERE design_document_input_snapshot.workspace_id = $2
+      AND design_document_input_snapshot.project_id = $1
+      AND (SELECT count(*) FROM deleted_design_document_revisions) >= 0
+    RETURNING design_document_input_snapshot.id
+),
+deleted_design_documents AS (
+    DELETE FROM design_document
+    WHERE design_document.workspace_id = $2
+      AND design_document.project_id = $1
+      AND (SELECT count(*) FROM deleted_design_document_snapshots) >= 0
+    RETURNING design_document.id
+),
 cleared_design_deliveries AS (
     UPDATE design_delivery
     SET project_id = NULL
@@ -141,6 +161,7 @@ DELETE FROM project
 WHERE project.id = $1
   AND project.workspace_id = $2
   AND (SELECT count(*) FROM cleared_design_files) >= 0
+  AND (SELECT count(*) FROM deleted_design_documents) >= 0
   AND (SELECT count(*) FROM cleared_design_deliveries) >= 0
   AND (SELECT count(*) FROM cleared_design_system_profiles) >= 0
   AND (SELECT count(*) FROM deleted_design_folders) >= 0;

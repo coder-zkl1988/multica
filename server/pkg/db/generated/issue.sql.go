@@ -342,6 +342,13 @@ const deleteIssue = `-- name: DeleteIssue :exec
 WITH target AS (
     SELECT issue.id FROM issue WHERE issue.id = $1 AND issue.workspace_id = $2
 ),
+cleared_design_documents AS (
+    UPDATE design_document
+    SET issue_id = NULL
+    WHERE design_document.workspace_id = $2
+      AND design_document.issue_id IN (SELECT target.id FROM target)
+    RETURNING design_document.id
+),
 cleared_vcs_pr_links AS (
     DELETE FROM issue_vcs_pull_request WHERE issue_id IN (SELECT target.id FROM target)
 ),
@@ -363,7 +370,9 @@ cleared_design_restore_task_issue AS (
     WHERE workspace_id = $2
       AND issue_id IN (SELECT target.id FROM target)
 )
-DELETE FROM issue WHERE issue.id IN (SELECT target.id FROM target)
+DELETE FROM issue
+WHERE issue.id IN (SELECT target.id FROM target)
+  AND (SELECT count(*) FROM cleared_design_documents) >= 0
 `
 
 type DeleteIssueParams struct {

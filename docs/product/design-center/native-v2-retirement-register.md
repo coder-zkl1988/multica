@@ -45,6 +45,14 @@
 
 当前没有经过新 Phase A 功能切片确认的退役条目。不得把取消路线分支中的局部删除推断为本账本状态。
 
+### 2026-08-13 Phase A A1 复核
+
+- 状态变化：无。
+- 触达范围：A1 新增 Design Document 内部协议、持久化和对象存储 primitive，并把 Project Design System V2 的格式无关 ZIP/digest 安全逻辑抽到共享 helper。
+- 保留原因：A1 尚未替代首页页面 task、`design_draft` / `semantic_pagespec` 消费者、Open Design 历史读取或项目设计体系 package 流程。
+- 证据：`native-design-phase-a1-validation.md`；V2 golden、daemon/handler 回归、GitNexus `detect_changes` 均已执行。
+- 下一次复核：后续产品切片真实迁移活动消费者并满足 DC-040 时，再新增具体 capability 条目；不能从名称 grep 推导状态。
+
 `feature/fengchen-fixed-v2` 只保留为取消的独立 Phase B 路线 checkpoint，不合入 `feature/fengchen`，不作为实现基线，也不计入产品或退役进度。
 
 后续条目使用以下模板追加：

@@ -646,6 +646,23 @@ WHERE project_design_system.workspace_id = $1
 
 -- name: DeleteWorkspaceDesignDependents :exec
 WITH
+deleted_design_document_revisions AS (
+    DELETE FROM design_document_revision
+    WHERE design_document_revision.workspace_id = $1
+    RETURNING design_document_revision.id
+),
+deleted_design_document_snapshots AS (
+    DELETE FROM design_document_input_snapshot
+    WHERE design_document_input_snapshot.workspace_id = $1
+      AND (SELECT count(*) FROM deleted_design_document_revisions) >= 0
+    RETURNING design_document_input_snapshot.id
+),
+deleted_design_documents AS (
+    DELETE FROM design_document
+    WHERE design_document.workspace_id = $1
+      AND (SELECT count(*) FROM deleted_design_document_snapshots) >= 0
+    RETURNING design_document.id
+),
 deleted_restore_mappings AS (
     DELETE FROM design_restore_mapping WHERE design_restore_mapping.workspace_id = $1
 ),
@@ -664,7 +681,8 @@ deleted_open_design_runs AS (
 DELETE FROM project_design_system_package
 WHERE design_system_id IN (
     SELECT id FROM project_design_system WHERE project_design_system.workspace_id = $1
-);
+)
+  AND (SELECT count(*) FROM deleted_design_documents) >= 0;
 
 -- name: DeleteWorkspaceDesignTemplateData :exec
 WITH
