@@ -73,8 +73,8 @@ func TestFilterMCPConfigDropsSensitiveServers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if blocked != 3 {
-		t.Fatalf("blocked = %d, want 3", blocked)
+	if blocked != 2 {
+		t.Fatalf("blocked = %d, want 2", blocked)
 	}
 	var document struct {
 		MCPServers map[string]any `json:"mcpServers"`
@@ -82,7 +82,86 @@ func TestFilterMCPConfigDropsSensitiveServers(t *testing.T) {
 	if err := json.Unmarshal(filtered, &document); err != nil {
 		t.Fatal(err)
 	}
-	if len(document.MCPServers) != 1 || document.MCPServers["docs"] == nil {
+	if len(document.MCPServers) != 2 || document.MCPServers["docs"] == nil || document.MCPServers["lark-messages"] == nil {
+		t.Fatalf("filtered servers = %#v", document.MCPServers)
+	}
+}
+
+func TestDeniedCommandAllowsFeishuCollabSubcommands(t *testing.T) {
+	t.Parallel()
+
+	allowed := []string{
+		"lark-cli wiki spaces get_node --params '{\"token\":\"G1Djw\"}'",
+		"lark-cli docx +create --title PRD",
+		"lark-cli doc create --folder abc",
+		"lark-cli whiteboard +create --title 脑图",
+		"feishu-cli wiki get_node --params '{\"token\":\"x\"}'",
+	}
+	for _, command := range allowed {
+		if denied, reason := DeniedCommand(command); denied {
+			t.Fatalf("allowed feishu collaboration command denied: %q (%s)", command, reason)
+		}
+	}
+}
+
+func TestDeniedCommandStillBlocksNonCollabLark(t *testing.T) {
+	t.Parallel()
+
+	blocked := []string{
+		"lark-cli",
+		"lark-cli auth status",
+		"lark-cli im +messages-search --query payroll",
+		"lark-cli contact +search --query alice",
+		"lark-cli drive +download-all",
+		"lark-cli sheets +read",
+		"lark-cli unknown +cmd",
+	}
+	for _, command := range blocked {
+		if denied, reason := DeniedCommand(command); !denied {
+			t.Fatalf("expected non-collaboration lark command to be denied: %q", command)
+		} else if reason != "lark_or_feishu_cli" {
+			t.Fatalf("unexpected reason for %q: %s", command, reason)
+		}
+	}
+}
+
+func TestDeniedSkillAllowsLarkCollabOnly(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range []string{"lark-doc", "lark-wiki", "lark-whiteboard", "lark-markdown"} {
+		if denied, _ := DeniedSkill(name, "", "Read and create Feishu documents"); denied {
+			t.Fatalf("collaboration skill %q should be allowed", name)
+		}
+	}
+	for _, name := range []string{"lark-im", "lark-contact", "lark-calendar", "lark-drive", "lark-sheets", "lark-base", "lark-openapi-explorer"} {
+		if denied, _ := DeniedSkill(name, "", "anything"); !denied {
+			t.Fatalf("non-collaboration skill %q should be denied", name)
+		}
+	}
+}
+
+func TestFilterMCPConfigKeepsLarkCliServer(t *testing.T) {
+	t.Parallel()
+
+	raw := json.RawMessage(`{"mcpServers":{
+		"lark":{"command":"lark-cli","args":["mcp"]},
+		"feishu-docs":{"command":"/usr/local/bin/feishu-cli","args":["mcp"]},
+		"desktop-control":{"command":"computer-use-mcp"}
+	}}`)
+	filtered, blocked, err := FilterMCPConfig(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if blocked != 1 {
+		t.Fatalf("blocked = %d, want 1", blocked)
+	}
+	var document struct {
+		MCPServers map[string]any `json:"mcpServers"`
+	}
+	if err := json.Unmarshal(filtered, &document); err != nil {
+		t.Fatal(err)
+	}
+	if document.MCPServers["lark"] == nil || document.MCPServers["feishu-docs"] == nil || document.MCPServers["desktop-control"] != nil {
 		t.Fatalf("filtered servers = %#v", document.MCPServers)
 	}
 }

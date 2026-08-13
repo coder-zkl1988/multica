@@ -194,7 +194,7 @@ func TestMergeRuntimeAndAgentMcpConfigNullKeepsNativeInheritance(t *testing.T) {
 func TestMergeRuntimeAndAgentMcpConfigFiltersPrivacySensitiveServers(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	if err := os.WriteFile(filepath.Join(home, ".claude.json"), []byte(`{"mcpServers":{"lark":{"command":"lark-cli","args":["chat"]},"docs":{"type":"http","url":"https://docs.example/mcp"}}}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(home, ".claude.json"), []byte(`{"mcpServers":{"lark":{"command":"lark-cli","args":["chat"]},"lark-api":{"type":"http","url":"https://open.feishu.cn/open-apis"},"docs":{"type":"http","url":"https://docs.example/mcp"}}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -208,8 +208,11 @@ func TestMergeRuntimeAndAgentMcpConfigFiltersPrivacySensitiveServers(t *testing.
 	if err := json.Unmarshal(merged, &document); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := document.McpServers["lark"]; ok {
-		t.Fatalf("privacy-sensitive lark server must be filtered, got %#v", document.McpServers)
+	if _, ok := document.McpServers["lark"]; !ok {
+		t.Fatalf("lark-cli collaboration server must survive filtering, got %#v", document.McpServers)
+	}
+	if _, ok := document.McpServers["lark-api"]; ok {
+		t.Fatalf("non-CLI lark server must still be filtered, got %#v", document.McpServers)
 	}
 	if _, ok := document.McpServers["docs"]; !ok {
 		t.Fatalf("benign runtime server must survive filtering, got %#v", document.McpServers)
