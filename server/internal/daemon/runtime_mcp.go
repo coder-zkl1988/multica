@@ -30,15 +30,17 @@ type runtimeLocalMcpServerSummary struct {
 // runtime URLs, headers, commands, and env values never need to leave the
 // machine.
 //
-// Privacy gate: native inheritance is never trusted. A nil/null agent config
-// becomes an empty managed set, and the merged result always passes through
-// agentguard.FilterMCPConfig so MCP servers that expose private data
-// (Lark/Feishu, desktop control, screenshots, credentials, keychains) are
-// stripped before the CLI launches. The function fails closed: no unchecked
-// server survives to the agent.
+// Privacy gate: native inheritance is never trusted for providers where the
+// daemon owns the MCP launch contract. OpenClaw is the exception: absent agent
+// config returns nil so execenv can inherit the active user config; any explicit
+// config is managed in isolation and still passes through the privacy filter.
 func mergeRuntimeAndAgentMcpConfig(provider string, agentConfig json.RawMessage) (json.RawMessage, error) {
 	trimmed := bytes.TrimSpace(agentConfig)
-	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+	hasExplicitAgentConfig := len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("null"))
+	if provider == "openclaw" && !hasExplicitAgentConfig {
+		return nil, nil
+	}
+	if !hasExplicitAgentConfig {
 		trimmed = []byte(`{"mcpServers":{}}`)
 	}
 
@@ -58,9 +60,14 @@ func mergeRuntimeAndAgentMcpConfig(provider string, agentConfig json.RawMessage)
 		}
 	}
 
-	runtimeServers, supported, err := loadRuntimeMcpServerConfigs(provider)
-	if err != nil {
-		return nil, err
+	runtimeServers := map[string]any{}
+	supported := false
+	if provider != "openclaw" {
+		var err error
+		runtimeServers, supported, err = loadRuntimeMcpServerConfigs(provider)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	var merged map[string]any

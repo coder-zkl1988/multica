@@ -170,6 +170,68 @@ args = ["mcp-server-fetch"]
 	}
 }
 
+func TestMergeRuntimeAndAgentMcpConfigOpenclawNullPreservesNativeInheritance(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	configDir := filepath.Join(home, ".openclaw")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "openclaw.json"), []byte(`{"mcp":{"servers":{"pmo":{"command":"pmo-mcp"}}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, raw := range []json.RawMessage{nil, json.RawMessage("null"), json.RawMessage(" null ")} {
+		merged, err := mergeRuntimeAndAgentMcpConfig("openclaw", raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if merged != nil {
+			t.Fatalf("openclaw nil/null merged %q = %q, want nil inheritance", string(raw), string(merged))
+		}
+	}
+}
+
+func TestMergeRuntimeAndAgentMcpConfigOpenclawExplicitConfigDoesNotInheritNativeServers(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	configDir := filepath.Join(home, ".openclaw")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "openclaw.json"), []byte(`{"mcp":{"servers":{"pmo":{"command":"pmo-mcp"}}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	for name, raw := range map[string]json.RawMessage{
+		"empty":  json.RawMessage(`{"mcpServers":{}}`),
+		"custom": json.RawMessage(`{"mcpServers":{"custom":{"command":"custom-mcp"}}}`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			merged, err := mergeRuntimeAndAgentMcpConfig("openclaw", raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var document struct {
+				McpServers map[string]any `json:"mcpServers"`
+			}
+			if err := json.Unmarshal(merged, &document); err != nil {
+				t.Fatal(err)
+			}
+			if _, ok := document.McpServers["pmo"]; ok {
+				t.Fatalf("native OpenClaw server leaked into managed config: %#v", document.McpServers)
+			}
+			if name == "empty" && len(document.McpServers) != 0 {
+				t.Fatalf("explicit empty config = %#v, want empty managed set", document.McpServers)
+			}
+			if name == "custom" {
+				if _, ok := document.McpServers["custom"]; !ok {
+					t.Fatalf("explicit custom server missing: %#v", document.McpServers)
+				}
+			}
+		})
+	}
+}
+
 func TestMergeRuntimeAndAgentMcpConfigNullKeepsNativeInheritance(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	for _, raw := range []json.RawMessage{nil, json.RawMessage("null"), json.RawMessage(" null ")} {

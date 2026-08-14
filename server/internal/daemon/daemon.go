@@ -6274,9 +6274,9 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// before allowing reuse, so a pre-fix leader session recorded against
 	// local_directory still fails closed.
 	var agentMcpConfig json.RawMessage
-	// Privacy gate: start from an empty managed MCP set. Native or agent MCP
-	// configs are never inherited unchecked — every server flows through
-	// mergeRuntimeAndAgentMcpConfig → agentguard.FilterMCPConfig.
+	// Privacy gate: start from an empty managed MCP set. OpenClaw may return nil
+	// to inherit its active user config; every explicit managed config still
+	// flows through mergeRuntimeAndAgentMcpConfig → agentguard.FilterMCPConfig.
 	effectiveMcpConfig := json.RawMessage(`{"mcpServers":{}}`)
 	var cursorMcpAuthSource string
 	if task.Agent != nil {
@@ -6907,8 +6907,8 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	if task.Agent != nil {
 		customArgs = task.Agent.CustomArgs
 	}
-	// Always pass the privacy-filtered managed MCP set, even for agent-less
-	// tasks, so the CLI never falls back to unchecked native MCP servers.
+	// Pass the privacy-filtered managed MCP set. A nil OpenClaw config is the
+	// deliberate exception that preserves its active user MCP configuration.
 	mcpConfig = effectiveMcpConfig
 	if provider == "hermes" {
 		customArgs = hermesLaunchArgs(customArgs, env != nil && env.HermesHome != "")
