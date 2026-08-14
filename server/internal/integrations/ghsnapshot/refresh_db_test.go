@@ -26,6 +26,7 @@ func testDBPool(t *testing.T) *pgxpool.Pool {
 		pool.Close()
 		t.Skipf("skipping DB test: database not reachable: %v", err)
 	}
+	t.Cleanup(pool.Close)
 	return pool
 }
 
@@ -63,7 +64,7 @@ func randHex(t *testing.T) string {
 }
 
 func seedPR(t *testing.T, pool *pgxpool.Pool, q *db.Queries, headSHA string) db.GithubPullRequest {
-	return seedPRAt(t, pool, q, 987654, "r", 4242, headSHA)
+	return seedPRAt(t, pool, q, 987654, "r-"+randHex(t), 4242, headSHA)
 }
 
 func seedPRAt(t *testing.T, pool *pgxpool.Pool, q *db.Queries, installationID int64, repoName string, prNumber int32, headSHA string) db.GithubPullRequest {
@@ -100,16 +101,16 @@ func checkRunCount(t *testing.T, pool *pgxpool.Pool, prID pgtype.UUID) int {
 
 func TestListStaleUndecidedGitHubPRsExcludesDecidedAndRotatesCursor(t *testing.T) {
 	pool := testDBPool(t)
-	defer pool.Close()
 	q := db.New(pool)
 	ctx := context.Background()
 	now := time.Unix(1_700_010_000, 0)
 
+	unrelated := seedPRAt(t, pool, q, 1, "unrelated", 999318, "X")
 	settled := seedPRAt(t, pool, q, 111, "settled", 1, "S")
 	oldest := seedPRAt(t, pool, q, 111, "oldest", 2, "O")
 	running := seedPRAt(t, pool, q, 222, "running", 3, "R")
 	newer := seedPRAt(t, pool, q, 222, "newer", 4, "N")
-	prs := []db.GithubPullRequest{settled, oldest, running, newer}
+	prs := []db.GithubPullRequest{unrelated, settled, oldest, running, newer}
 	t.Cleanup(func() {
 		for _, pr := range prs {
 			_, _ = pool.Exec(context.Background(), `DELETE FROM github_pull_request_check_run WHERE pr_id=$1`, pr.ID)
@@ -166,7 +167,7 @@ func TestListStaleUndecidedGitHubPRsExcludesDecidedAndRotatesCursor(t *testing.T
 
 	first, err := q.ListStaleUndecidedGitHubPRs(ctx, db.ListStaleUndecidedGitHubPRsParams{
 		OlderThan:           tsFromTime(now.Add(-10 * time.Minute)),
-		AfterInstallationID: 0,
+		AfterInstallationID: oldest.InstallationID - 1,
 		AfterRepoOwner:      "",
 		AfterRepoName:       "",
 		AfterPrNumber:       0,
@@ -201,7 +202,6 @@ func TestListStaleUndecidedGitHubPRsExcludesDecidedAndRotatesCursor(t *testing.T
 // response for an old head must never overwrite a newer head's snapshot.
 func TestApplySnapshotHeadSHAGuard(t *testing.T) {
 	pool := testDBPool(t)
-	defer pool.Close()
 	q := db.New(pool)
 	ctx := context.Background()
 	now := time.Unix(1_700_000_100, 0)
@@ -277,7 +277,6 @@ func TestApplySnapshotHeadSHAGuard(t *testing.T) {
 // trailing edge must still fetch and apply B immediately.
 func TestInFlightOldHeadKeepsTrailingRefresh(t *testing.T) {
 	pool := testDBPool(t)
-	defer pool.Close()
 	q := db.New(pool)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -368,7 +367,6 @@ func TestInFlightOldHeadKeepsTrailingRefresh(t *testing.T) {
 // replace, not an accumulation.
 func TestApplySnapshotReplacesRuns(t *testing.T) {
 	pool := testDBPool(t)
-	defer pool.Close()
 	q := db.New(pool)
 	ctx := context.Background()
 	now := time.Unix(1_700_000_200, 0)
