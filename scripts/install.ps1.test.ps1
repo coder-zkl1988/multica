@@ -62,7 +62,7 @@ foreach ($banned in @("Get-SelfHostBackendPort", "Get-SelfHostFrontendPort", "Ge
     }
 }
 foreach ($required in @(
-        'https://api.github.com/repos/coder-zkl1988/multica/releases?per_page=100',
+        '$RepoApiUrl/releases?per_page=100',
         'Get-ComposePublishedPort -Service "backend" -ContainerPort 8080',
         'Get-ComposePublishedPort -Service "frontend" -ContainerPort 3000',
         'http://localhost:$($script:SelfHostBackendPort)/health')) {
