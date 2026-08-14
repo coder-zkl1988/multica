@@ -60,6 +60,51 @@ func TestBuildPromptPMOSyncStrictAndClean(t *testing.T) {
 	}
 }
 
+// TestBuildPromptPMOSyncOpenClawInvokesDataQuerySkill locks the provider-specific
+// instruction required for OpenClaw to load the installed PMO acquisition skill.
+func TestBuildPromptPMOSyncOpenClawInvokesDataQuerySkill(t *testing.T) {
+	ctx := service.PMOSyncContext{
+		Type:        service.PMOSyncContextType,
+		WorkspaceID: "0f2b6f6e-0000-4000-8000-000000000001",
+		RunID:       "0f2b6f6e-0000-4000-8000-000000000002",
+		Prompt:      service.BuildPMOSyncPrompt("SY-P-20260452"),
+	}
+	raw, err := json.Marshal(ctx)
+	if err != nil {
+		t.Fatalf("marshal pmo context: %v", err)
+	}
+
+	out := BuildPrompt(Task{PMOSyncContext: json.RawMessage(raw)}, "openclaw")
+	for _, want := range []string{"$sy-pmo-data-query", "snapshot mode", "SY-P-20260452"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("OpenClaw PMO prompt missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "exact SY-P requirement") {
+		t.Fatalf("OpenClaw PMO prompt must not hard-code the external key prefix:\n%s", out)
+	}
+}
+
+func TestBuildPromptPMOSyncOpenClawProviderIsolation(t *testing.T) {
+	ctx := service.PMOSyncContext{
+		Type:        service.PMOSyncContextType,
+		WorkspaceID: "0f2b6f6e-0000-4000-8000-000000000001",
+		RunID:       "0f2b6f6e-0000-4000-8000-000000000002",
+		Prompt:      service.BuildPMOSyncPrompt("EXT-P-001"),
+	}
+	raw, err := json.Marshal(ctx)
+	if err != nil {
+		t.Fatalf("marshal pmo context: %v", err)
+	}
+
+	for _, provider := range []string{"claude", "opencode"} {
+		out := BuildPrompt(Task{PMOSyncContext: json.RawMessage(raw)}, provider)
+		if strings.Contains(out, "$sy-pmo-data-query") {
+			t.Fatalf("%s PMO prompt leaked OpenClaw skill instruction:\n%s", provider, out)
+		}
+	}
+}
+
 // TestBuildPromptPMOSyncFallback guards the degenerate case: a PMO task whose
 // context cannot be parsed still renders a strict JSON-only instruction
 // instead of falling through to the issue prompt.
@@ -73,6 +118,11 @@ func TestBuildPromptPMOSyncFallback(t *testing.T) {
 	}
 	if strings.Contains(out, "assigned issue ID") {
 		t.Fatalf("PMO fallback fell through to issue prompt:\n%s", out)
+	}
+
+	openClawOut := buildPromptBody(Task{PMOSyncContext: json.RawMessage("not-json")}, "openclaw")
+	if strings.Contains(openClawOut, "$sy-pmo-data-query") {
+		t.Fatalf("malformed OpenClaw PMO context must not invoke the data skill:\n%s", openClawOut)
 	}
 }
 

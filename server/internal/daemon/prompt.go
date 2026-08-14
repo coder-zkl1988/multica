@@ -153,7 +153,7 @@ func buildPromptBody(task Task, provider string) string {
 		return buildDesignDocumentPrompt(task)
 	}
 	if len(task.PMOSyncContext) > 0 {
-		return buildPMOSyncPrompt(task)
+		return buildPMOSyncPrompt(task, provider)
 	}
 	var b strings.Builder
 	b.WriteString("You are running as a local coding agent for a Multica workspace.\n\n")
@@ -319,11 +319,11 @@ func buildDesignTemplateBlueprintAnalyzePrompt(task Task) string {
 // buildPMOSyncPrompt renders the opening prompt for a PMO requirement sync
 // task. The strict acquisition prompt generated at enqueue time
 // (service.BuildPMOSyncPrompt) is authoritative — the daemon re-parses the
-// sync context JSONB and renders it directly, without naming any company,
-// domain, or external capability (BuildPMOSyncPrompt already guarantees
-// none appear). The daemon carries no repo/issue context for this kind: the
-// prompt-only path is the whole task.
-func buildPMOSyncPrompt(task Task) string {
+// sync context JSONB and renders it directly. OpenClaw additionally needs the
+// installed PMO data skill named explicitly; other providers keep the generic,
+// infrastructure-agnostic acquisition prompt. The daemon carries no repo/issue
+// context for this kind: the prompt-only path is the whole task.
+func buildPMOSyncPrompt(task Task, provider string) string {
 	var b strings.Builder
 	b.WriteString("You are running as a PMO requirement sync agent for a Multica workspace.\n\n")
 	prompt := pmoSyncPromptFromContext(task.PMOSyncContext)
@@ -333,6 +333,9 @@ func buildPMOSyncPrompt(task Task) string {
 		// to operate on an issue that does not exist for this task.
 		b.WriteString("Your PMO sync context could not be parsed. Return one JSON object only, matching the PMO snapshot contract.\n")
 		return b.String()
+	}
+	if provider == "openclaw" {
+		b.WriteString("Use $sy-pmo-data-query in snapshot mode for the exact external requirement below. Return the skill helper stdout unchanged as your final answer; do not substitute other tools.\n\n")
 	}
 	b.WriteString(prompt)
 	b.WriteString("\n")
