@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { pmoKeys } from "./queries";
+import { pmoKeys, pmoRunsOptions } from "./queries";
 import type { PMORun } from "../types";
 
 // The query keys every PMO list/detail hook uses. Workspace id is always
@@ -50,3 +50,25 @@ const _statusExhaustive: Array<PMORun["status"]> = [
   "failed",
 ];
 void _statusExhaustive;
+
+describe("pmoRunsOptions", () => {
+  it("polls only while a run is queued or running", () => {
+    const options = pmoRunsOptions("ws-1", "cfg-1");
+    const refetchInterval = options.refetchInterval as unknown as (query: {
+      state: { data?: { runs: Array<Pick<PMORun, "status">> } };
+    }) => number | false;
+
+    expect(
+      refetchInterval({ state: { data: { runs: [{ status: "queued" }] } } }),
+    ).toBe(2000);
+    expect(
+      refetchInterval({ state: { data: { runs: [{ status: "running" }] } } }),
+    ).toBe(2000);
+    expect(
+      refetchInterval({
+        state: { data: { runs: [{ status: "failed" }, { status: "applied" }] } },
+      }),
+    ).toBe(false);
+    expect(refetchInterval({ state: {} })).toBe(false);
+  });
+});

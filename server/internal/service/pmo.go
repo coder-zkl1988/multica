@@ -314,5 +314,8 @@ Set owner.external_id to the owner's corporate email whenever it is available.
 If the source exposes only a bare corporate account such as yanmeichen, return yanmeichen@soyoung.com.
 Do not concatenate the account with the display name, and do not infer an email from a person's displayed name.
 Each task contains task_id, scheme_id, title, description, source_status, status, owner, start_date, due_date, workload, and updated_at.
-Project status must be one of planned, in_progress, paused, completed, cancelled. Issue and task status must be one of backlog, todo, in_progress, in_review, done, blocked, cancelled. Dates use YYYY-MM-DD and updated_at uses RFC3339. Set snapshot_complete to true only when the snapshot is complete.`, keyJSON)
+Project status must be one of planned, in_progress, paused, completed, cancelled. Issue and task status must be one of backlog, todo, in_progress, in_review, done, blocked, cancelled. Dates use YYYY-MM-DD and updated_at uses RFC3339. Set snapshot_complete to true only when the snapshot is complete.
+Use only the configured external requirement-source tools. Do not inspect repositories or documents as substitutes for the source hierarchy.
+If the complete parent, child-requirement, and task hierarchy cannot be fetched, return the same JSON structure immediately with "snapshot_complete":false.
+Do not fabricate missing items and do not ask a clarification question.`, keyJSON)
 }

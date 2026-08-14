@@ -12,8 +12,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -84,6 +86,11 @@ func (b *openclawBackend) Execute(ctx context.Context, prompt string, opts ExecO
 
 	cmd := exec.CommandContext(runCtx, execPath, args...)
 	hideAgentWindow(cmd)
+	configureProcessGroup(cmd)
+	cmd.Cancel = func() error {
+		signalProcessGroup(cmd.Process, syscall.SIGKILL)
+		return nil
+	}
 	b.cfg.Logger.Info("agent command", "exec", execPath, "args", args)
 	// 500ms, matching cursor-agent — the other backend whose CLI can deliver a
 	// terminal result while keeping a process alive.
@@ -156,6 +163,10 @@ func (b *openclawBackend) Execute(ctx context.Context, prompt string, opts ExecO
 
 		// Wait for process exit.
 		exitErr := cmd.Wait()
+		if runtime.GOOS != "windows" && !waitProcessGroupGone(cmd.Process, 0) {
+			b.cfg.Logger.Warn("openclaw process group still alive after command exit; killing descendants", "pid", cmd.Process.Pid)
+			signalProcessGroup(cmd.Process, syscall.SIGKILL)
+		}
 		duration := time.Since(startTime)
 
 		switch {
