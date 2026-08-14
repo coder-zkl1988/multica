@@ -424,22 +424,20 @@ func TestClaimTask_LeaderGetsBriefing(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	var leaderID, runtimeID string
-	if err := testPool.QueryRow(ctx,
-		`SELECT id, runtime_id FROM agent WHERE workspace_id = $1 ORDER BY created_at ASC LIMIT 1`,
-		testWorkspaceID,
-	).Scan(&leaderID, &runtimeID); err != nil {
-		t.Fatalf("get leader agent: %v", err)
+	fx := newSquadBriefingClaimFixture(t, ctx, "Briefing Claim")
+	if _, err := testPool.Exec(ctx, `
+		UPDATE squad SET name = 'Briefing Claim Squad', instructions = 'Be terse.'
+		WHERE id = $1
+	`, fx.SquadID); err != nil {
+		t.Fatalf("configure squad: %v", err)
 	}
 
-	squad := seedSquadForBriefing(t, leaderID, "Briefing Claim Squad", "Be terse.")
-
 	helper := createHandlerTestAgent(t, "Briefing Helper", []byte("[]"))
-	addAgentMember(t, squad.ID, helper, "implementer")
+	addAgentMember(t, util.MustParseUUID(fx.SquadID), helper, "implementer")
 
-	queueSquadIssueTaskFor(t, util.UUIDToString(squad.ID), leaderID, runtimeID, 95001)
+	queueSquadIssueTaskFor(t, fx.SquadID, fx.AgentID, fx.RuntimeID, 95001)
 
-	agent := claimAndDecodeAgent(t, runtimeID)
+	agent := claimAndDecodeAgent(t, fx.RuntimeID)
 	for _, want := range []string{
 		"## Squad Operating Protocol",
 		"## Squad Roster",

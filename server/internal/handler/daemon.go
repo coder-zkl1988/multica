@@ -459,9 +459,10 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 			status = "offline"
 		}
 		metadata, _ := json.Marshal(map[string]any{
-			"version":     runtime.Version,
-			"cli_version": req.CLIVersion,
-			"launched_by": req.LaunchedBy,
+			"version":      runtime.Version,
+			"cli_version":  req.CLIVersion,
+			"launched_by":  req.LaunchedBy,
+			"capabilities": requestClientCapabilities(r),
 		})
 
 		var registered db.AgentRuntime
@@ -1445,6 +1446,21 @@ func runtimeHasCapability(metadata []byte, capability string) bool {
 		}
 	}
 	return false
+}
+
+// requestClientCapabilities returns the non-empty advertised capabilities.
+func requestClientCapabilities(r *http.Request) []string {
+	raw := strings.Split(r.Header.Get("X-Client-Capabilities"), ",")
+	out := make([]string, 0, len(raw))
+	for _, part := range raw {
+		if capability := strings.TrimSpace(part); capability != "" {
+			out = append(out, capability)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // requestHasClientCapability reports whether the caller advertised a capability
@@ -4729,11 +4745,50 @@ func (h *Handler) ReportTaskMessages(w http.ResponseWriter, r *http.Request) {
 // task cancellation and finished flushing the transcript. Settles the chat
 // finalization that CancelTaskWithResult deferred for a started-but-empty
 // transcript (#5219); idempotent when nothing was deferred.
+type TaskCancelAckRequest struct {
+	BranchName    string `json:"branch_name,omitempty"`
+	ErrorMessage  string `json:"error_message,omitempty"`
+	FailureReason string `json:"failure_reason,omitempty"`
+}
+
 func (h *Handler) AckTaskCancelled(w http.ResponseWriter, r *http.Request) {
 	taskID := chi.URLParam(r, "taskId")
 	task, ok := h.requireDaemonTaskAccess(w, r, taskID)
 	if !ok {
 		return
+	}
+
+	// Older daemons send an empty body, so decoding remains best-effort.
+	var req TaskCancelAckRequest
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	delivered := false
+	if branch := strings.TrimSpace(req.BranchName); branch != "" {
+		if err := h.Queries.SetAgentTaskBranchName(r.Context(), db.SetAgentTaskBranchNameParams{
+			ID:         task.ID,
+			BranchName: pgtype.Text{String: branch, Valid: true},
+		}); err != nil {
+			slog.Error("cancel ack: record branch name failed", "task_id", taskID, "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to record branch name")
+			return
+		}
+		delivered = true
+	}
+	if message := strings.TrimSpace(req.ErrorMessage); message != "" {
+		reason := strings.TrimSpace(req.FailureReason)
+		if err := h.Queries.SetAgentTaskErrorIfEmpty(r.Context(), db.SetAgentTaskErrorIfEmptyParams{
+			ID:            task.ID,
+			Error:         pgtype.Text{String: message, Valid: true},
+			FailureReason: pgtype.Text{String: reason, Valid: reason != ""},
+		}); err != nil {
+			slog.Error("cancel ack: record task error failed", "task_id", taskID, "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to record task error")
+			return
+		}
+		delivered = true
+	}
+	if delivered {
+		h.TaskService.RebroadcastCancelledTask(r.Context(), task.ID)
 	}
 	h.TaskService.FinalizeDeferredCancelledChat(r.Context(), task.ID)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})

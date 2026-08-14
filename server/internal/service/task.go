@@ -3031,6 +3031,19 @@ func (s *TaskService) finalizeCancelledChatMessage(ctx context.Context, task db.
 	return cancelled
 }
 
+// RebroadcastCancelledTask refreshes clients after cancel acknowledgement data
+// lands on an already-cancelled task.
+func (s *TaskService) RebroadcastCancelledTask(ctx context.Context, taskID pgtype.UUID) {
+	task, err := s.Queries.GetAgentTask(ctx, taskID)
+	if err != nil {
+		slog.Warn("rebroadcast cancelled task: load failed", "task_id", util.UUIDToString(taskID), "error", err)
+		return
+	}
+	if task.Status == "cancelled" {
+		s.broadcastTaskEvent(ctx, protocol.EventTaskCancelled, task)
+	}
+}
+
 // FinalizeDeferredCancelledChat settles the empty/non-empty judgment that
 // finalizeCancelledChatMessage deferred for a started-but-empty cancelled
 // chat task (#5219). Called from the daemon's cancel-ack (transcript flush
