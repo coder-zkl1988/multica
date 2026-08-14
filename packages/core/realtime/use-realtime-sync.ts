@@ -910,6 +910,8 @@ export function useRealtimeSync(
         // catches every agent's list — the per-agent detail key sits
         // under agentTasks/<wsId>/<agentId>.
         qc.invalidateQueries({ queryKey: agentTasksKeys.all(wsId) });
+        qc.invalidateQueries({ queryKey: designKeys.documentTasks(wsId) });
+        qc.invalidateQueries({ queryKey: ["designs", wsId, "documents"] });
         // Per-issue task list (issue-detail Execution log). Prefix match
         // across all issues — keeps the contract "any task: event makes
         // every list-of-tasks query stale" so cache stays fresh even

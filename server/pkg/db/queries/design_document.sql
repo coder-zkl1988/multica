@@ -254,7 +254,15 @@ SELECT *
 FROM design_document
 WHERE workspace_id = $1
   AND project_id = $2
+  AND draft_revision_id IS NOT NULL
 ORDER BY created_at DESC, id;
+
+-- name: GetDesignDocumentInProject :one
+SELECT *
+FROM design_document
+WHERE id = $1
+  AND workspace_id = $2
+  AND project_id = $3;
 
 -- name: ListDesignDocumentRevisionsInProject :many
 SELECT *

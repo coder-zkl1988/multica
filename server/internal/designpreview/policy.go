@@ -49,6 +49,9 @@ func EvaluateCapture(capture Capture, policy Policy) TargetVerification {
 		FailedResourceCount:       capture.FailedResourceCount,
 		ConsoleErrorCount:         capture.ConsoleErrorCount,
 		OutboundRequestCount:      capture.OutboundRequestCount,
+		InteractionRequired:       capture.InteractionRequired,
+		InteractiveElementCount:   capture.InteractiveElementCount,
+		InteractionChanged:        capture.InteractionChanged,
 		Screenshot:                capture.Screenshot,
 	}
 	switch {
@@ -68,6 +71,10 @@ func EvaluateCapture(capture Capture, policy Policy) TargetVerification {
 		verification.FailureCode = FailureResourceLoad
 	case policy.RequireConsoleClean && capture.ConsoleErrorCount > 0:
 		verification.FailureCode = FailureConsoleError
+	case capture.InteractionRequired && capture.InteractiveElementCount == 0:
+		verification.FailureCode = FailureInteractionMissing
+	case capture.InteractionRequired && !capture.InteractionChanged:
+		verification.FailureCode = FailureInteractionNoEffect
 	case capture.Screenshot.SHA256 == "" || capture.Screenshot.Bytes <= 0 || capture.Screenshot.Width <= 0 || capture.Screenshot.Height <= 0:
 		verification.FailureCode = FailureScreenshotMissing
 	case capture.Screenshot.Entropy < policy.MinEntropy || capture.Screenshot.MaxChannelStddev < policy.MinMaxChannelStddev:
@@ -108,6 +115,22 @@ func ValidateReceipt(receipt Receipt, expectedDigest string, expectedTargets []T
 		return err
 	}
 	return ValidateTargetSet(receipt.Verification, expectedTargets)
+}
+
+func ValidateReceiptWithInteractions(receipt Receipt, expectedDigest string, expectedTargets []Target, required map[string]bool) error {
+	if err := ValidateReceipt(receipt, expectedDigest, expectedTargets); err != nil {
+		return err
+	}
+	for _, target := range receipt.Verification.Targets {
+		want := required[target.Target.ID]
+		if target.InteractionRequired != want {
+			return fmt.Errorf("Design Preview target %q interaction requirement does not match", target.Target.ID)
+		}
+		if want && (target.InteractiveElementCount == 0 || !target.InteractionChanged) {
+			return fmt.Errorf("Design Preview target %q interaction evidence did not pass", target.Target.ID)
+		}
+	}
+	return nil
 }
 
 func ValidateVerification(verification Verification, expectedPolicy Policy) error {
@@ -175,7 +198,7 @@ func validateTargetVerification(target TargetVerification, policy Policy) error 
 	for _, value := range []int{
 		target.RenderedElementCount, target.VisibleTextLength, target.ImageCount,
 		target.FailedImageCount, target.FailedResourceCount, target.ConsoleErrorCount,
-		target.OutboundRequestCount,
+		target.OutboundRequestCount, target.InteractiveElementCount,
 	} {
 		if value < 0 || value > metricMaxCount {
 			return errors.New("Design Preview target has an invalid count")
@@ -202,6 +225,9 @@ func validateTargetVerification(target TargetVerification, policy Policy) error 
 		FailedResourceCount:       target.FailedResourceCount,
 		ConsoleErrorCount:         target.ConsoleErrorCount,
 		OutboundRequestCount:      target.OutboundRequestCount,
+		InteractionRequired:       target.InteractionRequired,
+		InteractiveElementCount:   target.InteractiveElementCount,
+		InteractionChanged:        target.InteractionChanged,
 		Screenshot:                target.Screenshot,
 	}
 	evaluated := EvaluateCapture(capture, policy)

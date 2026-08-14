@@ -426,6 +426,56 @@ func (c *Client) UploadProjectDesignSystemPackage(
 	}
 }
 
+func (c *Client) UploadDesignDocumentPackage(ctx context.Context, taskID string, binding designdocument.Binding, contentDigest string, archive []byte) (DesignDocumentPackageUpload, error) {
+	if taskID == "" || binding.TaskID != taskID || binding.DocumentID == "" || binding.RevisionID == "" || !validProjectDesignSystemPackageDigest(binding.InputSnapshotSHA256) {
+		return DesignDocumentPackageUpload{}, errors.New("design document package binding is invalid")
+	}
+	if !validProjectDesignSystemPackageDigest(contentDigest) || len(archive) == 0 || len(archive) > 32<<20 {
+		return DesignDocumentPackageUpload{}, errors.New("design document package archive is invalid")
+	}
+	requestPath := fmt.Sprintf("/api/daemon/tasks/%s/design-document/package", taskID)
+	var lastErr error
+	for attempt := 0; ; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+requestPath, bytes.NewReader(archive))
+		if err != nil {
+			return DesignDocumentPackageUpload{}, err
+		}
+		req.Header.Set("Content-Type", "application/zip")
+		req.Header.Set("X-Multica-Design-Package-Digest", contentDigest)
+		req.Header.Set("X-Multica-Design-Document-ID", binding.DocumentID)
+		req.Header.Set("X-Multica-Design-Revision-ID", binding.RevisionID)
+		req.Header.Set("X-Multica-Design-Input-Snapshot-Digest", binding.InputSnapshotSHA256)
+		if c.token != "" {
+			req.Header.Set("Authorization", "Bearer "+c.token)
+		}
+		c.setIdentityHeaders(req)
+		resp, err := c.client.Do(req)
+		if err == nil {
+			var result DesignDocumentPackageUpload
+			if resp.StatusCode >= 400 {
+				data, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+				err = &requestError{Method: http.MethodPost, Path: requestPath, StatusCode: resp.StatusCode, Body: strings.TrimSpace(string(data))}
+			} else {
+				err = json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&result)
+				if err == nil && (strings.TrimSpace(result.ObjectKey) == "" || result.ContentDigest != contentDigest) {
+					err = errors.New("design document package response is invalid")
+				}
+			}
+			_ = resp.Body.Close()
+			if err == nil {
+				return result, nil
+			}
+		}
+		lastErr = err
+		if ctx.Err() != nil || !isTransientError(err) || attempt >= len(defaultTerminalRetrySchedule) {
+			return DesignDocumentPackageUpload{}, lastErr
+		}
+		if sleepErr := retrySleep(ctx, defaultTerminalRetrySchedule[attempt]); sleepErr != nil {
+			return DesignDocumentPackageUpload{}, lastErr
+		}
+	}
+}
+
 func (c *Client) DownloadOpenDesignBaseArchive(ctx context.Context, taskID string, reference opendesign.BasePackageReference) ([]byte, error) {
 	if strings.TrimSpace(taskID) == "" {
 		return nil, errors.New("Open Design base archive task ID is required")
@@ -591,6 +641,10 @@ func (c *Client) CompleteTask(ctx context.Context, taskID, output, branchName, s
 		case *designdocument.RepositoryGrounding:
 			if value != nil {
 				body["design_document_grounding"] = value
+			}
+		case *DesignDocumentPackageReceipt:
+			if value != nil {
+				body["design_document_package"] = value
 			}
 		case bool:
 			if value {

@@ -188,3 +188,20 @@ export function designDocumentTaskListOptions(wsId: string, projectId?: string) 
     select: (data) => data.tasks,
   });
 }
+
+export function designDocumentListOptions(wsId: string, projectId: string) {
+  return queryOptions({
+    queryKey: designKeys.documents(wsId, projectId),
+    queryFn: () => api.listDesignDocuments(projectId),
+    select: (data) => data.documents,
+    enabled: Boolean(projectId),
+  });
+}
+
+export function designDocumentPreviewOptions(wsId: string, projectId: string, documentId: string) {
+  return queryOptions({
+    queryKey: designKeys.documentPreview(wsId, projectId, documentId),
+    queryFn: () => api.getDesignDocumentPreview(documentId, projectId),
+    enabled: Boolean(projectId && documentId),
+  });
+}

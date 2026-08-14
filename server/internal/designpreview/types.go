@@ -5,16 +5,18 @@ import "context"
 const ReceiptSchemaV1 = "multica.design-preview-receipt/v1"
 
 const (
-	FailureDocumentNotLoaded = "document_not_loaded"
-	FailureDOMEmpty          = "dom_empty"
-	FailureComputedHidden    = "computed_visibility_hidden"
-	FailureRenderedMissing   = "rendered_content_not_visible"
-	FailurePageDimensions    = "page_dimensions_exceeded"
-	FailureResourceLoad      = "resource_load_failed"
-	FailureOutboundRequest   = "outbound_request_blocked"
-	FailureConsoleError      = "console_error"
-	FailureScreenshotMissing = "screenshot_missing"
-	FailureScreenshotUniform = "screenshot_uniform"
+	FailureDocumentNotLoaded   = "document_not_loaded"
+	FailureDOMEmpty            = "dom_empty"
+	FailureComputedHidden      = "computed_visibility_hidden"
+	FailureRenderedMissing     = "rendered_content_not_visible"
+	FailurePageDimensions      = "page_dimensions_exceeded"
+	FailureResourceLoad        = "resource_load_failed"
+	FailureOutboundRequest     = "outbound_request_blocked"
+	FailureConsoleError        = "console_error"
+	FailureScreenshotMissing   = "screenshot_missing"
+	FailureScreenshotUniform   = "screenshot_uniform"
+	FailureInteractionMissing  = "interaction_control_missing"
+	FailureInteractionNoEffect = "interaction_no_effect"
 )
 
 type Target struct {
@@ -24,8 +26,9 @@ type Target struct {
 }
 
 type TargetURL struct {
-	Target Target
-	URL    string
+	Target             Target
+	URL                string
+	RequireInteraction bool
 }
 
 type Verifier interface {
@@ -70,6 +73,9 @@ type Capture struct {
 	FailedResourceCount       int
 	ConsoleErrorCount         int
 	OutboundRequestCount      int
+	InteractionRequired       bool
+	InteractiveElementCount   int
+	InteractionChanged        bool
 	Screenshot                Screenshot
 }
 
@@ -89,6 +95,9 @@ type TargetVerification struct {
 	FailedResourceCount       int        `json:"failed_resource_count"`
 	ConsoleErrorCount         int        `json:"console_error_count"`
 	OutboundRequestCount      int        `json:"outbound_request_count"`
+	InteractionRequired       bool       `json:"interaction_required,omitempty"`
+	InteractiveElementCount   int        `json:"interactive_element_count,omitempty"`
+	InteractionChanged        bool       `json:"interaction_changed,omitempty"`
 	Screenshot                Screenshot `json:"screenshot"`
 }
 

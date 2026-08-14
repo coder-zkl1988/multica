@@ -69,6 +69,14 @@
 - 证据：`native-design-phase-a3-validation.md`；Design Document handler live PostgreSQL、daemon/execenv/prompt、Core/Views、race/vet/build 和源 checkout 零修改回归。
 - 下一次复核：A4 形成首个通过 Audit/Preview 的不可变 Design Document revision 后，再按真实消费者评估旧页面生成入口；本阶段无删除授权。
 
+### 2026-08-14 Phase A A4 复核
+
+- 状态变化：无。
+- 触达范围：Design Document 已经通过静态 Audit、本地 Chrome Preview、immutable archive 和 Server 独立重验形成首个 draft revision，并在项目“设计草稿”中提供 digest-bound sandbox Preview。
+- 保留原因：A4 尚未提供 A5 调整/保存/放弃或 A6 真实质量验收；旧 `design_draft` / `semantic_pagespec` 仍有历史读取、其他入口和未确认外部消费者，不能据此停止写入或删除。
+- 证据：`native-design-phase-a4-validation.md`；Chrome、daemon、live PostgreSQL、Core/Views、race/vet/sqlc 和 GitNexus 验证已执行。
+- 下一次复核：A5 把活动保存/调整消费者迁移到 immutable Design Document revision 后，逐项判断旧页面草稿入口是否可转 `write-retired`；本阶段仍无历史数据或对象删除授权。
+
 `feature/fengchen-fixed-v2` 只保留为取消的独立 Phase B 路线 checkpoint，不合入 `feature/fengchen`，不作为实现基线，也不计入产品或退役进度。
 
 后续条目使用以下模板追加：

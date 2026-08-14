@@ -57,6 +57,56 @@ func TestChromiumVerifierAcceptsNativeUIKitTarget(t *testing.T) {
 	}
 }
 
+func TestChromiumVerifierRequiresObservableInteraction(t *testing.T) {
+	server := newPreviewTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/changes":
+			fmt.Fprint(w, `<!doctype html><html><style>body{font:16px sans-serif;background:repeating-linear-gradient(135deg,#dbeafe 0 28px,#eef2ff 28px 56px)}main{margin:48px;padding:48px;background:#fff;border:8px solid #2563eb}button{padding:12px;background:#0f766e;color:#fff}</style><body><main><h1>Inbox</h1><button id="assign">Assign</button><p id="status"></p></main><script>document.getElementById("assign").addEventListener("click",()=>document.getElementById("status").textContent="Assigned")</script></body></html>`)
+		case "/noop":
+			fmt.Fprint(w, `<!doctype html><html><style>body{font:16px sans-serif;background:repeating-linear-gradient(135deg,#fee2e2 0 28px,#fff7ed 28px 56px)}main{margin:48px;padding:48px;background:#fff;border:8px solid #dc2626}button{padding:12px;background:#7c2d12;color:#fff}</style><body><main><h1>Inbox</h1><button>No operation</button></main></body></html>`)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+
+	verification := verifyPreviewTargets(t, []TargetURL{
+		{Target: Target{Kind: "preview", ID: "changes", Path: "prototype/index.html"}, URL: server.URL + "/changes", RequireInteraction: true},
+		{Target: Target{Kind: "preview", ID: "noop", Path: "prototype/noop.html"}, URL: server.URL + "/noop", RequireInteraction: true},
+	})
+	if verification.Passed || len(verification.Targets) != 2 {
+		t.Fatalf("verification = %+v", verification)
+	}
+	if got := verification.Targets[0]; !got.Passed || !got.InteractionRequired || got.InteractiveElementCount < 1 || !got.InteractionChanged {
+		t.Fatalf("changing interaction = %+v", got)
+	}
+	if got := verification.Targets[1]; got.Passed || got.FailureCode != FailureInteractionNoEffect || !got.InteractionRequired || got.InteractiveElementCount < 1 || got.InteractionChanged {
+		t.Fatalf("no-op interaction = %+v", got)
+	}
+}
+
+func TestValidateReceiptRequiresDeclaredInteractionEvidence(t *testing.T) {
+	target := Target{Kind: "preview", ID: "main", Path: "prototype/index.html"}
+	verification := successfulTestVerification([]Target{target})
+	digest := "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	receipt, err := NewReceipt(digest, verification)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateReceiptWithInteractions(receipt, digest, []Target{target}, map[string]bool{"main": true}); err == nil {
+		t.Fatal("receipt without required interaction evidence unexpectedly passed")
+	}
+	verification.Targets[0].InteractionRequired = true
+	verification.Targets[0].InteractiveElementCount = 1
+	verification.Targets[0].InteractionChanged = true
+	receipt, err = NewReceipt(digest, verification)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateReceiptWithInteractions(receipt, digest, []Target{target}, map[string]bool{"main": true}); err != nil {
+		t.Fatalf("interaction receipt rejected: %v", err)
+	}
+}
+
 func TestChromiumVerifierAcceptsVisibleMaskedAndClippedTargets(t *testing.T) {
 	server := newPreviewTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {

@@ -179,6 +179,51 @@ const domMetricsExpression = `(() => {
   };
 })()`
 
+const interactionStartExpression = `(() => {
+  const body = document.body;
+  if (!body) return { count: 0, before: 0 };
+  const visible = (element) => {
+    const style = getComputedStyle(element);
+    const rect = element.getBoundingClientRect();
+    return style.display !== 'none' && style.visibility !== 'hidden' && Number.parseFloat(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0 && !element.disabled;
+  };
+  const stateHash = () => {
+    let hash = 2166136261;
+    const controls = Array.from(body.querySelectorAll('input,select,textarea,details'));
+    const value = body.innerHTML + '\u0000' + controls.map((element) => String(element.value || '') + ':' + String(element.checked || false) + ':' + String(element.open || false)).join('|');
+    for (let index = 0; index < value.length; index += 1) {
+      hash ^= value.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    return hash >>> 0;
+  };
+  const elements = Array.from(body.querySelectorAll('button,input,select,textarea,summary,[role="button"]')).filter(visible).slice(0, 16);
+  const before = stateHash();
+  for (const element of elements) {
+    if (element instanceof HTMLInputElement && !['button','submit','reset','checkbox','radio'].includes(element.type)) {
+      element.value = element.value ? element.value + ' preview' : 'Preview';
+      element.dispatchEvent(new Event('input', { bubbles: true }));
+      element.dispatchEvent(new Event('change', { bubbles: true }));
+    } else if (element instanceof HTMLTextAreaElement) {
+      element.value = element.value ? element.value + ' preview' : 'Preview';
+      element.dispatchEvent(new Event('input', { bubbles: true }));
+      element.dispatchEvent(new Event('change', { bubbles: true }));
+    } else if (element instanceof HTMLSelectElement && element.options.length > 1) {
+      element.selectedIndex = element.selectedIndex === 0 ? 1 : 0;
+      element.dispatchEvent(new Event('change', { bubbles: true }));
+    } else {
+      element.click();
+    }
+  }
+  window.__multicaPreviewStateHash = stateHash;
+  return { count: elements.length, before };
+})()`
+
+const interactionEndExpression = `(() => {
+  const hash = window.__multicaPreviewStateHash;
+  return typeof hash === 'function' ? hash() : 0;
+})()`
+
 type ChromiumVerifier struct {
 	browserPath string
 	policy      Policy
@@ -194,6 +239,11 @@ type domMetrics struct {
 	BodyHeight                int  `json:"bodyHeight"`
 	ImageCount                int  `json:"imageCount"`
 	FailedImageCount          int  `json:"failedImageCount"`
+}
+
+type interactionStart struct {
+	Count  int    `json:"count"`
+	Before uint32 `json:"before"`
 }
 
 type networkEvidence struct {
@@ -349,6 +399,18 @@ func (v *ChromiumVerifier) captureTarget(parent context.Context, allowedOrigin s
 		return capture, nil
 	}
 
+	interaction := interactionStart{}
+	interactionAfter := uint32(0)
+	if target.RequireInteraction {
+		if err := chromedp.Run(targetCtx,
+			chromedp.Evaluate(interactionStartExpression, &interaction),
+			chromedp.Sleep(100*time.Millisecond),
+			chromedp.Evaluate(interactionEndExpression, &interactionAfter),
+		); err != nil {
+			return Capture{}, fmt.Errorf("exercise Design Preview interactions for %q: %w", target.Target.Path, err)
+		}
+	}
+
 	var dom domMetrics
 	var screenshot []byte
 	if err := chromedp.Run(targetCtx,
@@ -379,6 +441,9 @@ func (v *ChromiumVerifier) captureTarget(parent context.Context, allowedOrigin s
 		FailedResourceCount:       failedResources,
 		ConsoleErrorCount:         consoleErrors,
 		OutboundRequestCount:      outboundRequests,
+		InteractionRequired:       target.RequireInteraction,
+		InteractiveElementCount:   interaction.Count,
+		InteractionChanged:        target.RequireInteraction && interaction.Before != interactionAfter,
 		Screenshot:                screenshotMetrics,
 	}, nil
 }

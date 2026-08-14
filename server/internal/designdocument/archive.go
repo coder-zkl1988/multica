@@ -35,6 +35,9 @@ func CollectDirectory(root string, expected Binding) (CollectedPackage, error) {
 	if !report.Passed {
 		return collected, auditError(report)
 	}
+	if err := decodeStrict(files["coverage.json"], &collected.Coverage); err != nil {
+		return CollectedPackage{}, fmt.Errorf("decode audited design document coverage: %w", err)
+	}
 	raw, err := json.Marshal(manifest)
 	if err != nil {
 		return CollectedPackage{}, fmt.Errorf("encode design document manifest: %w", err)
@@ -48,7 +51,7 @@ func CollectDirectory(root string, expected Binding) (CollectedPackage, error) {
 	if err != nil {
 		return CollectedPackage{}, err
 	}
-	return CollectedPackage{Archive: archive, Manifest: validated.Manifest, Audit: validated.Audit}, nil
+	return CollectedPackage{Archive: archive, Manifest: validated.Manifest, Audit: validated.Audit, Coverage: validated.Coverage}, nil
 }
 
 // ValidateStagingDirectory checks the complete agent-authored package surface
@@ -118,7 +121,37 @@ func ValidateArchive(archive []byte, expected Binding) (ValidatedPackage, error)
 	if !report.Passed {
 		return result, auditError(report)
 	}
+	if err := decodeStrict(all["coverage.json"], &result.Coverage); err != nil {
+		return ValidatedPackage{}, fmt.Errorf("decode audited design document coverage: %w", err)
+	}
 	return result, nil
+}
+
+func ReadArchiveFile(archive []byte, expected Binding, name string) ([]byte, FileEntry, error) {
+	validated, err := ValidateArchive(archive, expected)
+	if err != nil {
+		return nil, FileEntry{}, err
+	}
+	var entry FileEntry
+	found := false
+	for _, candidate := range validated.Manifest.Files {
+		if candidate.Path == name {
+			entry, found = candidate, true
+			break
+		}
+	}
+	if !found {
+		return nil, FileEntry{}, errors.New("design document archive file is not declared")
+	}
+	files, err := designpackage.ReadArchive(archive, archiveLimits(), packagePolicy(true))
+	if err != nil {
+		return nil, FileEntry{}, mapSharedError(err)
+	}
+	contents, ok := files[name]
+	if !ok || name == "manifest.json" {
+		return nil, FileEntry{}, errors.New("design document archive file is unavailable")
+	}
+	return contents, entry, nil
 }
 
 func buildIndex(files map[string][]byte) ([]FileEntry, error) {

@@ -77,11 +77,13 @@ type CollectedPackage struct {
 	Archive  []byte      `json:"-"`
 	Manifest Manifest    `json:"manifest"`
 	Audit    AuditReport `json:"audit"`
+	Coverage Coverage    `json:"-"`
 }
 
 type ValidatedPackage struct {
 	Manifest Manifest    `json:"manifest"`
 	Audit    AuditReport `json:"audit"`
+	Coverage Coverage    `json:"-"`
 }
 
 type Brief struct {

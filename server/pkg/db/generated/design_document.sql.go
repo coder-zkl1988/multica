@@ -404,6 +404,38 @@ func (q *Queries) CreateDesignDocumentWithInputSnapshotAndFirstRevision(ctx cont
 	return i, err
 }
 
+const getDesignDocumentInProject = `-- name: GetDesignDocumentInProject :one
+SELECT id, workspace_id, project_id, issue_id, title, draft_revision_id, saved_revision_id, created_by, created_at, updated_at
+FROM design_document
+WHERE id = $1
+  AND workspace_id = $2
+  AND project_id = $3
+`
+
+type GetDesignDocumentInProjectParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ProjectID   pgtype.UUID `json:"project_id"`
+}
+
+func (q *Queries) GetDesignDocumentInProject(ctx context.Context, arg GetDesignDocumentInProjectParams) (DesignDocument, error) {
+	row := q.db.QueryRow(ctx, getDesignDocumentInProject, arg.ID, arg.WorkspaceID, arg.ProjectID)
+	var i DesignDocument
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.ProjectID,
+		&i.IssueID,
+		&i.Title,
+		&i.DraftRevisionID,
+		&i.SavedRevisionID,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getDesignDocumentInputSnapshotInProject = `-- name: GetDesignDocumentInputSnapshotInProject :one
 SELECT id, workspace_id, project_id, issue_id, task_id, agent_id, target_platform, schema_version, snapshot, snapshot_sha256, base_revision_id, base_content_digest, design_system_id, design_system_source_task_id, design_system_content_digest, created_at
 FROM design_document_input_snapshot
@@ -650,6 +682,7 @@ SELECT id, workspace_id, project_id, issue_id, title, draft_revision_id, saved_r
 FROM design_document
 WHERE workspace_id = $1
   AND project_id = $2
+  AND draft_revision_id IS NOT NULL
 ORDER BY created_at DESC, id
 `
 

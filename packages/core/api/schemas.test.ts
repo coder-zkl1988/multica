@@ -102,9 +102,32 @@ import {
   EMPTY_LIST_TEST_RUN_CASES_RESPONSE,
   EMPTY_TEST_CASE_RESULT_TIMELINE_RESPONSE,
   EMPTY_LIST_TEST_CAPABILITIES_RESPONSE,
+  DesignDocumentPreviewSchema,
 } from "./schemas";
 import { IssueViewSchema, IssueViewListSchema } from "./schemas";
 import { parseWithFallback } from "./schema";
+
+describe("Design Document preview schema", () => {
+  it("requires digest-bound browser verification evidence", () => {
+    const value = {
+      schema: "multica.design-document-preview/v1",
+      document_id: "document-1",
+      revision_id: "revision-1",
+      content_digest: `sha256:${"a".repeat(64)}`,
+      resource_base_url: "/api/design-document-previews/files/",
+      resource_access_token: "token",
+      resource_access_expires_at: "2026-08-14T01:00:00Z",
+      targets: [{ id: "main", kind: "page", path: "prototype/index.html" }],
+      preview: {
+        schema_version: "multica.design-preview-receipt/v1",
+        content_digest: `sha256:${"a".repeat(64)}`,
+        verification: { passed: true, browser: { name: "Chromium", version: "1" } },
+      },
+    };
+    expect(DesignDocumentPreviewSchema.parse(value).preview.verification.passed).toBe(true);
+    expect(DesignDocumentPreviewSchema.safeParse({ ...value, preview: undefined }).success).toBe(false);
+  });
+});
 
 const baseIssue = {
   id: "11111111-1111-1111-1111-111111111111",

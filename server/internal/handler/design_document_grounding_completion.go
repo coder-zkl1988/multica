@@ -98,47 +98,9 @@ func prepareDesignDocumentGroundingCompletion(task db.AgentTaskQueue, receipt *d
 }
 
 func persistDesignDocumentGroundingCompletion(ctx context.Context, queries *db.Queries, task db.AgentTaskQueue, prepared preparedDesignDocumentGrounding) error {
-	var taskContext struct {
-		Input       json.RawMessage `json:"input"`
-		WorkspaceID string          `json:"workspace_id"`
-		ProjectID   string          `json:"project_id"`
-		IssueID     string          `json:"issue_id"`
-		AgentID     string          `json:"agent_id"`
-	}
-	if err := json.Unmarshal(task.Context, &taskContext); err != nil {
-		return err
-	}
-	snapshotJSON, snapshotDigest, err := designdocument.SnapshotWithRepositoryGrounding(taskContext.Input, prepared.Grounding)
+	params, snapshotDigest, _, err := designDocumentGroundedSnapshot(task, prepared.Grounding)
 	if err != nil {
 		return err
-	}
-	var input struct {
-		SchemaVersion  string `json:"schema_version"`
-		TargetPlatform string `json:"target_platform"`
-		DesignSystem   *struct {
-			ID            string `json:"id"`
-			SourceTaskID  string `json:"source_task_id"`
-			ContentDigest string `json:"content_digest"`
-		} `json:"design_system"`
-	}
-	if err := json.Unmarshal(snapshotJSON, &input); err != nil {
-		return err
-	}
-	workspaceID, _ := parseUUIDValue(taskContext.WorkspaceID)
-	projectID, _ := parseUUIDValue(taskContext.ProjectID)
-	var issueID pgtype.UUID
-	if taskContext.IssueID != "" {
-		issueID, _ = parseUUIDValue(taskContext.IssueID)
-	}
-	params := designDocumentSnapshotParams{
-		WorkspaceID: workspaceID, ProjectID: projectID, IssueID: issueID,
-		TaskID: task.ID, AgentID: task.AgentID, TargetPlatform: pgtype.Text{String: input.TargetPlatform, Valid: input.TargetPlatform != ""},
-		SchemaVersion: input.SchemaVersion, Snapshot: snapshotJSON,
-	}
-	if input.DesignSystem != nil {
-		params.DesignSystemID, _ = parseUUIDValue(input.DesignSystem.ID)
-		params.DesignSystemSourceTaskID, _ = parseUUIDValue(input.DesignSystem.SourceTaskID)
-		params.DesignSystemContentDigest = input.DesignSystem.ContentDigest
 	}
 	snapshot, err := createDesignDocumentInputSnapshot(ctx, queries, params)
 	if err != nil {
@@ -148,7 +110,7 @@ func persistDesignDocumentGroundingCompletion(ctx context.Context, queries *db.Q
 		return errors.New("Design Document input snapshot digest mismatch")
 	}
 	updated, err := queries.SetDesignDocumentTaskInputSnapshot(ctx, db.SetDesignDocumentTaskInputSnapshotParams{
-		Input: snapshotJSON, InputSnapshotID: uuidToString(snapshot.ID), InputSnapshotSha256: snapshotDigest, ID: task.ID, AgentID: task.AgentID,
+		Input: params.Snapshot, InputSnapshotID: uuidToString(snapshot.ID), InputSnapshotSha256: snapshotDigest, ID: task.ID, AgentID: task.AgentID,
 	})
 	if err != nil {
 		return err

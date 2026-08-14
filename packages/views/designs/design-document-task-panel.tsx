@@ -2,11 +2,11 @@
 
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CircleStop, Clock3, FilePlus2, Loader2, Paperclip, Play, RotateCcw, X } from "lucide-react";
+import { CircleStop, Clock3, Eye, FilePlus2, Loader2, Paperclip, Play, RotateCcw, X } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@multica/core/api";
 import { designKeys } from "@multica/core/designs/keys";
-import { designDocumentTaskListOptions } from "@multica/core/designs/queries";
+import { designDocumentListOptions, designDocumentPreviewOptions, designDocumentTaskListOptions } from "@multica/core/designs/queries";
 import { useFileUpload } from "@multica/core/hooks/use-file-upload";
 import { useWorkspaceId } from "@multica/core/hooks";
 import type { Agent, DesignDocumentAgentTask, Issue, Project } from "@multica/core/types";
@@ -38,11 +38,17 @@ export function DesignDocumentTaskPanel({
   const [platform, setPlatform] = useState<"" | "web" | "mobile" | "cross_platform">("");
   const [attachments, setAttachments] = useState<UploadedInput[]>([]);
   const [submitError, setSubmitError] = useState("");
+  const [previewDocumentId, setPreviewDocumentId] = useState("");
+  const [previewTargetId, setPreviewTargetId] = useState("");
   const effectiveProjectId = projectId ?? selectedProjectId;
   const selectedProject = projects.find((project) => project.id === effectiveProjectId);
   const availableAgents = useMemo(() => agents.filter((agent) => !agent.archived_at && agent.runtime_id), [agents]);
 
   const { data: taskRows = [], isLoading: tasksLoading } = useQuery(designDocumentTaskListOptions(wsId, projectId));
+  const { data: documents = [] } = useQuery(designDocumentListOptions(wsId, effectiveProjectId));
+  const { data: preview, isLoading: previewLoading, isError: previewError } = useQuery(designDocumentPreviewOptions(wsId, effectiveProjectId, previewDocumentId));
+  const previewDocument = documents.find((document) => document.id === previewDocumentId);
+  const previewTarget = preview?.targets.find((target) => target.id === previewTargetId) ?? preview?.targets[0];
   const { data: projectIssues = [] } = useQuery({
     queryKey: ["design-document-task-issues", wsId, effectiveProjectId],
     queryFn: async () => (await api.listIssues({ project_id: effectiveProjectId, limit: 100 })).issues,
@@ -186,6 +192,38 @@ export function DesignDocumentTaskPanel({
         </div>
         {submitError ? <p role="alert" className="text-caption text-destructive">{submitError}</p> : null}
       </section>
+
+      {documents.length ? (
+        <section aria-labelledby="design-document-preview-heading" className="space-y-3 border-b pb-6">
+          <div className="flex items-center justify-between gap-3">
+            <h2 id="design-document-preview-heading" className="text-body font-semibold">设计草稿</h2>
+            <span className="font-mono text-caption text-muted-foreground">{documents.length}</span>
+          </div>
+          <div className="grid min-h-72 gap-4 lg:grid-cols-[14rem_minmax(0,1fr)]">
+            <div className="divide-y rounded-md border">
+              {documents.map((document) => (
+                <button key={document.id} type="button" aria-label={`预览 ${document.title}`} className={`flex w-full items-center gap-2 px-3 py-2.5 text-left text-body hover:bg-muted/50 ${previewDocumentId === document.id ? "bg-muted" : ""}`} onClick={() => { setPreviewDocumentId(document.id); setPreviewTargetId(""); }}>
+                  <Eye className="h-3.5 w-3.5 shrink-0" />
+                  <span className="truncate">{document.title}</span>
+                </button>
+              ))}
+            </div>
+            <div className="min-w-0">
+              {previewLoading ? <div className="flex min-h-72 items-center justify-center"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div> : previewError ? (
+                <div role="alert" className="flex min-h-72 items-center justify-center border border-dashed text-caption text-destructive">预览不可用</div>
+              ) : preview && previewTarget && previewDocument ? (
+                <div className="space-y-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    {preview.targets.length > 1 ? <div role="tablist" aria-label="预览页面" className="flex flex-wrap gap-1">{preview.targets.map((target) => <button key={target.id} type="button" role="tab" aria-selected={target.id === previewTarget.id} className={`h-8 rounded-md px-3 text-caption ${target.id === previewTarget.id ? "bg-foreground text-background" : "bg-muted text-muted-foreground"}`} onClick={() => setPreviewTargetId(target.id)}>{target.id}</button>)}</div> : <span />}
+                    <span className="text-caption text-muted-foreground">{preview.preview.verification.browser.name} {preview.preview.verification.browser.version} 技术校验通过</span>
+                  </div>
+                  <iframe title={`${previewDocument.title} · ${previewTarget.id}`} src={`${preview.resource_base_url}${previewTarget.path.split("/").map(encodeURIComponent).join("/")}`} sandbox="allow-scripts" referrerPolicy="no-referrer" className="aspect-[16/10] min-h-72 w-full rounded-md border bg-white" />
+                </div>
+              ) : <div className="flex min-h-72 items-center justify-center border border-dashed text-caption text-muted-foreground">选择草稿</div>}
+            </div>
+          </div>
+        </section>
+      ) : null}
 
       <section aria-labelledby="design-task-list-heading" className="space-y-3">
         <div className="flex items-center justify-between gap-3">

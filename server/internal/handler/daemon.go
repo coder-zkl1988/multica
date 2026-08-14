@@ -3349,6 +3349,7 @@ type TaskCompleteRequest struct {
 	// before persisting it as the new draft.
 	ProjectDesignSystemPackage *ProjectDesignSystemPackageReceipt  `json:"project_design_system_package,omitempty"`
 	DesignDocumentGrounding    *designdocument.RepositoryGrounding `json:"design_document_grounding,omitempty"`
+	DesignDocumentPackage      *DesignDocumentPackageReceipt       `json:"design_document_package,omitempty"`
 	// SessionRolloutMissing: the daemon withheld this task's Codex session
 	// because its rollout was missing (MUL-5305). Clear the resume pointer and
 	// flag the continuity gap for the next claim.
@@ -3373,6 +3374,19 @@ type ProjectDesignSystemPackageReceipt struct {
 	ArtifactIndex []projectdesignsystem.ArtifactIndexEntry `json:"artifact_index"`
 	Audit         projectdesignsystem.AuditReport          `json:"audit"`
 	Preview       designpreview.Receipt                    `json:"preview"`
+}
+
+type DesignDocumentPackageReceipt struct {
+	SchemaVersion       string                             `json:"schema_version"`
+	DocumentID          string                             `json:"document_id"`
+	RevisionID          string                             `json:"revision_id"`
+	ObjectKey           string                             `json:"object_key"`
+	ContentDigest       string                             `json:"content_digest"`
+	InputSnapshotSHA256 string                             `json:"input_snapshot_sha256"`
+	ArtifactIndex       []designdocument.FileEntry         `json:"artifact_index"`
+	Grounding           designdocument.RepositoryGrounding `json:"grounding"`
+	Audit               designdocument.AuditReport         `json:"audit"`
+	Preview             designpreview.Receipt              `json:"preview"`
 }
 
 const taskCompleteRequestMaxBytes int64 = 2 << 20
@@ -3543,18 +3557,18 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 			testGenerationCtx = &generationCtx
 		}
 	}
-	var preparedDesignDocument *preparedDesignDocumentGrounding
+	var preparedDesignDocument *preparedDesignDocumentPackage
 	if existingTask.Status == "running" && isDesignDocumentTaskContext(existingTask.Context) {
-		prepared, groundingErr := prepareDesignDocumentGroundingCompletion(existingTask, req.DesignDocumentGrounding)
-		if groundingErr != nil {
-			failedTask, failErr := h.TaskService.FailTask(r.Context(), existingTask.ID, groundingErr.Error(), req.SessionID, req.WorkDir, "design_document_grounding_invalid", req.SessionRolloutMissing, req.RetiredSessionID)
+		prepared, packageErr := prepareDesignDocumentPackageCompletion(r.Context(), existingTask, req.DesignDocumentPackage, h.Storage)
+		if packageErr != nil {
+			failedTask, failErr := h.TaskService.FailTask(r.Context(), existingTask.ID, packageErr.Error(), req.SessionID, req.WorkDir, "design_document_package_invalid", req.SessionRolloutMissing, req.RetiredSessionID)
 			if failErr != nil {
 				slog.Warn("Design Document grounding completion: failed to mark task failed", "task_id", taskID, "error", failErr)
 			} else if failedTask != nil {
 				h.TaskService.NotifyTaskFinished(*failedTask)
 				_ = h.Queries.DeleteTaskTokensByTask(r.Context(), failedTask.ID)
 			}
-			writeError(w, http.StatusBadRequest, "invalid Design Document grounding receipt: "+groundingErr.Error())
+			writeError(w, http.StatusBadRequest, "invalid Design Document package receipt: "+packageErr.Error())
 			return
 		}
 		preparedDesignDocument = &prepared
@@ -3603,7 +3617,7 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 	}
 	if preparedDesignDocument != nil {
 		completeWithMutation(func(qtx *db.Queries, completedTask db.AgentTaskQueue) error {
-			return persistDesignDocumentGroundingCompletion(r.Context(), qtx, completedTask, *preparedDesignDocument)
+			return persistDesignDocumentPackageCompletion(r.Context(), qtx, completedTask, *preparedDesignDocument)
 		})
 	} else if preparedRepositoryAnalysis != nil {
 		completeWithMutation(func(qtx *db.Queries, completedTask db.AgentTaskQueue) error {

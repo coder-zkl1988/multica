@@ -41,6 +41,22 @@ describe("ApiClient design document tasks", () => {
     await expect(client.createDesignDocumentAgentTask({ project_id: "project-1", agent_id: "agent-1", requirement: "Page" })).resolves.toMatchObject({ id: "", status: "failed" });
     await expect(client.listDesignDocumentAgentTasks()).resolves.toEqual({ tasks: [] });
   });
+
+  it("lists Design Documents and loads a digest-bound preview", async () => {
+    const document = { id: "document-1", project_id: "project-1", title: "Checkout", draft_revision_id: "revision-1", created_at: "2026-08-14T00:00:00Z", updated_at: "2026-08-14T00:00:00Z" };
+    const preview = { schema: "multica.design-document-preview/v1", document_id: "document-1", revision_id: "revision-1", content_digest: `sha256:${"a".repeat(64)}`, resource_base_url: "/api/design-document-previews/files/", resource_access_token: "token", resource_access_expires_at: "2026-08-14T01:00:00Z", targets: [{ id: "main", kind: "page", path: "prototype/index.html" }], preview: { schema_version: "multica.design-preview-receipt/v1", content_digest: `sha256:${"a".repeat(64)}`, verification: { passed: true, browser: { name: "Chromium", version: "1" } } } };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ documents: [document] }), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(preview), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+    await expect(client.listDesignDocuments("project-1")).resolves.toEqual({ documents: [expect.objectContaining(document)] });
+    await expect(client.getDesignDocumentPreview("document-1", "project-1")).resolves.toMatchObject(preview);
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "https://api.example.test/api/design-documents?project_id=project-1",
+      "https://api.example.test/api/design-documents/document-1/preview?project_id=project-1",
+    ]);
+  });
 });
 
 describe("ApiClient pull-request response schema", () => {

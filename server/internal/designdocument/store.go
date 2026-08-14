@@ -11,8 +11,8 @@ import (
 )
 
 type ArchiveReference struct {
-	ObjectKey     string
-	ContentDigest string
+	ObjectKey     string `json:"object_key"`
+	ContentDigest string `json:"content_digest"`
 }
 
 func ArchiveObjectKey(binding Binding, contentDigest string) (string, error) {

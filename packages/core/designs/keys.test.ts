@@ -32,6 +32,10 @@ describe("designKeys", () => {
       "system-1",
       "package-preview",
     ]);
+    expect(designKeys.documents("ws-1", "project-1")).toEqual(["designs", "ws-1", "documents", "project-1"]);
+    expect(designKeys.documentPreview("ws-1", "project-1", "document-1")).toEqual([
+      "designs", "ws-1", "documents", "project-1", "document-1", "preview",
+    ]);
   });
 
   it("keeps project design system query options workspace-scoped", () => {

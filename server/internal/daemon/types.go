@@ -285,6 +285,7 @@ type TaskResult struct {
 	ProjectDesignSystemArtifacts *ProjectDesignSystemArtifacts       `json:"-"`               // legacy three-file inline payload; collected for non-V2 tasks only
 	ProjectDesignSystemPackage   *ProjectDesignSystemPackageReceipt  `json:"-"`               // V2-native package receipt (archive + audit + preview); populated only on the V2 path
 	DesignDocumentGrounding      *designdocument.RepositoryGrounding `json:"-"`               // validated A3 grounding receipt; no local paths or source contents
+	DesignDocumentPackage        *DesignDocumentPackageReceipt       `json:"-"`               // A4 package receipt; grounding + Audit + Preview + archive identity
 }
 
 // ProjectDesignSystemArtifacts is the legacy inline three-file payload the

@@ -186,7 +186,9 @@ import type {
   CreateDesignDraftAgentTaskResponse,
   CreateDesignDocumentAgentTaskRequest,
   DesignDocumentAgentTask,
+  DesignDocumentPreview,
   ListDesignDocumentAgentTasksResponse,
+  ListDesignDocumentsResponse,
   CreateDesignDraftRequest,
   CreateDesignDeliveryRequest,
   CreateDesignFileRequest,
@@ -450,7 +452,9 @@ import {
   DesignSystemProfileSchema,
   CreateDesignDraftAgentTaskResponseSchema,
   DesignDocumentAgentTaskSchema,
+  DesignDocumentPreviewSchema,
   ListDesignDocumentAgentTasksResponseSchema,
+  ListDesignDocumentsResponseSchema,
   ProjectDesignSystemSchema,
   ProjectDesignSystemPackagePreviewSchema,
   DesignRestoreTaskSchema,
@@ -461,7 +465,9 @@ import {
   EMPTY_DESIGN_SYSTEM_PROFILE,
   EMPTY_CREATE_DESIGN_DRAFT_AGENT_TASK_RESPONSE,
   EMPTY_DESIGN_DOCUMENT_AGENT_TASK,
+  EMPTY_DESIGN_DOCUMENT_PREVIEW,
   EMPTY_LIST_DESIGN_DOCUMENT_AGENT_TASKS_RESPONSE,
+  EMPTY_LIST_DESIGN_DOCUMENTS_RESPONSE,
   EMPTY_PROJECT_DESIGN_SYSTEM,
   EMPTY_PROJECT_DESIGN_SYSTEM_PACKAGE_PREVIEW,
   EMPTY_DESIGN_RESTORE_TASK,
@@ -3541,6 +3547,20 @@ export class ApiClient {
       EMPTY_LIST_DESIGN_DOCUMENT_AGENT_TASKS_RESPONSE,
       { endpoint: "GET /api/design-documents/agent-tasks" },
     );
+  }
+
+  async listDesignDocuments(projectId: string): Promise<ListDesignDocumentsResponse> {
+    const raw = await this.fetch<unknown>(`/api/design-documents?project_id=${encodeURIComponent(projectId)}`);
+    return parseWithFallback(raw, ListDesignDocumentsResponseSchema, EMPTY_LIST_DESIGN_DOCUMENTS_RESPONSE, {
+      endpoint: "GET /api/design-documents",
+    });
+  }
+
+  async getDesignDocumentPreview(documentId: string, projectId: string): Promise<DesignDocumentPreview> {
+    const raw = await this.fetch<unknown>(`/api/design-documents/${encodeURIComponent(documentId)}/preview?project_id=${encodeURIComponent(projectId)}`);
+    return parseWithFallback(raw, DesignDocumentPreviewSchema, { ...EMPTY_DESIGN_DOCUMENT_PREVIEW, document_id: documentId }, {
+      endpoint: "GET /api/design-documents/{id}/preview",
+    });
   }
 
   async getDesignDraft(id: string): Promise<DesignDraft> {

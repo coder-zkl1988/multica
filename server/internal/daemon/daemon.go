@@ -205,6 +205,7 @@ type terminalTaskReport struct {
 	projectDesignSystemArtifacts *ProjectDesignSystemArtifacts
 	projectDesignSystemPackage   *ProjectDesignSystemPackageReceipt
 	designDocumentGrounding      *designdocument.RepositoryGrounding
+	designDocumentPackage        *DesignDocumentPackageReceipt
 	// sessionRolloutMissing is true when the daemon withheld this task's Codex
 	// session because its rollout was not in the store (MUL-5305). The server
 	// clears the resume pointer and flags the continuity gap for the next claim.
@@ -4930,6 +4931,7 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 			projectDesignSystemArtifacts: result.ProjectDesignSystemArtifacts,
 			projectDesignSystemPackage:   result.ProjectDesignSystemPackage,
 			designDocumentGrounding:      result.DesignDocumentGrounding,
+			designDocumentPackage:        result.DesignDocumentPackage,
 			sessionRolloutMissing:        result.SessionRolloutMissing,
 			retiredSessionID:             result.RetiredSessionID,
 		}); failErr != nil {
@@ -5203,6 +5205,7 @@ func (d *Daemon) reportTaskResult(ctx context.Context, taskID string, result Tas
 			projectDesignSystemArtifacts: result.ProjectDesignSystemArtifacts,
 			projectDesignSystemPackage:   result.ProjectDesignSystemPackage,
 			designDocumentGrounding:      result.DesignDocumentGrounding,
+			designDocumentPackage:        result.DesignDocumentPackage,
 			sessionRolloutMissing:        result.SessionRolloutMissing,
 			retiredSessionID:             result.RetiredSessionID,
 		})
@@ -5244,6 +5247,7 @@ func (d *Daemon) reportTaskResult(ctx context.Context, taskID string, result Tas
 			projectDesignSystemArtifacts: result.ProjectDesignSystemArtifacts,
 			projectDesignSystemPackage:   result.ProjectDesignSystemPackage,
 			designDocumentGrounding:      result.DesignDocumentGrounding,
+			designDocumentPackage:        result.DesignDocumentPackage,
 			sessionRolloutMissing:        result.SessionRolloutMissing,
 			retiredSessionID:             result.RetiredSessionID,
 		}); failErr != nil {
@@ -5279,6 +5283,7 @@ func (d *Daemon) reportTaskResult(ctx context.Context, taskID string, result Tas
 			projectDesignSystemArtifacts: result.ProjectDesignSystemArtifacts,
 			projectDesignSystemPackage:   result.ProjectDesignSystemPackage,
 			designDocumentGrounding:      result.DesignDocumentGrounding,
+			designDocumentPackage:        result.DesignDocumentPackage,
 			sessionRolloutMissing:        result.SessionRolloutMissing,
 			retiredSessionID:             result.RetiredSessionID,
 		}); err != nil {
@@ -5298,7 +5303,7 @@ func (d *Daemon) reportTerminalTask(parentCtx context.Context, report terminalTa
 
 	switch report.kind {
 	case terminalTaskReportComplete:
-		return d.client.CompleteTask(ctx, report.taskID, report.output, report.branchName, report.sessionID, report.workDir, report.projectDesignSystemArtifacts, report.projectDesignSystemPackage, report.designDocumentGrounding, report.sessionRolloutMissing, report.retiredSessionID)
+		return d.client.CompleteTask(ctx, report.taskID, report.output, report.branchName, report.sessionID, report.workDir, report.projectDesignSystemArtifacts, report.projectDesignSystemPackage, report.designDocumentGrounding, report.designDocumentPackage, report.sessionRolloutMissing, report.retiredSessionID)
 	case terminalTaskReportFail:
 		return d.client.FailTask(ctx, report.taskID, report.errorMessage, report.sessionID, report.workDir, report.failureReason, report.sessionRolloutMissing, report.retiredSessionID)
 	default:
@@ -6281,6 +6286,15 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 				return
 			}
 			taskResult.DesignDocumentGrounding = receipt
+			finalized, finalizeErr := d.finalizeDesignDocumentResultFromDaemon(ctx, task, taskResult, receipt, env.OutputDir)
+			if finalizeErr != nil {
+				taskResult.Status = "blocked"
+				taskResult.Comment = "Design Document finalize failed: " + finalizeErr.Error()
+				taskResult.FailureReason = designDocumentFailureAudit
+				taskResult.DesignDocumentGrounding = nil
+				return
+			}
+			taskResult = finalized
 		}()
 	}
 	_ = d.client.ReportProgress(ctx, task.ID, fmt.Sprintf("Launching %s", provider), 1, 2)

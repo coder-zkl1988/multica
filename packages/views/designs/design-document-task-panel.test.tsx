@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => ({
   create: vi.fn(),
   list: vi.fn(),
   listIssues: vi.fn(),
+  listDocuments: vi.fn(),
+  getPreview: vi.fn(),
   upload: vi.fn(),
 }));
 
@@ -16,6 +18,8 @@ vi.mock("@multica/core/api", () => ({
     createDesignDocumentAgentTask: mocks.create,
     listDesignDocumentAgentTasks: mocks.list,
     listIssues: mocks.listIssues,
+    listDesignDocuments: mocks.listDocuments,
+    getDesignDocumentPreview: mocks.getPreview,
     uploadFile: mocks.upload,
     deleteAttachment: vi.fn(),
     cancelTaskById: vi.fn(),
@@ -43,6 +47,8 @@ describe("DesignDocumentTaskPanel", () => {
     mocks.create.mockReset();
     mocks.list.mockReset().mockResolvedValue({ tasks: [] });
     mocks.listIssues.mockReset().mockResolvedValue({ issues: [], total: 0 });
+    mocks.listDocuments.mockReset().mockResolvedValue({ documents: [] });
+    mocks.getPreview.mockReset();
   });
 
   it("opens the project only after the server accepts the task", async () => {
@@ -98,5 +104,23 @@ describe("DesignDocumentTaskPanel", () => {
       project_id: "project-1", agent_id: "agent-1", issue_id: "issue-1", requirement: "Customer detail",
       target_platform: "web", repository_grounding_mode: "unavailable", retry_task_id: "failed-1",
     });
+  });
+
+  it("opens a completed first draft in the sandboxed package preview", async () => {
+    const user = userEvent.setup();
+    mocks.listDocuments.mockResolvedValue({ documents: [{ id: "document-1", project_id: "project-1", title: "Checkout", draft_revision_id: "revision-1", created_at: "2026-08-14T00:00:00Z", updated_at: "2026-08-14T00:00:00Z" }] });
+    mocks.getPreview.mockResolvedValue({
+      schema: "multica.design-document-preview/v1", document_id: "document-1", revision_id: "revision-1",
+      content_digest: `sha256:${"a".repeat(64)}`, resource_base_url: "/api/design-document-previews/scope/files/",
+      resource_access_token: "token", resource_access_expires_at: "2026-08-14T01:00:00Z",
+      targets: [{ id: "main", kind: "page", path: "prototype/index.html" }],
+      preview: { schema_version: "multica.design-preview-receipt/v1", content_digest: `sha256:${"a".repeat(64)}`, verification: { passed: true, browser: { name: "Chromium", version: "1" } } },
+    });
+    renderWithClient(<DesignDocumentTaskPanel projects={projects} agents={agents} projectId="project-1" />);
+    await user.click(await screen.findByRole("button", { name: "预览 Checkout" }));
+    const frame = await screen.findByTitle("Checkout · main");
+    expect(frame).toHaveAttribute("src", "/api/design-document-previews/scope/files/prototype/index.html");
+    expect(frame).toHaveAttribute("sandbox", "allow-scripts");
+    expect(screen.getByText("Chromium 1 技术校验通过")).toBeInTheDocument();
   });
 });

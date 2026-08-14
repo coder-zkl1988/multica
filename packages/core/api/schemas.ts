@@ -69,7 +69,9 @@ import type {
   WebhookDelivery,
   CreateDesignDraftAgentTaskResponse,
   DesignDocumentAgentTask,
+  DesignDocumentPreview,
   ListDesignDocumentAgentTasksResponse,
+  ListDesignDocumentsResponse,
   DesignDelivery,
   DesignDraft,
   DesignDraftMaterializeResponse,
@@ -1283,6 +1285,45 @@ export const EMPTY_DESIGN_DOCUMENT_AGENT_TASK: DesignDocumentAgentTask = {
 };
 
 export const EMPTY_LIST_DESIGN_DOCUMENT_AGENT_TASKS_RESPONSE: ListDesignDocumentAgentTasksResponse = { tasks: [] };
+
+export const DesignDocumentSchema = z.object({
+  id: z.string(),
+  project_id: z.string(),
+  issue_id: z.string().optional(),
+  title: z.string(),
+  draft_revision_id: z.string().optional(),
+  saved_revision_id: z.string().optional(),
+  created_at: z.string(),
+  updated_at: z.string(),
+}).loose();
+
+export const ListDesignDocumentsResponseSchema = z.object({ documents: z.array(DesignDocumentSchema).default([]) }).loose();
+export const EMPTY_LIST_DESIGN_DOCUMENTS_RESPONSE: ListDesignDocumentsResponse = { documents: [] };
+
+export const DesignDocumentPreviewSchema = z.object({
+  schema: z.literal("multica.design-document-preview/v1"),
+  document_id: z.string(),
+  revision_id: z.string(),
+  content_digest: z.string(),
+  resource_base_url: z.string(),
+  resource_access_token: z.string(),
+  resource_access_expires_at: z.string(),
+  targets: z.array(z.object({ id: z.string(), kind: z.literal("page"), path: z.string() })),
+  preview: z.object({
+    schema_version: z.literal("multica.design-preview-receipt/v1"),
+    content_digest: z.string(),
+    verification: z.object({
+      passed: z.boolean(),
+      browser: z.object({ name: z.string(), version: z.string() }).loose(),
+    }).loose(),
+  }).loose(),
+}).loose();
+
+export const EMPTY_DESIGN_DOCUMENT_PREVIEW: DesignDocumentPreview = {
+  schema: "multica.design-document-preview/v1", document_id: "", revision_id: "", content_digest: "",
+  resource_base_url: "", resource_access_token: "", resource_access_expires_at: "", targets: [],
+  preview: { schema_version: "multica.design-preview-receipt/v1", content_digest: "", verification: { passed: false, browser: { name: "", version: "" } } },
+};
 
 export const DesignDraftMaterializeResponseSchema = z.object({
   draft: DesignDraftSchema,
