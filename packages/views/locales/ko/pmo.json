@@ -135,6 +135,7 @@
     "error_redacted": "세부 정보 숨김",
     "trigger_manual": "수동",
     "trigger_scheduled": "정기",
+    "view_log": "실행 로그 보기",
     "summary": {
       "creates_other": "생성 {{count}}건",
       "incoming_fields_other": "외부 업데이트 필드 {{count}}개",

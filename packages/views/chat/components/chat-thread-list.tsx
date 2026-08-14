@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Archive,
@@ -8,6 +9,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock,
+  Copy,
   Loader2,
   Pin,
   PinOff,
@@ -15,6 +17,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
+import { copyText } from "@multica/ui/lib/clipboard";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { paths, useWorkspaceSlug } from "@multica/core/paths";
 import { useWorkspacePresenceMap } from "@multica/core/agents";
@@ -201,6 +204,16 @@ export function ChatThreadList({
     });
   };
 
+  const copySessionId = (session: ChatSession) => {
+    void copyText(session.id).then((ok) => {
+      if (ok) {
+        toast.success(t(($) => $.message_list.copied_toast));
+      } else {
+        toast.error(t(($) => $.message_list.copy_failed_toast));
+      }
+    });
+  };
+
   const renderRow = (session: ChatSession) => {
     const isCurrent = session.id === activeSessionId;
     const agent = agentById.get(session.agent_id) ?? null;
@@ -268,6 +281,12 @@ export function ChatThreadList({
       view === "archived"
         ? [
             {
+              key: "copy-session-id",
+              icon: <Copy className="size-3.5" />,
+              label: t(($) => $.list.copy_session_id),
+              onSelect: () => copySessionId(session),
+            },
+            {
               key: "unarchive",
               icon: <ArchiveRestore className="size-3.5" />,
               label: t(($) => $.list.unarchive),
@@ -283,6 +302,12 @@ export function ChatThreadList({
             },
           ]
         : [
+            {
+              key: "copy-session-id",
+              icon: <Copy className="size-3.5" />,
+              label: t(($) => $.list.copy_session_id),
+              onSelect: () => copySessionId(session),
+            },
             {
               key: "pin",
               icon: session.pinned ? (

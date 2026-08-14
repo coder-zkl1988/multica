@@ -28,6 +28,7 @@ export type DiffFilter =
   | "unresolved";
 
 export interface DiffFieldRow {
+  entityName: string;
   entityKey: string;
   externalType: string;
   action: EntityAction;
@@ -57,6 +58,17 @@ export function asString(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
+function entityTitle(fields: Record<string, unknown>, entityKey: string): string {
+  const raw = fields.title;
+  if (!raw || typeof raw !== "object") return entityKey;
+  const title = raw as Record<string, unknown>;
+  return asString(title.external)
+    || asString(title.local)
+    || asString(title.baseline_external)
+    || asString(title.baseline_local)
+    || entityKey;
+}
+
 export function parseEntityAction(value: unknown): EntityAction {
   return value === "create" || value === "update" || value === "external_removed"
     ? value
@@ -84,11 +96,13 @@ export function parseDiffView(raw: unknown): DiffView | null {
     const fields = entity.fields && typeof entity.fields === "object"
       ? (entity.fields as Record<string, unknown>)
       : {};
+    const entityName = entityTitle(fields, entityKey);
     for (const [field, diff] of Object.entries(fields)) {
       if (!diff || typeof diff !== "object") continue;
       const d = diff as Record<string, unknown>;
       const decision = parseDecision(d.decision);
       rows.push({
+        entityName,
         entityKey,
         externalType,
         action,

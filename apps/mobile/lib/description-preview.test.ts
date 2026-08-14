@@ -47,4 +47,27 @@ describe("descriptionPreview", () => {
     expect(descriptionPreview("   \n  ")).toBe("");
     expect(descriptionPreview("")).toBe("");
   });
+
+  it("drops channel-media provenance left behind by an image", () => {
+    const attachmentId = "0f8a1b2c-3d4e-4f50-9a6b-7c8d9e0f1a2b";
+    expect(
+      descriptionPreview(
+        `Text\n\n![](image.png)\n\n<!-- multica:channel-media:${attachmentId} -->`,
+      ),
+    ).toBe("Text");
+  });
+
+  it("unwraps escaped and nested links without leaving punctuation", () => {
+    expect(
+      descriptionPreview(
+        "See \\[wiki\\]([https://example.test/x](https://example.test/x)) now",
+      ),
+    ).toBe("See wiki now");
+  });
+
+  it("unescapes CommonMark punctuation but preserves literal backslashes", () => {
+    expect(descriptionPreview("cost \\$5 and C:\\Users\\zain")).toBe(
+      "cost $5 and C:\\Users\\zain",
+    );
+  });
 });

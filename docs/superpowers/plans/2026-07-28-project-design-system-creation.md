@@ -1100,4 +1100,3 @@ Expected: affected flows are limited to project design-system creation, speciali
 - [ ] API response parsing has malformed-response fallbacks.
 - [ ] SQL and generated SQL comply with the repository's no-`JOIN` push rule.
 - [ ] Live acceptance verifies prompt input, three files, Server validation, database digest, and actual visuals.
-

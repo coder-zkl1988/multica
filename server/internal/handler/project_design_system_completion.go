@@ -518,7 +518,7 @@ func nativeReceiptReport(receipt designpreview.Receipt) ([]byte, error) {
 }
 
 func (h *Handler) failInvalidProjectDesignSystemCompletion(ctx context.Context, task db.AgentTaskQueue, req TaskCompleteRequest, cause error) {
-	failedTask, err := h.TaskService.FailTask(ctx, task.ID, cause.Error(), req.SessionID, req.WorkDir, "project_design_system_invalid_artifacts", req.SessionRolloutMissing, req.RetiredSessionID)
+	failedTask, err := h.TaskService.FailTask(ctx, task.ID, cause.Error(), req.SessionID, req.WorkDir, req.BranchName, "project_design_system_invalid_artifacts", req.SessionRolloutMissing, req.RetiredSessionID)
 	if err != nil || failedTask == nil {
 		return
 	}

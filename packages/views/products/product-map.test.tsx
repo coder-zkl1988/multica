@@ -62,6 +62,7 @@ describe("ProductNodeDetail", () => {
     renderWithI18n(<ProductNodeDetail node={pendingNode} />);
     expect(screen.getByText("院务系统")).toBeTruthy();
     expect(screen.getAllByText(/Pending confirmation/).length).toBeGreaterThan(0);
+    expect(screen.getByText("no pmo data yet")).toBeTruthy();
     expect(screen.queryByText(/Released/)).toBeNull();
   });
 

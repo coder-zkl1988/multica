@@ -1,9 +1,9 @@
 # Multica 原生设计引擎产品与技术方案
 
-> 日期：2026-08-05  
-> 状态：已确认  
-> 范围：项目设计体系、后续在线设计任务、模板与社区资源的共同引擎基础  
-> 核心依据：Open Design 的产品流程、能力语义、分层资源包和质量门禁  
+> 日期：2026-08-05
+> 状态：已确认
+> 范围：项目设计体系、后续在线设计任务、模板与社区资源的共同引擎基础
+> 核心依据：Open Design 的产品流程、能力语义、分层资源包和质量门禁
 > 明确排除：Open Design Worker、Daemon、Runtime 和第二套 Project 控制面
 >
 > 2026-08-12 范围更新：本方案原定后续阶段实现的 `multica.design-document/v1` 已由 DC-041 至 DC-046 纳入新的 Phase A；产物、revision、仓库 Grounding、浏览器门禁和实施子切片以 [Native Design Phase A：页面 Design Document 产品与技术方案](./2026-08-12-native-design-phase-a-design-document-design.md) 为准。本文其余原生引擎原则继续有效。

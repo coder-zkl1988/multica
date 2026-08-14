@@ -75,6 +75,11 @@ make check            # Full verification pipeline
    - 后端日志：migration / ERR / FTL / panic / daemon heartbeat
    - caddy 与 multica-iworker.service 状态；20s 后稳定性复检、磁盘、回滚产物清单
 
+### PR 提交流程（fork）
+
+- PR 建到本仓库（`coder-zkl1988/multica`）自己的 `main`，不要建到 `multica-ai/multica`。
+- 分支从本仓库 `main` 拉出；提 PR 前用 `git rev-list --count origin/main..HEAD` 确认只包含自己的提交。
+
 See CLAUDE.md for the authoritative rules and common commands.
 See CLAUDE.md for the complete command reference.
 

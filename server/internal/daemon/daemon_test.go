@@ -2018,12 +2018,17 @@ func TestGateResumeToReusedWorkdir(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name        string
-		sessionID   string
-		priorDir    string
-		envDir      string
-		wantSession string
-		wantReused  bool
+		name      string
+		sessionID string
+		priorDir  string
+		envDir    string
+		// sessionHomeUnreachable models a provider whose session store this run
+		// cannot reach even though the workdir matches — the Hermes
+		// local_directory case (GH #6806). Zero value keeps the cwd-keyed
+		// providers' behaviour.
+		sessionHomeUnreachable bool
+		wantSession            string
+		wantReused             bool
 	}{
 		{
 			name:        "same workdir keeps session",
@@ -2057,6 +2062,19 @@ func TestGateResumeToReusedWorkdir(t *testing.T) {
 			wantSession: "",
 			wantReused:  false,
 		},
+		{
+			// The local_directory flow: workdir is the user's own directory
+			// and therefore identical across tasks, but reuse is disabled so
+			// the session store is a fresh, empty one. Forwarding the id here
+			// is what made every turn silently restart the conversation.
+			name:                   "matching workdir but unreachable session store drops session",
+			sessionID:              "sess-1",
+			priorDir:               "/repo",
+			envDir:                 "/repo",
+			sessionHomeUnreachable: true,
+			wantSession:            "",
+			wantReused:             false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -2064,7 +2082,7 @@ func TestGateResumeToReusedWorkdir(t *testing.T) {
 			task := Task{PriorSessionID: tt.sessionID, PriorWorkDir: tt.priorDir}
 			taskCtx := execenv.TaskContextForEnv{PriorSessionResumed: tt.sessionID != ""}
 
-			reused := gateResumeToReusedWorkdir(&task, &taskCtx, tt.envDir, slog.Default())
+			reused := gateResumeToReusedWorkdir(&task, &taskCtx, tt.envDir, !tt.sessionHomeUnreachable, slog.Default())
 
 			if reused != tt.wantReused {
 				t.Fatalf("reused = %v, want %v", reused, tt.wantReused)
@@ -2080,6 +2098,79 @@ func TestGateResumeToReusedWorkdir(t *testing.T) {
 			wantUnavailable := tt.sessionID != "" && tt.wantSession == ""
 			if taskCtx.PriorSessionResumeUnavailable != wantUnavailable {
 				t.Fatalf("PriorSessionResumeUnavailable = %v, want %v", taskCtx.PriorSessionResumeUnavailable, wantUnavailable)
+			}
+		})
+	}
+}
+
+func TestSessionHomeReachable(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		provider   string
+		env        *execenv.Environment
+		envReused  bool
+		wantReturn bool
+	}{
+		{
+			// Every non-Hermes backend keys its sessions by cwd (or resolves
+			// its own store), so this predicate must not narrow their gate.
+			name:       "cwd-keyed provider is always reachable",
+			provider:   "claude",
+			env:        &execenv.Environment{},
+			wantReturn: true,
+		},
+		{
+			name:     "hermes with a mounted store holding history",
+			provider: "hermes",
+			env: &execenv.Environment{
+				HermesSessionStore:          "/profile/hermes-sessions/a/default/issue-1",
+				HermesSessionHistoryPresent: true,
+			},
+			wantReturn: true,
+		},
+		{
+			// Mounted onto nothing: a first turn, a store the GC reclaimed
+			// between turns, a switched profile, or a dangling link. Reading
+			// "mounted" as "resumable" here would forward a dead session id.
+			name:       "hermes with a mounted but empty session store",
+			provider:   "hermes",
+			env:        &execenv.Environment{HermesSessionStore: "/profile/hermes-sessions/a/default/issue-1"},
+			wantReturn: false,
+		},
+		{
+			// A store is mounted, so the env-reuse fallback must not override
+			// the store's own answer — the transcript lives in the store now.
+			name:       "hermes with an empty store is not rescued by env reuse",
+			provider:   "hermes",
+			env:        &execenv.Environment{HermesSessionStore: "/profile/hermes-sessions/a/default/issue-1"},
+			envReused:  true,
+			wantReturn: false,
+		},
+		{
+			// No store, but the prior task's env root — and therefore its
+			// overlay's task-local state.db — carried over.
+			name:       "hermes on a reused env root",
+			provider:   "hermes",
+			env:        &execenv.Environment{},
+			envReused:  true,
+			wantReturn: true,
+		},
+		{
+			// The GH #6806 shape: a fresh overlay with an empty state.db, so
+			// no session recorded by a prior task can be found here.
+			name:       "hermes on a fresh overlay with no store",
+			provider:   "hermes",
+			env:        &execenv.Environment{},
+			wantReturn: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := sessionHomeReachable(tt.provider, tt.env, tt.envReused); got != tt.wantReturn {
+				t.Fatalf("sessionHomeReachable() = %v, want %v", got, tt.wantReturn)
 			}
 		})
 	}
@@ -2309,6 +2400,41 @@ func TestExecuteAndDrain_FlushesTranscriptBeforeReturningResult(t *testing.T) {
 
 	if got := rec.snapshot(); len(got) != 2 {
 		t.Fatalf("expected the transcript flushed before the result hand-off, got %d messages: %+v", len(got), got)
+	}
+}
+
+// TestExecuteAndDrain_PreservesTranscriptOrder pins the backend's message
+// order even when buffered thinking/text is interrupted by tool events.
+func TestExecuteAndDrain_PreservesTranscriptOrder(t *testing.T) {
+	t.Parallel()
+
+	msgCh := make(chan agent.Message, 4)
+	msgCh <- agent.Message{Type: agent.MessageThinking, Content: "inspect"}
+	msgCh <- agent.Message{Type: agent.MessageToolUse, Tool: "bash", CallID: "call-1"}
+	msgCh <- agent.Message{Type: agent.MessageToolResult, Tool: "bash", CallID: "call-1", Output: "ok"}
+	msgCh <- agent.Message{Type: agent.MessageText, Content: "done"}
+	close(msgCh)
+	resultCh := make(chan agent.Result, 1)
+	resultCh <- agent.Result{Status: "completed", Output: "done"}
+
+	d, rec := newTranscriptRecorder(t)
+	_, _, err := d.executeAndDrain(context.Background(), sessionBackend{session: &agent.Session{
+		Messages: msgCh,
+		Result:   resultCh,
+	}}, "p", agent.ExecOptions{}, slog.Default(), "task-order", "", new(atomic.Int32))
+	if err != nil {
+		t.Fatalf("executeAndDrain: %v", err)
+	}
+
+	got := rec.snapshot()
+	want := []string{"thinking", "tool_use", "tool_result", "text"}
+	if len(got) != len(want) {
+		t.Fatalf("expected %d messages, got %d: %+v", len(want), len(got), got)
+	}
+	for i, typ := range want {
+		if got[i].Type != typ || got[i].Seq != i+1 {
+			t.Fatalf("message %d: expected type=%s seq=%d, got %+v", i, typ, i+1, got[i])
+		}
 	}
 }
 

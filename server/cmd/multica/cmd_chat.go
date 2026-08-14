@@ -47,14 +47,91 @@ channel.`,
 	RunE: runChatThread,
 }
 
+var chatSessionCmd = &cobra.Command{
+	Use:   "session",
+	Short: "Inspect and continue Web Chat sessions",
+	Long: `Inspect Web Chat sessions by session id.
+
+These commands read Web Chat sessions, not external channel threads. They use
+the authenticated server API and the same session ownership/private-agent gates
+as the Web Chat UI.`,
+}
+
+var chatSessionGetCmd = &cobra.Command{
+	Use:   "get <session-id>",
+	Short: "Read Web Chat session details",
+	Args:  cobra.ExactArgs(1),
+	RunE:  runChatSessionGet,
+}
+
+var chatSessionMessagesCmd = &cobra.Command{
+	Use:   "messages <session-id>",
+	Short: "Read Web Chat session messages",
+	Args:  cobra.ExactArgs(1),
+	RunE:  runChatSessionMessages,
+}
+
+var chatSessionPendingTaskCmd = &cobra.Command{
+	Use:   "pending-task <session-id>",
+	Short: "Read the current pending task for a Web Chat session",
+	Args:  cobra.ExactArgs(1),
+	RunE:  runChatSessionPendingTask,
+}
+
+var chatSessionTasksCmd = &cobra.Command{
+	Use:   "tasks <session-id>",
+	Short: "List historical tasks for a Web Chat session",
+	Args:  cobra.ExactArgs(1),
+	RunE:  runChatSessionTasks,
+}
+
+var chatSessionTaskMessagesCmd = &cobra.Command{
+	Use:   "task-messages <session-id>",
+	Short: "Read task messages for a Web Chat session task",
+	Args:  cobra.ExactArgs(1),
+	RunE:  runChatSessionTaskMessages,
+}
+
+var chatSessionSendCmd = &cobra.Command{
+	Use:   "send <session-id>",
+	Short: "Send a message to a Web Chat session",
+	Args:  cobra.ExactArgs(1),
+	RunE:  runChatSessionSend,
+}
+
 func init() {
 	for _, c := range []*cobra.Command{chatHistoryCmd, chatThreadCmd} {
 		c.Flags().Int("limit", 0, "Maximum number of messages to return (the server clamps the range)")
 		c.Flags().String("before", "", "Opaque cursor (a next_cursor from a prior page) to read older messages")
 		c.Flags().String("output", "json", "Output format: table or json")
 	}
+	for _, c := range []*cobra.Command{
+		chatSessionGetCmd,
+		chatSessionMessagesCmd,
+		chatSessionPendingTaskCmd,
+		chatSessionTasksCmd,
+		chatSessionTaskMessagesCmd,
+		chatSessionSendCmd,
+	} {
+		c.Flags().String("output", "json", "Output format: json")
+	}
+	chatSessionTaskMessagesCmd.Flags().String("task", "", "Task id to read; defaults to the most recent task for the session")
+	chatSessionTaskMessagesCmd.Flags().Int("since", 0, "Only return messages with seq greater than this value")
+	chatSessionSendCmd.Flags().String("content", "", "Message content (decodes \\n, \\r, \\t, \\\\; pipe via --content-stdin for multi-line bodies)")
+	chatSessionSendCmd.Flags().Bool("content-stdin", false, "Read message content from stdin (preserves multi-line content verbatim)")
+	chatSessionSendCmd.Flags().String("content-file", "", "Read message content from a UTF-8 file. The path must be inside the current working directory unless --allow-external-file is set.")
+	chatSessionSendCmd.Flags().Bool("allow-external-file", false, "Allow --content-file to read a path outside the current working directory")
+	chatSessionCmd.AddCommand(
+		chatSessionGetCmd,
+		chatSessionMessagesCmd,
+		chatSessionPendingTaskCmd,
+		chatSessionTasksCmd,
+		chatSessionTaskMessagesCmd,
+		chatSessionSendCmd,
+	)
 	chatCmd.AddCommand(chatHistoryCmd)
 	chatCmd.AddCommand(chatThreadCmd)
+	chatCmd.AddCommand(chatSessionCmd)
 }
 
 func runChatHistory(cmd *cobra.Command, _ []string) error {
@@ -75,6 +152,79 @@ func runChatThread(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	return renderChatRead(cmd, resp, false)
+}
+
+func runChatSessionGet(cmd *cobra.Command, args []string) error {
+	return fetchAndPrintChatSessionJSON(cmd, chatSessionPath(args[0]))
+}
+
+func runChatSessionMessages(cmd *cobra.Command, args []string) error {
+	return fetchAndPrintChatSessionJSON(cmd, chatSessionPath(args[0])+"/messages")
+}
+
+func runChatSessionPendingTask(cmd *cobra.Command, args []string) error {
+	return fetchAndPrintChatSessionJSON(cmd, chatSessionPath(args[0])+"/pending-task")
+}
+
+func runChatSessionTasks(cmd *cobra.Command, args []string) error {
+	return fetchAndPrintChatSessionJSON(cmd, chatSessionPath(args[0])+"/tasks")
+}
+
+func runChatSessionTaskMessages(cmd *cobra.Command, args []string) error {
+	q := url.Values{}
+	if taskID, _ := cmd.Flags().GetString("task"); taskID != "" {
+		q.Set("task", taskID)
+	}
+	if since, _ := cmd.Flags().GetInt("since"); since > 0 {
+		q.Set("since", strconv.Itoa(since))
+	}
+	path := chatSessionPath(args[0]) + "/task-messages"
+	if encoded := q.Encode(); encoded != "" {
+		path += "?" + encoded
+	}
+	return fetchAndPrintChatSessionJSON(cmd, path)
+}
+
+func runChatSessionSend(cmd *cobra.Command, args []string) error {
+	content, ok, err := resolveTextFlag(cmd, "content")
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("--content, --content-stdin, or --content-file is required")
+	}
+
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := cli.APIContext(context.Background())
+	defer cancel()
+
+	var resp any
+	if err := client.PostJSON(ctx, chatSessionPath(args[0])+"/messages", map[string]string{"content": content}, &resp); err != nil {
+		return fmt.Errorf("send chat session message: %w", err)
+	}
+	return cli.PrintJSON(os.Stdout, resp)
+}
+
+func fetchAndPrintChatSessionJSON(cmd *cobra.Command, path string) error {
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := cli.APIContext(context.Background())
+	defer cancel()
+
+	var resp any
+	if err := client.GetJSON(ctx, path, &resp); err != nil {
+		return fmt.Errorf("read chat session: %w", err)
+	}
+	return cli.PrintJSON(os.Stdout, resp)
+}
+
+func chatSessionPath(sessionID string) string {
+	return "/api/chat/sessions/" + url.PathEscape(sessionID)
 }
 
 // fetchChatRead builds the request (shared --limit/--before paging, plus the

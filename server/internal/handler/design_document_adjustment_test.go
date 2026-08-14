@@ -239,7 +239,7 @@ func TestDesignDocumentAdjustmentCompletionAtomicallyMovesDraft(t *testing.T) {
 		t.Fatalf("prepare adjustment: %v", err)
 	}
 	resultJSON, _ := json.Marshal(map[string]any{"output": "done", "design_document_package": receipt})
-	completed, err := testHandler.TaskService.CompleteTaskWithMutationAndSessionState(context.Background(), task.ID, resultJSON, "", "", false, "", func(queries *db.Queries, completed db.AgentTaskQueue) error {
+	completed, err := testHandler.TaskService.CompleteTaskWithMutationAndSessionState(context.Background(), task.ID, resultJSON, "", "", "", false, "", func(queries *db.Queries, completed db.AgentTaskQueue) error {
 		return persistDesignDocumentPackageCompletion(context.Background(), queries, completed, prepared)
 	})
 	if err != nil || completed == nil || completed.Status != "completed" {
@@ -264,7 +264,7 @@ func persistDesignDocumentPackageFixture(t *testing.T) designDocumentPackageFixt
 		t.Fatal(err)
 	}
 	resultJSON, _ := json.Marshal(map[string]any{"output": "done", "design_document_package": fixture.receipt})
-	if _, err := testHandler.TaskService.CompleteTaskWithMutationAndSessionState(context.Background(), fixture.task.ID, resultJSON, "", "", false, "", func(queries *db.Queries, completed db.AgentTaskQueue) error {
+	if _, err := testHandler.TaskService.CompleteTaskWithMutationAndSessionState(context.Background(), fixture.task.ID, resultJSON, "", "", "", false, "", func(queries *db.Queries, completed db.AgentTaskQueue) error {
 		return persistDesignDocumentPackageCompletion(context.Background(), queries, completed, prepared)
 	}); err != nil {
 		t.Fatal(err)

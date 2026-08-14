@@ -31,6 +31,12 @@ export function pmoRunsOptions(wsId: string, configId: string) {
     queryFn: () => api.listPMORuns(wsId, { config_id: configId }),
     select: (data) => data.runs,
     enabled: Boolean(configId),
+    refetchInterval: (query) =>
+      query.state.data?.runs.some(
+        (run) => run.status === "queued" || run.status === "running",
+      )
+        ? 2000
+        : false,
   });
 }
 

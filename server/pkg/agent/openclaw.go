@@ -8,10 +8,13 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -72,10 +75,21 @@ func (b *openclawBackend) Execute(ctx context.Context, prompt string, opts ExecO
 	if sessionID == "" {
 		sessionID = fmt.Sprintf("multica-%d", time.Now().UnixNano())
 	}
+	agentID := ResolveOpenclawAgentID(opts.Model, opts.CustomArgs)
+	if agentID == "" {
+		agentID = "main"
+	}
+	stateDir := b.openclawStateDir()
+	transcriptOffset := openclawSessionSize(stateDir, agentID, sessionID)
 	args := buildOpenclawArgs(prompt, sessionID, opts, b.cfg.Logger)
 
 	cmd := exec.CommandContext(runCtx, execPath, args...)
 	hideAgentWindow(cmd)
+	configureProcessGroup(cmd)
+	cmd.Cancel = func() error {
+		signalProcessGroup(cmd, syscall.SIGKILL)
+		return nil
+	}
 	b.cfg.Logger.Info("agent command", "exec", execPath, "args", args)
 	// 500ms, matching cursor-agent — the other backend whose CLI can deliver a
 	// terminal result while keeping a process alive.
@@ -110,7 +124,7 @@ func (b *openclawBackend) Execute(ctx context.Context, prompt string, opts ExecO
 	}
 	cmd.Stderr = newLogWriter(b.cfg.Logger, "[openclaw:stderr] ")
 
-	if err := cmd.Start(); err != nil {
+	if err := startOwnedProcessTree(cmd, b.cfg.Logger); err != nil {
 		cancel()
 		return nil, fmt.Errorf("start openclaw: %w", err)
 	}
@@ -132,7 +146,7 @@ func (b *openclawBackend) Execute(ctx context.Context, prompt string, opts ExecO
 		defer close(resCh)
 
 		startTime := time.Now()
-		scanResult := b.processOutput(stdout, msgCh)
+		scanResult := b.processOutputWithoutFinalText(stdout, msgCh)
 
 		// openclaw delivered a complete result but would not exit. Cancel the
 		// run context so CommandContext kills it and cmd.Wait can return —
@@ -148,6 +162,11 @@ func (b *openclawBackend) Execute(ctx context.Context, prompt string, opts ExecO
 
 		// Wait for process exit.
 		exitErr := cmd.Wait()
+		if !waitProcessGroupGone(cmd, 0) {
+			b.cfg.Logger.Warn("openclaw process group still alive after command exit; killing descendants", "pid", cmd.Process.Pid)
+			signalProcessGroup(cmd, syscall.SIGKILL)
+		}
+		releaseProcessGroup(cmd)
 		duration := time.Since(startTime)
 
 		switch {
@@ -189,6 +208,17 @@ func (b *openclawBackend) Execute(ctx context.Context, prompt string, opts ExecO
 		}
 
 		b.cfg.Logger.Info("openclaw finished", "pid", cmd.Process.Pid, "status", scanResult.status, "duration", duration.Round(time.Millisecond).String())
+
+		if messages, err := readOpenclawSessionTranscript(stateDir, agentID, sessionID, transcriptOffset); err != nil {
+			b.cfg.Logger.Debug("openclaw session transcript unavailable", "session_id", sessionID, "error", err)
+		} else {
+			for _, message := range messages {
+				trySend(msgCh, message)
+			}
+		}
+		if scanResult.output != "" {
+			trySend(msgCh, Message{Type: MessageText, Content: scanResult.output})
+		}
 
 		// Build usage map. Prefer the model openclaw reported in
 		// `meta.agentMeta.model` (the actual LLM, e.g. `deepseek-chat`).
@@ -400,6 +430,14 @@ type openclawEventResult struct {
 // the dominant happy path (one pretty-printed JSON blob) deterministic
 // while keeping NDJSON event support intact.
 func (b *openclawBackend) processOutput(r io.Reader, ch chan<- Message) openclawEventResult {
+	return b.processOutputWithFinalText(r, ch, true)
+}
+
+func (b *openclawBackend) processOutputWithoutFinalText(r io.Reader, ch chan<- Message) openclawEventResult {
+	return b.processOutputWithFinalText(r, ch, false)
+}
+
+func (b *openclawBackend) processOutputWithFinalText(r io.Reader, ch chan<- Message, emitFinalText bool) openclawEventResult {
 	buf, cutShort, readErr := readOpenclawStdout(r, openclawResultIdleGrace)
 	if readErr != nil {
 		return openclawEventResult{status: "failed", errMsg: fmt.Sprintf("read stdout: %v", readErr)}
@@ -411,7 +449,7 @@ func (b *openclawBackend) processOutput(r io.Reader, ch chan<- Message) openclaw
 	// matches, we're done — no need to involve the line scanner at all.
 	if result, ok := parseWholeBufferOpenclawResult(buf); ok {
 		var output strings.Builder
-		res := b.buildOpenclawEventResult(result, ch, &output)
+		res := b.buildOpenclawEventResult(result, ch, &output, emitFinalText)
 		res.cutShort = cutShort
 		return res
 	}
@@ -451,7 +489,9 @@ func (b *openclawBackend) processOutput(r io.Reader, ch chan<- Message) openclaw
 			case "text":
 				if event.Text != "" {
 					output.WriteString(event.Text)
-					trySend(ch, Message{Type: MessageText, Content: event.Text})
+					if emitFinalText {
+						trySend(ch, Message{Type: MessageText, Content: event.Text})
+					}
 				}
 			case "tool_use":
 				var input map[string]any
@@ -503,7 +543,7 @@ func (b *openclawBackend) processOutput(r io.Reader, ch chan<- Message) openclaw
 		// Try parsing as a final result blob (legacy format).
 		if result, ok := tryParseOpenclawResult(line); ok {
 			gotEvents = true
-			res := b.buildOpenclawEventResult(result, ch, &output)
+			res := b.buildOpenclawEventResult(result, ch, &output, emitFinalText)
 			if res.sessionID != "" {
 				sessionID = res.sessionID
 			}
@@ -620,12 +660,14 @@ func tryParseOpenclawResult(raw string) (openclawResult, bool) {
 }
 
 // buildOpenclawEventResult extracts text and metadata from a final result blob.
-// Text payloads are appended to the shared output builder and emitted to ch.
-func (b *openclawBackend) buildOpenclawEventResult(result openclawResult, ch chan<- Message, output *strings.Builder) openclawEventResult {
+// Text payloads are appended to the shared output builder and optionally emitted to ch.
+func (b *openclawBackend) buildOpenclawEventResult(result openclawResult, ch chan<- Message, output *strings.Builder, emitText bool) openclawEventResult {
 	for _, p := range result.Payloads {
 		if p.Text != "" {
 			output.WriteString(p.Text)
-			trySend(ch, Message{Type: MessageText, Content: p.Text})
+			if emitText {
+				trySend(ch, Message{Type: MessageText, Content: p.Text})
+			}
 		}
 	}
 
@@ -741,6 +783,139 @@ func (e openclawEvent) errorMessage() string {
 		return e.Message
 	}
 	return "unknown openclaw error"
+}
+
+func (b *openclawBackend) openclawStateDir() string {
+	if stateDir := strings.TrimSpace(b.cfg.Env["OPENCLAW_STATE_DIR"]); stateDir != "" {
+		return stateDir
+	}
+	if stateDir := strings.TrimSpace(os.Getenv("OPENCLAW_STATE_DIR")); stateDir != "" {
+		return stateDir
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".openclaw")
+}
+
+type openclawSessionRecord struct {
+	Type    string                 `json:"type"`
+	Message openclawSessionMessage `json:"message"`
+}
+
+type openclawSessionMessage struct {
+	Role       string          `json:"role"`
+	Content    json.RawMessage `json:"content"`
+	ToolCallID string          `json:"toolCallId"`
+	ToolName   string          `json:"toolName"`
+}
+
+type openclawSessionContent struct {
+	Type     string          `json:"type"`
+	Thinking string          `json:"thinking"`
+	Text     string          `json:"text"`
+	ID       string          `json:"id"`
+	Name     string          `json:"name"`
+	Input    json.RawMessage `json:"input"`
+}
+
+func openclawSessionPath(stateDir, agentID, sessionID string) (string, error) {
+	if stateDir == "" || filepath.Base(agentID) != agentID || filepath.Base(sessionID) != sessionID {
+		return "", fmt.Errorf("invalid openclaw session path")
+	}
+	return filepath.Join(stateDir, "agents", agentID, "sessions", sessionID+".jsonl"), nil
+}
+
+func openclawSessionSize(stateDir, agentID, sessionID string) int64 {
+	path, err := openclawSessionPath(stateDir, agentID, sessionID)
+	if err != nil {
+		return 0
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+	return info.Size()
+}
+
+func readOpenclawSessionTranscript(stateDir, agentID, sessionID string, offset int64) ([]Message, error) {
+	path, err := openclawSessionPath(stateDir, agentID, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	if offset > 0 {
+		if _, err := file.Seek(offset, io.SeekStart); err != nil {
+			return nil, err
+		}
+	}
+
+	scanner := newAgentStreamScanner(file)
+	var messages []Message
+	for scanner.Scan() {
+		var record openclawSessionRecord
+		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil || record.Type != "message" {
+			continue
+		}
+		switch record.Message.Role {
+		case "user":
+			messages = nil
+		case "assistant":
+			var content []openclawSessionContent
+			if json.Unmarshal(record.Message.Content, &content) != nil {
+				continue
+			}
+			for _, item := range content {
+				switch item.Type {
+				case "thinking":
+					if item.Thinking != "" {
+						messages = append(messages, Message{Type: MessageThinking, Content: item.Thinking})
+					}
+				case "toolCall":
+					var input map[string]any
+					if len(item.Input) > 0 {
+						_ = json.Unmarshal(item.Input, &input)
+					}
+					messages = append(messages, Message{Type: MessageToolUse, Tool: item.Name, CallID: item.ID, Input: input})
+				}
+			}
+		case "toolResult":
+			output := openclawSessionText(record.Message.Content)
+			messages = append(messages, Message{
+				Type:   MessageToolResult,
+				Tool:   record.Message.ToolName,
+				CallID: record.Message.ToolCallID,
+				Output: output,
+			})
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return messages, nil
+}
+
+func openclawSessionText(raw json.RawMessage) string {
+	var text string
+	if json.Unmarshal(raw, &text) == nil {
+		return text
+	}
+	var content []openclawSessionContent
+	if json.Unmarshal(raw, &content) != nil {
+		return ""
+	}
+	var output strings.Builder
+	for _, item := range content {
+		if item.Type == "text" {
+			output.WriteString(item.Text)
+		}
+	}
+	return output.String()
 }
 
 // openclawError represents a structured error in an openclaw event,

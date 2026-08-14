@@ -1,6 +1,6 @@
 {
   "error": {
-    "load_prefix": "加载 issue 失败：",
+    "load_prefix": "加载任务失败：",
     "unknown": "未知错误",
     "retry": "重试"
   },
@@ -21,17 +21,17 @@
     "none": "无优先级"
   },
   "my_issues": {
-    "tab_title": "我的 issue",
+    "tab_title": "我的任务",
     "scope": {
       "assigned": "已分配",
       "created": "已创建",
       "agents": "智能体"
     },
     "empty": {
-      "no_active_filters": "没有符合当前筛选条件的 issue。",
-      "assigned": "没有分配给你的 issue。",
-      "created": "你还没有创建任何 issue。",
-      "agents": "还没有分配给你的智能体或小队的 issue。"
+      "no_active_filters": "没有符合当前筛选条件的任务。",
+      "assigned": "没有分配给你的任务。",
+      "created": "你还没有创建任何任务。",
+      "agents": "还没有分配给你的智能体或小队的任务。"
     },
     "view_mode": {
       "switch_to_list": "切换到列表视图",
@@ -42,17 +42,29 @@
     }
   },
   "all_issues": {
-    "header_title": "issue",
+    "header_title": "全部任务",
     "scope": {
       "all": "全部",
       "members": "成员",
       "agents": "智能体"
     },
     "empty": {
-      "no_active_filters": "没有符合当前筛选条件的 issue。",
-      "all": "此工作区还没有 issue。",
-      "members": "没有分配给成员的 issue。",
-      "agents": "没有分配给智能体或小队的 issue。"
+      "no_active_filters": "没有符合当前筛选条件的任务。",
+      "all": "此工作区还没有任务。",
+      "members": "没有分配给成员的任务。",
+      "agents": "没有分配给智能体或小队的任务。"
+    }
+  },
+  "task_list_picker": {
+    "accessibility_label": "切换我的任务或全部任务"
+  },
+  "card": {
+    "updated_ago": "更新于 {{time}}",
+    "time": {
+      "just_now": "刚刚",
+      "minutes_ago": "{{count}} 分钟前",
+      "hours_ago": "{{count}} 小时前",
+      "days_ago": "{{count}} 天前"
     }
   },
   "filter_button": {

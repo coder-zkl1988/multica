@@ -19,8 +19,9 @@ import (
 )
 
 // productMapCmd seeds the workspace product map (SY-20). Idempotent: upserts
-// product nodes by (workspace_id, slug), refs by (product_id, ref_type,
-// ref_id), editors by (product_id, user_id). Safe to re-run.
+// product nodes and their AI-derived capability trees by (workspace_id, slug),
+// refs by (product_id, ref_type, ref_id), editors by (product_id, user_id).
+// Safe to re-run after a code analysis refresh.
 //
 // Design decisions locked with the owner (2026-08-11):
 //   - status_source is per-product configurable. Multica ships through its own
@@ -63,9 +64,22 @@ var productMapCmd = &cobra.Command{
 			return fmt.Errorf("ping database: %w", err)
 		}
 
-		q := db.New(pool)
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			return fmt.Errorf("begin product map seed: %w", err)
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+		q := db.New(tx)
 		wsUUID := util.MustParseUUID(workspaceID)
 		editorUUID := util.MustParseUUID(editorUserID)
+		if _, err := tx.Exec(ctx, `
+			DELETE FROM product_nodes
+			WHERE workspace_id = $1
+			  AND evidence->>'source' = 'ai_code_analysis'
+			  AND evidence->>'repository' = ANY($2::text[])
+		`, wsUUID, []string{"multica", "prime-saas-fe"}); err != nil {
+			return fmt.Errorf("clear generated product capability trees: %w", err)
+		}
 
 		// Multica node — status_source=code_repo. Evidence carries the repo +
 		// default branch; the head SHA is filled by the operator/agent before
@@ -92,6 +106,9 @@ var productMapCmd = &cobra.Command{
 			return fmt.Errorf("upsert Multica node: %w", err)
 		}
 		slog.Info("seeded Multica node", "id", util.UUIDToString(multicaNode.ID))
+		if err := seedProductCatalog(ctx, q, wsUUID, multicaNode, multicaProductCatalog, "multica"); err != nil {
+			return fmt.Errorf("seed Multica capability tree: %w", err)
+		}
 
 		// 院务系统 node — status_source=pmo; no PMO data yet → 待确认.
 		yuanwuNode, err := q.UpsertProductNode(ctx, db.UpsertProductNodeParams{
@@ -109,6 +126,9 @@ var productMapCmd = &cobra.Command{
 			return fmt.Errorf("upsert 院务系统 node: %w", err)
 		}
 		slog.Info("seeded 院务系统 node", "id", util.UUIDToString(yuanwuNode.ID))
+		if err := seedProductCatalog(ctx, q, wsUUID, yuanwuNode, yuanwuProductCatalog, "prime-saas-fe"); err != nil {
+			return fmt.Errorf("seed 院务系统 capability tree: %w", err)
+		}
 
 		// 凯撒（沙磊）as first editor on both products.
 		for _, node := range []db.ProductNode{multicaNode, yuanwuNode} {
@@ -141,7 +161,11 @@ var productMapCmd = &cobra.Command{
 			}
 		}
 
-		fmt.Printf("product map seeded: Multica=%s 院务系统=%s\n",
+		if err := tx.Commit(ctx); err != nil {
+			return fmt.Errorf("commit product map seed: %w", err)
+		}
+
+		fmt.Printf("product map seeded with AI-derived capability trees: Multica=%s 院务系统=%s\n",
 			util.UUIDToString(multicaNode.ID), util.UUIDToString(yuanwuNode.ID))
 		return nil
 	},
@@ -157,6 +181,36 @@ func init() {
 
 func pgtypeUUIDNil() pgtype.UUID {
 	return pgtype.UUID{}
+}
+
+func seedProductCatalog(ctx context.Context, q *db.Queries, workspaceID pgtype.UUID, parent db.ProductNode, catalog []productMapCatalogNode, repository string) error {
+	for index, item := range catalog {
+		evidence := map[string]any{
+			"source":        "ai_code_analysis",
+			"engine":        "gitnexus",
+			"repository":    repository,
+			"source_paths":  item.SourcePaths,
+			"catalog_scope": "online_default_branch",
+		}
+		node, err := q.UpsertProductNode(ctx, db.UpsertProductNodeParams{
+			WorkspaceID:  workspaceID,
+			ParentID:     parent.ID,
+			Name:         item.Name,
+			Slug:         item.Slug,
+			Description:  item.Description,
+			SortOrder:    int32(index + 1),
+			Status:       "pending_confirmation",
+			StatusSource: parent.StatusSource,
+			Evidence:     mustJSON(evidence),
+		})
+		if err != nil {
+			return fmt.Errorf("upsert %s: %w", item.Slug, err)
+		}
+		if err := seedProductCatalog(ctx, q, workspaceID, node, item.Children, repository); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func mustJSON(v any) []byte {

@@ -249,35 +249,35 @@ func taskContextForEnv(task Task) execenv.TaskContextForEnv {
 		skills = task.Agent.Skills
 	}
 	return execenv.TaskContextForEnv{
-		IssueID:                               task.IssueID,
-		TriggerCommentID:                      task.TriggerCommentID,
-		NewCommentCount:                       task.NewCommentCount,
-		NewCommentsSince:                      task.NewCommentsSince,
-		PriorSessionResumed:                   task.PriorSessionID != "",
-		AgentID:                               agentID,
-		AgentName:                             agentName,
-		AgentInstructions:                     instructions,
-		AgentSkills:                           convertSkillsForEnv(skills),
-		Repos:                                 convertReposForEnv(task.Repos),
-		ProjectID:                             task.ProjectID,
-		ProjectTitle:                          task.ProjectTitle,
-		ProjectResources:                      convertProjectResourcesForEnv(task.ProjectResources),
-		ChatSessionID:                         task.ChatSessionID,
-		AutopilotRunID:                        task.AutopilotRunID,
-		AutopilotID:                           task.AutopilotID,
-		AutopilotTitle:                        task.AutopilotTitle,
-		AutopilotDescription:                  task.AutopilotDescription,
-		AutopilotSource:                       task.AutopilotSource,
-		AutopilotTriggerPayload:               strings.TrimSpace(string(task.AutopilotTriggerPayload)),
-		QuickCreatePrompt:                     task.QuickCreatePrompt,
-		UIDraftCreateContext:                  strings.TrimSpace(string(task.UIDraftCreateContext)),
-		DesignRestoreContext:                  strings.TrimSpace(string(task.DesignRestoreContext)),
-		DesignSystemProfileAnalyzeContext:     strings.TrimSpace(string(task.DesignSystemProfileAnalyzeContext)),
-		ProjectDesignSystemContext:            strings.TrimSpace(string(task.ProjectDesignSystemContext)),
-		IsSquadLeader:                         strings.Contains(instructions, "## Squad Operating Protocol"),
-		RequestingUserName:                    task.RequestingUserName,
-		RequestingUserProfileDescription:      task.RequestingUserProfileDescription,
-		WorkspaceContext:                      task.WorkspaceContext,
+		IssueID:                           task.IssueID,
+		TriggerCommentID:                  task.TriggerCommentID,
+		NewCommentCount:                   task.NewCommentCount,
+		NewCommentsSince:                  task.NewCommentsSince,
+		PriorSessionResumed:               task.PriorSessionID != "",
+		AgentID:                           agentID,
+		AgentName:                         agentName,
+		AgentInstructions:                 instructions,
+		AgentSkills:                       convertSkillsForEnv(skills),
+		Repos:                             convertReposForEnv(task.Repos),
+		ProjectID:                         task.ProjectID,
+		ProjectTitle:                      task.ProjectTitle,
+		ProjectResources:                  convertProjectResourcesForEnv(task.ProjectResources),
+		ChatSessionID:                     task.ChatSessionID,
+		AutopilotRunID:                    task.AutopilotRunID,
+		AutopilotID:                       task.AutopilotID,
+		AutopilotTitle:                    task.AutopilotTitle,
+		AutopilotDescription:              task.AutopilotDescription,
+		AutopilotSource:                   task.AutopilotSource,
+		AutopilotTriggerPayload:           strings.TrimSpace(string(task.AutopilotTriggerPayload)),
+		QuickCreatePrompt:                 task.QuickCreatePrompt,
+		UIDraftCreateContext:              strings.TrimSpace(string(task.UIDraftCreateContext)),
+		DesignRestoreContext:              strings.TrimSpace(string(task.DesignRestoreContext)),
+		DesignSystemProfileAnalyzeContext: strings.TrimSpace(string(task.DesignSystemProfileAnalyzeContext)),
+		ProjectDesignSystemContext:        strings.TrimSpace(string(task.ProjectDesignSystemContext)),
+		IsSquadLeader:                     strings.Contains(instructions, "## Squad Operating Protocol"),
+		RequestingUserName:                task.RequestingUserName,
+		RequestingUserProfileDescription:  task.RequestingUserProfileDescription,
+		WorkspaceContext:                  task.WorkspaceContext,
 	}
 }
 
@@ -342,5 +342,5 @@ func (d *Daemon) failOpenDesignPreflight(ctx context.Context, task Task, runCont
 }
 
 func (d *Daemon) failOpenDesignTask(ctx context.Context, task Task, message, reason, workDir string) {
-	_ = d.client.FailTask(ctx, task.ID, message, "", workDir, reason, false, "")
+	_ = d.client.FailTask(ctx, task.ID, message, "", workDir, "", reason, false, "")
 }

@@ -95,14 +95,26 @@ import (
 // human-equivalent or machine-equivalent.
 func RequireHumanActor(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// X-Actor-Source is server-set only. The auth middleware
-		// strips any client-supplied value before stamping its own,
-		// so a non-empty value here is authoritative.
-		switch r.Header.Get("X-Actor-Source") {
-		case "task_token", "cloud_pat", "service_account":
+		if isMachineCredentialActor(r) {
 			writeError(w, http.StatusForbidden, "this endpoint is only available to human actors")
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// isMachineCredentialActor centralizes the authoritative actor-source check so
+// sensitive handlers can keep a fail-closed backstop in addition to their
+// router middleware. Unknown actor sources intentionally remain human-equivalent
+// until their authentication branch is explicitly classified here.
+func isMachineCredentialActor(r *http.Request) bool {
+	// X-Actor-Source is server-set only. The auth middleware strips any
+	// client-supplied value before stamping its own, so a recognized value here
+	// is authoritative.
+	switch r.Header.Get("X-Actor-Source") {
+	case "task_token", "cloud_pat", "service_account":
+		return true
+	default:
+		return false
+	}
 }

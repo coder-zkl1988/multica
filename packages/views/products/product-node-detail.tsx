@@ -61,7 +61,7 @@ export function ProductNodeDetail({ node }: { node: ProductMapNode | null }) {
 
         <div>
           <h3 className="text-body font-semibold">{t(($) => $.evidence_title)}</h3>
-          {node.has_live_evidence && evidenceEntries.length > 0 ? (
+          {evidenceEntries.length > 0 ? (
             <dl className="mt-2 space-y-1 text-body">
               {evidenceEntries.map(([k, v]) => (
                 <div key={k} className="flex gap-2">

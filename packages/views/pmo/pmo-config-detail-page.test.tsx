@@ -124,6 +124,7 @@ const applyRunMutate = vi.fn();
 const setMappingMutate = vi.fn();
 const updateConfigMutate = vi.fn();
 const push = vi.fn();
+const transcriptButtonProps = vi.fn();
 
 vi.mock("@multica/core/pmo/mutations", () => ({
   useStartPMORun: () => ({ mutate: startRunMutate, isPending: false }),
@@ -178,6 +179,13 @@ vi.mock("@tanstack/react-query", () => ({
 }));
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
+
+vi.mock("../common/task-transcript", () => ({
+  TranscriptButton: (props: { task: { id: string }; agentName: string; isLive?: boolean; title?: string }) => {
+    transcriptButtonProps(props);
+    return <button aria-label={props.title}>{props.title}</button>;
+  },
+}));
 
 // Keep the ui primitives as light DOM so the state logic is what is under test.
 // Button preserves its `render` prop (a real AppLink) so link-style buttons
@@ -353,6 +361,7 @@ beforeEach(() => {
   setMappingMutate.mockClear();
   updateConfigMutate.mockClear();
   push.mockClear();
+  transcriptButtonProps.mockClear();
 });
 
 describe("PMOConfigDetailPage routing and states", () => {
@@ -393,11 +402,49 @@ describe("PMOConfigDetailPage preview tab", () => {
     previewConfig();
     setRuns([makeRun()]);
     renderPage();
-    // EXT-P-001 appears once per diff row for that entity (title + status).
-    expect(screen.getAllByText("EXT-P-001").length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText("New external title")).toBeInTheDocument();
+    // Entity name is the primary text; the stable external key is secondary.
+    expect(screen.getAllByTestId("pmo-entity-name").map((node) => node.textContent)).toEqual(
+      expect.arrayContaining(["New external title", "New task title"]),
+    );
+    expect(screen.getAllByTestId("pmo-entity-key").map((node) => node.textContent)).toEqual(
+      expect.arrayContaining(["EXT-P-001", "TASK-001"]),
+    );
     expect(screen.getByText("New local title")).toBeInTheDocument();
-    expect(screen.getByText("TASK-001")).toBeInTheDocument();
+  });
+
+  it("falls back to the stable external key when no title is present", () => {
+    previewConfig();
+    setRuns([makeRun({
+      diff: {
+        entities: [
+          {
+            external_type: "task",
+            external_key: "task-d46ba80ebcc030c3",
+            local_type: "issue",
+            local_id: "issue-2",
+            action: "create",
+            fields: {
+              title: {
+                baseline_external: null,
+                baseline_local: null,
+                external: null,
+                local: null,
+                decision: "incoming",
+              },
+            },
+          },
+        ],
+        warnings: [],
+        summary: { creates: 1, incoming_fields: 1, local_only_fields: 0, converged_fields: 0, conflicts: 0, external_removed: 0, unresolved_assignees: 0 },
+      },
+    })]);
+    renderPage();
+    expect(screen.getAllByTestId("pmo-entity-name").map((node) => node.textContent)).toEqual(
+      expect.arrayContaining(["task-d46ba80ebcc030c3"]),
+    );
+    expect(screen.getAllByTestId("pmo-entity-key").map((node) => node.textContent)).toEqual(
+      expect.arrayContaining(["task-d46ba80ebcc030c3"]),
+    );
   });
 
   it("shows an empty preview when there are no runs", () => {
@@ -473,7 +520,7 @@ describe("PMOConfigDetailPage preview tab", () => {
     setRuns([makeRun()]);
     renderPage();
     fireEvent.click(screen.getByRole("button", { name: "Conflicts" }));
-    expect(screen.getByText("New external title")).toBeInTheDocument();
+    expect(screen.getAllByText("New external title").length).toBeGreaterThan(0);
     // The incoming-only status/task rows are filtered out under "Conflicts".
     expect(screen.queryByText("Incoming")).toBeNull();
     expect(screen.queryByText("New task title")).toBeNull();
@@ -569,5 +616,31 @@ describe("PMOConfigDetailPage history tab", () => {
     expect(screen.getByText("Failed")).toBeInTheDocument();
     expect(screen.getAllByText("Manual").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText(/sync_error/)).toBeInTheDocument();
+  });
+
+  it("shows a transcript button for runs with an agent task", () => {
+    previewConfig();
+    setRuns([makeRun({ agent_task_id: "task-1", status: "running" })]);
+    renderPage();
+    fireEvent.click(screen.getByRole("tab", { name: /Run history/ }));
+
+    expect(screen.getByRole("button", { name: "View execution log" })).toBeInTheDocument();
+    expect(transcriptButtonProps).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: expect.objectContaining({ id: "task-1", agent_id: "agent-1", status: "running" }),
+        agentName: "Example Agent",
+        isLive: true,
+        title: "View execution log",
+      }),
+    );
+  });
+
+  it("does not show a transcript button without an agent task", () => {
+    previewConfig();
+    setRuns([makeRun({ agent_task_id: null })]);
+    renderPage();
+    fireEvent.click(screen.getByRole("tab", { name: /Run history/ }));
+
+    expect(screen.queryByRole("button", { name: "View execution log" })).toBeNull();
   });
 });

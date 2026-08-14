@@ -1606,6 +1606,118 @@ func (h *Handler) GetPendingChatTask(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// ListChatSessionTasks returns the historical task rows attached to a Web Chat
+// session. It is intentionally session-scoped rather than a thin wrapper around
+// the generic task APIs so the copied session id never bypasses chat ownership
+// or private-agent visibility checks.
+func (h *Handler) ListChatSessionTasks(w http.ResponseWriter, r *http.Request) {
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	workspaceID := ctxWorkspaceID(r.Context())
+	sessionID := chi.URLParam(r, "sessionId")
+
+	session, ok := h.gatePublicChatSessionForUser(w, r, userID, workspaceID, sessionID)
+	if !ok {
+		return
+	}
+
+	tasks, err := h.Queries.ListTasksByChatSession(r.Context(), session.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list chat session tasks")
+		return
+	}
+
+	resp := make([]AgentTaskResponse, len(tasks))
+	for i, task := range tasks {
+		resp[i] = taskToResponse(task, workspaceID)
+	}
+	h.hydrateTaskAttributions(r.Context(), attributionsOf(resp))
+
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// ListChatSessionTaskMessages returns persisted daemon/task messages for a task
+// attached to the Web Chat session. If no task id is supplied, it reads the most
+// recent session task, matching the task list's created_at DESC order.
+func (h *Handler) ListChatSessionTaskMessages(w http.ResponseWriter, r *http.Request) {
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	workspaceID := ctxWorkspaceID(r.Context())
+	sessionID := chi.URLParam(r, "sessionId")
+
+	session, ok := h.gatePublicChatSessionForUser(w, r, userID, workspaceID, sessionID)
+	if !ok {
+		return
+	}
+
+	tasks, err := h.Queries.ListTasksByChatSession(r.Context(), session.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list chat session tasks")
+		return
+	}
+
+	var task db.AgentTaskQueue
+	taskID := strings.TrimSpace(r.URL.Query().Get("task"))
+	if taskID == "" {
+		if len(tasks) == 0 {
+			writeJSON(w, http.StatusOK, []protocol.TaskMessagePayload{})
+			return
+		}
+		task = tasks[0]
+	} else {
+		taskUUID, ok := parseUUIDOrBadRequest(w, taskID, "task_id")
+		if !ok {
+			return
+		}
+		found := false
+		for _, candidate := range tasks {
+			if candidate.ID == taskUUID {
+				task = candidate
+				found = true
+				break
+			}
+		}
+		if !found {
+			writeError(w, http.StatusNotFound, "task not found for chat session")
+			return
+		}
+	}
+
+	resolvedTaskID := uuidToString(task.ID)
+	var (
+		messages []db.TaskMessage
+		queryErr error
+	)
+	if sinceStr := r.URL.Query().Get("since"); sinceStr != "" {
+		sinceSeq, parseErr := strconv.Atoi(sinceStr)
+		if parseErr != nil {
+			writeError(w, http.StatusBadRequest, "invalid since parameter")
+			return
+		}
+		messages, queryErr = h.Queries.ListTaskMessagesSince(r.Context(), db.ListTaskMessagesSinceParams{
+			TaskID: task.ID,
+			Seq:    int32(sinceSeq),
+		})
+	} else {
+		messages, queryErr = h.Queries.ListTaskMessages(r.Context(), task.ID)
+	}
+	if queryErr != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list task messages")
+		return
+	}
+
+	resp := make([]protocol.TaskMessagePayload, len(messages))
+	for i, message := range messages {
+		resp[i] = taskMessageToPayload(message, resolvedTaskID, uuidToString(task.IssueID))
+	}
+
+	writeJSON(w, http.StatusOK, resp)
+}
+
 // PrioritizeQueuedChatTask moves one queued follow-up ahead of its FIFO peers.
 // The client then cancels the current task through the existing cancellation
 // endpoint, preserving that path's transcript and draft-restore semantics.

@@ -4,10 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -89,6 +91,57 @@ func pmoCompleteTaskForTest(t *testing.T, taskID, output string) *httptest.Respo
 	w := httptest.NewRecorder()
 	testHandler.CompleteTask(w, req)
 	return w
+}
+
+func createPMOEmailMemberForTest(t *testing.T, account string) string {
+	t.Helper()
+	ctx := context.Background()
+	email := strings.ToLower(account) + "@soyoung.com"
+	var userID string
+	if err := testPool.QueryRow(ctx,
+		`INSERT INTO "user" (name, email) VALUES ('PMO Email Member', $1) RETURNING id`,
+		email,
+	).Scan(&userID); err != nil {
+		t.Fatalf("create pmo email user: %v", err)
+	}
+	if _, err := testPool.Exec(ctx,
+		`INSERT INTO member (workspace_id, user_id, role) VALUES ($1, $2, 'member')`,
+		testWorkspaceID, userID,
+	); err != nil {
+		t.Fatalf("create pmo email member: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM member WHERE workspace_id = $1 AND user_id = $2`, testWorkspaceID, userID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM "user" WHERE id = $1`, userID)
+	})
+	return userID
+}
+
+func validPMOSnapshotForTestWithOwner(t *testing.T, account string) string {
+	t.Helper()
+	snapshot := map[string]any{
+		"schema_version":    "1",
+		"snapshot_complete": true,
+		"parent_requirement": map[string]any{
+			"key": "EXT-P-001", "display_number": "P-001", "numeric_id": 1,
+			"title": "Parent Requirement", "description": "", "source_status": "planned", "status": "planned",
+			"owner": map[string]any{"external_id": account, "display_name": "PMO Email Member"},
+		},
+		"child_requirements": []any{
+			map[string]any{
+				"key": "EXT-I-001", "display_number": "I-001", "numeric_id": 2,
+				"title": "Child Requirement", "description": "", "source_status": "todo", "status": "todo",
+				"owner": map[string]any{"external_id": account, "display_name": "PMO Email Member"},
+				"tasks": []any{},
+			},
+		},
+		"tasks": []any{},
+	}
+	raw, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatalf("marshal pmo snapshot: %v", err)
+	}
+	return string(raw)
 }
 
 func TestClaimPMOSyncTaskExposesSyncContext(t *testing.T) {
@@ -231,6 +284,49 @@ func TestCompletePMOSyncTaskStoresPreview(t *testing.T) {
 	}
 	if !previewComplete {
 		t.Fatal("pmo run preview columns not fully populated")
+	}
+}
+
+func TestCompletePMOSyncTaskStoresPreviewAutoMappedAssignee(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	account := fmt.Sprintf("pmo-auto-%d", time.Now().UnixNano())
+	userID := createPMOEmailMemberForTest(t, account)
+	config := createPMOConfigForTest(t)
+	run := startPMORunForTest(t, config.ID)
+	taskID := *run.AgentTaskID
+	markAgentTaskRunningForTest(t, taskID)
+
+	w := pmoCompleteTaskForTest(t, taskID, validPMOSnapshotForTestWithOwner(t, account))
+	if w.Code != http.StatusOK {
+		t.Fatalf("complete: %d %s", w.Code, w.Body.String())
+	}
+
+	var diffRaw, summaryRaw []byte
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT diff, summary FROM pmo_sync_run WHERE id = $1`, run.ID,
+	).Scan(&diffRaw, &summaryRaw); err != nil {
+		t.Fatalf("read pmo run diff: %v", err)
+	}
+	var diff service.PMODiff
+	if err := json.Unmarshal(diffRaw, &diff); err != nil {
+		t.Fatalf("decode pmo diff: %v", err)
+	}
+	var summary service.PMODiffSummary
+	if err := json.Unmarshal(summaryRaw, &summary); err != nil {
+		t.Fatalf("decode pmo summary: %v", err)
+	}
+	if summary.UnresolvedAssignees != 0 || len(diff.Warnings) != 0 {
+		t.Fatalf("preview unresolved assignees = %d, warnings = %+v", summary.UnresolvedAssignees, diff.Warnings)
+	}
+	for _, entity := range diff.Entities {
+		if field, ok := entity.Fields["lead_id"]; ok && field.External != userID {
+			t.Fatalf("project lead external = %#v, want %s", field.External, userID)
+		}
+		if field, ok := entity.Fields["assignee_id"]; ok && field.External != userID {
+			t.Fatalf("issue assignee external = %#v, want %s", field.External, userID)
+		}
 	}
 }
 

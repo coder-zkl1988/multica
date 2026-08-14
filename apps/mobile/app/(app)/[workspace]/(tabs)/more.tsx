@@ -1,7 +1,8 @@
 /**
  * More tab — a real page (not a popover). Mirrors what the dropdown it
  * replaced showed: the user's identity (→ Settings), the current
- * workspace (→ switch-workspace), and shortcuts to Pinned/Issues/Projects.
+ * workspace (→ switch-workspace), and workspace shortcuts. Issues live in
+ * the dedicated Tasks tab, where My Issues and All Issues share one screen.
  *
  * SectionGroup/NavRow are the same shared components more/settings.tsx
  * uses — this is the pattern's second call site, not a new one.
@@ -109,11 +110,6 @@ export default function MorePage() {
             onPress={() => slug && router.push(`/${slug}/more/pins`)}
             chevronColor={mutedFg}
             title={t("more_page.nav.pinned")}
-          />
-          <NavRow
-            onPress={() => slug && router.push(`/${slug}/more/issues`)}
-            chevronColor={mutedFg}
-            title={t("more_page.nav.issues")}
           />
           <NavRow
             onPress={() => slug && router.push(`/${slug}/more/projects`)}

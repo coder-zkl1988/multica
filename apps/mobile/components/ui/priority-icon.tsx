@@ -1,21 +1,19 @@
 /**
  * Mobile PriorityIcon — react-native-svg implementation.
  *
- * Geometry mirrors packages/views/issues/components/priority-icon.tsx
- * (16×16 viewBox, 4 ascending bars, "none" rendered as a center dash). Bar
- * counts mirror packages/core/issues/config/priority.ts PRIORITY_CONFIG.bars
- * — Behavioral parity rule: same priority → same number of filled bars
- * across clients.
+ * Geometry mirrors packages/views/issues/components/priority-icon.tsx:
+ * low / medium / high share a three-bar frame, urgent is an interrupt badge,
+ * and none is a quiet dash.
  *
  * Differences from web:
  *   - No urgent pulse animation in v1 (would need reanimated; defer until
  *     animation polish iteration).
  */
-import Svg, { Line, Rect } from "react-native-svg";
+import Svg, { Circle, Line, Rect } from "react-native-svg";
 import type { IssuePriority } from "@multica/core/types";
 
 const BARS: Record<IssuePriority, number> = {
-  urgent: 4,
+  urgent: 3,
   high: 3,
   medium: 2,
   low: 1,
@@ -54,24 +52,40 @@ export function PriorityIcon({
     );
   }
 
+  if (priority === "urgent") {
+    return (
+      <Svg width={size} height={size} viewBox="0 0 16 16">
+        <Rect x={2} y={2} width={12} height={12} rx={3} fill={COLOR.urgent} />
+        <Line
+          x1={8}
+          y1={5}
+          x2={8}
+          y2={8.6}
+          stroke="#ffffff"
+          strokeWidth={1.7}
+          strokeLinecap="round"
+        />
+        <Circle cx={8} cy={11} r={0.95} fill="#ffffff" />
+      </Svg>
+    );
+  }
+
   const filled = BARS[priority];
   const color = COLOR[priority];
 
   return (
     <Svg width={size} height={size} viewBox="0 0 16 16">
-      {[0, 1, 2, 3].map((i) => {
-        const y = 12 - (i + 1) * 3;
-        const h = (i + 1) * 3;
+      {[6, 9, 12].map((height, i) => {
         return (
           <Rect
             key={i}
-            x={1 + i * 4}
-            y={y}
-            width={3}
-            height={h}
-            rx={0.5}
+            x={2 + i * 4.25}
+            y={14 - height}
+            width={3.5}
+            height={height}
+            rx={1}
             fill={color}
-            opacity={i < filled ? 1 : 0.2}
+            opacity={i < filled ? 1 : 0.35}
           />
         );
       })}

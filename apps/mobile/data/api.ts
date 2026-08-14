@@ -85,6 +85,7 @@ import {
   ChatPendingTaskSchema,
   ChatSessionListSchema,
   ChatSessionSchema,
+  ChildIssueProgressResponseSchema,
   EMPTY_ACTIVE_TASKS_RESPONSE,
   EMPTY_AGENT_LIST,
   EMPTY_AGENT_TASK_LIST,
@@ -92,6 +93,7 @@ import {
   EMPTY_CHAT_MESSAGE_LIST,
   EMPTY_CHAT_PENDING_TASK,
   EMPTY_CHAT_SESSION_LIST,
+  EMPTY_CHILD_ISSUE_PROGRESS_RESPONSE,
   EMPTY_COMMENT,
   EMPTY_INBOX_LIST,
   EMPTY_ISSUE_FALLBACK,
@@ -131,6 +133,7 @@ import {
   UserSchema,
   WorkspaceListSchema,
 } from "./schemas";
+import type { ChildIssueProgressResponse } from "./schemas";
 import type { ZodType } from "zod";
 import { getCurrentSlug } from "./workspace-store";
 import { CLIENT_OS, CLIENT_VERSION } from "@/lib/client-identity";
@@ -614,6 +617,17 @@ class ApiClient {
     return parseWithFallback(raw, ListIssuesResponseSchema, EMPTY_LIST_ISSUES_RESPONSE, {
       endpoint: "GET /api/issues",
     });
+  }
+
+  async getChildIssueProgress(opts?: {
+    signal?: AbortSignal;
+  }): Promise<ChildIssueProgressResponse> {
+    return this.fetchValidated(
+      "/api/issues/child-progress",
+      ChildIssueProgressResponseSchema,
+      EMPTY_CHILD_ISSUE_PROGRESS_RESPONSE,
+      { ...opts, endpoint: "GET /api/issues/child-progress" },
+    );
   }
 
   /** Workspace-wide issue search. Backend `GET /api/issues/search` with

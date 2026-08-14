@@ -1992,12 +1992,78 @@ func (h *Handler) resolveAgentProvider(r *http.Request, workspaceID pgtype.UUID,
 // so it now names the capability gap instead.
 func thinkingLevelRejection(provider, value string) string {
 	if !agent.ThinkingControlSupported(provider) {
-		return fmt.Sprintf(
-			"runtime %q does not support a per-agent reasoning effort; leave thinking_level empty to use the runtime default",
-			provider,
-		)
+		return thinkingCapabilityRejection(provider)
 	}
 	return fmt.Sprintf("thinking_level %q is not a recognised value for runtime %q", value, provider)
+}
+
+// existingThinkingCapabilityRejection is the carry-over path's capability
+// sentence — same answer as thinkingCapabilityRejection, but it names the value
+// already on the agent and the escape hatch that clears it.
+func existingThinkingCapabilityRejection(provider, value string) string {
+	return fmt.Sprintf(
+		"runtime %q does not support a per-agent reasoning effort; pass thinking_level=\"\" to clear the existing %q",
+		provider, value,
+	)
+}
+
+// thinkingCapabilityUnknownRejection covers the ambiguous case: the provider
+// name does not say which binary is installed and no catalog has been reported
+// yet, so we can neither confirm nor deny the capability.
+func thinkingCapabilityUnknownRejection(provider string) string {
+	return fmt.Sprintf(
+		"cannot confirm whether runtime %q supports a per-agent reasoning effort: it has not reported a model catalog yet. Open the model picker for this runtime to trigger discovery and retry, or leave thinking_level empty to use the runtime default",
+		provider,
+	)
+}
+
+// existingThinkingCapabilityUnknownRejection is the carry-over path's version of
+// the same answer: it names the value already on the agent and the escape hatch.
+func existingThinkingCapabilityUnknownRejection(provider, value string) string {
+	return fmt.Sprintf(
+		"cannot confirm whether runtime %q supports a per-agent reasoning effort: it has not reported a model catalog yet. Pass thinking_level=\"\" to clear the existing %q, or retry once the runtime has reported its models",
+		provider, value,
+	)
+}
+
+func thinkingCapabilityRejection(provider string) string {
+	return fmt.Sprintf(
+		"runtime %q does not support a per-agent reasoning effort; leave thinking_level empty to use the runtime default",
+		provider,
+	)
+}
+
+type acpEffortEvidence int
+
+const (
+	acpEffortUnknown acpEffortEvidence = iota
+	acpEffortAbsent
+	acpEffortPresent
+)
+
+var ambiguousACPEffortProviders = map[string]bool{
+	"hermes": true,
+}
+
+// acpThinkingDecision answers whether this runtime may carry a thinking level,
+// consulting the model catalog its daemon reported.
+func (h *Handler) acpThinkingDecision(ctx context.Context, provider string, runtimeID pgtype.UUID) acpEffortEvidence {
+	if !agent.UsesACPCatalogThinking(provider) {
+		return acpEffortPresent
+	}
+	snapshot := h.cachedModelCatalog(ctx, uuidToString(runtimeID))
+	if snapshot == nil || len(snapshot.Models) == 0 {
+		if ambiguousACPEffortProviders[provider] {
+			return acpEffortUnknown
+		}
+		return acpEffortPresent
+	}
+	for _, m := range snapshot.Models {
+		if m.Thinking != nil && len(m.Thinking.SupportedLevels) > 0 {
+			return acpEffortPresent
+		}
+	}
+	return acpEffortAbsent
 }
 
 // existingThinkingLevelRejection is thinkingLevelRejection for the carry-over
@@ -2006,10 +2072,7 @@ func thinkingLevelRejection(provider, value string) string {
 // user does not have to guess that clearing is allowed.
 func existingThinkingLevelRejection(provider, value string) string {
 	if !agent.ThinkingControlSupported(provider) {
-		return fmt.Sprintf(
-			"runtime %q does not support a per-agent reasoning effort; pass thinking_level=\"\" to clear the existing %q",
-			provider, value,
-		)
+		return existingThinkingCapabilityRejection(provider, value)
 	}
 	return fmt.Sprintf(
 		"existing thinking_level %q is not valid for runtime %q; pass thinking_level=\"\" to clear or set a value valid for the new runtime",

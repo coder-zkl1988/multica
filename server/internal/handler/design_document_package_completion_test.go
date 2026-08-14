@@ -110,7 +110,7 @@ func TestDesignDocumentPackageCompletionCreatesAtomicFirstDraft(t *testing.T) {
 		t.Fatalf("prepare: %v", err)
 	}
 	resultJSON, _ := json.Marshal(map[string]any{"output": "done", "design_document_package": fixture.receipt})
-	completed, err := testHandler.TaskService.CompleteTaskWithMutationAndSessionState(context.Background(), fixture.task.ID, resultJSON, "", "", false, "", func(queries *db.Queries, completed db.AgentTaskQueue) error {
+	completed, err := testHandler.TaskService.CompleteTaskWithMutationAndSessionState(context.Background(), fixture.task.ID, resultJSON, "", "", "", false, "", func(queries *db.Queries, completed db.AgentTaskQueue) error {
 		return persistDesignDocumentPackageCompletion(context.Background(), queries, completed, prepared)
 	})
 	if err != nil || completed == nil || completed.Status != "completed" {

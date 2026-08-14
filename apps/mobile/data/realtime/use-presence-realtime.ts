@@ -5,7 +5,8 @@
  * Invalidates the queries that back the presence dot:
  *   - runtimeListOptions      ← daemon:register, runtime sweeper transitions
  *   - agentListOptions        ← agent:status / created / archived / restored
- *   - agentTaskSnapshotOptions← task:queued / dispatch / completed / failed /
+ *   - agentTaskSnapshotOptions← task:queued / dispatch / running /
+ *                               waiting_local_directory / completed / failed /
  *                               cancelled
  *
  * Deliberately NOT subscribed (cellular-data rule, apps/mobile/CLAUDE.md):
@@ -53,10 +54,12 @@ export function usePresenceRealtime() {
         ws.on("agent:archived", invalidateAgents),
         ws.on("agent:restored", invalidateAgents),
 
-        // Task lifecycle — drives the workload dimension of presence and the
-        // reserved-for-P1 peek sheet. progress / message intentionally absent.
+        // Task lifecycle — drives presence and board-card activity. Progress /
+        // message are intentionally absent because they do not change buckets.
         ws.on("task:queued", invalidateSnapshot),
         ws.on("task:dispatch", invalidateSnapshot),
+        ws.on("task:running", invalidateSnapshot),
+        ws.on("task:waiting_local_directory", invalidateSnapshot),
         ws.on("task:completed", invalidateSnapshot),
         ws.on("task:failed", invalidateSnapshot),
         ws.on("task:cancelled", invalidateSnapshot),

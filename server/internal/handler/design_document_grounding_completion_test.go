@@ -19,7 +19,7 @@ func TestDesignDocumentGroundingCompletionCreatesOneAtomicSnapshot(t *testing.T)
 	if err != nil {
 		t.Fatalf("prepare completion: %v", err)
 	}
-	completed, err := testHandler.TaskService.CompleteTaskWithMutationAndSessionState(context.Background(), task.ID, []byte(`{"output":"done"}`), "", "", false, "", func(queries *db.Queries, completed db.AgentTaskQueue) error {
+	completed, err := testHandler.TaskService.CompleteTaskWithMutationAndSessionState(context.Background(), task.ID, []byte(`{"output":"done"}`), "", "", "", false, "", func(queries *db.Queries, completed db.AgentTaskQueue) error {
 		return persistDesignDocumentGroundingCompletion(context.Background(), queries, completed, prepared)
 	})
 	if err != nil || completed == nil || completed.Status != "completed" {
@@ -72,7 +72,7 @@ func TestDesignDocumentGroundingCompletionRollsBackTerminalTaskAndSnapshot(t *te
 	if _, err := testPool.Exec(context.Background(), `UPDATE agent_task_queue SET context = jsonb_set(context, '{operation}', '"changed"'::jsonb) WHERE id = $1`, task.ID); err != nil {
 		t.Fatal(err)
 	}
-	_, err = testHandler.TaskService.CompleteTaskWithMutationAndSessionState(context.Background(), task.ID, []byte(`{"output":"done"}`), "", "", false, "", func(queries *db.Queries, completed db.AgentTaskQueue) error {
+	_, err = testHandler.TaskService.CompleteTaskWithMutationAndSessionState(context.Background(), task.ID, []byte(`{"output":"done"}`), "", "", "", false, "", func(queries *db.Queries, completed db.AgentTaskQueue) error {
 		return persistDesignDocumentGroundingCompletion(context.Background(), queries, completed, prepared)
 	})
 	if err == nil || !strings.Contains(err.Error(), "snapshot binding changed") {

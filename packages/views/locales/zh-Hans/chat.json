@@ -217,6 +217,7 @@
     "archive": "归档",
     "unarchive": "取消归档",
     "archived_title": "已归档",
+    "copy_session_id": "复制会话 ID",
     "row_actions_aria": "聊天操作"
   },
   "header": {

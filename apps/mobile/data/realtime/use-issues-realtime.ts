@@ -39,18 +39,26 @@ export function useIssuesRealtime() {
     (ws, wsId) => {
       const invalidateList = () =>
         qc.invalidateQueries({ queryKey: issueKeys.list(wsId) });
+      const invalidateChildProgress = () =>
+        qc.invalidateQueries({ queryKey: issueKeys.childProgress(wsId) });
 
       return [
         ws.on("issue:created", (payload) => {
           prependToIssuesList(qc, wsId, payload.issue);
+          invalidateChildProgress();
         }),
         ws.on("issue:updated", (payload) => {
           patchIssuesList(qc, wsId, payload.issue);
+          invalidateChildProgress();
         }),
         ws.on("issue:deleted", (payload) => {
           removeFromIssuesList(qc, wsId, payload.issue_id);
+          invalidateChildProgress();
         }),
-        ws.onReconnect(invalidateList),
+        ws.onReconnect(() => {
+          invalidateList();
+          invalidateChildProgress();
+        }),
       ];
     },
     [qc],

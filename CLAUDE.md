@@ -248,6 +248,12 @@ Do not claim verification passed unless you ran it. If you skip checks because t
 - A production deployment requires a CLI release tag on `main`: create `v0.x.x`, push it, and let `release.yml` publish binaries and the Homebrew tap.
 - Bump patch by default unless the user specifies a version.
 
+## Pull Requests (fork)
+
+- This repository is a fork of `multica-ai/multica`. Cut feature branches from this repo's own `main` (`coder-zkl1988/multica`) and open PRs against this repo's `main`.
+- Do not open PRs against `multica-ai/multica` from fork branches: the two `main` histories have diverged, and GitHub will list every fork-local commit as part of the PR.
+- Sanity-check before opening a PR: `git rev-list --count origin/main..HEAD` should only count your own commits.
+
 ## Domain Reminders
 
 1. Create a tag on the `main` branch: `git tag v0.x.x`

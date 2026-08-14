@@ -1,3 +1,5 @@
+import { stripChannelMediaMarkers } from "@multica/core/types";
+
 /**
  * Markdown → one-line plain text for issue cards.
  *
@@ -13,10 +15,11 @@
  * `@multica/core` (see apps/mobile/CLAUDE.md).
  */
 export function descriptionPreview(markdown: string): string {
-  return markdown
-    .replace(/!file\[[^\]]*\]\([^)]*\)/g, "")
-    .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+  return stripChannelMediaMarkers(markdown)
+    .replace(/\\([!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~])/g, "$1")
+    .replace(/!file\[[^\]]*\]\((?:[^()]|\([^()]*\))*\)/g, "")
+    .replace(/!\[[^\]]*\]\((?:[^()]|\([^()]*\))*\)/g, "")
+    .replace(/\[([^\]]+)\]\((?:[^()]|\([^()]*\))*\)/g, "$1")
     .replace(/[*_`~]+/g, "")
     .replace(/^[\s>#]+/gm, "")
     .replace(/\s+/g, " ")

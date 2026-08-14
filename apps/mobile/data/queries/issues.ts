@@ -34,6 +34,26 @@ export const issueListOptions = (wsId: string | null) =>
     enabled: !!wsId,
   });
 
+export const childIssueProgressOptions = (wsId: string | null) =>
+  queryOptions({
+    queryKey: issueKeys.childProgress(wsId),
+    queryFn: ({ signal }) => api.getChildIssueProgress({ signal }),
+    select: (data) => {
+      const progressByParent = new Map<
+        string,
+        { done: number; total: number }
+      >();
+      for (const entry of data.progress) {
+        progressByParent.set(entry.parent_issue_id, {
+          done: entry.done,
+          total: entry.total,
+        });
+      }
+      return progressByParent;
+    },
+    enabled: !!wsId,
+  });
+
 export const issueDetailOptions = (wsId: string | null, id: string) =>
   queryOptions({
     queryKey: issueKeys.detail(wsId, id),

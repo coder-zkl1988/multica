@@ -42,7 +42,7 @@
     }
   },
   "all_issues": {
-    "header_title": "Issues",
+    "header_title": "All Issues",
     "scope": {
       "all": "All",
       "members": "Members",
@@ -53,6 +53,18 @@
       "all": "No issues in this workspace.",
       "members": "No issues assigned to a member.",
       "agents": "No issues assigned to agents or squads."
+    }
+  },
+  "task_list_picker": {
+    "accessibility_label": "Switch between My Issues and All Issues"
+  },
+  "card": {
+    "updated_ago": "Updated {{time}}",
+    "time": {
+      "just_now": "just now",
+      "minutes_ago": "{{count}}m ago",
+      "hours_ago": "{{count}}h ago",
+      "days_ago": "{{count}}d ago"
     }
   },
   "filter_button": {

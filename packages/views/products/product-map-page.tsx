@@ -47,7 +47,7 @@ function TreeNode({
   selectedId: string | null;
   onSelect: (id: string) => void;
 }) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(depth === 0);
   const hasChildren = (node.children?.length ?? 0) > 0;
   const selected = selectedId === node.id;
 

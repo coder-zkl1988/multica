@@ -28,7 +28,7 @@
     "section": {
       "recent": "最近",
       "projects": "项目",
-      "issues": "issue",
+      "issues": "任务",
       "cancelled": "已取消"
     },
     "no_results": "未找到与“{{query}}”匹配的结果",
@@ -38,7 +38,6 @@
     "section_title": "工作区",
     "nav": {
       "pinned": "固定",
-      "issues": "issue",
       "projects": "项目",
       "skills": "skill",
       "runtimes": "运行时",

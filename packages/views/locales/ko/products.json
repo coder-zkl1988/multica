@@ -5,7 +5,7 @@
   "meta_line": "slug: {{slug}} · 상태 소스: {{source}}",
   "refs_title": "연결된 프로젝트 / 요구사항",
   "refs_empty": "추적 링크가 아직 없습니다 (프로젝트가 워크스페이스에 들어오면 채워집니다)",
-  "evidence_title": "출시 상태 근거",
+  "evidence_title": "근거",
   "evidence_pending": "확인 대기 — PMO / 코드 저장소 근거 없이 Issue 상태만으로 출시로 판단하지 않습니다",
   "updated_at": "업데이트: {{time}}",
   "editors_suffix": " · 편집자: {{ids}}",

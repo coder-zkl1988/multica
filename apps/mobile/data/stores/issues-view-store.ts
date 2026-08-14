@@ -1,5 +1,5 @@
 /**
- * View store for the workspace-wide Issues page (`more/issues.tsx`).
+ * View store for the workspace-wide Issues view in the Tasks tab.
  *
  * Shape mirrors `useMyIssuesViewStore` plus a `scope` field — workspace
  * Issues has `all / members / agents` scope tabs (see web
@@ -7,7 +7,7 @@
  * My Issues has its own `assigned / created / agents` scopes.
  *
  * The `scope` filter is **client-side** on `assignee_type` — see
- * `more/issues.tsx`'s `scopedIssues` derivation. Server param stays unset
+ * `all-issues-view.tsx`'s `scopedIssues` derivation. Server param stays unset
  * so the cache key (`issueKeys.list(wsId)`) and WS realtime invalidation
  * (`useIssuesRealtime`) don't have to know about scope.
  *
@@ -29,12 +29,15 @@ import { create } from "zustand";
 import type { IssuePriority, IssueStatus } from "@multica/core/types";
 
 export type IssuesScope = "all" | "members" | "agents";
+export type IssuesViewMode = "board" | "list";
 
 interface IssuesViewState {
   scope: IssuesScope;
+  viewMode: IssuesViewMode;
   statusFilters: IssueStatus[];
   priorityFilters: IssuePriority[];
   setScope: (scope: IssuesScope) => void;
+  setViewMode: (mode: IssuesViewMode) => void;
   toggleStatusFilter: (status: IssueStatus) => void;
   togglePriorityFilter: (priority: IssuePriority) => void;
   clearFilters: () => void;
@@ -42,9 +45,11 @@ interface IssuesViewState {
 
 export const useIssuesViewStore = create<IssuesViewState>((set) => ({
   scope: "all",
+  viewMode: "board",
   statusFilters: [],
   priorityFilters: [],
   setScope: (scope) => set({ scope }),
+  setViewMode: (viewMode) => set({ viewMode }),
   toggleStatusFilter: (status) =>
     set((state) => ({
       statusFilters: state.statusFilters.includes(status)

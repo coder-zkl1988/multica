@@ -441,6 +441,47 @@ export const EMPTY_SEARCH_ISSUES_RESPONSE: SearchIssuesResponse = {
   total: 0,
 };
 
+// =====================================================
+// Child issue progress (workspace-wide board metadata)
+// =====================================================
+
+export interface ChildIssueProgressEntry {
+  parent_issue_id: string;
+  total: number;
+  done: number;
+}
+
+export interface ChildIssueProgressResponse {
+  progress: ChildIssueProgressEntry[];
+}
+
+const ChildIssueProgressEntrySchema = z.object({
+  parent_issue_id: z.string(),
+  total: z.number().int().nonnegative(),
+  done: z.number().int().nonnegative(),
+}).loose();
+
+/**
+ * GET /api/issues/child-progress. Parse entries independently so one
+ * malformed row cannot hide progress for every otherwise-valid parent.
+ */
+export const ChildIssueProgressResponseSchema: z.ZodType<ChildIssueProgressResponse> =
+  z.object({
+    progress: z
+      .array(z.unknown())
+      .default([])
+      .transform((rows) =>
+        rows.flatMap((row) => {
+          const parsed = ChildIssueProgressEntrySchema.safeParse(row);
+          return parsed.success ? [parsed.data] : [];
+        }),
+      ),
+  }).loose();
+
+export const EMPTY_CHILD_ISSUE_PROGRESS_RESPONSE: ChildIssueProgressResponse = {
+  progress: [],
+};
+
 const SearchProjectResultSchema = ProjectSchema.safeExtend({
   match_source: z.enum(["title", "description"]).catch("title"),
   matched_snippet: z.string().optional(),
@@ -472,7 +513,15 @@ export const AgentTaskSchema: z.ZodType<AgentTask> = z.object({
   runtime_id: z.string().default(""),
   issue_id: z.string().default(""),
   status: z
-    .enum(["queued", "dispatched", "running", "completed", "failed", "cancelled"])
+    .enum([
+      "queued",
+      "dispatched",
+      "waiting_local_directory",
+      "running",
+      "completed",
+      "failed",
+      "cancelled",
+    ])
     .catch("queued"),
   priority: z.number().default(0),
   dispatched_at: z.string().nullable().default(null),

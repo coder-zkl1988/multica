@@ -63,6 +63,31 @@ The daemon injects a task-scoped `mat_` credential for Multica API commands and 
 
 The daemon still preserves the real `HOME` and XDG variables for provider tools such as `gh`, `aws`, `kubectl`, and npm. This is CLI resolution hardening, not hard filesystem confidentiality: a process under the same OS user can still open an explicitly known Owner path. Dedicated Unix users, containers, VMs, or an equivalent OS boundary are required for that stronger isolation.
 
+## Web Chat Session Inspection
+
+When a user provides a Web Chat session id, use the Web Chat session CLI commands instead of `multica chat thread`, because `chat thread` reads external channel integrations rather than Web Chat sessions.
+
+Recommended flow:
+
+```bash
+multica chat session get <session-id> --output json
+multica chat session messages <session-id> --output json
+multica chat session pending-task <session-id> --output json
+multica chat session tasks <session-id> --output json
+multica chat session task-messages <session-id> --output json
+multica chat session task-messages <session-id> --task <task-id> --output json
+```
+
+`task-messages` returns the execution log for a session task: assistant output, tool calls, tool results, and errors. Without `--task`, it reads the most recent task for the session; pass a task id from `multica chat session tasks` to inspect an older run.
+
+Only continue a session when the user explicitly asks:
+
+```bash
+multica chat session send <session-id> --content "..." --output json
+```
+
+These commands are permission-gated by the server. A session id is not an authorization token: use only the CLI's authenticated Web Chat session APIs, and do not bypass them with `curl`, `wget`, private/internal endpoints, or direct database reads.
+
 ## Debugging an agent that did not run
 
 Check in this order:

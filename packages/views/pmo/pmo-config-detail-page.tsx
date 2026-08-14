@@ -22,6 +22,7 @@ import type {
   PMOConflictResolution,
   PMORun,
 } from "@multica/core/types";
+import type { AgentTask } from "@multica/core/types/agent";
 import { cn } from "@multica/ui/lib/utils";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@multica/ui/components/ui/alert";
 import { Badge } from "@multica/ui/components/ui/badge";
@@ -53,6 +54,7 @@ import { BreadcrumbHeader } from "../layout/breadcrumb-header";
 import { PageHeader } from "../layout/page-header";
 import { AppLink, useNavigation } from "../navigation";
 import { useT } from "../i18n";
+import { TranscriptButton } from "../common/task-transcript";
 import {
   conflictId,
   formatDateTime,
@@ -193,6 +195,7 @@ export function PMOConfigDetailPage() {
   };
 
   const activeAgents = useMemo(() => agents.filter((a) => !a.archived_at), [agents]);
+  const agentName = agents.find((agent) => agent.id === config?.agent_id)?.name ?? config?.agent_id ?? "";
 
   const filteredRows = useMemo(() => {
     const rows = diffView?.rows ?? [];
@@ -316,9 +319,13 @@ export function PMOConfigDetailPage() {
                 className={cn("border-b last:border-b-0", rowConflicted && "bg-warning/5")}
               >
                 <td className="px-3 py-1.5 align-top">
-                  <TruncatedValue value={row.entityKey} />
+                  <div data-testid="pmo-entity-name">
+                    <TruncatedValue value={row.entityName} />
+                  </div>
                   <span className="block text-micro text-muted-foreground">
                     {row.externalType === "requirement" ? t(($) => $.entities.requirement) : row.externalType === "task" ? t(($) => $.entities.task) : row.externalType}
+                    {" · "}
+                    <span data-testid="pmo-entity-key" className="font-mono">{row.entityKey}</span>
                   </span>
                 </td>
                 <td className="max-w-36 px-3 py-1.5 align-top">
@@ -611,62 +618,122 @@ export function PMOConfigDetailPage() {
               />
             ) : (
               <div className="divide-y py-1">
-                {runs.map((historyRun) => (
-                  <div key={historyRun.id} className="flex flex-wrap items-center gap-x-4 gap-y-1.5 py-2.5">
-                    <Badge
-                      variant={
-                        historyRun.status === "failed"
-                          ? "destructive"
-                          : historyRun.status === "preview_ready"
-                            ? "default"
-                            : "secondary"
+                {runs.map((historyRun) => {
+                  const task: AgentTask | null = historyRun.agent_task_id
+                    ? {
+                        id: historyRun.agent_task_id,
+                        agent_id: config.agent_id,
+                        runtime_id: "",
+                        issue_id: "",
+                        status:
+                          historyRun.status === "running"
+                            ? "running"
+                            : historyRun.status === "queued"
+                              ? "queued"
+                              : historyRun.status === "failed"
+                                ? "failed"
+                                : "completed",
+                        priority: 0,
+                        dispatched_at: null,
+                        started_at: historyRun.started_at,
+                        completed_at: historyRun.completed_at,
+                        result: null,
+                        error: historyRun.error_message,
+                        created_at: historyRun.created_at,
                       }
-                      className={cn(historyRun.status === "applied_with_review" && "bg-warning/10 text-warning")}
+                    : null;
+
+                  return (
+                    <div
+                      key={historyRun.id}
+                      className="flex flex-wrap items-center gap-x-4 gap-y-1.5 py-2.5"
                     >
-                      {historyRun.status === "queued" && t(($) => $.status.queued)}
-                      {historyRun.status === "running" && t(($) => $.status.running)}
-                      {historyRun.status === "preview_ready" && t(($) => $.status.preview_ready)}
-                      {historyRun.status === "applied" && t(($) => $.status.applied)}
-                      {historyRun.status === "applied_with_review" && t(($) => $.status.applied_with_review)}
-                      {historyRun.status === "failed" && t(($) => $.status.failed)}
-                      {historyRun.status === "queued" ||
-                      historyRun.status === "running" ||
-                      historyRun.status === "preview_ready" ||
-                      historyRun.status === "applied" ||
-                      historyRun.status === "applied_with_review" ||
-                      historyRun.status === "failed"
-                        ? null
-                        : t(($) => $.status.unknown)}
-                    </Badge>
-                    <span className="text-caption text-muted-foreground">
-                      {historyRun.trigger === "scheduled" ? t(($) => $.history.trigger_scheduled) : t(($) => $.history.trigger_manual)}
-                    </span>
-                    <span className="text-caption text-muted-foreground">{formatDateTime(historyRun.created_at)}</span>
-                    <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
-                      {(() => {
-                        const counts = historyCounts(historyRun);
-                        return (
-                          <>
-                            <SummaryChip count={counts?.creates} label={(c) => t(($) => $.history.summary.creates, { count: c })} />
-                            <SummaryChip count={counts?.incoming_fields} label={(c) => t(($) => $.history.summary.incoming_fields, { count: c })} />
-                            <SummaryChip count={counts?.conflicts_resolved} label={(c) => t(($) => $.history.summary.conflicts_resolved, { count: c })} />
-                            <SummaryChip count={counts?.conflicts_pending} label={(c) => t(($) => $.history.summary.conflicts_pending, { count: c })} />
-                            <SummaryChip count={counts?.unresolved_assignees} label={(c) => t(($) => $.history.summary.unresolved_assignees, { count: c })} />
-                          </>
-                        );
-                      })()}
-                    </div>
-                    {historyRun.status === "failed" && (
-                      <span
-                        className="max-w-full truncate text-caption text-destructive"
-                        title={historyRun.error_code ?? ""}
+                      <Badge
+                        variant={
+                          historyRun.status === "failed"
+                            ? "destructive"
+                            : historyRun.status === "preview_ready"
+                              ? "default"
+                              : "secondary"
+                        }
+                        className={cn(
+                          historyRun.status === "applied_with_review" && "bg-warning/10 text-warning",
+                        )}
                       >
-                        {historyRun.error_code ?? ""}
-                        {historyRun.error_message ? ` — ${historyRun.error_message}` : ` — ${t(($) => $.history.error_redacted)}`}
+                        {historyRun.status === "queued" && t(($) => $.status.queued)}
+                        {historyRun.status === "running" && t(($) => $.status.running)}
+                        {historyRun.status === "preview_ready" && t(($) => $.status.preview_ready)}
+                        {historyRun.status === "applied" && t(($) => $.status.applied)}
+                        {historyRun.status === "applied_with_review" && t(($) => $.status.applied_with_review)}
+                        {historyRun.status === "failed" && t(($) => $.status.failed)}
+                        {historyRun.status === "queued" ||
+                        historyRun.status === "running" ||
+                        historyRun.status === "preview_ready" ||
+                        historyRun.status === "applied" ||
+                        historyRun.status === "applied_with_review" ||
+                        historyRun.status === "failed"
+                          ? null
+                          : t(($) => $.status.unknown)}
+                      </Badge>
+                      <span className="text-caption text-muted-foreground">
+                        {historyRun.trigger === "scheduled"
+                          ? t(($) => $.history.trigger_scheduled)
+                          : t(($) => $.history.trigger_manual)}
                       </span>
-                    )}
-                  </div>
-                ))}
+                      <span className="text-caption text-muted-foreground">
+                        {formatDateTime(historyRun.created_at)}
+                      </span>
+                      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
+                        {(() => {
+                          const counts = historyCounts(historyRun);
+                          return (
+                            <>
+                              <SummaryChip
+                                count={counts?.creates}
+                                label={(c) => t(($) => $.history.summary.creates, { count: c })}
+                              />
+                              <SummaryChip
+                                count={counts?.incoming_fields}
+                                label={(c) => t(($) => $.history.summary.incoming_fields, { count: c })}
+                              />
+                              <SummaryChip
+                                count={counts?.conflicts_resolved}
+                                label={(c) => t(($) => $.history.summary.conflicts_resolved, { count: c })}
+                              />
+                              <SummaryChip
+                                count={counts?.conflicts_pending}
+                                label={(c) => t(($) => $.history.summary.conflicts_pending, { count: c })}
+                              />
+                              <SummaryChip
+                                count={counts?.unresolved_assignees}
+                                label={(c) => t(($) => $.history.summary.unresolved_assignees, { count: c })}
+                              />
+                            </>
+                          );
+                        })()}
+                      </div>
+                      {historyRun.status === "failed" && (
+                        <span
+                          className="max-w-full truncate text-caption text-destructive"
+                          title={historyRun.error_code ?? ""}
+                        >
+                          {historyRun.error_code ?? ""}
+                          {historyRun.error_message
+                            ? ` — ${historyRun.error_message}`
+                            : ` — ${t(($) => $.history.error_redacted)}`}
+                        </span>
+                      )}
+                      {task && (
+                        <TranscriptButton
+                          task={task}
+                          agentName={agentName}
+                          isLive={historyRun.status === "running"}
+                          title={t(($) => $.history.view_log)}
+                        />
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
           </TabsContent>

@@ -144,3 +144,52 @@ func TestCompleteManualPMOSyncTaskStaysPreviewReady(t *testing.T) {
 		t.Fatalf("manual run status = %q, want preview_ready", status)
 	}
 }
+
+func TestCompleteScheduledPMOSyncTaskAutoMapsAssigneeByEmail(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	account := "pmo-scheduled-auto-map"
+	userID := createPMOEmailMemberForTest(t, account)
+	config := createPMOConfigForTest(t)
+	run := startPMORunForTest(t, config.ID)
+	makeRunScheduledForTest(t, run.ID)
+	markAgentTaskRunningForTest(t, *run.AgentTaskID)
+
+	w := pmoCompleteTaskForTest(t, *run.AgentTaskID, validPMOSnapshotForTestWithOwner(t, account))
+	if w.Code != http.StatusOK {
+		t.Fatalf("complete: %d %s", w.Code, w.Body.String())
+	}
+
+	var status string
+	var summaryRaw []byte
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT status, summary FROM pmo_sync_run WHERE id = $1`, run.ID,
+	).Scan(&status, &summaryRaw); err != nil {
+		t.Fatalf("read run: %v", err)
+	}
+	if status != "applied" {
+		t.Fatalf("scheduled run status = %q, want applied", status)
+	}
+	var summary struct {
+		UnresolvedAssignees int `json:"unresolved_assignees"`
+	}
+	if err := json.Unmarshal(summaryRaw, &summary); err != nil {
+		t.Fatalf("decode summary: %v", err)
+	}
+	if summary.UnresolvedAssignees != 0 {
+		t.Fatalf("scheduled unresolved assignees = %d, want 0", summary.UnresolvedAssignees)
+	}
+
+	var localType, localID string
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT COALESCE(local_type, ''), COALESCE(local_id::text, '')
+		FROM pmo_sync_link
+		WHERE config_id = $1 AND external_type = 'assignee' AND external_key = $2
+	`, config.ID, account).Scan(&localType, &localID); err != nil {
+		t.Fatalf("read assignee link: %v", err)
+	}
+	if localType != "member" || localID != userID {
+		t.Fatalf("scheduled assignee link = %q/%s, want member/%s", localType, localID, userID)
+	}
+}

@@ -281,7 +281,6 @@ export function DesignsPage({ figmaPluginDownloadUrl }: { figmaPluginDownloadUrl
   const { data: projectData } = useQuery({ queryKey: ["projects", wsId, "designs"], queryFn: () => api.listProjects() });
   const projects = projectData?.projects ?? [];
   const [search, setSearch] = useState("");
-  const [figmaCode, setFigmaCode] = useState<{ code: string; expiresAt: string } | null>(null);
   const [toolMenu, setToolMenu] = useState<ToolMenuState>(null);
   const [deleteTarget, setDeleteTarget] = useState<DesignFile | null>(null);
   const [createFolderOpen, setCreateFolderOpen] = useState(false);
@@ -296,10 +295,6 @@ export function DesignsPage({ figmaPluginDownloadUrl }: { figmaPluginDownloadUrl
   const { data: designSystems = [], isLoading: designSystemsLoading } = useQuery(designSystemListOptions(wsId, selectedProjectId || undefined));
   const { data: projectDesignSystem, isLoading: projectDesignSystemLoading } = useQuery(projectDesignSystemByProjectOptions(wsId, selectedProjectId));
   const { data: projectDesignTasks = [] } = useQuery(designDocumentTaskListOptions(wsId, selectedProjectId || undefined));
-  const figmaConnection = useMutation({
-    mutationFn: () => api.createFigmaImportConnection(),
-    onSuccess: (data) => setFigmaCode({ code: data.code, expiresAt: data.expires_at }),
-  });
 
   const projectById = useMemo(() => new Map(projects.map((project) => [project.id, project])), [projects]);
   const folderById = useMemo(() => new Map(folders.map((folder) => [folder.id, folder])), [folders]);
@@ -533,35 +528,10 @@ export function DesignsPage({ figmaPluginDownloadUrl }: { figmaPluginDownloadUrl
         </div>
         <div className="flex shrink-0 items-center gap-2">
           <FigmaPluginDownload downloadUrl={figmaPluginDownloadUrl} />
-          <Button
-            size="sm"
-            variant="outline"
-            aria-label={figmaConnection.isPending ? "正在创建 Figma 连接代码" : "连接 Figma"}
-            onClick={() => figmaConnection.mutate()}
-            disabled={figmaConnection.isPending}
-          >
-            <FileJson className="h-3.5 w-3.5" />
-            <span className="hidden sm:inline">{figmaConnection.isPending ? "正在创建代码…" : "连接 Figma"}</span>
-            <span className="sm:hidden">{figmaConnection.isPending ? "连接中…" : "连接"}</span>
-          </Button>
         </div>
       </PageHeader>
 
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        {figmaCode ? (
-          <div className="border-b bg-muted/30 px-4 py-3 text-body">
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <div className="font-medium">Figma 连接代码</div>
-                <div className="text-caption text-muted-foreground">将此一次性代码粘贴到 Figma 插件中。过期时间：{figmaCode.expiresAt}。</div>
-              </div>
-              <code className="select-all rounded-md border bg-background px-3 py-1.5 font-mono text-caption">{figmaCode.code}</code>
-            </div>
-          </div>
-        ) : null}
-        {figmaConnection.error ? (
-          <div className="border-b px-4 py-2 text-caption text-destructive">无法创建 Figma 连接代码。</div>
-        ) : null}
         <div className="flex shrink-0 flex-col border-b bg-muted/20 sm:flex-row sm:items-end sm:justify-between">
           <div role="tablist" aria-label="设计项目" className="flex min-w-0 items-end gap-1 overflow-x-auto overflow-y-hidden px-3 pt-2 sm:px-4">
             <div className={`-mb-px flex h-9 w-28 shrink-0 items-center rounded-t-md border px-1 transition-colors ${activeWorkspaceTabId === DESIGN_HOME_TAB_ID ? "border-border border-b-background bg-background text-foreground shadow-sm" : "border-transparent text-muted-foreground hover:bg-background/70 hover:text-foreground"}`}>
