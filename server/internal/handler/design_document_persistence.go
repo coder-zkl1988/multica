@@ -37,6 +37,21 @@ type designDocumentFirstRevisionParams struct {
 	Archive    []byte
 }
 
+type designDocumentAdjustmentRevisionParams struct {
+	DocumentID pgtype.UUID
+	RevisionID pgtype.UUID
+	Snapshot   designDocumentSnapshotParams
+	Archive    []byte
+}
+
+type designDocumentPointerParams struct {
+	WorkspaceID                pgtype.UUID
+	ProjectID                  pgtype.UUID
+	DocumentID                 pgtype.UUID
+	ExpectedDraftRevisionID    pgtype.UUID
+	ExpectedDraftContentDigest string
+}
+
 func createDesignDocumentInputSnapshot(ctx context.Context, queries *db.Queries, input designDocumentSnapshotParams) (db.DesignDocumentInputSnapshot, error) {
 	if input.BaseRevisionID.Valid || input.BaseContentDigest != "" {
 		return db.DesignDocumentInputSnapshot{}, errors.New("standalone design document snapshot cannot have base provenance")
@@ -64,7 +79,7 @@ func createDesignDocumentWithFirstRevision(ctx context.Context, queries *db.Quer
 	if err != nil {
 		return db.CreateDesignDocumentWithInputSnapshotAndFirstRevisionRow{}, err
 	}
-	binding := designDocumentPersistenceBinding(input, snapshotDigest)
+	binding := designDocumentPersistenceBinding(input.DocumentID, input.RevisionID, input.Snapshot, snapshotDigest)
 	validated, err := designdocument.ValidateArchive(input.Archive, binding)
 	if err != nil {
 		return db.CreateDesignDocumentWithInputSnapshotAndFirstRevisionRow{}, err
@@ -97,15 +112,72 @@ func createDesignDocumentWithFirstRevision(ctx context.Context, queries *db.Quer
 	})
 }
 
-func designDocumentPersistenceBinding(input designDocumentFirstRevisionParams, snapshotDigest string) designdocument.Binding {
+func createDesignDocumentAdjustmentRevision(ctx context.Context, queries *db.Queries, input designDocumentAdjustmentRevisionParams) (db.CreateDesignDocumentAdjustmentRevisionRow, error) {
+	if !input.Snapshot.BaseRevisionID.Valid || input.Snapshot.BaseContentDigest == "" {
+		return db.CreateDesignDocumentAdjustmentRevisionRow{}, errors.New("design document adjustment requires base provenance")
+	}
+	snapshotDigest, err := designpackage.CanonicalJSONDigest(input.Snapshot.Snapshot, "design document input snapshot")
+	if err != nil {
+		return db.CreateDesignDocumentAdjustmentRevisionRow{}, err
+	}
+	binding := designDocumentPersistenceBinding(input.DocumentID, input.RevisionID, input.Snapshot, snapshotDigest)
+	validated, err := designdocument.ValidateArchive(input.Archive, binding)
+	if err != nil {
+		return db.CreateDesignDocumentAdjustmentRevisionRow{}, err
+	}
+	manifest, err := json.Marshal(validated.Manifest)
+	if err != nil {
+		return db.CreateDesignDocumentAdjustmentRevisionRow{}, fmt.Errorf("encode design document manifest: %w", err)
+	}
+	artifactIndex, err := json.Marshal(validated.Manifest.Files)
+	if err != nil {
+		return db.CreateDesignDocumentAdjustmentRevisionRow{}, fmt.Errorf("encode design document artifact index: %w", err)
+	}
+	objectKey, err := designdocument.ArchiveObjectKey(binding, validated.Manifest.ContentDigest)
+	if err != nil {
+		return db.CreateDesignDocumentAdjustmentRevisionRow{}, err
+	}
+	return queries.CreateDesignDocumentAdjustmentRevision(ctx, db.CreateDesignDocumentAdjustmentRevisionParams{
+		DocumentID: input.DocumentID, WorkspaceID: input.Snapshot.WorkspaceID,
+		ProjectID: input.Snapshot.ProjectID, BaseRevisionID: input.Snapshot.BaseRevisionID,
+		BaseContentDigest: input.Snapshot.BaseContentDigest, TaskID: input.Snapshot.TaskID,
+		AgentID: input.Snapshot.AgentID, TargetPlatform: input.Snapshot.TargetPlatform,
+		SnapshotSchemaVersion: input.Snapshot.SchemaVersion, Snapshot: input.Snapshot.Snapshot,
+		SnapshotSha256: snapshotDigest, DesignSystemID: input.Snapshot.DesignSystemID,
+		DesignSystemSourceTaskID:  input.Snapshot.DesignSystemSourceTaskID,
+		DesignSystemContentDigest: optionalText(input.Snapshot.DesignSystemContentDigest),
+		Manifest:                  manifest, RevisionSchemaVersion: designdocument.SchemaVersion,
+		RevisionID: input.RevisionID, ContentDigest: validated.Manifest.ContentDigest,
+		ArtifactIndex: artifactIndex, ArchiveObjectKey: objectKey,
+	})
+}
+
+func saveDesignDocumentDraft(ctx context.Context, queries *db.Queries, input designDocumentPointerParams) (db.DesignDocument, error) {
+	return queries.SaveDesignDocumentDraft(ctx, db.SaveDesignDocumentDraftParams{
+		DocumentID: input.DocumentID, WorkspaceID: input.WorkspaceID, ProjectID: input.ProjectID,
+		ExpectedDraftRevisionID:    input.ExpectedDraftRevisionID,
+		ExpectedDraftContentDigest: input.ExpectedDraftContentDigest,
+	})
+}
+
+func discardDesignDocumentDraft(ctx context.Context, queries *db.Queries, input designDocumentPointerParams) (db.DesignDocument, error) {
+	return queries.DiscardDesignDocumentDraft(ctx, db.DiscardDesignDocumentDraftParams{
+		DocumentID: input.DocumentID, WorkspaceID: input.WorkspaceID, ProjectID: input.ProjectID,
+		ExpectedDraftRevisionID:    input.ExpectedDraftRevisionID,
+		ExpectedDraftContentDigest: input.ExpectedDraftContentDigest,
+	})
+}
+
+func designDocumentPersistenceBinding(documentID, revisionID pgtype.UUID, snapshot designDocumentSnapshotParams, snapshotDigest string) designdocument.Binding {
 	return designdocument.Binding{
-		DocumentID: uuidToString(input.DocumentID), RevisionID: uuidToString(input.RevisionID),
-		WorkspaceID: uuidToString(input.Snapshot.WorkspaceID), ProjectID: uuidToString(input.Snapshot.ProjectID),
-		IssueID: uuidToString(input.Snapshot.IssueID), TaskID: uuidToString(input.Snapshot.TaskID),
-		AgentID: uuidToString(input.Snapshot.AgentID), TargetPlatform: input.Snapshot.TargetPlatform.String,
-		InputSnapshotSHA256: snapshotDigest, DesignSystemID: uuidToString(input.Snapshot.DesignSystemID),
-		DesignSystemSourceTaskID:  uuidToString(input.Snapshot.DesignSystemSourceTaskID),
-		DesignSystemContentDigest: input.Snapshot.DesignSystemContentDigest,
+		DocumentID: uuidToString(documentID), RevisionID: uuidToString(revisionID),
+		WorkspaceID: uuidToString(snapshot.WorkspaceID), ProjectID: uuidToString(snapshot.ProjectID),
+		IssueID: uuidToString(snapshot.IssueID), TaskID: uuidToString(snapshot.TaskID),
+		AgentID: uuidToString(snapshot.AgentID), TargetPlatform: snapshot.TargetPlatform.String,
+		InputSnapshotSHA256: snapshotDigest, BaseRevisionID: uuidToString(snapshot.BaseRevisionID),
+		BaseContentDigest: snapshot.BaseContentDigest, DesignSystemID: uuidToString(snapshot.DesignSystemID),
+		DesignSystemSourceTaskID:  uuidToString(snapshot.DesignSystemSourceTaskID),
+		DesignSystemContentDigest: snapshot.DesignSystemContentDigest,
 	}
 }
 

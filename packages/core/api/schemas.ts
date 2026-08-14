@@ -69,6 +69,7 @@ import type {
   WebhookDelivery,
   CreateDesignDraftAgentTaskResponse,
   DesignDocumentAgentTask,
+  DesignDocument,
   DesignDocumentPreview,
   ListDesignDocumentAgentTasksResponse,
   ListDesignDocumentsResponse,
@@ -1245,6 +1246,10 @@ export const EMPTY_CREATE_DESIGN_DRAFT_AGENT_TASK_RESPONSE: CreateDesignDraftAge
 
 export const DesignDocumentAgentTaskSchema = z.object({
   id: z.string(),
+  operation: z.enum(["first_generation", "adjust"]).optional(),
+  document_id: z.string().optional(),
+  base_revision_id: z.string().optional(),
+  base_content_digest: z.string().optional(),
   input_snapshot_id: z.string().optional(),
   workspace_id: z.string().default(""),
   project_id: z.string(),
@@ -1297,6 +1302,10 @@ export const DesignDocumentSchema = z.object({
   updated_at: z.string(),
 }).loose();
 
+export const EMPTY_DESIGN_DOCUMENT: DesignDocument = {
+  id: "", project_id: "", title: "", created_at: "", updated_at: "",
+};
+
 export const ListDesignDocumentsResponseSchema = z.object({ documents: z.array(DesignDocumentSchema).default([]) }).loose();
 export const EMPTY_LIST_DESIGN_DOCUMENTS_RESPONSE: ListDesignDocumentsResponse = { documents: [] };
 
@@ -1309,6 +1318,11 @@ export const DesignDocumentPreviewSchema = z.object({
   resource_access_token: z.string(),
   resource_access_expires_at: z.string(),
   targets: z.array(z.object({ id: z.string(), kind: z.literal("page"), path: z.string() })),
+  adjustment_scopes: z.array(z.object({
+    kind: z.enum(["document", "page", "state", "overlay", "block"]),
+    id: z.string().optional(),
+    label: z.string(),
+  })).default([]),
   preview: z.object({
     schema_version: z.literal("multica.design-preview-receipt/v1"),
     content_digest: z.string(),
@@ -1322,6 +1336,7 @@ export const DesignDocumentPreviewSchema = z.object({
 export const EMPTY_DESIGN_DOCUMENT_PREVIEW: DesignDocumentPreview = {
   schema: "multica.design-document-preview/v1", document_id: "", revision_id: "", content_digest: "",
   resource_base_url: "", resource_access_token: "", resource_access_expires_at: "", targets: [],
+  adjustment_scopes: [],
   preview: { schema_version: "multica.design-preview-receipt/v1", content_digest: "", verification: { passed: false, browser: { name: "", version: "" } } },
 };
 

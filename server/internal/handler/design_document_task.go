@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/designdocument"
 	"github.com/multica-ai/multica/server/internal/projectdesignsystem"
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -44,6 +45,10 @@ type CreateDesignDocumentAgentTaskRequest struct {
 
 type DesignDocumentAgentTaskResponse struct {
 	ID                  string  `json:"id"`
+	Operation           string  `json:"operation,omitempty"`
+	DocumentID          string  `json:"document_id,omitempty"`
+	BaseRevisionID      string  `json:"base_revision_id,omitempty"`
+	BaseContentDigest   string  `json:"base_content_digest,omitempty"`
 	InputSnapshotID     *string `json:"input_snapshot_id,omitempty"`
 	WorkspaceID         string  `json:"workspace_id"`
 	ProjectID           string  `json:"project_id"`
@@ -91,7 +96,19 @@ type designDocumentTaskSnapshot struct {
 	Attachments            []designDocumentTaskAttachment  `json:"attachments"`
 	DesignSystem           *designDocumentTaskDesignSystem `json:"design_system,omitempty"`
 	RepositoryGrounding    string                          `json:"repository_grounding"`
+	Repository             json.RawMessage                 `json:"repository,omitempty"`
+	Adjustment             *designDocumentAdjustment       `json:"adjustment,omitempty"`
 	AttachmentSourceTaskID string                          `json:"attachment_source_task_id,omitempty"`
+}
+
+type designDocumentAdjustment struct {
+	Instruction string                        `json:"instruction"`
+	Scope       designDocumentAdjustmentScope `json:"scope"`
+}
+
+type designDocumentAdjustmentScope struct {
+	Kind string `json:"kind"`
+	ID   string `json:"id,omitempty"`
 }
 
 type designDocumentTaskEntity struct {
@@ -370,8 +387,18 @@ func validateDesignDocumentTaskInputIdentity(input designDocumentTaskSnapshot, w
 	if input.SchemaVersion != designDocumentInputSchema || input.TaskProtocol != designDocumentTaskSchema || input.OutputSchema != "multica.design-document/v1" ||
 		strings.TrimSpace(input.Requirement) == "" || len(input.Requirement) > maxDesignDocumentRequirement ||
 		(input.TargetPlatform != "" && input.TargetPlatform != "web" && input.TargetPlatform != "mobile" && input.TargetPlatform != "cross_platform") ||
-		(input.RepositoryGrounding != "pending" && input.RepositoryGrounding != "unavailable") || input.Attachments == nil {
+		(input.RepositoryGrounding != "pending" && input.RepositoryGrounding != "unavailable" && input.RepositoryGrounding != "pinned") || input.Attachments == nil {
 		return errors.New("Design Document task input is invalid")
+	}
+	if input.RepositoryGrounding == "pinned" {
+		if input.Adjustment == nil || len(input.Repository) == 0 {
+			return errors.New("Design Document adjustment input is invalid")
+		}
+		if _, err := designdocument.ValidateRepositoryGrounding(input.Repository); err != nil {
+			return errors.New("Design Document adjustment repository grounding is invalid")
+		}
+	} else if input.Adjustment != nil || len(input.Repository) != 0 {
+		return errors.New("Design Document first-generation input is invalid")
 	}
 	if input.Workspace.ID != workspaceID || input.Project.ID != projectID || input.Agent.ID != agentID {
 		return errors.New("Design Document task input identity is invalid")
@@ -550,6 +577,7 @@ func (h *Handler) designDocumentTaskSavedDesignSystem(r *http.Request, workspace
 func designDocumentTaskResponse(row db.ListDesignDocumentAgentTasksRow) DesignDocumentAgentTaskResponse {
 	return DesignDocumentAgentTaskResponse{
 		ID: uuidToString(row.ID), InputSnapshotID: optionalUUIDString(row.InputSnapshotID),
+		Operation: row.Operation, DocumentID: row.DocumentID, BaseRevisionID: row.BaseRevisionID, BaseContentDigest: row.BaseContentDigest,
 		WorkspaceID: uuidToString(row.WorkspaceID), ProjectID: uuidToString(row.ProjectID), ProjectTitle: row.ProjectTitle,
 		IssueID: optionalUUIDString(row.IssueID), IssueNumber: optionalInt32(row.IssueNumber), IssueTitle: optionalTextString(row.IssueTitle),
 		AgentID: uuidToString(row.AgentID), AgentName: row.AgentName, Requirement: row.Requirement,

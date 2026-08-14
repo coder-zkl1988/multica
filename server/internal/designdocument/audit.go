@@ -100,6 +100,9 @@ func auditBrief(brief Brief) []Diagnostic {
 	for _, v := range brief.Overlays {
 		add("overlay", v.ID, v.Name, v.Description, overlays)
 	}
+	for _, v := range brief.Blocks {
+		add("block", v.ID, v.Name, v.Description, nil)
+	}
 	for _, v := range brief.Flows {
 		add("flow", v.ID, v.Name, v.Description, flows)
 	}
@@ -126,7 +129,7 @@ func auditBrief(brief Brief) []Diagnostic {
 		check("page_reference_dangling", []string{v.PageID}, pages)
 		check("requirement_reference_dangling", v.RequirementIDs, requirements)
 	}
-	for _, v := range append(append([]PageScope{}, brief.States...), brief.Overlays...) {
+	for _, v := range append(append(append([]PageScope{}, brief.States...), brief.Overlays...), brief.Blocks...) {
 		check("page_reference_dangling", []string{v.PageID}, pages)
 		check("requirement_reference_dangling", v.RequirementIDs, requirements)
 	}

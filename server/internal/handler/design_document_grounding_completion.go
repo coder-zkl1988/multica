@@ -35,18 +35,21 @@ func prepareDesignDocumentGroundingCompletion(task db.AgentTaskQueue, receipt *d
 		return preparedDesignDocumentGrounding{}, err
 	}
 	var taskContext struct {
-		Type           string          `json:"type"`
-		TaskProtocol   string          `json:"task_protocol"`
-		Operation      string          `json:"operation"`
-		ExecutionReady bool            `json:"execution_ready"`
-		Input          json.RawMessage `json:"input"`
-		WorkspaceID    string          `json:"workspace_id"`
-		ProjectID      string          `json:"project_id"`
-		IssueID        string          `json:"issue_id"`
-		AgentID        string          `json:"agent_id"`
-		TargetPlatform string          `json:"target_platform"`
+		Type              string          `json:"type"`
+		TaskProtocol      string          `json:"task_protocol"`
+		Operation         string          `json:"operation"`
+		ExecutionReady    bool            `json:"execution_ready"`
+		Input             json.RawMessage `json:"input"`
+		WorkspaceID       string          `json:"workspace_id"`
+		ProjectID         string          `json:"project_id"`
+		IssueID           string          `json:"issue_id"`
+		AgentID           string          `json:"agent_id"`
+		TargetPlatform    string          `json:"target_platform"`
+		DocumentID        string          `json:"document_id"`
+		BaseRevisionID    string          `json:"base_revision_id"`
+		BaseContentDigest string          `json:"base_content_digest"`
 	}
-	if json.Unmarshal(task.Context, &taskContext) != nil || taskContext.Type != designDocumentTaskContextType || taskContext.TaskProtocol != designDocumentTaskSchema || taskContext.Operation != "first_generation" || !taskContext.ExecutionReady {
+	if json.Unmarshal(task.Context, &taskContext) != nil || taskContext.Type != designDocumentTaskContextType || taskContext.TaskProtocol != designDocumentTaskSchema || (taskContext.Operation != "first_generation" && taskContext.Operation != "adjust") || !taskContext.ExecutionReady {
 		return preparedDesignDocumentGrounding{}, errors.New("task is not an execution-ready Design Document task")
 	}
 	if taskContext.AgentID != uuidToString(task.AgentID) || taskContext.ProjectID == "" || taskContext.WorkspaceID == "" {
@@ -87,10 +90,20 @@ func prepareDesignDocumentGroundingCompletion(task db.AgentTaskQueue, receipt *d
 	} else if task.RerunOfTaskID.Valid {
 		return preparedDesignDocumentGrounding{}, errors.New("Design Document task attachment provenance is invalid")
 	}
-	if input.RepositoryGrounding != "pending" && input.RepositoryGrounding != designdocument.GroundingUnavailable {
+	if input.RepositoryGrounding != "pending" && input.RepositoryGrounding != designdocument.GroundingUnavailable && input.RepositoryGrounding != "pinned" {
 		return preparedDesignDocumentGrounding{}, errors.New("Design Document repository grounding mode is invalid")
 	}
-	if (input.RepositoryGrounding == "unavailable") != (validated.Status == designdocument.GroundingUnavailable) {
+	if taskContext.Operation == "adjust" {
+		if input.RepositoryGrounding != "pinned" || !jsonValuesEqual(input.Repository, raw) {
+			return preparedDesignDocumentGrounding{}, errors.New("adjustment grounding does not match pinned repository facts")
+		}
+		if _, err := parseUUIDValue(taskContext.DocumentID); err != nil {
+			return preparedDesignDocumentGrounding{}, errors.New("adjustment document identity is invalid")
+		}
+		if _, err := parseUUIDValue(taskContext.BaseRevisionID); err != nil || !validDesignDocumentDigest(taskContext.BaseContentDigest) {
+			return preparedDesignDocumentGrounding{}, errors.New("adjustment base identity is invalid")
+		}
+	} else if (input.RepositoryGrounding == "unavailable") != (validated.Status == designdocument.GroundingUnavailable) {
 		return preparedDesignDocumentGrounding{}, errors.New("repository grounding receipt does not match the explicit task mode")
 	}
 	validatedRaw, _ := json.Marshal(validated)

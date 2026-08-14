@@ -64,18 +64,21 @@ func (h *Handler) UploadDesignDocumentPackage(w http.ResponseWriter, r *http.Req
 
 func designDocumentUploadBinding(task db.AgentTaskQueue, workspaceID string, r *http.Request) (designdocument.Binding, error) {
 	var taskContext struct {
-		Type           string                     `json:"type"`
-		TaskProtocol   string                     `json:"task_protocol"`
-		Operation      string                     `json:"operation"`
-		ExecutionReady bool                       `json:"execution_ready"`
-		Input          designDocumentTaskSnapshot `json:"input"`
-		WorkspaceID    string                     `json:"workspace_id"`
-		ProjectID      string                     `json:"project_id"`
-		IssueID        string                     `json:"issue_id"`
-		AgentID        string                     `json:"agent_id"`
-		TargetPlatform string                     `json:"target_platform"`
+		Type              string                     `json:"type"`
+		TaskProtocol      string                     `json:"task_protocol"`
+		Operation         string                     `json:"operation"`
+		ExecutionReady    bool                       `json:"execution_ready"`
+		Input             designDocumentTaskSnapshot `json:"input"`
+		WorkspaceID       string                     `json:"workspace_id"`
+		ProjectID         string                     `json:"project_id"`
+		IssueID           string                     `json:"issue_id"`
+		AgentID           string                     `json:"agent_id"`
+		TargetPlatform    string                     `json:"target_platform"`
+		DocumentID        string                     `json:"document_id"`
+		BaseRevisionID    string                     `json:"base_revision_id"`
+		BaseContentDigest string                     `json:"base_content_digest"`
 	}
-	if json.Unmarshal(task.Context, &taskContext) != nil || taskContext.Type != designDocumentTaskContextType || taskContext.TaskProtocol != designDocumentTaskSchema || taskContext.Operation != "first_generation" || !taskContext.ExecutionReady {
+	if json.Unmarshal(task.Context, &taskContext) != nil || taskContext.Type != designDocumentTaskContextType || taskContext.TaskProtocol != designDocumentTaskSchema || (taskContext.Operation != "first_generation" && taskContext.Operation != "adjust") || !taskContext.ExecutionReady {
 		return designdocument.Binding{}, errors.New("invalid task context")
 	}
 	if taskContext.WorkspaceID != workspaceID || taskContext.AgentID != uuidToString(task.AgentID) || taskContext.Input.TargetPlatform != taskContext.TargetPlatform {
@@ -97,6 +100,16 @@ func designDocumentUploadBinding(task db.AgentTaskQueue, workspaceID string, r *
 		DocumentID: documentID, RevisionID: revisionID, WorkspaceID: taskContext.WorkspaceID, ProjectID: taskContext.ProjectID,
 		IssueID: taskContext.IssueID, TaskID: uuidToString(task.ID), AgentID: taskContext.AgentID,
 		TargetPlatform: taskContext.TargetPlatform, InputSnapshotSHA256: snapshotDigest,
+	}
+	if taskContext.Operation == "adjust" {
+		if documentID != taskContext.DocumentID || revisionID == taskContext.BaseRevisionID || !validDesignDocumentDigest(taskContext.BaseContentDigest) {
+			return designdocument.Binding{}, errors.New("invalid adjustment identity")
+		}
+		if _, err := parseUUIDValue(taskContext.BaseRevisionID); err != nil {
+			return designdocument.Binding{}, err
+		}
+		binding.BaseRevisionID = taskContext.BaseRevisionID
+		binding.BaseContentDigest = taskContext.BaseContentDigest
 	}
 	if taskContext.Input.DesignSystem != nil {
 		binding.DesignSystemID = taskContext.Input.DesignSystem.ID

@@ -150,7 +150,7 @@ func buildPromptBody(task Task, provider string) string {
 		return buildProjectDesignSystemPrompt()
 	}
 	if len(task.DesignDocumentContext) > 0 {
-		return buildDesignDocumentPrompt()
+		return buildDesignDocumentPrompt(task)
 	}
 	if len(task.PMOSyncContext) > 0 {
 		return buildPMOSyncPrompt(task)
@@ -171,7 +171,17 @@ func buildPromptBody(task Task, provider string) string {
 	return b.String()
 }
 
-func buildDesignDocumentPrompt() string {
+func buildDesignDocumentPrompt(task Task) string {
+	if isDesignDocumentAdjustment(task.DesignDocumentContext) {
+		return `You are running as a Design Document adjustment designer for a Multica workspace.
+
+Read .agent_context/design_document/context/task.json and the immutable base package at .agent_context/design_document/context/base/package.zip. Follow the adjustment instruction and semantic scope exactly. Reuse the pinned repository grounding embedded in task.json. Do not inspect or update repository checkouts.
+
+Produce a complete replacement package in $MULTICA_OUTPUT_DIR: brief.json, coverage.json, prototype/index.html, prototype/styles.css, prototype/app.js, and optional local assets. Preserve all unaffected content and stable semantic IDs. Do not create manifest.json. The package must be complete, offline, and use no remote resources, network APIs, credentials, absolute local paths, service workers, or external commands.
+
+Do not call Multica write commands, change Issue state, post comments, delegate, spawn sub-agents, or leave follow-up work. Before finishing, read back every staged file and verify the package is complete. Final stdout is only a short completion summary; staged files are authoritative.
+`
+	}
 	return `You are running as a Design Document designer for a Multica workspace.
 
 Read .agent_context/design_document/context/task.json first. Treat every file under context/ and reference/ as immutable input. Read repository-facts/checkout.json and inspect only the listed repository checkouts. Distinguish repository facts from inferences and record conflicts, missing facts, and uncertainty.

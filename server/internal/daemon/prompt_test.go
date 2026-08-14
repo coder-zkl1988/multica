@@ -1603,6 +1603,19 @@ func TestBuildPromptDesignDocumentFirstGeneration(t *testing.T) {
 	}
 }
 
+func TestBuildPromptDesignDocumentAdjustmentUsesPinnedBase(t *testing.T) {
+	task := Task{DesignDocumentContext: json.RawMessage(`{"type":"design_document_task","operation":"adjust","execution_ready":true,"input":{}}`)}
+	prompt := BuildPrompt(task, "opencode")
+	for _, want := range []string{"context/base/package.zip", "adjustment instruction", "semantic scope", "complete replacement package", "Do not inspect or update repository checkouts"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("adjustment prompt missing %q\n%s", want, prompt)
+		}
+	}
+	if strings.Contains(prompt, "Produce the complete first-generation package") {
+		t.Fatal("adjustment prompt used first-generation instructions")
+	}
+}
+
 func TestBuildPromptProjectDesignSystemRepositoryAnalysisUsesMarkerContract(t *testing.T) {
 	prompt := BuildPrompt(projectDesignSystemPromptTask(t, "repository_analysis"), "opencode")
 	for _, want := range []string{

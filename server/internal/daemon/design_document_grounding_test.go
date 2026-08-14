@@ -205,6 +205,49 @@ func TestMaterializeDesignDocumentInputsCreatesReadOnlyPinnedFiles(t *testing.T)
 	}
 }
 
+func TestDesignDocumentAdjustmentReusesPinnedGroundingAndBasePackage(t *testing.T) {
+	base := []byte("immutable base package")
+	digest := "sha256:" + strings.Repeat("a", 64)
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.URL.Path != "/api/daemon/tasks/task-adjust/design-document/base" {
+			t.Fatalf("unexpected adjustment input request %s", r.URL.Path)
+		}
+		w.Header().Set("X-Multica-Design-Package-Digest", digest)
+		_, _ = w.Write(base)
+	}))
+	t.Cleanup(server.Close)
+	grounding := `{"schema_version":"multica.design-document-grounding/v1","status":"unavailable","repositories":[],"facts":[],"conflicts":[],"missing":[],"warnings":["Pinned unavailable grounding."]}`
+	contextJSON := `{"type":"design_document_task","operation":"adjust","execution_ready":true,"document_id":"11111111-1111-1111-1111-111111111111","base_revision_id":"22222222-2222-2222-2222-222222222222","base_content_digest":"` + digest + `","input":{"repository_grounding":"pinned","repository":` + grounding + `,"attachments":[{"id":"attachment-1","size_bytes":10,"sha256":"` + digest + `"}],"design_system":{"content_digest":"` + digest + `"}}}`
+	task := Task{ID: "task-adjust", WorkspaceID: "workspace-1", DesignDocumentContext: json.RawMessage(contextJSON)}
+	env, err := execenv.Prepare(execenv.PrepareParams{WorkspacesRoot: t.TempDir(), WorkspaceID: task.WorkspaceID, TaskID: task.ID, Provider: "opencode", Task: execenv.TaskContextForEnv{DesignDocumentContext: contextJSON}}, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer env.Cleanup(true)
+	if err := materializeDesignDocumentInputs(context.Background(), task, env.WorkDir, NewClient(server.URL)); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(env.WorkDir, ".agent_context", "design_document", "context", "base", "package.zip"))
+	if err != nil || string(got) != string(base) || requests != 1 {
+		t.Fatalf("base=%q requests=%d err=%v", got, requests, err)
+	}
+	state, err := prepareDesignDocumentGrounding(context.Background(), task, env.WorkDir, "daemon-1", nil, slog.Default())
+	if err != nil || state.pinned == nil || state.pinned.Status != "unavailable" || len(state.Repositories) != 0 {
+		t.Fatalf("adjustment grounding=%+v err=%v", state, err)
+	}
+	checkout, err := os.ReadFile(filepath.Join(env.WorkDir, ".agent_context", "design_document", "context", "repository-facts", "checkout.json"))
+	if err != nil || !strings.Contains(string(checkout), `"repositories":[]`) {
+		t.Fatalf("adjustment checkout=%s err=%v", checkout, err)
+	}
+	outputDir := copyDesignDocumentFixture(t)
+	receipt, err := finalizeDesignDocumentGrounding(state, env.WorkDir, outputDir)
+	if err != nil || receipt == nil || receipt.Status != "unavailable" {
+		t.Fatalf("adjustment finalize=%+v err=%v", receipt, err)
+	}
+}
+
 func TestRepositoryGroundingReadsAreBoundedAndCancelable(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "source.txt")
 	if err := os.WriteFile(path, make([]byte, maxDesignDocumentGroundingSourceBytes+1), 0o644); err != nil {

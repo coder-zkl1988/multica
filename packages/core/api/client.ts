@@ -185,6 +185,9 @@ import type {
   CreateDesignDraftAgentTaskRequest,
   CreateDesignDraftAgentTaskResponse,
   CreateDesignDocumentAgentTaskRequest,
+  AdjustDesignDocumentRequest,
+  DesignDocumentPointerRequest,
+  DesignDocument,
   DesignDocumentAgentTask,
   DesignDocumentPreview,
   ListDesignDocumentAgentTasksResponse,
@@ -452,6 +455,7 @@ import {
   DesignSystemProfileSchema,
   CreateDesignDraftAgentTaskResponseSchema,
   DesignDocumentAgentTaskSchema,
+  DesignDocumentSchema,
   DesignDocumentPreviewSchema,
   ListDesignDocumentAgentTasksResponseSchema,
   ListDesignDocumentsResponseSchema,
@@ -465,6 +469,7 @@ import {
   EMPTY_DESIGN_SYSTEM_PROFILE,
   EMPTY_CREATE_DESIGN_DRAFT_AGENT_TASK_RESPONSE,
   EMPTY_DESIGN_DOCUMENT_AGENT_TASK,
+  EMPTY_DESIGN_DOCUMENT,
   EMPTY_DESIGN_DOCUMENT_PREVIEW,
   EMPTY_LIST_DESIGN_DOCUMENT_AGENT_TASKS_RESPONSE,
   EMPTY_LIST_DESIGN_DOCUMENTS_RESPONSE,
@@ -3560,6 +3565,36 @@ export class ApiClient {
     const raw = await this.fetch<unknown>(`/api/design-documents/${encodeURIComponent(documentId)}/preview?project_id=${encodeURIComponent(projectId)}`);
     return parseWithFallback(raw, DesignDocumentPreviewSchema, { ...EMPTY_DESIGN_DOCUMENT_PREVIEW, document_id: documentId }, {
       endpoint: "GET /api/design-documents/{id}/preview",
+    });
+  }
+
+  async adjustDesignDocument(documentId: string, data: AdjustDesignDocumentRequest): Promise<DesignDocumentAgentTask> {
+    const raw = await this.fetch<unknown>(`/api/design-documents/${encodeURIComponent(documentId)}/adjust`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, DesignDocumentAgentTaskSchema, EMPTY_DESIGN_DOCUMENT_AGENT_TASK, {
+      endpoint: "POST /api/design-documents/{id}/adjust",
+    });
+  }
+
+  async saveDesignDocument(documentId: string, data: DesignDocumentPointerRequest): Promise<DesignDocument> {
+    const raw = await this.fetch<unknown>(`/api/design-documents/${encodeURIComponent(documentId)}/save`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, DesignDocumentSchema, { ...EMPTY_DESIGN_DOCUMENT, id: documentId }, {
+      endpoint: "POST /api/design-documents/{id}/save",
+    });
+  }
+
+  async discardDesignDocumentDraft(documentId: string, data: DesignDocumentPointerRequest): Promise<DesignDocument> {
+    const raw = await this.fetch<unknown>(`/api/design-documents/${encodeURIComponent(documentId)}/draft`, {
+      method: "DELETE",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, DesignDocumentSchema, { ...EMPTY_DESIGN_DOCUMENT, id: documentId }, {
+      endpoint: "DELETE /api/design-documents/{id}/draft",
     });
   }
 

@@ -221,7 +221,7 @@ func writeDesignDocumentContext(workDir string, ctx TaskContextForEnv, manifest 
 	var discriminator, operation string
 	var executionReady bool
 	if json.Unmarshal(task["type"], &discriminator) != nil || discriminator != "design_document_task" ||
-		json.Unmarshal(task["operation"], &operation) != nil || operation != "first_generation" ||
+		json.Unmarshal(task["operation"], &operation) != nil || (operation != "first_generation" && operation != "adjust") ||
 		json.Unmarshal(task["execution_ready"], &executionReady) != nil || !executionReady {
 		return errors.New("invalid Design Document task context")
 	}
@@ -230,9 +230,10 @@ func writeDesignDocumentContext(workDir string, ctx TaskContextForEnv, manifest 
 	inputDir := filepath.Join(contextDir, "input-snapshots")
 	factsDir := filepath.Join(contextDir, "repository-facts")
 	designSystemDir := filepath.Join(contextDir, "design-system")
+	baseDir := filepath.Join(contextDir, "base")
 	referenceDir := filepath.Join(root, "reference")
 	workDirPath := filepath.Join(root, "work")
-	for _, dir := range []string{inputDir, factsDir, designSystemDir, referenceDir, workDirPath} {
+	for _, dir := range []string{inputDir, factsDir, designSystemDir, baseDir, referenceDir, workDirPath} {
 		if err := recordMkdirAll(dir, 0o755, manifest); err != nil {
 			return err
 		}
@@ -609,7 +610,7 @@ func RestoreV2SidecarWritability(workdir string) error {
 	}
 	designRoot := filepath.Join(agentContext, "design_document")
 	if isRealDirectory(designRoot) {
-		for _, relative := range []string{"context", "context/input-snapshots", "context/repository-facts", "context/design-system", "reference", "reference/attachments"} {
+		for _, relative := range []string{"context", "context/input-snapshots", "context/repository-facts", "context/design-system", "context/base", "reference", "reference/attachments"} {
 			dir := filepath.Join(designRoot, filepath.FromSlash(relative))
 			if isRealDirectory(dir) {
 				if err := os.Chmod(dir, 0o755); err != nil {

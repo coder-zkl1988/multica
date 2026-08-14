@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CircleStop, Clock3, Eye, FilePlus2, Loader2, Paperclip, Play, RotateCcw, X } from "lucide-react";
+import { CircleStop, Clock3, Eye, FilePlus2, Loader2, Paperclip, Play, RotateCcw, Save, WandSparkles, X } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@multica/core/api";
 import { designKeys } from "@multica/core/designs/keys";
@@ -40,6 +40,8 @@ export function DesignDocumentTaskPanel({
   const [submitError, setSubmitError] = useState("");
   const [previewDocumentId, setPreviewDocumentId] = useState("");
   const [previewTargetId, setPreviewTargetId] = useState("");
+  const [adjustmentScope, setAdjustmentScope] = useState("");
+  const [adjustmentInstruction, setAdjustmentInstruction] = useState("");
   const effectiveProjectId = projectId ?? selectedProjectId;
   const selectedProject = projects.find((project) => project.id === effectiveProjectId);
   const availableAgents = useMemo(() => agents.filter((agent) => !agent.archived_at && agent.runtime_id), [agents]);
@@ -49,6 +51,8 @@ export function DesignDocumentTaskPanel({
   const { data: preview, isLoading: previewLoading, isError: previewError } = useQuery(designDocumentPreviewOptions(wsId, effectiveProjectId, previewDocumentId));
   const previewDocument = documents.find((document) => document.id === previewDocumentId);
   const previewTarget = preview?.targets.find((target) => target.id === previewTargetId) ?? preview?.targets[0];
+  const selectedAdjustmentScope = preview?.adjustment_scopes.find((scope) => adjustmentScopeKey(scope) === adjustmentScope) ?? preview?.adjustment_scopes[0];
+  const activeAdjustment = taskRows.some((task) => task.operation === "adjust" && task.document_id === previewDocumentId && ["queued", "dispatched", "running", "waiting_local_directory", "deferred"].includes(task.status));
   const { data: projectIssues = [] } = useQuery({
     queryKey: ["design-document-task-issues", wsId, effectiveProjectId],
     queryFn: async () => (await api.listIssues({ project_id: effectiveProjectId, limit: 100 })).issues,
@@ -105,6 +109,58 @@ export function DesignDocumentTaskPanel({
       toast.success("已创建无仓库上下文的新任务");
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : "重试失败"),
+  });
+
+  const refreshDocument = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: designKeys.documentTasks(wsId) }),
+      queryClient.invalidateQueries({ queryKey: designKeys.documents(wsId, effectiveProjectId) }),
+      queryClient.invalidateQueries({ queryKey: designKeys.documentPreview(wsId, effectiveProjectId, previewDocumentId) }),
+    ]);
+  };
+
+  const adjustDocument = useMutation({
+    mutationFn: () => api.adjustDesignDocument(previewDocumentId, {
+      project_id: effectiveProjectId,
+      agent_id: agentId,
+      instruction: adjustmentInstruction.trim(),
+      scope: { kind: selectedAdjustmentScope!.kind, ...(selectedAdjustmentScope?.id ? { id: selectedAdjustmentScope.id } : {}) },
+      base_revision_id: preview!.revision_id,
+      base_content_digest: preview!.content_digest,
+    }),
+    onSuccess: async () => {
+      setAdjustmentInstruction("");
+      await refreshDocument();
+      toast.success("调整任务已创建");
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "创建调整任务失败"),
+  });
+
+  const saveDocument = useMutation({
+    mutationFn: () => api.saveDesignDocument(previewDocumentId, {
+      project_id: effectiveProjectId,
+      expected_draft_revision_id: preview!.revision_id,
+      expected_draft_content_digest: preview!.content_digest,
+    }),
+    onSuccess: async () => {
+      await refreshDocument();
+      toast.success("草稿已保存");
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "保存草稿失败"),
+  });
+
+  const discardDocument = useMutation({
+    mutationFn: () => api.discardDesignDocumentDraft(previewDocumentId, {
+      project_id: effectiveProjectId,
+      expected_draft_revision_id: preview!.revision_id,
+      expected_draft_content_digest: preview!.content_digest,
+    }),
+    onSuccess: async (document) => {
+      if (!document.draft_revision_id) setPreviewDocumentId("");
+      await refreshDocument();
+      toast.success("草稿已放弃");
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "放弃草稿失败"),
   });
 
   const handleFiles = async (files: FileList | null) => {
@@ -202,9 +258,10 @@ export function DesignDocumentTaskPanel({
           <div className="grid min-h-72 gap-4 lg:grid-cols-[14rem_minmax(0,1fr)]">
             <div className="divide-y rounded-md border">
               {documents.map((document) => (
-                <button key={document.id} type="button" aria-label={`预览 ${document.title}`} className={`flex w-full items-center gap-2 px-3 py-2.5 text-left text-body hover:bg-muted/50 ${previewDocumentId === document.id ? "bg-muted" : ""}`} onClick={() => { setPreviewDocumentId(document.id); setPreviewTargetId(""); }}>
+                <button key={document.id} type="button" aria-label={`预览 ${document.title}`} className={`flex w-full items-center gap-2 px-3 py-2.5 text-left text-body hover:bg-muted/50 ${previewDocumentId === document.id ? "bg-muted" : ""}`} onClick={() => { setPreviewDocumentId(document.id); setPreviewTargetId(""); setAdjustmentScope(""); setAdjustmentInstruction(""); }}>
                   <Eye className="h-3.5 w-3.5 shrink-0" />
                   <span className="truncate">{document.title}</span>
+                  {document.draft_revision_id !== document.saved_revision_id ? <Badge variant="secondary" className="ml-auto">未保存</Badge> : null}
                 </button>
               ))}
             </div>
@@ -218,6 +275,32 @@ export function DesignDocumentTaskPanel({
                     <span className="text-caption text-muted-foreground">{preview.preview.verification.browser.name} {preview.preview.verification.browser.version} 技术校验通过</span>
                   </div>
                   <iframe title={`${previewDocument.title} · ${previewTarget.id}`} src={`${preview.resource_base_url}${previewTarget.path.split("/").map(encodeURIComponent).join("/")}`} sandbox="allow-scripts" referrerPolicy="no-referrer" className="aspect-[16/10] min-h-72 w-full rounded-md border bg-white" />
+                  <div className="space-y-3 border-t pt-3">
+                    <div className="grid gap-3 sm:grid-cols-[minmax(10rem,0.7fr)_minmax(0,1.3fr)]">
+                      <div className="space-y-1.5">
+                        <Label htmlFor="design-document-adjustment-scope">调整范围</Label>
+                        <NativeSelect id="design-document-adjustment-scope" aria-label="调整范围" className="w-full" value={selectedAdjustmentScope ? adjustmentScopeKey(selectedAdjustmentScope) : ""} onChange={(event) => setAdjustmentScope(event.target.value)}>
+                          {preview.adjustment_scopes.map((scope) => <NativeSelectOption key={adjustmentScopeKey(scope)} value={adjustmentScopeKey(scope)}>{scope.label}</NativeSelectOption>)}
+                        </NativeSelect>
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label htmlFor="design-document-adjustment-instruction">调整说明</Label>
+                        <Textarea id="design-document-adjustment-instruction" aria-label="调整说明" value={adjustmentInstruction} onChange={(event) => setAdjustmentInstruction(event.target.value)} maxLength={32768} rows={3} />
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap items-center justify-end gap-2">
+                      {activeAdjustment ? <Badge variant="secondary">调整中</Badge> : null}
+                      <Button size="sm" variant="outline" disabled={activeAdjustment || saveDocument.isPending || !previewDocument.draft_revision_id || previewDocument.draft_revision_id === previewDocument.saved_revision_id} onClick={() => saveDocument.mutate()}>
+                        {saveDocument.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}保存草稿
+                      </Button>
+                      <Button size="sm" variant="outline" disabled={activeAdjustment || discardDocument.isPending || !previewDocument.draft_revision_id} onClick={() => discardDocument.mutate()}>
+                        {discardDocument.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}放弃草稿
+                      </Button>
+                      <Button size="sm" disabled={activeAdjustment || adjustDocument.isPending || !agentId || !adjustmentInstruction.trim() || !selectedAdjustmentScope} onClick={() => adjustDocument.mutate()}>
+                        {adjustDocument.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <WandSparkles className="h-3.5 w-3.5" />}开始调整
+                      </Button>
+                    </div>
+                  </div>
                 </div>
               ) : <div className="flex min-h-72 items-center justify-center border border-dashed text-caption text-muted-foreground">选择草稿</div>}
             </div>
@@ -242,6 +325,10 @@ export function DesignDocumentTaskPanel({
       </section>
     </div>
   );
+}
+
+function adjustmentScopeKey(scope: { kind: string; id?: string }) {
+  return `${scope.kind}:${scope.id ?? ""}`;
 }
 
 function DesignTaskRow({ task, stopping, retrying, onStop, onRetry }: { task: DesignDocumentAgentTask; stopping: boolean; retrying: boolean; onStop: () => void; onRetry: () => void }) {

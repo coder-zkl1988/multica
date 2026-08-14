@@ -17,17 +17,47 @@ import (
 )
 
 type designDocumentDaemonInput struct {
-	Type           string `json:"type"`
-	Operation      string `json:"operation"`
-	ExecutionReady bool   `json:"execution_ready"`
-	WorkspaceID    string `json:"workspace_id"`
-	ProjectID      string `json:"project_id"`
-	AgentID        string `json:"agent_id"`
-	Input          struct {
+	Type              string `json:"type"`
+	Operation         string `json:"operation"`
+	ExecutionReady    bool   `json:"execution_ready"`
+	WorkspaceID       string `json:"workspace_id"`
+	ProjectID         string `json:"project_id"`
+	AgentID           string `json:"agent_id"`
+	DocumentID        string `json:"document_id"`
+	BaseRevisionID    string `json:"base_revision_id"`
+	BaseContentDigest string `json:"base_content_digest"`
+	Input             struct {
 		AttachmentSourceTaskID string                          `json:"attachment_source_task_id"`
 		Attachments            []designDocumentTaskAttachment  `json:"attachments"`
 		DesignSystem           *designDocumentTaskDesignSystem `json:"design_system"`
 	} `json:"input"`
+}
+
+func (h *Handler) DownloadDesignDocumentBase(w http.ResponseWriter, r *http.Request) {
+	_, workspaceID, input, ok := h.loadDesignDocumentDaemonInput(w, r)
+	if !ok || input.Operation != "adjust" || h.Storage == nil {
+		writeError(w, http.StatusNotFound, "Design Document base is unavailable")
+		return
+	}
+	workspaceUUID, workspaceErr := parseUUIDValue(workspaceID)
+	projectID, projectErr := parseUUIDValue(input.ProjectID)
+	documentID, documentErr := parseUUIDValue(input.DocumentID)
+	baseRevisionID, revisionErr := parseUUIDValue(input.BaseRevisionID)
+	if workspaceErr != nil || projectErr != nil || documentErr != nil || revisionErr != nil || !validDesignDocumentDigest(input.BaseContentDigest) {
+		writeError(w, http.StatusNotFound, "Design Document base is unavailable")
+		return
+	}
+	loaded, err := h.loadDesignDocumentPreview(r.Context(), workspaceUUID, projectID, documentID)
+	if err != nil || loaded.Revision.ID != baseRevisionID || loaded.Revision.ContentDigest != input.BaseContentDigest {
+		writeError(w, http.StatusConflict, "Design Document base changed")
+		return
+	}
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Length", strconv.Itoa(len(loaded.Archive)))
+	w.Header().Set("X-Multica-Design-Package-Digest", loaded.Revision.ContentDigest)
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(loaded.Archive)
 }
 
 func (h *Handler) DownloadDesignDocumentTaskAttachment(w http.ResponseWriter, r *http.Request) {
@@ -157,7 +187,11 @@ func (h *Handler) loadDesignDocumentDaemonInput(w http.ResponseWriter, r *http.R
 		return db.AgentTaskQueue{}, "", designDocumentDaemonInput{}, false
 	}
 	var input designDocumentDaemonInput
-	if json.Unmarshal(task.Context, &input) != nil || input.Type != designDocumentTaskContextType || input.Operation != "first_generation" || !input.ExecutionReady || input.ProjectID == "" || input.WorkspaceID != workspaceID || input.AgentID != uuidToString(task.AgentID) {
+	if json.Unmarshal(task.Context, &input) != nil || input.Type != designDocumentTaskContextType || (input.Operation != "first_generation" && input.Operation != "adjust") || !input.ExecutionReady || input.ProjectID == "" || input.WorkspaceID != workspaceID || input.AgentID != uuidToString(task.AgentID) {
+		writeError(w, http.StatusNotFound, "Design Document input is unavailable")
+		return db.AgentTaskQueue{}, "", designDocumentDaemonInput{}, false
+	}
+	if input.Operation == "adjust" && (input.DocumentID == "" || input.BaseRevisionID == "" || !validDesignDocumentDigest(input.BaseContentDigest)) {
 		writeError(w, http.StatusNotFound, "Design Document input is unavailable")
 		return db.AgentTaskQueue{}, "", designDocumentDaemonInput{}, false
 	}

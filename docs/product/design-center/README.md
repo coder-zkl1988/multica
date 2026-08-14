@@ -279,7 +279,7 @@ Agent 每次直接生成一套内部一致的设计体系草稿，不先生成�
 
 新 Phase A 的产品方案已经确认。首页使用自然语言发起项目页面设计 task，项目和智能体必选、任务（Issue）可选；task 内自动完成有界只读仓库 grounding，并产出版本化 `multica.design-document/v1`。每个项目允许多份 Design Document，每份文档以不可变 revisions、draft/saved 指针和持续工作空间支持 Preview、调整、保存与放弃。Package 必须通过 Audit 和员工本地守护进程现有 `designpreview` 强制门禁，浏览器不可用时不降级。完整方案见 [Native Design Phase A：页面 Design Document 产品与技术方案](../../superpowers/specs/2026-08-12-native-design-phase-a-design-document-design.md) 和 DC-042 至 DC-046。
 
-A1 至 A4 已按确认规格完成自动化实现：A1 提供 Design Document 协议、持久化和对象存储基础，A2 提供首页/项目任务入口，A3 提供 task-owned workspace、只读仓库 Grounding 与固定输入，A4 提供静态 Audit、本地 Chrome 强制 Preview、immutable archive、原子 first revision/draft 和项目内 sandbox Preview。证据见 [Phase A A4 阶段报告](./native-design-phase-a4-validation.md)。按正式规格权重严格加权，当前 Phase A 工程进度约 **79%**；这不代表 A5 saved/adjust 闭环或 A6 真实产物与人工质量验收已完成。下一步只在用户确认后进入 A5。工作区共享设计体系、官方模板、工作区成员模板发布和跨工作区社区模板继续按 DC-041 作为 Slice B 至 E 独立推进，不计入 Phase A。`feature/fengchen-fixed-v2` 只保留为取消路线的隔离 checkpoint，不属于当前产品进度或后续实现基线。
+A1 至 A5 已按确认规格完成自动化实现：A1 提供 Design Document 协议、持久化和对象存储基础，A2 提供首页/项目任务入口，A3 提供 task-owned workspace、只读仓库 Grounding 与固定输入，A4 提供静态 Audit、本地 Chrome 强制 Preview、immutable archive、原子 first revision/draft 和项目内 sandbox Preview，A5 提供固定 base revision 的语义范围调整、单文档单写者、完整 package 重验、新 revision/draft 以及保存与放弃。证据见 [Phase A A5 阶段报告](./native-design-phase-a5-validation.md)。按正式规格权重严格加权，当前 Phase A 工程进度为 **90%**；A6 真实 Agent 产物、视觉和业务质量人工验收尚未完成。工作区共享设计体系、官方模板、工作区成员模板发布和跨工作区社区模板继续按 DC-041 作为 Slice B 至 E 独立推进，不计入 Phase A。`feature/fengchen-fixed-v2` 只保留为取消路线的隔离 checkpoint，不属于当前产品进度或后续实现基线。
 
 2026-08-05 已确认的原生方向继续有效：Open Design Worker/Runtime 的直接接入不进入产品主线，Phase 0 和 Phase 2 已完成结果保留为真实执行、失败隔离、Audit、Preview 和草稿门禁证据。
 

@@ -94,6 +94,7 @@ type Brief struct {
 	Subpages      []Subpage    `json:"subpages"`
 	States        []PageScope  `json:"states"`
 	Overlays      []PageScope  `json:"overlays"`
+	Blocks        []PageScope  `json:"blocks,omitempty"`
 	Flows         []Flow       `json:"flows"`
 	Scenarios     []Scenario   `json:"scenarios"`
 	Accessibility []NamedScope `json:"accessibility"`

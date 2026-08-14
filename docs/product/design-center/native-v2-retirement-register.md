@@ -77,6 +77,14 @@
 - 证据：`native-design-phase-a4-validation.md`；Chrome、daemon、live PostgreSQL、Core/Views、race/vet/sqlc 和 GitNexus 验证已执行。
 - 下一次复核：A5 把活动保存/调整消费者迁移到 immutable Design Document revision 后，逐项判断旧页面草稿入口是否可转 `write-retired`；本阶段仍无历史数据或对象删除授权。
 
+### 2026-08-14 Phase A A5 复核
+
+- 状态变化：无。
+- 触达范围：Design Document 已提供固定 base revision 的语义范围调整、单文档单写者、完整 package 重验、新 immutable revision/draft、保存与放弃；项目当前草稿工作区不再依赖旧 PageSpec adjustment/save API。
+- 保留原因：旧 `design_draft` / `semantic_pagespec` 仍有历史读取、其他入口和未确认外部消费者；A5 没有迁移全部活动消费者，也没有 A6 真实质量验收证据，不能标记 `write-retired` 或删除。
+- 证据：`native-design-phase-a5-validation.md`；live PostgreSQL、daemon/execenv、Core/Views 全量、race/vet/build/sqlc 验证已执行。
+- 下一次复核：A6 完成真实 Agent/仓库/业务产物验收，并逐项确认旧入口和外部消费者后，才允许新增具体 capability 条目或推进状态；历史数据与对象删除仍需独立审批。
+
 `feature/fengchen-fixed-v2` 只保留为取消的独立 Phase B 路线 checkpoint，不合入 `feature/fengchen`，不作为实现基线，也不计入产品或退役进度。
 
 后续条目使用以下模板追加：

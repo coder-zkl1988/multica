@@ -34,15 +34,22 @@ type designDocumentSummary struct {
 }
 
 type designDocumentPreviewResponse struct {
-	Schema                  string                         `json:"schema"`
-	DocumentID              string                         `json:"document_id"`
-	RevisionID              string                         `json:"revision_id"`
-	ContentDigest           string                         `json:"content_digest"`
-	ResourceBaseURL         string                         `json:"resource_base_url"`
-	ResourceAccessToken     string                         `json:"resource_access_token"`
-	ResourceAccessExpiresAt string                         `json:"resource_access_expires_at"`
-	Targets                 []designdocument.PreviewTarget `json:"targets"`
-	Preview                 designpreview.Receipt          `json:"preview"`
+	Schema                  string                           `json:"schema"`
+	DocumentID              string                           `json:"document_id"`
+	RevisionID              string                           `json:"revision_id"`
+	ContentDigest           string                           `json:"content_digest"`
+	ResourceBaseURL         string                           `json:"resource_base_url"`
+	ResourceAccessToken     string                           `json:"resource_access_token"`
+	ResourceAccessExpiresAt string                           `json:"resource_access_expires_at"`
+	Targets                 []designdocument.PreviewTarget   `json:"targets"`
+	Preview                 designpreview.Receipt            `json:"preview"`
+	AdjustmentScopes        []designDocumentAdjustmentOption `json:"adjustment_scopes"`
+}
+
+type designDocumentAdjustmentOption struct {
+	Kind  string `json:"kind"`
+	ID    string `json:"id,omitempty"`
+	Label string `json:"label"`
 }
 
 type loadedDesignDocumentPreview struct {
@@ -109,7 +116,7 @@ func (h *Handler) GetDesignDocumentPreview(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, designDocumentPreviewResponse{
 		Schema: designDocumentPreviewSchema, DocumentID: document, RevisionID: revision, ContentDigest: loaded.Revision.ContentDigest,
 		ResourceBaseURL: baseURL, ResourceAccessToken: token, ResourceAccessExpiresAt: expiresAt.Format(time.RFC3339), Targets: loaded.Package.Manifest.PreviewTargets,
-		Preview: loaded.Receipt.Preview,
+		Preview: loaded.Receipt.Preview, AdjustmentScopes: designDocumentAdjustmentOptions(loaded.Document, loaded.Archive, loaded.Binding),
 	})
 }
 
@@ -186,7 +193,7 @@ func (h *Handler) loadDesignDocumentPreview(ctx context.Context, workspaceID, pr
 		BaseRevisionID: snapshot.BaseRevisionID, BaseContentDigest: snapshot.BaseContentDigest.String,
 		DesignSystemID: snapshot.DesignSystemID, DesignSystemSourceTaskID: snapshot.DesignSystemSourceTaskID, DesignSystemContentDigest: snapshot.DesignSystemContentDigest.String,
 	}
-	binding := designDocumentPersistenceBinding(designDocumentFirstRevisionParams{DocumentID: document.ID, RevisionID: revision.ID, Snapshot: snapshotParams}, snapshot.SnapshotSha256)
+	binding := designDocumentPersistenceBinding(document.ID, revision.ID, snapshotParams, snapshot.SnapshotSha256)
 	archive, validated, err := designdocument.LoadArchive(ctx, h.Storage, revision.ArchiveObjectKey, binding)
 	if err != nil || revision.ContentDigest != validated.Manifest.ContentDigest || receipt.ContentDigest != revision.ContentDigest || receipt.ObjectKey != revision.ArchiveObjectKey {
 		return loadedDesignDocumentPreview{}, errors.New("archive evidence conflict")

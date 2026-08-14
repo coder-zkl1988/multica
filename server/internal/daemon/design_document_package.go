@@ -170,19 +170,22 @@ func finalizeDesignDocumentResult(ctx context.Context, task Task, result TaskRes
 
 func decodeDesignDocumentBinding(task Task, grounding *designdocument.RepositoryGrounding) (designdocument.Binding, string, error) {
 	var envelope struct {
-		Type           string          `json:"type"`
-		TaskProtocol   string          `json:"task_protocol"`
-		Operation      string          `json:"operation"`
-		ExecutionReady bool            `json:"execution_ready"`
-		Input          json.RawMessage `json:"input"`
-		WorkspaceID    string          `json:"workspace_id"`
-		ProjectID      string          `json:"project_id"`
-		IssueID        string          `json:"issue_id"`
-		AgentID        string          `json:"agent_id"`
-		TargetPlatform string          `json:"target_platform"`
+		Type              string          `json:"type"`
+		TaskProtocol      string          `json:"task_protocol"`
+		Operation         string          `json:"operation"`
+		ExecutionReady    bool            `json:"execution_ready"`
+		Input             json.RawMessage `json:"input"`
+		WorkspaceID       string          `json:"workspace_id"`
+		ProjectID         string          `json:"project_id"`
+		IssueID           string          `json:"issue_id"`
+		AgentID           string          `json:"agent_id"`
+		TargetPlatform    string          `json:"target_platform"`
+		DocumentID        string          `json:"document_id"`
+		BaseRevisionID    string          `json:"base_revision_id"`
+		BaseContentDigest string          `json:"base_content_digest"`
 	}
-	if err := json.Unmarshal(task.DesignDocumentContext, &envelope); err != nil || envelope.Type != "design_document_task" || envelope.TaskProtocol != "multica.design-document-task/v1" || envelope.Operation != "first_generation" || !envelope.ExecutionReady {
-		return designdocument.Binding{}, "", errors.New("task context is not an execution-ready first generation")
+	if err := json.Unmarshal(task.DesignDocumentContext, &envelope); err != nil || envelope.Type != "design_document_task" || envelope.TaskProtocol != "multica.design-document-task/v1" || (envelope.Operation != "first_generation" && envelope.Operation != "adjust") || !envelope.ExecutionReady {
+		return designdocument.Binding{}, "", errors.New("task context is not an execution-ready Design Document task")
 	}
 	if envelope.WorkspaceID != task.WorkspaceID || envelope.ProjectID != task.ProjectID || envelope.IssueID != task.IssueID || envelope.AgentID != task.AgentID {
 		return designdocument.Binding{}, "", errors.New("task context identity does not match the claimed task")
@@ -209,6 +212,17 @@ func decodeDesignDocumentBinding(task Task, grounding *designdocument.Repository
 	binding := designdocument.Binding{
 		DocumentID: uuid.NewString(), RevisionID: uuid.NewString(), WorkspaceID: task.WorkspaceID, ProjectID: task.ProjectID,
 		IssueID: task.IssueID, TaskID: task.ID, AgentID: task.AgentID, TargetPlatform: input.TargetPlatform, InputSnapshotSHA256: digest,
+	}
+	if envelope.Operation == "adjust" {
+		if _, err := uuid.Parse(envelope.DocumentID); err != nil {
+			return designdocument.Binding{}, "", errors.New("adjustment document identity is invalid")
+		}
+		if _, err := uuid.Parse(envelope.BaseRevisionID); err != nil || !validProjectDesignSystemPackageDigest(envelope.BaseContentDigest) {
+			return designdocument.Binding{}, "", errors.New("adjustment base identity is invalid")
+		}
+		binding.DocumentID = envelope.DocumentID
+		binding.BaseRevisionID = envelope.BaseRevisionID
+		binding.BaseContentDigest = envelope.BaseContentDigest
 	}
 	if input.DesignSystem != nil {
 		binding.DesignSystemID = input.DesignSystem.ID

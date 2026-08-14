@@ -171,6 +171,33 @@ func TestFinalizeDesignDocumentResultCollectsPreviewsAndUploadsBoundPackage(t *t
 	}
 }
 
+func TestDecodeDesignDocumentAdjustmentBindingPinsDocumentAndBase(t *testing.T) {
+	_, grounding := designDocumentFinalizeFixture(t)
+	groundingRaw, _ := json.Marshal(grounding)
+	input := map[string]any{
+		"schema_version": "multica.design-document-input/v1", "task_protocol": "multica.design-document-task/v1",
+		"output_schema": designdocument.SchemaVersion, "requirement": "Issue inbox", "target_platform": "web",
+		"repository_grounding": "pinned", "repository": json.RawMessage(groundingRaw), "attachments": []any{},
+		"adjustment": map[string]any{"instruction": "Tighten the header", "scope": map[string]string{"kind": "page", "id": "page-inbox"}},
+	}
+	contextValue := map[string]any{
+		"type": "design_document_task", "task_protocol": "multica.design-document-task/v1", "operation": "adjust", "execution_ready": true,
+		"workspace_id": "22222222-2222-2222-2222-222222222222", "project_id": "33333333-3333-3333-3333-333333333333",
+		"issue_id": "44444444-4444-4444-4444-444444444444", "agent_id": "55555555-5555-5555-5555-555555555555", "target_platform": "web",
+		"document_id": "66666666-6666-6666-6666-666666666666", "base_revision_id": "77777777-7777-7777-7777-777777777777",
+		"base_content_digest": "sha256:" + strings.Repeat("b", 64), "input": input,
+	}
+	raw, _ := json.Marshal(contextValue)
+	task := Task{ID: "11111111-1111-1111-1111-111111111111", WorkspaceID: contextValue["workspace_id"].(string), ProjectID: contextValue["project_id"].(string), IssueID: contextValue["issue_id"].(string), AgentID: contextValue["agent_id"].(string), DesignDocumentContext: raw}
+	binding, _, err := decodeDesignDocumentBinding(task, grounding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if binding.DocumentID != contextValue["document_id"] || binding.BaseRevisionID != contextValue["base_revision_id"] || binding.BaseContentDigest != contextValue["base_content_digest"] || binding.RevisionID == binding.BaseRevisionID {
+		t.Fatalf("adjustment binding=%+v", binding)
+	}
+}
+
 func copyDesignDocumentFixture(t *testing.T) string {
 	t.Helper()
 	source := filepath.Join("..", "designdocument", "testdata", "v1-valid")

@@ -16,6 +16,7 @@ import (
 )
 
 type preparedDesignDocumentPackage struct {
+	Operation      string
 	DocumentID     pgtype.UUID
 	RevisionID     pgtype.UUID
 	Title          string
@@ -33,6 +34,20 @@ func prepareDesignDocumentPackageCompletion(ctx context.Context, task db.AgentTa
 	if documentErr != nil || revisionErr != nil {
 		return preparedDesignDocumentPackage{}, errors.New("Design Document package identity is invalid")
 	}
+	var taskIdentity struct {
+		Operation         string `json:"operation"`
+		DocumentID        string `json:"document_id"`
+		BaseRevisionID    string `json:"base_revision_id"`
+		BaseContentDigest string `json:"base_content_digest"`
+	}
+	if json.Unmarshal(task.Context, &taskIdentity) != nil || (taskIdentity.Operation != "first_generation" && taskIdentity.Operation != "adjust") {
+		return preparedDesignDocumentPackage{}, errors.New("Design Document package operation is invalid")
+	}
+	if taskIdentity.Operation == "adjust" {
+		if receipt.DocumentID != taskIdentity.DocumentID || receipt.RevisionID == taskIdentity.BaseRevisionID || taskIdentity.BaseRevisionID == "" || !validDesignDocumentDigest(taskIdentity.BaseContentDigest) {
+			return preparedDesignDocumentPackage{}, errors.New("Design Document adjustment package identity is invalid")
+		}
+	}
 	grounding, err := prepareDesignDocumentGroundingCompletion(task, &receipt.Grounding)
 	if err != nil {
 		return preparedDesignDocumentPackage{}, err
@@ -41,7 +56,7 @@ func prepareDesignDocumentPackageCompletion(ctx context.Context, task db.AgentTa
 	if err != nil || receipt.InputSnapshotSHA256 != snapshotDigest {
 		return preparedDesignDocumentPackage{}, errors.New("Design Document package snapshot binding is invalid")
 	}
-	binding := designDocumentPersistenceBinding(designDocumentFirstRevisionParams{DocumentID: documentID, RevisionID: revisionID, Snapshot: snapshot}, snapshotDigest)
+	binding := designDocumentPersistenceBinding(documentID, revisionID, snapshot, snapshotDigest)
 	wantKey, err := designdocument.ArchiveObjectKey(binding, receipt.ContentDigest)
 	if err != nil || receipt.ObjectKey != wantKey {
 		return preparedDesignDocumentPackage{}, errors.New("Design Document package object binding is invalid")
@@ -64,10 +79,29 @@ func prepareDesignDocumentPackageCompletion(ctx context.Context, task db.AgentTa
 	if !receipt.Preview.Verification.Passed || designpreview.ValidateReceiptWithInteractions(receipt.Preview, receipt.ContentDigest, targets, required) != nil {
 		return preparedDesignDocumentPackage{}, errors.New("Design Document Preview receipt is invalid")
 	}
-	return preparedDesignDocumentPackage{DocumentID: documentID, RevisionID: revisionID, Title: title, Snapshot: snapshot, SnapshotDigest: snapshotDigest, Archive: archive}, nil
+	return preparedDesignDocumentPackage{Operation: taskIdentity.Operation, DocumentID: documentID, RevisionID: revisionID, Title: title, Snapshot: snapshot, SnapshotDigest: snapshotDigest, Archive: archive}, nil
 }
 
 func persistDesignDocumentPackageCompletion(ctx context.Context, queries *db.Queries, task db.AgentTaskQueue, prepared preparedDesignDocumentPackage) error {
+	if prepared.Operation == "adjust" {
+		created, err := createDesignDocumentAdjustmentRevision(ctx, queries, designDocumentAdjustmentRevisionParams{
+			DocumentID: prepared.DocumentID, RevisionID: prepared.RevisionID, Snapshot: prepared.Snapshot, Archive: prepared.Archive,
+		})
+		if err != nil {
+			return err
+		}
+		updated, err := queries.SetDesignDocumentTaskInputSnapshot(ctx, db.SetDesignDocumentTaskInputSnapshotParams{
+			Input: prepared.Snapshot.Snapshot, InputSnapshotID: uuidToString(created.InputSnapshotID), InputSnapshotSha256: prepared.SnapshotDigest,
+			ID: task.ID, AgentID: task.AgentID,
+		})
+		if err != nil {
+			return err
+		}
+		if updated != 1 {
+			return errors.New("Design Document task snapshot binding changed")
+		}
+		return nil
+	}
 	created, err := createDesignDocumentWithFirstRevision(ctx, queries, designDocumentFirstRevisionParams{
 		DocumentID: prepared.DocumentID, RevisionID: prepared.RevisionID, Title: prepared.Title,
 		CreatedBy: task.OriginatorUserID, Snapshot: prepared.Snapshot, Archive: prepared.Archive,
@@ -90,10 +124,13 @@ func persistDesignDocumentPackageCompletion(ctx context.Context, queries *db.Que
 
 func designDocumentGroundedSnapshot(task db.AgentTaskQueue, grounding json.RawMessage) (designDocumentSnapshotParams, string, string, error) {
 	var taskContext struct {
-		Input       json.RawMessage `json:"input"`
-		WorkspaceID string          `json:"workspace_id"`
-		ProjectID   string          `json:"project_id"`
-		IssueID     string          `json:"issue_id"`
+		Operation         string          `json:"operation"`
+		Input             json.RawMessage `json:"input"`
+		WorkspaceID       string          `json:"workspace_id"`
+		ProjectID         string          `json:"project_id"`
+		IssueID           string          `json:"issue_id"`
+		BaseRevisionID    string          `json:"base_revision_id"`
+		BaseContentDigest string          `json:"base_content_digest"`
 	}
 	if err := json.Unmarshal(task.Context, &taskContext); err != nil {
 		return designDocumentSnapshotParams{}, "", "", err
@@ -120,6 +157,13 @@ func designDocumentGroundedSnapshot(task db.AgentTaskQueue, grounding json.RawMe
 	params := designDocumentSnapshotParams{
 		WorkspaceID: workspaceID, ProjectID: projectID, IssueID: issueID, TaskID: task.ID, AgentID: task.AgentID,
 		TargetPlatform: pgtype.Text{String: input.TargetPlatform, Valid: input.TargetPlatform != ""}, SchemaVersion: input.SchemaVersion, Snapshot: snapshotJSON,
+	}
+	if taskContext.Operation == "adjust" {
+		params.BaseRevisionID, err = parseUUIDValue(taskContext.BaseRevisionID)
+		if err != nil || !validDesignDocumentDigest(taskContext.BaseContentDigest) {
+			return designDocumentSnapshotParams{}, "", "", errors.New("Design Document adjustment base is invalid")
+		}
+		params.BaseContentDigest = taskContext.BaseContentDigest
 	}
 	if input.DesignSystem != nil {
 		params.DesignSystemID, _ = parseUUIDValue(input.DesignSystem.ID)

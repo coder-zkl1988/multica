@@ -6235,6 +6235,9 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			if designDocumentGroundingErr != nil {
 				break
 			}
+			if isDesignDocumentAdjustment(task.DesignDocumentContext) {
+				break
+			}
 			if err := d.ensureRepoReady(prepareCtx, task.WorkspaceID, repo.URL); err != nil {
 				designDocumentGroundingErr = fmt.Errorf("repository unavailable: %w", err)
 				break

@@ -57,6 +57,30 @@ describe("ApiClient design document tasks", () => {
       "https://api.example.test/api/design-documents/document-1/preview?project_id=project-1",
     ]);
   });
+
+  it("adjusts, saves, and discards a Design Document through base-bound lifecycle routes", async () => {
+	const digest = `sha256:${"a".repeat(64)}`;
+	const task = { id: "task-2", operation: "adjust", document_id: "document-1", base_revision_id: "revision-1", base_content_digest: digest, project_id: "project-1", status: "queued" };
+	const document = { id: "document-1", project_id: "project-1", title: "Checkout", draft_revision_id: "revision-1", saved_revision_id: "revision-1", created_at: "2026-08-14T00:00:00Z", updated_at: "2026-08-14T00:00:00Z" };
+	const fetchMock = vi.fn()
+	  .mockResolvedValueOnce(new Response(JSON.stringify(task), { status: 202, headers: { "Content-Type": "application/json" } }))
+	  .mockResolvedValueOnce(new Response(JSON.stringify(document), { status: 200, headers: { "Content-Type": "application/json" } }))
+	  .mockResolvedValueOnce(new Response(JSON.stringify({ ...document, draft_revision_id: undefined }), { status: 200, headers: { "Content-Type": "application/json" } }));
+	vi.stubGlobal("fetch", fetchMock);
+	const client = new ApiClient("https://api.example.test");
+	await expect(client.adjustDesignDocument("document-1", {
+	  project_id: "project-1", agent_id: "agent-1", instruction: "Tighten header",
+	  scope: { kind: "page", id: "page-checkout" }, base_revision_id: "revision-1", base_content_digest: digest,
+	})).resolves.toMatchObject(task);
+	await expect(client.saveDesignDocument("document-1", { project_id: "project-1", expected_draft_revision_id: "revision-1", expected_draft_content_digest: digest })).resolves.toMatchObject(document);
+	await expect(client.discardDesignDocumentDraft("document-1", { project_id: "project-1", expected_draft_revision_id: "revision-1", expected_draft_content_digest: digest })).resolves.toMatchObject({ id: "document-1" });
+	expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+	  "https://api.example.test/api/design-documents/document-1/adjust",
+	  "https://api.example.test/api/design-documents/document-1/save",
+	  "https://api.example.test/api/design-documents/document-1/draft",
+	]);
+	expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(["POST", "POST", "DELETE"]);
+  });
 });
 
 describe("ApiClient pull-request response schema", () => {

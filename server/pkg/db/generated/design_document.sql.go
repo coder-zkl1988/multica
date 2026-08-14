@@ -11,6 +11,198 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const createDesignDocumentAdjustmentRevision = `-- name: CreateDesignDocumentAdjustmentRevision :one
+WITH locked_document AS (
+    SELECT document.id, document.workspace_id, document.project_id, document.issue_id, document.title, document.draft_revision_id, document.saved_revision_id, document.created_by, document.created_at, document.updated_at
+    FROM design_document AS document
+    WHERE document.id = $1
+      AND document.workspace_id = $2
+      AND document.project_id = $3
+    FOR UPDATE
+),
+eligible_document AS (
+    SELECT document.id, document.workspace_id, document.project_id, document.issue_id, document.title, document.draft_revision_id, document.saved_revision_id, document.created_by, document.created_at, document.updated_at
+    FROM locked_document AS document
+    JOIN design_document_revision AS base
+      ON base.id = document.draft_revision_id
+     AND base.document_id = document.id
+     AND base.workspace_id = document.workspace_id
+     AND base.project_id = document.project_id
+    WHERE document.draft_revision_id = $4
+      AND base.content_digest = $5
+),
+inserted_snapshot AS (
+    INSERT INTO design_document_input_snapshot (
+        workspace_id, project_id, issue_id, task_id, agent_id, target_platform,
+        schema_version, snapshot, snapshot_sha256, base_revision_id,
+        base_content_digest, design_system_id, design_system_source_task_id,
+        design_system_content_digest
+    )
+    SELECT
+        document.workspace_id, document.project_id, document.issue_id,
+        $6, $7, $8,
+        $9, $10, $11,
+        $4, $5,
+        $12, $13,
+        $14
+    FROM eligible_document AS document
+    WHERE EXISTS (
+        SELECT 1
+        FROM agent_task_queue AS task
+        JOIN agent ON agent.id = task.agent_id
+        WHERE task.id = $6
+          AND task.agent_id = $7
+          AND task.issue_id IS NOT DISTINCT FROM document.issue_id
+          AND agent.workspace_id = document.workspace_id
+    )
+    AND (
+        $12::uuid IS NULL
+        OR EXISTS (
+            SELECT 1
+            FROM project_design_system AS system
+            JOIN project_design_system_package AS package
+              ON package.design_system_id = system.id
+             AND package.slot = 'saved'
+            WHERE system.id = $12
+              AND system.workspace_id = document.workspace_id
+              AND system.project_id = document.project_id
+              AND package.source_task_id = $13
+              AND package.manifest ->> 'content_digest' = $14::text
+        )
+    )
+    AND $15::jsonb ->> 'schema_version' = $16::text
+    AND $15::jsonb ->> 'document_id' = document.id::text
+    AND $15::jsonb ->> 'revision_id' = $17::uuid::text
+    AND $15::jsonb ->> 'workspace_id' = document.workspace_id::text
+    AND $15::jsonb ->> 'project_id' = document.project_id::text
+    AND COALESCE($15::jsonb ->> 'issue_id', '') = COALESCE(document.issue_id::text, '')
+    AND $15::jsonb ->> 'task_id' = $6::uuid::text
+    AND $15::jsonb ->> 'agent_id' = $7::uuid::text
+    AND COALESCE($15::jsonb ->> 'target_platform', '') = COALESCE($8::text, '')
+    AND $15::jsonb ->> 'input_snapshot_sha256' = $11::text
+    AND $15::jsonb ->> 'base_revision_id' = $4::uuid::text
+    AND $15::jsonb ->> 'base_content_digest' = $5::text
+    AND COALESCE($15::jsonb ->> 'design_system_id', '') = COALESCE($12::uuid::text, '')
+    AND COALESCE($15::jsonb ->> 'design_system_source_task_id', '') = COALESCE($13::uuid::text, '')
+    AND COALESCE($15::jsonb ->> 'design_system_content_digest', '') = COALESCE($14::text, '')
+    AND $15::jsonb ->> 'content_digest' = $18::text
+    AND $19::jsonb = $15::jsonb -> 'files'
+    AND $20::text =
+        'design-documents/' || document.workspace_id::text || '/' || document.project_id::text || '/' ||
+        document.id::text || '/' || $17::uuid::text || '/' ||
+        substr($18::text, 8) || '.zip'
+    RETURNING id, workspace_id, project_id, issue_id, task_id, agent_id, target_platform, schema_version, snapshot, snapshot_sha256, base_revision_id, base_content_digest, design_system_id, design_system_source_task_id, design_system_content_digest, created_at
+),
+updated_document AS (
+    UPDATE design_document AS document
+    SET draft_revision_id = $17, updated_at = now()
+    FROM inserted_snapshot AS snapshot
+    WHERE document.id = $1
+      AND document.workspace_id = snapshot.workspace_id
+      AND document.project_id = snapshot.project_id
+      AND document.draft_revision_id = snapshot.base_revision_id
+    RETURNING document.id, document.workspace_id, document.project_id, document.issue_id, document.title, document.draft_revision_id, document.saved_revision_id, document.created_by, document.created_at, document.updated_at
+),
+inserted_revision AS (
+    INSERT INTO design_document_revision (
+        id, document_id, workspace_id, project_id, input_snapshot_id,
+        source_task_id, base_revision_id, schema_version, manifest,
+        artifact_index, archive_object_key, content_digest, created_by_agent_id
+    )
+    SELECT
+        $17, document.id, document.workspace_id,
+        document.project_id, snapshot.id, snapshot.task_id,
+        snapshot.base_revision_id, $16,
+        $15, $19,
+        $20, $18, snapshot.agent_id
+    FROM updated_document AS document
+    JOIN inserted_snapshot AS snapshot
+      ON snapshot.workspace_id = document.workspace_id
+     AND snapshot.project_id = document.project_id
+    RETURNING id, input_snapshot_id
+)
+SELECT document.id, document.workspace_id, document.project_id, document.issue_id, document.title, document.draft_revision_id, document.saved_revision_id, document.created_by, document.created_at, document.updated_at, revision.input_snapshot_id
+FROM updated_document AS document
+JOIN inserted_revision AS revision ON revision.id = document.draft_revision_id
+`
+
+type CreateDesignDocumentAdjustmentRevisionParams struct {
+	DocumentID                pgtype.UUID `json:"document_id"`
+	WorkspaceID               pgtype.UUID `json:"workspace_id"`
+	ProjectID                 pgtype.UUID `json:"project_id"`
+	BaseRevisionID            pgtype.UUID `json:"base_revision_id"`
+	BaseContentDigest         string      `json:"base_content_digest"`
+	TaskID                    pgtype.UUID `json:"task_id"`
+	AgentID                   pgtype.UUID `json:"agent_id"`
+	TargetPlatform            pgtype.Text `json:"target_platform"`
+	SnapshotSchemaVersion     string      `json:"snapshot_schema_version"`
+	Snapshot                  []byte      `json:"snapshot"`
+	SnapshotSha256            string      `json:"snapshot_sha256"`
+	DesignSystemID            pgtype.UUID `json:"design_system_id"`
+	DesignSystemSourceTaskID  pgtype.UUID `json:"design_system_source_task_id"`
+	DesignSystemContentDigest pgtype.Text `json:"design_system_content_digest"`
+	Manifest                  []byte      `json:"manifest"`
+	RevisionSchemaVersion     string      `json:"revision_schema_version"`
+	RevisionID                pgtype.UUID `json:"revision_id"`
+	ContentDigest             string      `json:"content_digest"`
+	ArtifactIndex             []byte      `json:"artifact_index"`
+	ArchiveObjectKey          string      `json:"archive_object_key"`
+}
+
+type CreateDesignDocumentAdjustmentRevisionRow struct {
+	ID              pgtype.UUID        `json:"id"`
+	WorkspaceID     pgtype.UUID        `json:"workspace_id"`
+	ProjectID       pgtype.UUID        `json:"project_id"`
+	IssueID         pgtype.UUID        `json:"issue_id"`
+	Title           string             `json:"title"`
+	DraftRevisionID pgtype.UUID        `json:"draft_revision_id"`
+	SavedRevisionID pgtype.UUID        `json:"saved_revision_id"`
+	CreatedBy       pgtype.UUID        `json:"created_by"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	InputSnapshotID pgtype.UUID        `json:"input_snapshot_id"`
+}
+
+func (q *Queries) CreateDesignDocumentAdjustmentRevision(ctx context.Context, arg CreateDesignDocumentAdjustmentRevisionParams) (CreateDesignDocumentAdjustmentRevisionRow, error) {
+	row := q.db.QueryRow(ctx, createDesignDocumentAdjustmentRevision,
+		arg.DocumentID,
+		arg.WorkspaceID,
+		arg.ProjectID,
+		arg.BaseRevisionID,
+		arg.BaseContentDigest,
+		arg.TaskID,
+		arg.AgentID,
+		arg.TargetPlatform,
+		arg.SnapshotSchemaVersion,
+		arg.Snapshot,
+		arg.SnapshotSha256,
+		arg.DesignSystemID,
+		arg.DesignSystemSourceTaskID,
+		arg.DesignSystemContentDigest,
+		arg.Manifest,
+		arg.RevisionSchemaVersion,
+		arg.RevisionID,
+		arg.ContentDigest,
+		arg.ArtifactIndex,
+		arg.ArchiveObjectKey,
+	)
+	var i CreateDesignDocumentAdjustmentRevisionRow
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.ProjectID,
+		&i.IssueID,
+		&i.Title,
+		&i.DraftRevisionID,
+		&i.SavedRevisionID,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.InputSnapshotID,
+	)
+	return i, err
+}
+
 const createDesignDocumentAgentTask = `-- name: CreateDesignDocumentAgentTask :one
 INSERT INTO agent_task_queue (
     id, agent_id, runtime_id, issue_id, status, priority, context, wait_reason,
@@ -404,6 +596,65 @@ func (q *Queries) CreateDesignDocumentWithInputSnapshotAndFirstRevision(ctx cont
 	return i, err
 }
 
+const discardDesignDocumentDraft = `-- name: DiscardDesignDocumentDraft :one
+UPDATE design_document AS document
+SET draft_revision_id = document.saved_revision_id, updated_at = now()
+WHERE document.id = $1
+  AND document.workspace_id = $2
+  AND document.project_id = $3
+  AND document.draft_revision_id = $4
+  AND EXISTS (
+      SELECT 1
+      FROM design_document_revision AS revision
+      WHERE revision.id = document.draft_revision_id
+        AND revision.document_id = document.id
+        AND revision.workspace_id = document.workspace_id
+        AND revision.project_id = document.project_id
+        AND revision.content_digest = $5
+  )
+  AND NOT EXISTS (
+      SELECT 1
+      FROM agent_task_queue AS task
+      WHERE task.context ->> 'type' = 'design_document_task'
+        AND task.context ->> 'operation' = 'adjust'
+        AND task.context ->> 'document_id' = document.id::text
+        AND task.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory', 'deferred')
+  )
+RETURNING document.id, document.workspace_id, document.project_id, document.issue_id, document.title, document.draft_revision_id, document.saved_revision_id, document.created_by, document.created_at, document.updated_at
+`
+
+type DiscardDesignDocumentDraftParams struct {
+	DocumentID                 pgtype.UUID `json:"document_id"`
+	WorkspaceID                pgtype.UUID `json:"workspace_id"`
+	ProjectID                  pgtype.UUID `json:"project_id"`
+	ExpectedDraftRevisionID    pgtype.UUID `json:"expected_draft_revision_id"`
+	ExpectedDraftContentDigest string      `json:"expected_draft_content_digest"`
+}
+
+func (q *Queries) DiscardDesignDocumentDraft(ctx context.Context, arg DiscardDesignDocumentDraftParams) (DesignDocument, error) {
+	row := q.db.QueryRow(ctx, discardDesignDocumentDraft,
+		arg.DocumentID,
+		arg.WorkspaceID,
+		arg.ProjectID,
+		arg.ExpectedDraftRevisionID,
+		arg.ExpectedDraftContentDigest,
+	)
+	var i DesignDocument
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.ProjectID,
+		&i.IssueID,
+		&i.Title,
+		&i.DraftRevisionID,
+		&i.SavedRevisionID,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getDesignDocumentInProject = `-- name: GetDesignDocumentInProject :one
 SELECT id, workspace_id, project_id, issue_id, title, draft_revision_id, saved_revision_id, created_by, created_at, updated_at
 FROM design_document
@@ -420,6 +671,39 @@ type GetDesignDocumentInProjectParams struct {
 
 func (q *Queries) GetDesignDocumentInProject(ctx context.Context, arg GetDesignDocumentInProjectParams) (DesignDocument, error) {
 	row := q.db.QueryRow(ctx, getDesignDocumentInProject, arg.ID, arg.WorkspaceID, arg.ProjectID)
+	var i DesignDocument
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.ProjectID,
+		&i.IssueID,
+		&i.Title,
+		&i.DraftRevisionID,
+		&i.SavedRevisionID,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getDesignDocumentInProjectForUpdate = `-- name: GetDesignDocumentInProjectForUpdate :one
+SELECT id, workspace_id, project_id, issue_id, title, draft_revision_id, saved_revision_id, created_by, created_at, updated_at
+FROM design_document
+WHERE id = $1
+  AND workspace_id = $2
+  AND project_id = $3
+FOR UPDATE
+`
+
+type GetDesignDocumentInProjectForUpdateParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ProjectID   pgtype.UUID `json:"project_id"`
+}
+
+func (q *Queries) GetDesignDocumentInProjectForUpdate(ctx context.Context, arg GetDesignDocumentInProjectForUpdateParams) (DesignDocument, error) {
+	row := q.db.QueryRow(ctx, getDesignDocumentInProjectForUpdate, arg.ID, arg.WorkspaceID, arg.ProjectID)
 	var i DesignDocument
 	err := row.Scan(
 		&i.ID,
@@ -510,6 +794,24 @@ func (q *Queries) GetDesignDocumentRevisionInProject(ctx context.Context, arg Ge
 	return i, err
 }
 
+const hasActiveDesignDocumentAdjustmentTask = `-- name: HasActiveDesignDocumentAdjustmentTask :one
+SELECT EXISTS (
+    SELECT 1
+    FROM agent_task_queue
+    WHERE context ->> 'type' = 'design_document_task'
+      AND context ->> 'operation' = 'adjust'
+      AND context ->> 'document_id' = $1::uuid::text
+      AND status IN ('queued', 'dispatched', 'running', 'waiting_local_directory', 'deferred')
+)
+`
+
+func (q *Queries) HasActiveDesignDocumentAdjustmentTask(ctx context.Context, documentID pgtype.UUID) (bool, error) {
+	row := q.db.QueryRow(ctx, hasActiveDesignDocumentAdjustmentTask, documentID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const listDesignDocumentAgentTasks = `-- name: ListDesignDocumentAgentTasks :many
 SELECT
     task.id,
@@ -522,6 +824,10 @@ SELECT
     issue.title AS issue_title,
     task.agent_id,
     agent.name AS agent_name,
+	COALESCE(task.context ->> 'operation', '')::text AS operation,
+	COALESCE(task.context ->> 'document_id', '')::text AS document_id,
+	COALESCE(task.context ->> 'base_revision_id', '')::text AS base_revision_id,
+	COALESCE(task.context ->> 'base_content_digest', '')::text AS base_content_digest,
     COALESCE(task.context -> 'input' ->> 'requirement', '')::text AS requirement,
     COALESCE(task.context -> 'input' ->> 'target_platform', '')::text AS target_platform,
     COALESCE(task.context -> 'input' ->> 'repository_grounding', '')::text AS repository_grounding,
@@ -572,6 +878,10 @@ type ListDesignDocumentAgentTasksRow struct {
 	IssueTitle          pgtype.Text        `json:"issue_title"`
 	AgentID             pgtype.UUID        `json:"agent_id"`
 	AgentName           string             `json:"agent_name"`
+	Operation           string             `json:"operation"`
+	DocumentID          string             `json:"document_id"`
+	BaseRevisionID      string             `json:"base_revision_id"`
+	BaseContentDigest   string             `json:"base_content_digest"`
 	Requirement         string             `json:"requirement"`
 	TargetPlatform      string             `json:"target_platform"`
 	RepositoryGrounding string             `json:"repository_grounding"`
@@ -605,6 +915,10 @@ func (q *Queries) ListDesignDocumentAgentTasks(ctx context.Context, arg ListDesi
 			&i.IssueTitle,
 			&i.AgentID,
 			&i.AgentName,
+			&i.Operation,
+			&i.DocumentID,
+			&i.BaseRevisionID,
+			&i.BaseContentDigest,
 			&i.Requirement,
 			&i.TargetPlatform,
 			&i.RepositoryGrounding,
@@ -722,6 +1036,65 @@ func (q *Queries) ListDesignDocumentsInProject(ctx context.Context, arg ListDesi
 	return items, nil
 }
 
+const saveDesignDocumentDraft = `-- name: SaveDesignDocumentDraft :one
+UPDATE design_document AS document
+SET saved_revision_id = document.draft_revision_id, updated_at = now()
+WHERE document.id = $1
+  AND document.workspace_id = $2
+  AND document.project_id = $3
+  AND document.draft_revision_id = $4
+  AND EXISTS (
+      SELECT 1
+      FROM design_document_revision AS revision
+      WHERE revision.id = document.draft_revision_id
+        AND revision.document_id = document.id
+        AND revision.workspace_id = document.workspace_id
+        AND revision.project_id = document.project_id
+        AND revision.content_digest = $5
+  )
+  AND NOT EXISTS (
+      SELECT 1
+      FROM agent_task_queue AS task
+      WHERE task.context ->> 'type' = 'design_document_task'
+        AND task.context ->> 'operation' = 'adjust'
+        AND task.context ->> 'document_id' = document.id::text
+        AND task.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory', 'deferred')
+  )
+RETURNING document.id, document.workspace_id, document.project_id, document.issue_id, document.title, document.draft_revision_id, document.saved_revision_id, document.created_by, document.created_at, document.updated_at
+`
+
+type SaveDesignDocumentDraftParams struct {
+	DocumentID                 pgtype.UUID `json:"document_id"`
+	WorkspaceID                pgtype.UUID `json:"workspace_id"`
+	ProjectID                  pgtype.UUID `json:"project_id"`
+	ExpectedDraftRevisionID    pgtype.UUID `json:"expected_draft_revision_id"`
+	ExpectedDraftContentDigest string      `json:"expected_draft_content_digest"`
+}
+
+func (q *Queries) SaveDesignDocumentDraft(ctx context.Context, arg SaveDesignDocumentDraftParams) (DesignDocument, error) {
+	row := q.db.QueryRow(ctx, saveDesignDocumentDraft,
+		arg.DocumentID,
+		arg.WorkspaceID,
+		arg.ProjectID,
+		arg.ExpectedDraftRevisionID,
+		arg.ExpectedDraftContentDigest,
+	)
+	var i DesignDocument
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.ProjectID,
+		&i.IssueID,
+		&i.Title,
+		&i.DraftRevisionID,
+		&i.SavedRevisionID,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const setDesignDocumentTaskInputSnapshot = `-- name: SetDesignDocumentTaskInputSnapshot :execrows
 UPDATE agent_task_queue
 SET context = jsonb_set(
@@ -735,7 +1108,7 @@ WHERE id = $4
   AND agent_id = $5
   AND status = 'completed'
   AND context ->> 'type' = 'design_document_task'
-  AND context ->> 'operation' = 'first_generation'
+  AND context ->> 'operation' IN ('first_generation', 'adjust')
 `
 
 type SetDesignDocumentTaskInputSnapshotParams struct {

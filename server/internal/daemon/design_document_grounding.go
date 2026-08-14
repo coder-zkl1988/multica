@@ -36,6 +36,7 @@ type designDocumentGroundingState struct {
 	sources      []designDocumentSourceBaseline
 	roots        map[string]string
 	workDir      string
+	pinned       *designdocument.RepositoryGrounding
 }
 
 type designDocumentSourceBaseline struct {
@@ -60,6 +61,7 @@ type designDocumentCheckoutRepository struct {
 }
 
 type designDocumentInputEnvelope struct {
+	Repository  json.RawMessage `json:"repository,omitempty"`
 	Attachments []struct {
 		ID        string `json:"id"`
 		SizeBytes int64  `json:"size_bytes"`
@@ -70,17 +72,48 @@ type designDocumentInputEnvelope struct {
 	} `json:"design_system"`
 }
 
+func isDesignDocumentAdjustment(raw json.RawMessage) bool {
+	var contextValue struct {
+		Type           string `json:"type"`
+		Operation      string `json:"operation"`
+		ExecutionReady bool   `json:"execution_ready"`
+	}
+	return json.Unmarshal(raw, &contextValue) == nil && contextValue.Type == "design_document_task" && contextValue.Operation == "adjust" && contextValue.ExecutionReady
+}
+
 func materializeDesignDocumentInputs(ctx context.Context, task Task, workDir string, client *Client) error {
 	if client == nil {
 		return errors.New("Design Document input client is unavailable")
 	}
 	var envelope struct {
-		Input designDocumentInputEnvelope `json:"input"`
+		Operation         string                      `json:"operation"`
+		BaseContentDigest string                      `json:"base_content_digest"`
+		Input             designDocumentInputEnvelope `json:"input"`
 	}
 	if json.Unmarshal(task.DesignDocumentContext, &envelope) != nil {
 		return errors.New("invalid Design Document input context")
 	}
 	root := filepath.Join(workDir, ".agent_context", "design_document")
+	if envelope.Operation == "adjust" {
+		baseDir := filepath.Join(root, "context", "base")
+		if err := os.Mkdir(baseDir, 0o755); err != nil && !os.IsExist(err) {
+			return err
+		}
+		if !isRealGroundingDirectory(baseDir) || os.Chmod(baseDir, 0o755) != nil {
+			return errors.New("Design Document base directory is unsafe")
+		}
+		archive, headers, err := client.DownloadDesignDocumentInput(ctx, task.ID, "base", "", 32<<20)
+		if err != nil {
+			return fmt.Errorf("download Design Document base: %w", err)
+		}
+		if headers.Get("X-Multica-Design-Package-Digest") != envelope.BaseContentDigest {
+			return errors.New("Design Document base digest does not match its pinned reference")
+		}
+		if err := os.WriteFile(filepath.Join(baseDir, "package.zip"), archive, 0o444); err != nil {
+			return err
+		}
+		return os.Chmod(baseDir, 0o555)
+	}
 	referenceDir := filepath.Join(root, "reference")
 	designSystemDir := filepath.Join(root, "context", "design-system")
 	for _, dir := range []string{referenceDir, designSystemDir} {
@@ -141,11 +174,23 @@ func prepareDesignDocumentGrounding(ctx context.Context, task Task, workDir, dae
 		Operation      string `json:"operation"`
 		ExecutionReady bool   `json:"execution_ready"`
 		Input          struct {
-			RepositoryGrounding string `json:"repository_grounding"`
+			RepositoryGrounding string          `json:"repository_grounding"`
+			Repository          json.RawMessage `json:"repository"`
 		} `json:"input"`
 	}
-	if json.Unmarshal(task.DesignDocumentContext, &envelope) != nil || envelope.Type != "design_document_task" || envelope.Operation != "first_generation" || !envelope.ExecutionReady {
+	if json.Unmarshal(task.DesignDocumentContext, &envelope) != nil || envelope.Type != "design_document_task" || (envelope.Operation != "first_generation" && envelope.Operation != "adjust") || !envelope.ExecutionReady {
 		return nil, errors.New("invalid Design Document grounding context")
+	}
+	if envelope.Operation == "adjust" {
+		if envelope.Input.RepositoryGrounding != "pinned" {
+			return nil, errors.New("invalid pinned Design Document grounding context")
+		}
+		grounding, err := designdocument.ValidateRepositoryGrounding(envelope.Input.Repository)
+		if err != nil {
+			return nil, err
+		}
+		state := &designDocumentGroundingState{Mode: "pinned", pinned: &grounding, roots: map[string]string{}, workDir: workDir}
+		return state, writeDesignDocumentCheckout(workDir, nil)
 	}
 	state := &designDocumentGroundingState{Mode: envelope.Input.RepositoryGrounding, roots: map[string]string{}, workDir: workDir}
 	if state.Mode == designdocument.GroundingUnavailable {
@@ -246,6 +291,10 @@ func finalizeDesignDocumentGrounding(state *designDocumentGroundingState, workDi
 	if _, err := designdocument.ValidateStagingDirectory(outputDir); err != nil {
 		return nil, err
 	}
+	if state.pinned != nil {
+		value := *state.pinned
+		return &value, nil
+	}
 	if state.Mode == designdocument.GroundingUnavailable {
 		value := designdocument.RepositoryGrounding{
 			SchemaVersion: designdocument.GroundingSchemaVersion, Status: designdocument.GroundingUnavailable,
@@ -310,6 +359,9 @@ func finalizeDesignDocumentGrounding(state *designDocumentGroundingState, workDi
 }
 
 func writeDesignDocumentCheckout(workDir string, repositories []designDocumentCheckoutRepository) error {
+	if repositories == nil {
+		repositories = []designDocumentCheckoutRepository{}
+	}
 	sort.Slice(repositories, func(i, j int) bool { return repositories[i].ID < repositories[j].ID })
 	raw, err := json.Marshal(designDocumentCheckout{SchemaVersion: designDocumentCheckoutSchema, Repositories: repositories})
 	if err != nil {
