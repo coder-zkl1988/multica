@@ -186,7 +186,7 @@ export function DesignDocumentTaskPanel({
     <div className="mx-auto flex w-full max-w-5xl flex-col gap-6 px-4 py-5 sm:px-6">
       <section aria-labelledby="design-task-form-heading" className="space-y-4 border-b pb-6">
         <div>
-          <h2 id="design-task-form-heading" className="text-base font-semibold">开始设计</h2>
+          <h2 id="design-task-form-heading" className="text-title-sm font-semibold">开始设计</h2>
         </div>
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="space-y-1.5">
