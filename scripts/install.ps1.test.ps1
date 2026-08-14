@@ -62,6 +62,7 @@ foreach ($banned in @("Get-SelfHostBackendPort", "Get-SelfHostFrontendPort", "Ge
     }
 }
 foreach ($required in @(
+        'https://api.github.com/repos/coder-zkl1988/multica/releases?per_page=100',
         'Get-ComposePublishedPort -Service "backend" -ContainerPort 8080',
         'Get-ComposePublishedPort -Service "frontend" -ContainerPort 3000',
         'http://localhost:$($script:SelfHostBackendPort)/health')) {
@@ -74,6 +75,40 @@ foreach ($required in @(
 # 2. Get-ComposePublishedPort parses what `docker compose port` returns
 # ---------------------------------------------------------------------------
 $definitions = Get-InstallerDefinitions
+
+
+# ---------------------------------------------------------------------------
+# 3. SSO release ordering is numeric and never downgrades
+# ---------------------------------------------------------------------------
+$versionCases = @(
+    @{ Left = "v0.4.23-sso.10"; Right = "v0.4.23-sso.9"; Expected = 1 }
+    @{ Left = "v0.4.23-sso.10"; Right = "v0.4.23-sso.10"; Expected = 0 }
+    @{ Left = "v0.4.23-sso.9"; Right = "v0.4.23-sso.10"; Expected = -1 }
+)
+foreach ($case in $versionCases) {
+    $result = & {
+        Invoke-Expression $definitions
+        Compare-CliVersions $case.Left $case.Right
+    }
+    if ($result -ne $case.Expected) {
+        Fail-Test "Compare-CliVersions $($case.Left) $($case.Right): expected $($case.Expected), got $result"
+    }
+}
+
+$installCalls = & {
+    Invoke-Expression $definitions
+    $script:installBinaryCalls = 0
+    function Resolve-CliRelease { }
+    function Test-CommandExists { return $true }
+    function multica { return "multica v0.4.23-sso.10" }
+    function Get-LatestVersion { return "v0.4.23-sso.9" }
+    function Install-CliBinary { $script:installBinaryCalls += 1 }
+    $null = Install-Cli
+    return $script:installBinaryCalls
+}
+if ($installCalls -ne 0) {
+    Fail-Test "Install-Cli must not downgrade v0.4.23-sso.10 to v0.4.23-sso.9"
+}
 
 $portReaderCases = @(
     @{ Label = "loopback binding"; Output = @("127.0.0.1:9500"); Expected = "9500" }
@@ -112,7 +147,7 @@ if ($null -ne $failureResult) {
 }
 
 # ---------------------------------------------------------------------------
-# 3. End to end: the probed URL and the printed URLs are the published ports
+# 4. End to end: the probed URL and the printed URLs are the published ports
 # ---------------------------------------------------------------------------
 $cases = @(
     @{ Label = "defaults"; Env = @{}; Mutation = $null; Backend = "8080"; Frontend = "3000" }

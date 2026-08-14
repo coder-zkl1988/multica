@@ -15,9 +15,10 @@ set -euo pipefail
 # Configuration
 # ---------------------------------------------------------------------------
 REPO_URL="https://github.com/coder-zkl1988/multica.git"
-REPO_WEB_URL="https://github.com/coder-zkl1988/multica"  # without .git, for GitHub web APIs
-CLI_RELEASE_TAG="v0.4.18-sso.1"
-CLI_VERSION="0.4.18-sso.1"
+REPO_WEB_URL="https://github.com/coder-zkl1988/multica"
+REPO_API_URL="https://api.github.com/repos/coder-zkl1988/multica"
+CLI_RELEASE_TAG="${MULTICA_CLI_RELEASE_TAG:-}"
+CLI_VERSION="${MULTICA_CLI_VERSION:-}"
 INSTALL_DIR="${MULTICA_INSTALL_DIR:-$HOME/.multica/server}"
 
 # Host ports Compose reported after `up -d`; set by setup_server and reused by
@@ -107,10 +108,41 @@ detect_os() {
   esac
 }
 
+# Resolve the highest SSO CLI release at install time. Keep the environment
+# overrides for incident rollback and offline/repro installs, but do not bake a
+# build number into this script.
+resolve_cli_release() {
+  if [ -z "$CLI_RELEASE_TAG" ] && [ -n "$CLI_VERSION" ]; then
+    CLI_RELEASE_TAG="v${CLI_VERSION#v}"
+  fi
+  if [ -z "$CLI_RELEASE_TAG" ]; then
+    local releases best tag
+    releases="$(curl -fsSL "${REPO_API_URL}/releases?per_page=100")" || fail "Failed to query CLI releases."
+    best="$(
+      printf '%s' "$releases" |
+        grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"v[0-9]+\.[0-9]+\.[0-9]+-sso\.[0-9]+"' |
+        sed -E 's/.*"([^"]+)".*/\1/' |
+        awk '
+        {
+          raw=$0; key=raw; sub(/^v/, "", key); gsub(/[.-]/, " ", key); split(key, p, " ");
+          if (!found || p[1] > a || (p[1] == a && p[2] > b) || (p[1] == a && p[2] == b && p[3] > c) || (p[1] == a && p[2] == b && p[3] == c && p[5] > d)) {
+            found=1; a=p[1]; b=p[2]; c=p[3]; d=p[5]; best=raw
+          }
+        }
+        END { if (found) print best }
+        '
+    )"
+    [ -n "$best" ] || fail "No published SSO CLI release found."
+    CLI_RELEASE_TAG="$best"
+  fi
+  CLI_VERSION="${CLI_VERSION:-${CLI_RELEASE_TAG#v}}"
+}
+
 # ---------------------------------------------------------------------------
 # CLI Installation
 # ---------------------------------------------------------------------------
 install_cli_binary() {
+  resolve_cli_release
   info "Installing Multica CLI from GitHub Releases..."
 
   local url="${REPO_WEB_URL}/releases/download/${CLI_RELEASE_TAG}/multica-cli-${CLI_VERSION}-${OS}-${ARCH}.tar.gz"

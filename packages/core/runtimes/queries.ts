@@ -1,5 +1,6 @@
 import { queryOptions } from "@tanstack/react-query";
 import { api } from "../api";
+import { fetchLatestCliReleaseTag } from "./cli-version";
 
 export const runtimeKeys = {
   all: (wsId: string) => ["runtimes", wsId] as const,
@@ -61,30 +62,10 @@ export function runtimeListOptions(wsId: string, owner?: "me", wsSlug?: string) 
   });
 }
 
-const GITHUB_RELEASES_URL =
-  "https://api.github.com/repos/coder-zkl1988/multica/releases/tags/v0.4.18-sso.1";
-const LATEST_VERSION_TIMEOUT_MS = 2500;
-
 export function latestCliVersionOptions() {
   return queryOptions({
     queryKey: runtimeKeys.latestVersion(),
-    queryFn: async (): Promise<string | null> => {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), LATEST_VERSION_TIMEOUT_MS);
-      try {
-        const resp = await fetch(GITHUB_RELEASES_URL, {
-          headers: { Accept: "application/vnd.github+json" },
-          signal: controller.signal,
-        });
-        if (!resp.ok) return null;
-        const data = await resp.json();
-        return (data.tag_name as string) ?? null;
-      } catch {
-        return null;
-      } finally {
-        clearTimeout(timeout);
-      }
-    },
+    queryFn: ({ signal }) => fetchLatestCliReleaseTag(signal),
     staleTime: 10 * 60 * 1000, // 10 minutes
     gcTime: 30 * 60 * 1000,
     refetchOnWindowFocus: false,

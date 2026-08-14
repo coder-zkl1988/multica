@@ -22,6 +22,20 @@ STUB
 
   cat >"$stub_bin/curl" <<'STUB'
 #!/usr/bin/env bash
+for arg in "$@"; do
+  case "$arg" in
+    http*)
+      if [[ -n "${MULTICA_TEST_URL_LOG:-}" ]]; then
+        printf '%s\n' "$arg" >>"$MULTICA_TEST_URL_LOG"
+      fi
+      ;;
+  esac
+done
+if [[ "$*" == *"https://api.github.com/repos/coder-zkl1988/multica/releases?per_page=100"* ]]; then
+  printf '[{"tag_name":"v0.3.2-sso.1","draft":false}]'
+  exit 0
+fi
+
 if [[ "$*" == *"-sI"* ]]; then
   printf 'HTTP/2 302\r\nlocation: https://github.com/multica-ai/multica/releases/tag/v0.3.2\r\n'
   exit 0
@@ -83,8 +97,16 @@ test_cli_install_existing_writable_directory() {
   target="$tmp/existing-bin"
   mkdir -p "$target"
 
-  MULTICA_BIN_DIR="$target" _run_install_cli_binary "$tmp"
+  MULTICA_BIN_DIR="$target" \
+    MULTICA_TEST_URL_LOG="$tmp/urls.log" \
+    _run_install_cli_binary "$tmp"
 
+  grep -qxF \
+    "https://api.github.com/repos/coder-zkl1988/multica/releases?per_page=100" \
+    "$tmp/urls.log" || {
+    echo "expected release metadata query to use the GitHub API" >&2
+    return 1
+  }
   [[ -x "$target/multica" ]] || {
     echo "expected CLI in existing writable directory" >&2
     return 1
@@ -165,6 +187,26 @@ STUB
   }
   grep -q "^$fallback:" "$tmp/path.after" || {
     echo "expected fallback directory in installer PATH" >&2
+    return 1
+  }
+}
+
+test_cli_install_release_override() {
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  _setup_sandbox "$tmp"
+
+  MULTICA_BIN_DIR="$tmp/install-bin" \
+    MULTICA_CLI_RELEASE_TAG="v9.9.9-sso.1" \
+    MULTICA_CLI_VERSION="9.9.9-sso.1" \
+    MULTICA_TEST_URL_LOG="$tmp/urls.log" \
+    _run_install_cli_binary "$tmp"
+
+  grep -qF \
+    "releases/download/v9.9.9-sso.1/multica-cli-9.9.9-sso.1-darwin-arm64.tar.gz" \
+    "$tmp/urls.log" || {
+    echo "expected CLI release override to control the download URL" >&2
     return 1
   }
 }
@@ -514,7 +556,7 @@ STUB
   printf '#!/usr/bin/env bash\nexit 0\n' >"$stub_bin/brew"
   chmod +x "$stub_bin/brew"
 
-  printf '#!/usr/bin/env bash\necho "multica v0.4.18-sso.1 (commit: test)"\n' >"$stub_bin/multica"
+  printf '#!/usr/bin/env bash\necho "multica v0.4.23-sso.6 (commit: test)"\n' >"$stub_bin/multica"
   chmod +x "$stub_bin/multica"
 
   # curl records every probed URL so the health-check port can be asserted.
@@ -668,6 +710,7 @@ STUB
 test_cli_install_existing_writable_directory
 test_cli_install_missing_directory_with_sudo
 test_cli_install_without_sudo_falls_back_and_updates_path
+test_cli_install_release_override
 test_cli_install_multica_bin_dir_creates_missing_directory
 test_cli_install_extract_failure_cleans_temp_directory
 test_brew_install_failure_falls_back_to_release_binary

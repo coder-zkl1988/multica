@@ -9,13 +9,23 @@ import { tmpdir } from "os";
 import { Readable } from "stream";
 
 import { selectPlatformReleaseAssetName } from "./cli-release-asset";
+import { fetchLatestCliReleaseTag } from "@multica/core/runtimes";
 
 // Desktop prefers the bundled `multica` CLI shipped inside the app for
 // same-repo builds, but it can also repair or bootstrap a managed copy in
 // userData on first launch when the bundled binary is missing or unusable.
 
-const GITHUB_LATEST_BASE =
-  "https://github.com/coder-zkl1988/multica/releases/download/v0.4.18-sso.1";
+const GITHUB_RELEASES_BASE =
+  "https://github.com/coder-zkl1988/multica/releases/download";
+const SSO_VERSION_RE = /^\d+\.\d+\.\d+-sso\.\d+$/;
+
+async function resolveCliReleaseTag(): Promise<string> {
+  const appVersion = app.getVersion().trim().replace(/^v/, "");
+  if (SSO_VERSION_RE.test(appVersion)) return `v${appVersion}`;
+  const latest = await fetchLatestCliReleaseTag();
+  if (!latest) throw new Error("could not resolve the latest SSO CLI release");
+  return latest;
+}
 
 function binaryName(): string {
   return process.platform === "win32" ? "multica.exe" : "multica";
@@ -44,8 +54,8 @@ async function downloadToFile(url: string, dest: string): Promise<void> {
 
 // Fetch goreleaser's published checksums.txt and parse it into a
 // filename → sha256 lookup. Format is `<hex>  <filename>` per line.
-async function fetchChecksums(): Promise<Map<string, string>> {
-  const url = `${GITHUB_LATEST_BASE}/checksums.txt`;
+async function fetchChecksums(releaseBase: string): Promise<Map<string, string>> {
+  const url = `${releaseBase}/checksums.txt`;
   const res = await fetch(url, { redirect: "follow" });
   if (!res.ok) {
     throw new Error(
@@ -92,7 +102,9 @@ async function extractArchive(archive: string, dest: string): Promise<void> {
 
 async function installFresh(): Promise<string> {
   const target = managedCliPath();
-  const checksums = await fetchChecksums();
+  const releaseTag = await resolveCliReleaseTag();
+  const releaseBase = `${GITHUB_RELEASES_BASE}/${releaseTag}`;
+  const checksums = await fetchChecksums(releaseBase);
   const assetName = selectPlatformReleaseAssetName(checksums.keys());
   const expectedChecksum = checksums.get(assetName);
   if (!expectedChecksum) {
@@ -100,7 +112,7 @@ async function installFresh(): Promise<string> {
       `no checksum for ${assetName} in checksums.txt — refusing to install unverified binary`,
     );
   }
-  const url = `${GITHUB_LATEST_BASE}/${assetName}`;
+  const url = `${releaseBase}/${assetName}`;
 
   const workDir = join(tmpdir(), `multica-cli-${Date.now()}`);
   await mkdir(workDir, { recursive: true });

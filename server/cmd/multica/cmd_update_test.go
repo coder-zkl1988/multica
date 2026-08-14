@@ -26,3 +26,24 @@ func TestUpdateCommandRegistersDownloadTimeoutFlag(t *testing.T) {
 		t.Fatalf("--download-timeout default = %q, want %q", got, (120 * time.Second).String())
 	}
 }
+
+func TestShouldUpdateCLI(t *testing.T) {
+	tests := []struct {
+		name    string
+		current string
+		latest  string
+		want    bool
+	}{
+		{name: "older sso build", current: "v0.4.23-sso.9", latest: "v0.4.23-sso.10", want: true},
+		{name: "same version", current: "v0.4.23-sso.10", latest: "v0.4.23-sso.10", want: false},
+		{name: "newer current version", current: "v0.4.23-sso.10", latest: "v0.4.23-sso.9", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldUpdateCLI(tt.current, tt.latest); got != tt.want {
+				t.Fatalf("shouldUpdateCLI(%q, %q) = %v, want %v", tt.current, tt.latest, got, tt.want)
+			}
+		})
+	}
+}

@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -35,9 +34,7 @@ func runUpdate(_ *cobra.Command, _ []string) error {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: could not check latest version: %v\n", err)
 	} else {
-		latestVer := strings.TrimPrefix(latest.TagName, "v")
-		currentVer := strings.TrimPrefix(version, "v")
-		if currentVer == latestVer {
+		if !shouldUpdateCLI(version, latest.TagName) {
 			fmt.Fprintln(os.Stderr, "Already up to date.")
 			return nil
 		}
@@ -58,4 +55,8 @@ func runUpdate(_ *cobra.Command, _ []string) error {
 	}
 	fmt.Fprintf(os.Stderr, "%s\nUpdate complete.\n", output)
 	return nil
+}
+
+func shouldUpdateCLI(current, latest string) bool {
+	return cli.IsNewerVersion(latest, current)
 }

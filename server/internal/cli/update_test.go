@@ -309,3 +309,17 @@ func TestUpdateDownloadTimeoutOrDefault(t *testing.T) {
 		})
 	}
 }
+
+func TestLatestForkCLIReleaseFiltersAndSortsSSOTags(t *testing.T) {
+	releases := []GitHubRelease{
+		{TagName: "desktop-v9.9.9-sso.9"},
+		{TagName: "v0.4.23-sso.6"},
+		{TagName: "v0.4.23-sso.7", Draft: true},
+		{TagName: "v0.4.22-sso.9"},
+		{TagName: "v0.4.23"},
+	}
+	got := latestForkCLIRelease(releases)
+	if got == nil || got.TagName != "v0.4.23-sso.6" {
+		t.Fatalf("latestForkCLIRelease = %#v, want v0.4.23-sso.6", got)
+	}
+}

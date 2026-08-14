@@ -1,5 +1,6 @@
 import { queryOptions } from "@tanstack/react-query";
 import { api } from "@/data/api";
+import { fetchLatestCliReleaseTag } from "@multica/core/runtimes";
 
 // Runtime list — workspace-scoped. Feeds the availability dimension of the
 // presence dot via @multica/core/agents/derive-presence (status + last_seen_at).
@@ -16,27 +17,11 @@ export const runtimeKeys = {
   latestVersion: () => ["runtimes", "latestVersion"] as const,
 };
 
-const GITHUB_RELEASES_URL =
-  "https://api.github.com/repos/coder-zkl1988/multica/releases/tags/v0.4.18-sso.1";
-
-// Mirrors packages/core/runtimes/queries.ts's latestCliVersionOptions —
-// same GitHub public-API call, same silent-null-on-failure behavior (a
-// flaky network on a phone should never surface as a query error for
-// something as inconsequential as an update-available badge).
+// Shares the same release-list resolver as web and desktop so the phone
+// never points at a stale hardcoded CLI tag.
 export const latestCliVersionOptions = () =>
   queryOptions({
     queryKey: runtimeKeys.latestVersion(),
-    queryFn: async (): Promise<string | null> => {
-      try {
-        const resp = await fetch(GITHUB_RELEASES_URL, {
-          headers: { Accept: "application/vnd.github+json" },
-        });
-        if (!resp.ok) return null;
-        const data = await resp.json();
-        return (data.tag_name as string) ?? null;
-      } catch {
-        return null;
-      }
-    },
-    staleTime: 10 * 60 * 1000, // 10 minutes
+    queryFn: ({ signal }) => fetchLatestCliReleaseTag(signal),
+    staleTime: 10 * 60 * 1000,
   });

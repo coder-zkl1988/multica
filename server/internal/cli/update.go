@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -31,15 +32,16 @@ import (
 const ChecksumManifestName = "checksums.txt"
 
 const forkReleaseAPIBase = "https://api.github.com/repos/coder-zkl1988/multica/releases"
-const forkCLIReleaseTag = "v0.4.18-sso.1"
 
 const DefaultUpdateDownloadTimeout = 120 * time.Second
 
 // GitHubRelease is the subset of the GitHub releases API response we need.
 type GitHubRelease struct {
-	TagName string               `json:"tag_name"`
-	HTMLURL string               `json:"html_url"`
-	Assets  []GitHubReleaseAsset `json:"assets"`
+	TagName    string               `json:"tag_name"`
+	HTMLURL    string               `json:"html_url"`
+	Draft      bool                 `json:"draft"`
+	Prerelease bool                 `json:"prerelease"`
+	Assets     []GitHubReleaseAsset `json:"assets"`
 }
 
 // IsReleaseVersion reports whether v looks like a tagged release version
@@ -243,9 +245,56 @@ func fetchReleaseByTag(tag string) (*GitHubRelease, error) {
 	return &release, nil
 }
 
-// FetchLatestRelease fetches the pinned SSO CLI release from the fork.
+var forkCLIReleasePattern = regexp.MustCompile(`^v\d+\.\d+\.\d+-sso\.\d+$`)
+
+func fetchReleaseList(url string) ([]GitHubRelease, error) {
+	client := &http.Client{Timeout: 10 * time.Second}
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("GitHub API returned %d", resp.StatusCode)
+	}
+	var releases []GitHubRelease
+	if err := json.NewDecoder(resp.Body).Decode(&releases); err != nil {
+		return nil, err
+	}
+	return releases, nil
+}
+
+func latestForkCLIRelease(releases []GitHubRelease) *GitHubRelease {
+	var latest *GitHubRelease
+	for i := range releases {
+		release := &releases[i]
+		if release.Draft || !forkCLIReleasePattern.MatchString(release.TagName) {
+			continue
+		}
+		if latest == nil || IsNewerVersion(release.TagName, latest.TagName) {
+			latest = release
+		}
+	}
+	return latest
+}
+
+// FetchLatestRelease resolves the highest published SSO CLI release instead of
+// pinning one build number in every client and installer.
 func FetchLatestRelease() (*GitHubRelease, error) {
-	return fetchReleaseByTag(forkCLIReleaseTag)
+	releases, err := fetchReleaseList(forkReleaseAPIBase + "?per_page=100")
+	if err != nil {
+		return nil, err
+	}
+	if latest := latestForkCLIRelease(releases); latest != nil {
+		return latest, nil
+	}
+	return nil, fmt.Errorf("no published SSO CLI release found")
 }
 
 // knownBrewPrefixes lists the install roots Homebrew uses on each platform.

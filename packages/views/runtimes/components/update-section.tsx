@@ -10,14 +10,13 @@ import {
 import { Button } from "@multica/ui/components/ui/button";
 import { api } from "@multica/core/api";
 import {
+  fetchLatestCliReleaseTag,
   isCliReleaseVersion,
   isNewerCliReleaseVersion,
 } from "@multica/core/runtimes";
 import type { RuntimeUpdateStatus } from "@multica/core/types";
 import { useT } from "../../i18n";
 
-const GITHUB_RELEASES_URL =
-  "https://api.github.com/repos/coder-zkl1988/multica/releases/tags/v0.4.18-sso.1";
 const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
 let cachedLatestVersion: string | null = null;
@@ -27,18 +26,12 @@ async function fetchLatestVersion(): Promise<string | null> {
   if (cachedLatestVersion && Date.now() - cachedAt < CACHE_TTL_MS) {
     return cachedLatestVersion;
   }
-  try {
-    const resp = await fetch(GITHUB_RELEASES_URL, {
-      headers: { Accept: "application/vnd.github+json" },
-    });
-    if (!resp.ok) return null;
-    const data = await resp.json();
-    cachedLatestVersion = data.tag_name ?? null;
+  const latest = await fetchLatestCliReleaseTag();
+  if (latest) {
+    cachedLatestVersion = latest;
     cachedAt = Date.now();
-    return cachedLatestVersion;
-  } catch {
-    return null;
   }
+  return latest;
 }
 
 const statusConfig: Record<

@@ -265,3 +265,53 @@ export function daemonSupportsLocalWorktree(
   }
   return newest ? runtimeSupportsLocalWorktree(newest.metadata) : false;
 }
+
+const CLI_RELEASES_API_URL =
+  "https://api.github.com/repos/coder-zkl1988/multica/releases?per_page=100";
+const SSO_CLI_RELEASE_RE = /^v\d+\.\d+\.\d+-sso\.\d+$/;
+
+/** Selects the highest published SSO CLI tag from a GitHub releases payload. */
+export function selectLatestCliReleaseTag(payload: unknown): string | null {
+  if (!Array.isArray(payload)) return null;
+  let latest: { tag: string; version: [number, number, number, number] } | null = null;
+  for (const release of payload) {
+    if (!release || typeof release !== "object") continue;
+    const tag = (release as { tag_name?: unknown }).tag_name;
+    const draft = (release as { draft?: unknown }).draft;
+    if (typeof tag !== "string" || draft === true || !SSO_CLI_RELEASE_RE.test(tag)) continue;
+    const version = parseCliReleaseVersion(tag);
+    if (!version) continue;
+    if (!latest) {
+      latest = { tag, version };
+      continue;
+    }
+    for (let index = 0; index < version.length; index += 1) {
+      const candidatePart = version[index] ?? 0;
+      const latestPart = latest.version[index] ?? 0;
+      if (candidatePart === latestPart) continue;
+      if (candidatePart > latestPart) latest = { tag, version };
+      break;
+    }
+  }
+  return latest?.tag ?? null;
+}
+
+export async function fetchLatestCliReleaseTag(signal?: AbortSignal): Promise<string | null> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 2500);
+  const abort = () => controller.abort(signal?.reason);
+  signal?.addEventListener("abort", abort, { once: true });
+  try {
+    const response = await fetch(CLI_RELEASES_API_URL, {
+      headers: { Accept: "application/vnd.github+json" },
+      signal: controller.signal,
+    });
+    if (!response.ok) return null;
+    return selectLatestCliReleaseTag(await response.json());
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+    signal?.removeEventListener("abort", abort);
+  }
+}

@@ -25,7 +25,7 @@ function renderSection(props: {
     <I18nProvider locale="en" resources={TEST_RESOURCES}>
       <UpdateSection
         runtimeId={props.runtimeId}
-        currentVersion={props.currentVersion ?? "v0.4.0"}
+        currentVersion={props.currentVersion ?? "v0.4.0-sso.1"}
         isOnline
         launchedBy={props.launchedBy}
       />
@@ -44,7 +44,7 @@ describe("UpdateSection read-only status", () => {
       "fetch",
       vi.fn().mockResolvedValue({
         ok: true,
-        json: async () => ({ tag_name: "v0.4.0" }),
+        json: async () => [{ tag_name: "v0.4.0-sso.1" }],
       }),
     );
 
@@ -62,7 +62,7 @@ describe("UpdateSection read-only status", () => {
       "fetch",
       vi.fn().mockResolvedValue({
         ok: true,
-        json: async () => ({ tag_name: "v0.4.0" }),
+        json: async () => [{ tag_name: "v0.4.0-sso.1" }],
       }),
     );
 
@@ -80,7 +80,7 @@ describe("UpdateSection read-only status", () => {
       "fetch",
       vi.fn().mockResolvedValue({
         ok: true,
-        json: async () => ({ tag_name: "v0.4.0" }),
+        json: async () => [{ tag_name: "v0.4.0-sso.1" }],
       }),
     );
 
@@ -119,7 +119,7 @@ describe("UpdateSection non-release versions", () => {
       "fetch",
       vi.fn().mockResolvedValue({
         ok: true,
-        json: async () => ({ tag_name: LATEST }),
+        json: async () => [{ tag_name: LATEST }],
       }),
     );
   });

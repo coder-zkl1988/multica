@@ -14,8 +14,9 @@ $ErrorActionPreference = "Stop"
 # ---------------------------------------------------------------------------
 $RepoUrl       = "https://github.com/coder-zkl1988/multica.git"
 $RepoWebUrl    = "https://github.com/coder-zkl1988/multica"
-$CliReleaseTag = "v0.4.18-sso.1"
-$CliVersion    = "0.4.18-sso.1"
+$RepoApiUrl    = "https://api.github.com/repos/coder-zkl1988/multica"
+$CliReleaseTag = if ($env:MULTICA_CLI_RELEASE_TAG) { $env:MULTICA_CLI_RELEASE_TAG } else { $null }
+$CliVersion    = if ($env:MULTICA_CLI_VERSION) { $env:MULTICA_CLI_VERSION.TrimStart("v") } else { $null }
 $DefaultInstallDir = Join-Path $env:USERPROFILE ".multica\server"
 $InstallDir    = if ($env:MULTICA_INSTALL_DIR) { $env:MULTICA_INSTALL_DIR } else { $DefaultInstallDir }
 
@@ -86,8 +87,46 @@ function Get-ComposePublishedPort {
     return $published
 }
 
+function Compare-CliVersions {
+    param([string]$Left, [string]$Right)
+
+    $pattern = '^v?(\d+)\.(\d+)\.(\d+)-sso\.(\d+)$'
+    if ($Left -notmatch $pattern) { return $null }
+    $leftKey = @([int]$Matches[1], [int]$Matches[2], [int]$Matches[3], [int]$Matches[4])
+    if ($Right -notmatch $pattern) { return $null }
+    $rightKey = @([int]$Matches[1], [int]$Matches[2], [int]$Matches[3], [int]$Matches[4])
+
+    for ($i = 0; $i -lt 4; $i++) {
+        if ($leftKey[$i] -eq $rightKey[$i]) { continue }
+        if ($leftKey[$i] -gt $rightKey[$i]) { return 1 }
+        return -1
+    }
+    return 0
+}
+
+function Resolve-CliRelease {
+    if (-not $script:CliReleaseTag -and $script:CliVersion) {
+        $script:CliReleaseTag = "v$($script:CliVersion)"
+    }
+    if (-not $script:CliReleaseTag) {
+        $releases = Invoke-RestMethod -Uri "$RepoApiUrl/releases?per_page=100" -Headers @{ Accept = "application/vnd.github+json" }
+        $best = $null
+        foreach ($release in @($releases)) {
+            $tag = [string]$release.tag_name
+            if ($release.draft -or $tag -notmatch '^v(\d+)\.(\d+)\.(\d+)-sso\.(\d+)$') { continue }
+            if (-not $best -or (Compare-CliVersions $tag $best.Tag) -gt 0) {
+                $best = [pscustomobject]@{ Tag = $tag }
+            }
+        }
+        if (-not $best) { throw "No published SSO CLI release found." }
+        $script:CliReleaseTag = $best.Tag
+    }
+    if (-not $script:CliVersion) { $script:CliVersion = $script:CliReleaseTag.TrimStart("v") }
+}
+
 function Get-LatestVersion {
-    return $CliReleaseTag
+    Resolve-CliRelease
+    return $script:CliReleaseTag
 }
 
 function Get-SelfHostRef {
@@ -214,7 +253,7 @@ function Get-WindowsCliArch {
 function Get-InstalledCliVersion {
     try {
         $firstLine = multica version 2>$null | Select-Object -First 1
-        if ("$firstLine" -match '\b(v?\d+(?:\.\d+)+)\b') {
+        if ("$firstLine" -match '\b(v?\d+\.\d+\.\d+(?:-sso\.\d+)?)\b') {
             $version = $Matches[1]
             if ($version -notlike 'v*') {
                 $version = "v$version"
@@ -230,6 +269,7 @@ function Get-InstalledCliVersion {
 # CLI Installation
 # ---------------------------------------------------------------------------
 function Install-CliBinary {
+    Resolve-CliRelease
     Write-Info "Installing Multica CLI from GitHub Releases..."
 
     if (-not [Environment]::Is64BitOperatingSystem) {
@@ -326,21 +366,17 @@ function Add-ToUserPath {
 }
 
 function Install-Cli {
+    Resolve-CliRelease
     if (Test-CommandExists "multica") {
         $currentVer = Get-InstalledCliVersion
         $latestVer = Get-LatestVersion
 
-        $currentCmp = if ($currentVer) { $currentVer -replace '^v','' } else { $null }
-        $latestCmp = if ($latestVer) { $latestVer -replace '^v','' } else { $null }
-
-        $isUpToDate = $currentCmp -and -not $latestCmp
-        if (-not $isUpToDate) {
-            try {
-                $isUpToDate = $currentCmp -and $latestCmp -and ([System.Version]$currentCmp -ge [System.Version]$latestCmp)
-            } catch {
-                $isUpToDate = $currentCmp -and $latestCmp -and ($currentCmp -eq $latestCmp)
-            }
+        $comparison = if ($currentVer -and $latestVer) {
+            Compare-CliVersions $currentVer $latestVer
+        } else {
+            $null
         }
+        $isUpToDate = $null -ne $comparison -and $comparison -ge 0
 
         if ($isUpToDate) {
             Write-Ok "Multica CLI is up to date ($currentVer)"

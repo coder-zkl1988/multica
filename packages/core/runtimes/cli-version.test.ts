@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, test, expect } from "vitest";
 import {
   chatProjectContextSupported,
   checkQuickCreateCliVersion,
@@ -6,6 +6,7 @@ import {
   handoffSupported,
   isCliReleaseVersion,
   isNewerCliReleaseVersion,
+  selectLatestCliReleaseTag,
   MIN_CHAT_PROJECT_CONTEXT_CLI_VERSION,
   MIN_HANDOFF_CLI_VERSION,
   runtimeSupportsLocalWorktree,
@@ -206,4 +207,16 @@ describe("daemonSupportsLocalWorktree", () => {
     expect(daemonSupportsLocalWorktree([], "d1")).toBe(false);
     expect(daemonSupportsLocalWorktree(other, null)).toBe(false);
   });
+});
+
+test("selectLatestCliReleaseTag ignores desktop, stable, and draft releases", () => {
+  expect(
+    selectLatestCliReleaseTag([
+      { tag_name: "desktop-v9.9.9-sso.9" },
+      { tag_name: "v9.9.9", draft: false },
+      { tag_name: "v0.4.23-sso.6", draft: false },
+      { tag_name: "v0.4.23-sso.7", draft: true },
+      { tag_name: "v0.4.23-sso.5", draft: false },
+    ]),
+  ).toBe("v0.4.23-sso.6");
 });
