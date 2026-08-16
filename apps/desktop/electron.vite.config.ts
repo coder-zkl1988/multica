@@ -3,9 +3,50 @@ import { defineConfig, externalizeDepsPlugin } from "electron-vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
+type BundleOutput =
+  | { type: "asset" }
+  | {
+      type: "chunk";
+      imports: string[];
+      dynamicImports: string[];
+    };
+
+export function workspaceExternalGuard() {
+  return {
+    name: "multica:workspace-external-guard",
+    generateBundle(
+      _options: unknown,
+      bundle: Record<string, BundleOutput>,
+    ) {
+      const externalWorkspaceImports = [
+        ...new Set(
+          Object.values(bundle).flatMap((output) =>
+            output.type === "chunk"
+              ? [...output.imports, ...output.dynamicImports].filter((specifier) =>
+                  specifier.startsWith("@multica/"),
+                )
+              : [],
+          ),
+        ),
+      ];
+
+      if (externalWorkspaceImports.length > 0) {
+        throw new Error(
+          `desktop main bundle externalized source-only workspace packages: ${externalWorkspaceImports.join(", ")}`,
+        );
+      }
+    },
+  };
+}
+
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin({ exclude: ["@multica/core"] })],
+    plugins: [
+      externalizeDepsPlugin({
+        exclude: ["@multica/core", "@multica/ui", "@multica/views"],
+      }),
+      workspaceExternalGuard(),
+    ],
   },
   preload: {
     plugins: [externalizeDepsPlugin()],

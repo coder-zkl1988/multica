@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -13,36 +14,66 @@ import {
   resolveBuildMatrix,
   stripLeadingSeparator,
 } from "./package.mjs";
-import { findExternalWorkspaceImports } from "./verify-main-bundle.mjs";
+import desktopConfig, { workspaceExternalGuard } from "../electron.vite.config.ts";
 
-describe("findExternalWorkspaceImports", () => {
-  it("rejects source-only workspace packages left as runtime requires", () => {
+describe("workspaceExternalGuard", () => {
+  it("rejects workspace packages left as static external imports", () => {
+    const guard = workspaceExternalGuard();
+
+    expect(() =>
+      guard.generateBundle({}, {
+        "index.js": {
+          type: "chunk",
+          imports: ["@multica/core/runtimes"],
+          dynamicImports: [],
+        },
+      }),
+    ).toThrow("@multica/core/runtimes");
+  });
+
+  it("allows third-party external imports", () => {
+    const guard = workspaceExternalGuard();
+
+    expect(() =>
+      guard.generateBundle({}, {
+        "index.js": {
+          type: "chunk",
+          imports: ["electron", "node:path"],
+          dynamicImports: [],
+        },
+      }),
+    ).not.toThrow();
+  });
+
+  it("bundles source-only workspace dependencies in the Electron main build", () => {
+    const externalizePlugin = desktopConfig.main?.plugins?.find(
+      (plugin) => plugin && "name" in plugin && plugin.name === "vite:externalize-deps",
+    );
+    const config = {};
+
+    externalizePlugin.config(config);
+
+    for (const specifier of [
+      "@multica/core/runtimes",
+      "@multica/ui",
+      "@multica/views",
+    ]) {
+      expect(
+        config.build.rollupOptions.external.some((external) =>
+          typeof external === "string"
+            ? external === specifier
+            : external.test(specifier),
+        ),
+      ).toBe(false);
+    }
+  });
+
+  it("is installed in the Electron main build pipeline", () => {
     expect(
-      findExternalWorkspaceImports(`require("@multica/core/runtimes");`),
-    ).toEqual(["@multica/core/runtimes"]);
-  });
-
-  it("allows workspace code compiled into the Electron main bundle", () => {
-    expect(findExternalWorkspaceImports("const releaseTag = 'v0.4.23';")).toEqual([]);
-  });
-});
-
-describe("Desktop release bundle gate", () => {
-  it("verifies the built main bundle before electron-builder packages it", () => {
-    const packageScriptPath = [
-      resolve(process.cwd(), "scripts/package.mjs"),
-      resolve(process.cwd(), "apps/desktop/scripts/package.mjs"),
-    ].find((candidate) => existsSync(candidate));
-    expect(packageScriptPath, "package.mjs not found").toBeTruthy();
-
-    const script = readFileSync(packageScriptPath, "utf8");
-    const viteBuild = script.indexOf('spawnSync("electron-vite"');
-    const bundleGate = script.indexOf("verifyMainBundle();");
-    const electronBuilder = script.indexOf('spawnSync("electron-builder"');
-
-    expect(viteBuild).toBeGreaterThanOrEqual(0);
-    expect(bundleGate).toBeGreaterThan(viteBuild);
-    expect(electronBuilder).toBeGreaterThan(bundleGate);
+      desktopConfig.main?.plugins?.some(
+        (plugin) => plugin && "name" in plugin && plugin.name === "multica:workspace-external-guard",
+      ),
+    ).toBe(true);
   });
 });
 

@@ -30,7 +30,6 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { rmSync } from "node:fs";
 import { delimiter, dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { verifyMainBundle } from "./verify-main-bundle.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const desktopRoot = resolve(here, "..");
@@ -408,8 +407,6 @@ function main() {
   if (viteResult.status !== 0) {
     process.exit(viteResult.status ?? 1);
   }
-  verifyMainBundle();
-
   // Step 2: derive the version that should be written into the app. CI
   // releases pin it explicitly via MULTICA_DESKTOP_VERSION so the dispatch
   // version wins even when an older `v*` tag sits at the same commit (git
