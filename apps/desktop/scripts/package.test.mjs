@@ -13,6 +13,38 @@ import {
   resolveBuildMatrix,
   stripLeadingSeparator,
 } from "./package.mjs";
+import { findExternalWorkspaceImports } from "./verify-main-bundle.mjs";
+
+describe("findExternalWorkspaceImports", () => {
+  it("rejects source-only workspace packages left as runtime requires", () => {
+    expect(
+      findExternalWorkspaceImports(`require("@multica/core/runtimes");`),
+    ).toEqual(["@multica/core/runtimes"]);
+  });
+
+  it("allows workspace code compiled into the Electron main bundle", () => {
+    expect(findExternalWorkspaceImports("const releaseTag = 'v0.4.23';")).toEqual([]);
+  });
+});
+
+describe("Desktop release bundle gate", () => {
+  it("verifies the built main bundle before electron-builder packages it", () => {
+    const packageScriptPath = [
+      resolve(process.cwd(), "scripts/package.mjs"),
+      resolve(process.cwd(), "apps/desktop/scripts/package.mjs"),
+    ].find((candidate) => existsSync(candidate));
+    expect(packageScriptPath, "package.mjs not found").toBeTruthy();
+
+    const script = readFileSync(packageScriptPath, "utf8");
+    const viteBuild = script.indexOf('spawnSync("electron-vite"');
+    const bundleGate = script.indexOf("verifyMainBundle();");
+    const electronBuilder = script.indexOf('spawnSync("electron-builder"');
+
+    expect(viteBuild).toBeGreaterThanOrEqual(0);
+    expect(bundleGate).toBeGreaterThan(viteBuild);
+    expect(electronBuilder).toBeGreaterThan(bundleGate);
+  });
+});
 
 describe("normalizeGitVersion", () => {
   it("returns null for empty / nullish input", () => {
