@@ -97,6 +97,10 @@ const (
 	EventProjectResourceUpdated = "project_resource:updated"
 	EventProjectResourceDeleted = "project_resource:deleted"
 
+	// Investigation events use one invalidation signal because list, timeline,
+	// run history, feedback, and project linkage share the same query tree.
+	EventInvestigationChanged = "investigation:changed"
+
 	// Test case events
 	EventTestCaseCreated = "test_case:created"
 	EventTestCaseUpdated = "test_case:updated"
@@ -110,11 +114,11 @@ const (
 	EventTestCaseProposalUpdated  = "test_case_proposal:updated"
 
 	// Test plan and execution events
-	EventTestPlanCreated    = "test_plan:created"
-	EventTestPlanUpdated    = "test_plan:updated"
-	EventTestPlanDeleted    = "test_plan:deleted"
-	EventTestRunUpdated     = "test_run:updated"
-	EventTestRunCaseUpdated = "test_run_case:updated"
+	EventTestPlanCreated       = "test_plan:created"
+	EventTestPlanUpdated       = "test_plan:updated"
+	EventTestPlanDeleted       = "test_plan:deleted"
+	EventTestRunUpdated        = "test_run:updated"
+	EventTestRunCaseUpdated    = "test_run_case:updated"
 	EventTestCapabilityUpdated = "test_capability:updated"
 
 	// Gallery Native design events

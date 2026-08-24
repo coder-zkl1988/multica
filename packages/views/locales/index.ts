@@ -14,6 +14,7 @@ import enSearch from "./en/search.json";
 import enInbox from "./en/inbox.json";
 import enWorkspace from "./en/workspace.json";
 import enProjects from "./en/projects.json";
+import enInvestigations from "./en/investigations.json";
 import enPmo from "./en/pmo.json";
 import enProducts from "./en/products.json";
 import enAutopilots from "./en/autopilots.json";
@@ -42,6 +43,7 @@ import zhHansSearch from "./zh-Hans/search.json";
 import zhHansInbox from "./zh-Hans/inbox.json";
 import zhHansWorkspace from "./zh-Hans/workspace.json";
 import zhHansProjects from "./zh-Hans/projects.json";
+import zhHansInvestigations from "./zh-Hans/investigations.json";
 import zhHansPmo from "./zh-Hans/pmo.json";
 import zhHansProducts from "./zh-Hans/products.json";
 import zhHansAutopilots from "./zh-Hans/autopilots.json";
@@ -70,6 +72,7 @@ import koSearch from "./ko/search.json";
 import koInbox from "./ko/inbox.json";
 import koWorkspace from "./ko/workspace.json";
 import koProjects from "./ko/projects.json";
+import koInvestigations from "./ko/investigations.json";
 import koPmo from "./ko/pmo.json";
 import koProducts from "./ko/products.json";
 import koAutopilots from "./ko/autopilots.json";
@@ -98,6 +101,7 @@ import jaSearch from "./ja/search.json";
 import jaInbox from "./ja/inbox.json";
 import jaWorkspace from "./ja/workspace.json";
 import jaProjects from "./ja/projects.json";
+import jaInvestigations from "./ja/investigations.json";
 import jaPmo from "./ja/pmo.json";
 import jaProducts from "./ja/products.json";
 import jaAutopilots from "./ja/autopilots.json";
@@ -132,6 +136,7 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     inbox: enInbox,
     workspace: enWorkspace,
     projects: enProjects,
+    investigations: enInvestigations,
     pmo: enPmo,
     products: enProducts,
     autopilots: enAutopilots,
@@ -162,6 +167,7 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     inbox: zhHansInbox,
     workspace: zhHansWorkspace,
     projects: zhHansProjects,
+    investigations: zhHansInvestigations,
     pmo: zhHansPmo,
     products: zhHansProducts,
     autopilots: zhHansAutopilots,
@@ -192,6 +198,7 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     inbox: koInbox,
     workspace: koWorkspace,
     projects: koProjects,
+    investigations: koInvestigations,
     pmo: koPmo,
     products: koProducts,
     autopilots: koAutopilots,
@@ -222,6 +229,7 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     inbox: jaInbox,
     workspace: jaWorkspace,
     projects: jaProjects,
+    investigations: jaInvestigations,
     pmo: jaPmo,
     products: jaProducts,
     autopilots: jaAutopilots,

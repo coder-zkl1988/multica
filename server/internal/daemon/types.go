@@ -116,6 +116,7 @@ type Task struct {
 	DesignRestoreContext              json.RawMessage        `json:"design_restore_context,omitempty"`
 	TestGenerationContext             string                 `json:"test_generation_context,omitempty"`
 	TestRunContext                    string                 `json:"test_run_context,omitempty"`
+	InvestigationContext              json.RawMessage        `json:"investigation_context,omitempty"`
 	DesignSystemProfileAnalyzeContext json.RawMessage        `json:"design_system_profile_analyze_context,omitempty"`
 	TemplateBlueprintAnalyzeContext   json.RawMessage        `json:"design_template_blueprint_analyze_context,omitempty"`
 	ProjectDesignSystemContext        json.RawMessage        `json:"project_design_system_context,omitempty"`

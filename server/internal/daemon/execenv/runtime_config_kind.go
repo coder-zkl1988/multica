@@ -6,7 +6,7 @@ package execenv
 // flag that once gated it against a legacy verbose brief was retired in
 // MUL-4297, so this is now the only brief).
 //
-// Seven kinds, mutually exclusive in practice. classifyTask documents the
+// Kinds are mutually exclusive in practice. classifyTask documents the
 // tiebreak rule that applies if a future caller accidentally violates the
 // mutex.
 type taskKind int
@@ -44,13 +44,16 @@ const (
 	// kindPMOSync: server-managed external requirement snapshot acquisition
 	// whose validated JSON result is stored as a preview by the server.
 	kindPMOSync
+	// kindInvestigation: server-managed diagnosis with a structured result and
+	// no issue-side lifecycle or comment delivery.
+	kindInvestigation
 )
 
 // classifyTask maps a TaskContextForEnv to the single taskKind the slim
 // brief should be assembled for. Precedence (documented for the tiebreak
 // case, although the daemon never sets two specific-kind flags at once):
 // chat → quick-create → autopilot run-only → design-system profile analysis
-// → design restore → UI draft creation → issue.
+// → PMO sync → investigation → design restore → UI draft creation → issue.
 //
 // Deliberately does not read ctx.TriggerCommentID: the classification must
 // not vary across runs of the same resumed session, or the brief's bytes
@@ -67,6 +70,8 @@ func classifyTask(ctx TaskContextForEnv) taskKind {
 		return kindDesignSystemProfileAnalyze
 	case ctx.PMOSyncContext != "":
 		return kindPMOSync
+	case ctx.InvestigationContext != "":
+		return kindInvestigation
 	case ctx.DesignRestoreContext != "":
 		return kindDesignRestore
 	case ctx.UIDraftCreateContext != "":

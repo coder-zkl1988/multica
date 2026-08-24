@@ -1528,6 +1528,23 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				})
 			})
 
+			// Investigations
+			r.Route("/api/investigations", func(r chi.Router) {
+				r.Get("/", h.ListInvestigations)
+				r.Post("/", h.CreateInvestigation)
+				r.Get("/statistics", h.GetInvestigationStatistics)
+				r.Route("/{id}", func(r chi.Router) {
+					r.Get("/", h.GetInvestigation)
+					r.Put("/agent", h.ChangeInvestigationAgent)
+					r.Post("/comments", h.AddInvestigationComment)
+					r.Post("/retry", h.RetryInvestigation)
+					r.Post("/confirm", h.ConfirmInvestigation)
+					r.Post("/projects/link", h.LinkInvestigationProject)
+					r.Post("/projects", h.CreateInvestigationProject)
+					r.Put("/feedback/{checkpoint}", h.UpsertInvestigationFeedback)
+				})
+			})
+
 			// Projects
 			r.Route("/api/projects", func(r chi.Router) {
 				r.Get("/search", h.SearchProjects)

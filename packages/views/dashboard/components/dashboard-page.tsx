@@ -12,8 +12,9 @@ import {
   NumberFlow,
 } from "@multica/ui/components/ui/number-flow";
 import { useWorkspaceId } from "@multica/core/hooks";
+import { useAuthStore } from "@multica/core/auth";
 import type { Agent } from "@multica/core/types";
-import { agentListOptions } from "@multica/core/workspace/queries";
+import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
 import { projectListOptions } from "@multica/core/projects/queries";
 import {
   dashboardKeys,
@@ -66,6 +67,7 @@ import { ProjectFilter, TimeRangeFilter } from "./dashboard-filters";
 import { UsageTrendCard } from "./usage-trend-card";
 import { Leaderboard } from "./leaderboard";
 import { ErrorsTab } from "./errors-tab";
+import { InvestigationStatisticsPanel } from "../../investigations/investigation-statistics";
 
 // Stable references — `data ?? []` would create a new empty array on
 // every render while the query is loading, which breaks useMemo's
@@ -79,7 +81,7 @@ const EMPTY_FAILURE_BY_AGENT: import("@multica/core/types").DashboardFailureByAg
   [];
 const EMPTY_AGENTS: Agent[] = [];
 
-type DashboardTab = "usage" | "errors";
+type DashboardTab = "usage" | "errors" | "investigations";
 const TAB_QUERY_KEY = "tab";
 const DEFAULT_TAB: DashboardTab = "usage";
 
@@ -148,6 +150,7 @@ function useDataFreshness(
 export function DashboardPage() {
   const { t, i18n } = useT("usage");
   const wsId = useWorkspaceId();
+  const currentUserId = useAuthStore((state) => state.user?.id);
   const viewTZ = useViewingTimezone();
   const navigation = useNavigation();
   const locales = i18n.resolvedLanguage ?? i18n.language;
@@ -160,7 +163,10 @@ export function DashboardPage() {
   // flipping tabs does not stack up history entries. An unknown ?tab= value
   // falls back to Usage rather than rendering nothing.
   const tabFromUrl = navigation.searchParams.get(TAB_QUERY_KEY);
-  const tab: DashboardTab = tabFromUrl === "errors" ? "errors" : DEFAULT_TAB;
+  const { data: members = [] } = useQuery(memberListOptions(wsId));
+  const role = members.find((member) => member.user_id === currentUserId)?.role;
+  const canViewInvestigationStatistics = role === "owner" || role === "admin";
+  const tab: DashboardTab = tabFromUrl === "errors" || (tabFromUrl === "investigations" && canViewInvestigationStatistics) ? tabFromUrl : DEFAULT_TAB;
   const handleTabChange = (next: string) => {
     const params = new URLSearchParams(navigation.searchParams);
     if (next === DEFAULT_TAB) params.delete(TAB_QUERY_KEY);
@@ -510,14 +516,20 @@ export function DashboardPage() {
             >
               {t(($) => $.errors.title)}
             </TabsTrigger>
+            {canViewInvestigationStatistics ? <TabsTrigger
+              value="investigations"
+              className="h-full rounded-none px-2.5 text-label group-data-horizontal/tabs:after:bottom-0"
+            >
+              {t(($) => $.tab_investigations)}
+            </TabsTrigger> : null}
           </TabsList>
           <div className="flex shrink-0 items-center gap-2">
             <TimeRangeFilter days={days} onChange={setDays} />
-            <ProjectFilter
+            {tab !== "investigations" ? <ProjectFilter
               projects={projects}
               projectValue={projectValue}
               onProjectChange={setProjectValue}
-            />
+            /> : null}
           </div>
         </div>
       </div>
@@ -632,6 +644,9 @@ export function DashboardPage() {
               />
             )}
           </TabsContent>
+          {canViewInvestigationStatistics ? <TabsContent value="investigations">
+            <InvestigationStatisticsPanel days={days} agents={agents} />
+          </TabsContent> : null}
         </div>
       </div>
     </Tabs>

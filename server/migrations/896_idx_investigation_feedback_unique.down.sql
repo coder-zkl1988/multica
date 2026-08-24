@@ -1,0 +1,1 @@
+DROP INDEX CONCURRENTLY IF EXISTS idx_investigation_feedback_unique;

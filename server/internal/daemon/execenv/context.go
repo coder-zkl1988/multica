@@ -1585,6 +1585,9 @@ func renderIssueContext(provider string, ctx TaskContextForEnv) string {
 	if ctx.PMOSyncContext != "" {
 		return renderPMOSyncContext(ctx)
 	}
+	if ctx.InvestigationContext != "" {
+		return "# Problem Investigation\n\nThe controlled context and result contract are in the current user message. This task has no Multica issue.\n"
+	}
 
 	var b strings.Builder
 

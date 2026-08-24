@@ -20,6 +20,7 @@ import {
 import { AttachmentPreviewRoute } from "./pages/attachment-preview-page";
 import { IssuesPage } from "@multica/views/issues/components";
 import { ProjectsPage } from "@multica/views/projects/components";
+import { InvestigationsPage, InvestigationDetail } from "@multica/views/investigations";
 import { PMOConfigDetailPage, PMOListPage } from "@multica/views/pmo";
 import { ProductMapPage } from "@multica/views/products";
 import { DashboardPage } from "@multica/views/dashboard";
@@ -125,6 +126,11 @@ function DesktopProjectDesignSystemRoute() {
   return <ProjectDesignSystemPage designSystemId={id} />;
 }
 
+function DesktopInvestigationDetailRoute() {
+  const { id } = useParams<{ id: string }>();
+  return id ? <InvestigationDetail investigationId={id} /> : null;
+}
+
 /**
  * Sets document.title from the deepest matched route's handle.title.
  * The tab system observes document.title via MutationObserver.
@@ -207,6 +213,16 @@ export const appRoutes: RouteObject[] = [
             path: "projects/:id",
             element: <ProjectDetailPage />,
             handle: { title: "Project" },
+          },
+          {
+            path: "investigations",
+            element: <InvestigationsPage />,
+            handle: { title: "Investigations" },
+          },
+          {
+            path: "investigations/:id",
+            element: <DesktopInvestigationDetailRoute />,
+            handle: { title: "Investigation" },
           },
           {
             path: "pmo",

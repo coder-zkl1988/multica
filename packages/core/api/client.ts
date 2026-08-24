@@ -297,6 +297,8 @@ import type {
   FeedbackContext,
   FeedbackKind,
 } from "../feedback/types";
+import type { CreateInvestigationRequest, Investigation, InvestigationComment, InvestigationDetail, InvestigationStatistics } from "../investigations/types";
+import { EMPTY_INVESTIGATION, EMPTY_INVESTIGATION_STATISTICS, InvestigationCommentSchema, InvestigationDetailSchema, InvestigationListSchema, InvestigationSchema, InvestigationStatisticsSchema } from "../investigations/schema";
 import type {
   CloudRuntimeNode,
   CreateCloudRuntimeNodeRequest,
@@ -3017,6 +3019,63 @@ export class ApiClient {
 
   async getProject(id: string): Promise<Project> {
     return this.fetch(`/api/projects/${id}`);
+  }
+
+  async listInvestigations(): Promise<Investigation[]> {
+    const raw = await this.fetch<unknown>("/api/investigations");
+    return parseWithFallback(raw, InvestigationListSchema, [], { endpoint: "GET /api/investigations" });
+  }
+
+  async getInvestigation(id: string): Promise<InvestigationDetail> {
+    const raw = await this.fetch<unknown>(`/api/investigations/${encodeURIComponent(id)}`);
+    return parseWithFallback(raw, InvestigationDetailSchema, { ...EMPTY_INVESTIGATION, comments: [], tasks: [], attachments: [] }, { endpoint: "GET /api/investigations/:id" });
+  }
+
+  async createInvestigation(data: CreateInvestigationRequest): Promise<Investigation> {
+    const raw = await this.fetch<unknown>("/api/investigations", { method: "POST", body: JSON.stringify(data) });
+    return parseWithFallback(raw, InvestigationSchema, EMPTY_INVESTIGATION, { endpoint: "POST /api/investigations" });
+  }
+
+  async addInvestigationComment(id: string, content: string, attachmentIds?: string[]): Promise<InvestigationComment> {
+    const raw = await this.fetch<unknown>(`/api/investigations/${encodeURIComponent(id)}/comments`, { method: "POST", body: JSON.stringify({ content, attachment_ids: attachmentIds }) });
+    return parseWithFallback(raw, InvestigationCommentSchema, { id: "", parent_id: null, author_type: "member", author_id: null, content: "", type: "comment", task_id: null, created_at: "" }, { endpoint: "POST /api/investigations/:id/comments" });
+  }
+
+  async confirmInvestigation(id: string): Promise<Investigation> {
+    const raw = await this.fetch<unknown>(`/api/investigations/${encodeURIComponent(id)}/confirm`, { method: "POST" });
+    return parseWithFallback(raw, InvestigationSchema, EMPTY_INVESTIGATION, { endpoint: "POST /api/investigations/:id/confirm" });
+  }
+
+  async retryInvestigation(id: string): Promise<Investigation> {
+    const raw = await this.fetch<unknown>(`/api/investigations/${encodeURIComponent(id)}/retry`, { method: "POST" });
+    return parseWithFallback(raw, InvestigationSchema, EMPTY_INVESTIGATION, { endpoint: "POST /api/investigations/:id/retry" });
+  }
+
+  async changeInvestigationAgent(id: string, agentId: string): Promise<Investigation> {
+    const raw = await this.fetch<unknown>(`/api/investigations/${encodeURIComponent(id)}/agent`, { method: "PUT", body: JSON.stringify({ agent_id: agentId }) });
+    return parseWithFallback(raw, InvestigationSchema, EMPTY_INVESTIGATION, { endpoint: "PUT /api/investigations/:id/agent" });
+  }
+
+  async linkInvestigationProject(id: string, projectId: string): Promise<Investigation> {
+    const raw = await this.fetch<unknown>(`/api/investigations/${encodeURIComponent(id)}/projects/link`, { method: "POST", body: JSON.stringify({ project_id: projectId }) });
+    return parseWithFallback(raw, InvestigationSchema, EMPTY_INVESTIGATION, { endpoint: "POST /api/investigations/:id/projects/link" });
+  }
+
+  async createInvestigationProject(id: string, title?: string): Promise<Project> {
+    return this.fetch(`/api/investigations/${encodeURIComponent(id)}/projects`, { method: "POST", body: JSON.stringify({ title }) });
+  }
+
+  async submitInvestigationFeedback(id: string, checkpoint: "diagnosis_confirmed" | "project_converted", score: number, attribution?: string, comment?: string): Promise<void> {
+    await this.fetch(`/api/investigations/${encodeURIComponent(id)}/feedback/${checkpoint}`, { method: "PUT", body: JSON.stringify({ score, attribution, comment }) });
+  }
+
+  async getInvestigationStatistics(params?: { since?: string; environment?: string; agentId?: string }): Promise<InvestigationStatistics> {
+    const search = new URLSearchParams();
+    if (params?.since) search.set("since", params.since);
+    if (params?.environment) search.set("environment", params.environment);
+    if (params?.agentId) search.set("agent_id", params.agentId);
+    const raw = await this.fetch<unknown>(`/api/investigations/statistics${search.size ? `?${search}` : ""}`);
+    return parseWithFallback(raw, InvestigationStatisticsSchema, EMPTY_INVESTIGATION_STATISTICS, { endpoint: "GET /api/investigations/statistics" });
   }
 
   // Test cases

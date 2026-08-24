@@ -1,6 +1,7 @@
 {
   "title": "分析",
   "tab_usage": "使用量",
+  "tab_investigations": "問題調査",
   "header": {
     "timezone_and_updated": "{{tz}} · {{time}} 更新",
     "refresh": "更新"

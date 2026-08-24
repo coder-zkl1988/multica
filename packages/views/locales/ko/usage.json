@@ -1,6 +1,7 @@
 {
   "title": "분석",
   "tab_usage": "사용량",
+  "tab_investigations": "문제 조사",
   "header": {
     "timezone_and_updated": "{{tz}} · {{time}} 업데이트",
     "refresh": "새로고침"

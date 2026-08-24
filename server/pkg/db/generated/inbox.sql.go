@@ -131,7 +131,7 @@ func (q *Queries) ArchiveInboxByIssueAndType(ctx context.Context, arg ArchiveInb
 const archiveInboxItem = `-- name: ArchiveInboxItem :one
 UPDATE inbox_item SET archived = true
 WHERE id = $1
-RETURNING id, workspace_id, recipient_type, recipient_id, type, severity, issue_id, title, body, read, archived, created_at, actor_type, actor_id, details
+RETURNING id, workspace_id, recipient_type, recipient_id, type, severity, issue_id, title, body, read, archived, created_at, actor_type, actor_id, details, investigation_id
 `
 
 func (q *Queries) ArchiveInboxItem(ctx context.Context, id pgtype.UUID) (InboxItem, error) {
@@ -153,6 +153,7 @@ func (q *Queries) ArchiveInboxItem(ctx context.Context, id pgtype.UUID) (InboxIt
 		&i.ActorType,
 		&i.ActorID,
 		&i.Details,
+		&i.InvestigationID,
 	)
 	return i, err
 }
@@ -232,7 +233,7 @@ INSERT INTO inbox_item (
     type, severity, issue_id, title, body,
     actor_type, actor_id, details
 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-RETURNING id, workspace_id, recipient_type, recipient_id, type, severity, issue_id, title, body, read, archived, created_at, actor_type, actor_id, details
+RETURNING id, workspace_id, recipient_type, recipient_id, type, severity, issue_id, title, body, read, archived, created_at, actor_type, actor_id, details, investigation_id
 `
 
 type CreateInboxItemParams struct {
@@ -280,12 +281,13 @@ func (q *Queries) CreateInboxItem(ctx context.Context, arg CreateInboxItemParams
 		&i.ActorType,
 		&i.ActorID,
 		&i.Details,
+		&i.InvestigationID,
 	)
 	return i, err
 }
 
 const getInboxItem = `-- name: GetInboxItem :one
-SELECT id, workspace_id, recipient_type, recipient_id, type, severity, issue_id, title, body, read, archived, created_at, actor_type, actor_id, details FROM inbox_item
+SELECT id, workspace_id, recipient_type, recipient_id, type, severity, issue_id, title, body, read, archived, created_at, actor_type, actor_id, details, investigation_id FROM inbox_item
 WHERE id = $1
 `
 
@@ -308,12 +310,13 @@ func (q *Queries) GetInboxItem(ctx context.Context, id pgtype.UUID) (InboxItem, 
 		&i.ActorType,
 		&i.ActorID,
 		&i.Details,
+		&i.InvestigationID,
 	)
 	return i, err
 }
 
 const getInboxItemInWorkspace = `-- name: GetInboxItemInWorkspace :one
-SELECT id, workspace_id, recipient_type, recipient_id, type, severity, issue_id, title, body, read, archived, created_at, actor_type, actor_id, details FROM inbox_item
+SELECT id, workspace_id, recipient_type, recipient_id, type, severity, issue_id, title, body, read, archived, created_at, actor_type, actor_id, details, investigation_id FROM inbox_item
 WHERE id = $1 AND workspace_id = $2
 `
 
@@ -341,12 +344,13 @@ func (q *Queries) GetInboxItemInWorkspace(ctx context.Context, arg GetInboxItemI
 		&i.ActorType,
 		&i.ActorID,
 		&i.Details,
+		&i.InvestigationID,
 	)
 	return i, err
 }
 
 const listArchivedInboxItems = `-- name: ListArchivedInboxItems :many
-SELECT i.id, i.workspace_id, i.recipient_type, i.recipient_id, i.type, i.severity, i.issue_id, i.title, i.body, i.read, i.archived, i.created_at, i.actor_type, i.actor_id, i.details,
+SELECT i.id, i.workspace_id, i.recipient_type, i.recipient_id, i.type, i.severity, i.issue_id, i.title, i.body, i.read, i.archived, i.created_at, i.actor_type, i.actor_id, i.details, i.investigation_id,
        iss.status as issue_status
 FROM inbox_item i
 LEFT JOIN issue iss ON iss.id = i.issue_id
@@ -371,22 +375,23 @@ type ListArchivedInboxItemsParams struct {
 }
 
 type ListArchivedInboxItemsRow struct {
-	ID            pgtype.UUID        `json:"id"`
-	WorkspaceID   pgtype.UUID        `json:"workspace_id"`
-	RecipientType string             `json:"recipient_type"`
-	RecipientID   pgtype.UUID        `json:"recipient_id"`
-	Type          string             `json:"type"`
-	Severity      string             `json:"severity"`
-	IssueID       pgtype.UUID        `json:"issue_id"`
-	Title         string             `json:"title"`
-	Body          pgtype.Text        `json:"body"`
-	Read          bool               `json:"read"`
-	Archived      bool               `json:"archived"`
-	CreatedAt     pgtype.Timestamptz `json:"created_at"`
-	ActorType     pgtype.Text        `json:"actor_type"`
-	ActorID       pgtype.UUID        `json:"actor_id"`
-	Details       []byte             `json:"details"`
-	IssueStatus   pgtype.Text        `json:"issue_status"`
+	ID              pgtype.UUID        `json:"id"`
+	WorkspaceID     pgtype.UUID        `json:"workspace_id"`
+	RecipientType   string             `json:"recipient_type"`
+	RecipientID     pgtype.UUID        `json:"recipient_id"`
+	Type            string             `json:"type"`
+	Severity        string             `json:"severity"`
+	IssueID         pgtype.UUID        `json:"issue_id"`
+	Title           string             `json:"title"`
+	Body            pgtype.Text        `json:"body"`
+	Read            bool               `json:"read"`
+	Archived        bool               `json:"archived"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	ActorType       pgtype.Text        `json:"actor_type"`
+	ActorID         pgtype.UUID        `json:"actor_id"`
+	Details         []byte             `json:"details"`
+	InvestigationID pgtype.UUID        `json:"investigation_id"`
+	IssueStatus     pgtype.Text        `json:"issue_status"`
 }
 
 // Archived counterpart of ListInboxItems, backing the inbox's "Archived"
@@ -429,6 +434,7 @@ func (q *Queries) ListArchivedInboxItems(ctx context.Context, arg ListArchivedIn
 			&i.ActorType,
 			&i.ActorID,
 			&i.Details,
+			&i.InvestigationID,
 			&i.IssueStatus,
 		); err != nil {
 			return nil, err
@@ -442,7 +448,7 @@ func (q *Queries) ListArchivedInboxItems(ctx context.Context, arg ListArchivedIn
 }
 
 const listInboxItems = `-- name: ListInboxItems :many
-SELECT i.id, i.workspace_id, i.recipient_type, i.recipient_id, i.type, i.severity, i.issue_id, i.title, i.body, i.read, i.archived, i.created_at, i.actor_type, i.actor_id, i.details,
+SELECT i.id, i.workspace_id, i.recipient_type, i.recipient_id, i.type, i.severity, i.issue_id, i.title, i.body, i.read, i.archived, i.created_at, i.actor_type, i.actor_id, i.details, i.investigation_id,
        iss.status as issue_status
 FROM inbox_item i
 LEFT JOIN issue iss ON iss.id = i.issue_id
@@ -457,22 +463,23 @@ type ListInboxItemsParams struct {
 }
 
 type ListInboxItemsRow struct {
-	ID            pgtype.UUID        `json:"id"`
-	WorkspaceID   pgtype.UUID        `json:"workspace_id"`
-	RecipientType string             `json:"recipient_type"`
-	RecipientID   pgtype.UUID        `json:"recipient_id"`
-	Type          string             `json:"type"`
-	Severity      string             `json:"severity"`
-	IssueID       pgtype.UUID        `json:"issue_id"`
-	Title         string             `json:"title"`
-	Body          pgtype.Text        `json:"body"`
-	Read          bool               `json:"read"`
-	Archived      bool               `json:"archived"`
-	CreatedAt     pgtype.Timestamptz `json:"created_at"`
-	ActorType     pgtype.Text        `json:"actor_type"`
-	ActorID       pgtype.UUID        `json:"actor_id"`
-	Details       []byte             `json:"details"`
-	IssueStatus   pgtype.Text        `json:"issue_status"`
+	ID              pgtype.UUID        `json:"id"`
+	WorkspaceID     pgtype.UUID        `json:"workspace_id"`
+	RecipientType   string             `json:"recipient_type"`
+	RecipientID     pgtype.UUID        `json:"recipient_id"`
+	Type            string             `json:"type"`
+	Severity        string             `json:"severity"`
+	IssueID         pgtype.UUID        `json:"issue_id"`
+	Title           string             `json:"title"`
+	Body            pgtype.Text        `json:"body"`
+	Read            bool               `json:"read"`
+	Archived        bool               `json:"archived"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	ActorType       pgtype.Text        `json:"actor_type"`
+	ActorID         pgtype.UUID        `json:"actor_id"`
+	Details         []byte             `json:"details"`
+	InvestigationID pgtype.UUID        `json:"investigation_id"`
+	IssueStatus     pgtype.Text        `json:"issue_status"`
 }
 
 func (q *Queries) ListInboxItems(ctx context.Context, arg ListInboxItemsParams) ([]ListInboxItemsRow, error) {
@@ -500,6 +507,7 @@ func (q *Queries) ListInboxItems(ctx context.Context, arg ListInboxItemsParams) 
 			&i.ActorType,
 			&i.ActorID,
 			&i.Details,
+			&i.InvestigationID,
 			&i.IssueStatus,
 		); err != nil {
 			return nil, err
@@ -533,7 +541,7 @@ func (q *Queries) MarkAllInboxRead(ctx context.Context, arg MarkAllInboxReadPara
 const markInboxRead = `-- name: MarkInboxRead :one
 UPDATE inbox_item SET read = true
 WHERE id = $1
-RETURNING id, workspace_id, recipient_type, recipient_id, type, severity, issue_id, title, body, read, archived, created_at, actor_type, actor_id, details
+RETURNING id, workspace_id, recipient_type, recipient_id, type, severity, issue_id, title, body, read, archived, created_at, actor_type, actor_id, details, investigation_id
 `
 
 func (q *Queries) MarkInboxRead(ctx context.Context, id pgtype.UUID) (InboxItem, error) {
@@ -555,6 +563,7 @@ func (q *Queries) MarkInboxRead(ctx context.Context, id pgtype.UUID) (InboxItem,
 		&i.ActorType,
 		&i.ActorID,
 		&i.Details,
+		&i.InvestigationID,
 	)
 	return i, err
 }
@@ -562,7 +571,7 @@ func (q *Queries) MarkInboxRead(ctx context.Context, id pgtype.UUID) (InboxItem,
 const markInboxUnread = `-- name: MarkInboxUnread :one
 UPDATE inbox_item SET read = false
 WHERE id = $1
-RETURNING id, workspace_id, recipient_type, recipient_id, type, severity, issue_id, title, body, read, archived, created_at, actor_type, actor_id, details
+RETURNING id, workspace_id, recipient_type, recipient_id, type, severity, issue_id, title, body, read, archived, created_at, actor_type, actor_id, details, investigation_id
 `
 
 // Exact inverse of MarkInboxRead, and item-level for the same reason it is:
@@ -590,6 +599,7 @@ func (q *Queries) MarkInboxUnread(ctx context.Context, id pgtype.UUID) (InboxIte
 		&i.ActorType,
 		&i.ActorID,
 		&i.Details,
+		&i.InvestigationID,
 	)
 	return i, err
 }
@@ -625,7 +635,7 @@ func (q *Queries) UnarchiveInboxByIssue(ctx context.Context, arg UnarchiveInboxB
 const unarchiveInboxItem = `-- name: UnarchiveInboxItem :one
 UPDATE inbox_item SET archived = false
 WHERE id = $1
-RETURNING id, workspace_id, recipient_type, recipient_id, type, severity, issue_id, title, body, read, archived, created_at, actor_type, actor_id, details
+RETURNING id, workspace_id, recipient_type, recipient_id, type, severity, issue_id, title, body, read, archived, created_at, actor_type, actor_id, details, investigation_id
 `
 
 // Deliberately does not touch `read`: unarchiving restores an item to the main
@@ -650,6 +660,7 @@ func (q *Queries) UnarchiveInboxItem(ctx context.Context, id pgtype.UUID) (Inbox
 		&i.ActorType,
 		&i.ActorID,
 		&i.Details,
+		&i.InvestigationID,
 	)
 	return i, err
 }

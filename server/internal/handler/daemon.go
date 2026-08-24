@@ -2526,7 +2526,16 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 	hasProjectDesignSystem := false
 	hasDesignDocument := false
 	hasPMOSync := false
+	hasInvestigation := false
 	if task.Context != nil && !task.IssueID.Valid && !task.ChatSessionID.Valid && !task.AutopilotRunID.Valid {
+		if investigationCtx, ok := service.ParseInvestigationTaskContext(*task); ok {
+			hasInvestigation = true
+			resp.WorkspaceID = investigationCtx.WorkspaceID
+			resp.ThreadName = investigationCtx.Description
+			resp.InvestigationContext = json.RawMessage(task.Context)
+			resp.Repos = h.workspaceRepoData(r.Context(), parseUUID(investigationCtx.WorkspaceID))
+		}
+
 		var qc service.QuickCreateContext
 		if json.Unmarshal(task.Context, &qc) == nil && qc.Type == service.QuickCreateContextType {
 			hasQuickCreate = true
@@ -2835,6 +2844,7 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 			"has_project_design_system", hasProjectDesignSystem,
 			"has_design_document", hasDesignDocument,
 			"has_pmo_sync", hasPMOSync,
+			"has_investigation", hasInvestigation,
 		)
 		if _, cerr := h.TaskService.CancelTask(r.Context(), task.ID); cerr != nil {
 			slog.Error("task claim: cancel after workspace check failed",
@@ -3371,6 +3381,13 @@ func (h *Handler) StartTask(w http.ResponseWriter, r *http.Request) {
 	if err := h.markTestGenerationJobRunning(r.Context(), *task); err != nil {
 		slog.Warn("test generation start: failed to mark job running", "task_id", taskID, "error", err)
 	}
+	if investigationCtx, ok := service.ParseInvestigationTaskContext(*task); ok {
+		if err := h.Queries.MarkInvestigationStarted(r.Context(), db.MarkInvestigationStartedParams{
+			ID: task.InvestigationID, WorkspaceID: parseUUID(investigationCtx.WorkspaceID),
+		}); err != nil {
+			slog.Warn("investigation start: failed to record first start", "task_id", taskID, "error", err)
+		}
+	}
 
 	slog.Info("task started", "task_id", taskID, "agent_id", uuidToString(task.AgentID))
 	writeJSON(w, http.StatusOK, taskToResponse(*task, workspaceID))
@@ -3588,7 +3605,29 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 	var pmoSnapshot *service.PMOSnapshot
 	var testRunCtx *service.TestRunContext
 	var testGenerationCtx *service.TestGenerationContext
+	var investigationOutput *investigationResult
 	hasUIDraftCreate := existingTask.Status == "running" && isUIDraftCreateTaskContext(existingTask.Context)
+	if existingTask.Status == "running" && existingTask.InvestigationID.Valid {
+		if _, ok := service.ParseInvestigationTaskContext(existingTask); !ok {
+			writeError(w, http.StatusBadRequest, "invalid investigation task context")
+			return
+		}
+		parsed, parseErr := parseInvestigationResult(req.Output)
+		if parseErr != nil {
+			failedTask, failErr := h.TaskService.FailTask(r.Context(), existingTask.ID, parseErr.Error(), req.SessionID, req.WorkDir, req.BranchName, "investigation_invalid_output", req.SessionRolloutMissing, req.RetiredSessionID)
+			if failErr != nil {
+				writeError(w, http.StatusInternalServerError, "failed to record invalid investigation output")
+				return
+			}
+			if failedTask != nil {
+				h.TaskService.NotifyTaskFinished(*failedTask)
+				_ = h.Queries.DeleteTaskTokensByTask(r.Context(), failedTask.ID)
+			}
+			writeError(w, http.StatusBadRequest, parseErr.Error())
+			return
+		}
+		investigationOutput = &parsed
+	}
 	preparedAnalysis, isRepositoryAnalysis, analysisErr := prepareProjectDesignSystemRepositoryAnalysisCompletion(existingTask, req.Output)
 	if existingTask.Status == "running" && isRepositoryAnalysis {
 		if analysisErr != nil {
@@ -3769,7 +3808,11 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 	completeWithMutation := func(mutate func(*db.Queries, db.AgentTaskQueue) error) {
 		task, err = h.TaskService.CompleteTaskWithMutationAndSessionState(r.Context(), parseUUID(taskID), result, req.SessionID, req.WorkDir, req.BranchName, req.SessionRolloutMissing, req.RetiredSessionID, mutate)
 	}
-	if preparedDesignDocument != nil {
+	if investigationOutput != nil {
+		completeWithMutation(func(qtx *db.Queries, completedTask db.AgentTaskQueue) error {
+			return persistInvestigationResult(r.Context(), qtx, completedTask, *investigationOutput)
+		})
+	} else if preparedDesignDocument != nil {
 		completeWithMutation(func(qtx *db.Queries, completedTask db.AgentTaskQueue) error {
 			return persistDesignDocumentPackageCompletion(r.Context(), qtx, completedTask, *preparedDesignDocument)
 		})
@@ -3896,7 +3939,9 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 		h.pmoAutoApplyScheduledRun(r.Context(), pmoSyncCtx, taskID)
 	}
 
-	h.emitIssueExecutedOnFirstCompletion(r, task)
+	if task.IssueID.Valid {
+		h.emitIssueExecutedOnFirstCompletion(r, task)
+	}
 	if createdDraft != nil {
 		slog.Info("ui agent draft created from task", "task_id", taskID, "draft_id", uuidToString(createdDraft.ID))
 		h.publish(protocol.EventDesignDraftReady, workspaceID, "agent", uuidToString(task.AgentID), map[string]any{
@@ -3930,7 +3975,9 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 	// input is never silently dropped. Loop-safe: member-authored only, capped
 	// by the existing per-(issue, agent) dedup, and terminating because the
 	// triggering comment always predates the follow-up run's started_at.
-	h.reconcileCommentsOnCompletion(r.Context(), task)
+	if task.IssueID.Valid {
+		h.reconcileCommentsOnCompletion(r.Context(), task)
+	}
 	// The terminal transaction and completion reconciliation are committed.
 	// Wake the owning runtime now so queued work that was blocked by this
 	// task's agent capacity or serialization key is re-claimed immediately.
