@@ -5527,6 +5527,9 @@ func gcMetaForTask(task Task) (execenv.GCMeta, bool) {
 		// through the task gc-check endpoint, same as quick-create.
 		meta.Kind = execenv.GCKindPMOSync
 		meta.TaskID = task.ID
+	case len(task.InvestigationContext) > 0:
+		meta.Kind = execenv.GCKindQuickCreate
+		meta.TaskID = task.ID
 	case len(task.ProjectDesignSystemContext) > 0:
 		meta.Kind = execenv.GCKindQuickCreate
 		meta.TaskID = task.ID
@@ -6213,6 +6216,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		ProjectDesignSystemContext:        strings.TrimSpace(string(task.ProjectDesignSystemContext)),
 		DesignDocumentContext:             strings.TrimSpace(string(task.DesignDocumentContext)),
 		PMOSyncContext:                    string(task.PMOSyncContext),
+		InvestigationContext:              string(task.InvestigationContext),
 		HandoffNote:                       task.HandoffNote,
 		IsSquadLeader:                     taskIsSquadLeader(task),
 		RequestingUserName:                task.RequestingUserName,

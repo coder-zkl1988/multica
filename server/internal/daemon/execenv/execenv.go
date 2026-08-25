@@ -191,6 +191,7 @@ type TaskContextForEnv struct {
 	ProjectDesignSystemContext        string // non-empty for project design-system generation tasks
 	DesignDocumentContext             string // non-empty for Design Document grounding/generation tasks
 	PMOSyncContext                    string // non-empty for PMO requirement sync tasks (prompt-only, no issue checkout)
+	InvestigationContext              string // non-empty for controlled problem investigation tasks
 	HandoffNote                       string // assignment handoff instruction; rendered into issue_context.md (MUL-3375)
 	IsSquadLeader                     bool   // true when THIS TASK runs the agent in the squad-leader role (may exit silently on no_action); derived from the claim's is_leader_task / squad_id, never sniffed from instructions text (MUL-5811)
 	// WorkspaceContext is the workspace-level system prompt (workspace.context

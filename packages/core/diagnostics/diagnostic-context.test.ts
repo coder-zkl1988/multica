@@ -37,6 +37,9 @@ describe("bucketDiagnosticPath", () => {
 
   it("templates every workspace detail route", () => {
     expect(bucketDiagnosticPath("/acme/issues/MUL-5345")).toBe("/:slug/issues/:id");
+    expect(bucketDiagnosticPath("/acme/investigations/inv-1")).toBe(
+      "/:slug/investigations/:id",
+    );
     expect(bucketDiagnosticPath("/acme/projects/p1")).toBe("/:slug/projects/:id");
     expect(bucketDiagnosticPath("/acme/designs/file-1")).toBe("/:slug/designs/:id");
     expect(bucketDiagnosticPath("/acme/designs/file-1/frames/frame-2")).toBe(

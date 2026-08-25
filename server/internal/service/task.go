@@ -651,6 +651,10 @@ var ErrAttributionFailClosed = errors.New("attribution: no precise accountable h
 // upper-layer log or response can leak the constraint name (#5914, Elon review).
 var ErrDuplicatePendingTask = errors.New("a pending task for this issue and agent already exists")
 
+// ErrInvestigationTaskActive means an investigation already has a live
+// diagnostic run. The database partial unique index is the source of truth.
+var ErrInvestigationTaskActive = errors.New("investigation already has an active diagnostic task")
+
 // ErrIssueNotRunnable means a create-time enqueue lost a race to issue or
 // project completion. The issue remains successfully created; callers omit the
 // task and reconcile any linked run from the authoritative issue state.
@@ -670,6 +674,11 @@ func isDuplicatePendingTaskErr(err error) bool {
 	default:
 		return false
 	}
+}
+
+func isInvestigationTaskActiveErr(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "idx_agent_task_queue_investigation_active"
 }
 
 // applyAttributionFallback applies the workspace's degraded-attribution policy to a
@@ -1617,6 +1626,22 @@ type TestGenerationContext struct {
 // TestRunContextType marks a task as a test execution round.
 const TestRunContextType = "test_run"
 
+// InvestigationTaskContextType marks a controlled problem-investigation run.
+const InvestigationTaskContextType = "investigation"
+
+// InvestigationTaskContext is the immutable evidence envelope delivered to a
+// diagnostic run. User-authored fields remain untrusted input inside it.
+type InvestigationTaskContext struct {
+	Type              string   `json:"type"`
+	InvestigationID   string   `json:"investigation_id"`
+	WorkspaceID       string   `json:"workspace_id"`
+	Environment       string   `json:"environment"`
+	Description       string   `json:"description"`
+	AttachmentIDs     []string `json:"attachment_ids,omitempty"`
+	SupplementalInput []string `json:"supplemental_input,omitempty"`
+	CapabilityVersion string   `json:"capability_version"`
+}
+
 // TestRunContext is the payload stored on test execution tasks. The capability
 // binding is frozen at dispatch so a retry reproduces the same environment; the
 // agent discovers what it may drive through `multica test capability list`,
@@ -1779,6 +1804,70 @@ func (s *TaskService) EnqueueQuickCreateTask(ctx context.Context, workspaceID, r
 	// cycle. Without this the user perceives "quick create never
 	// triggered" because the modal closes immediately and the task
 	// sits in 'queued' until the next sleepWithContextOrWakeup tick.
+	s.NotifyTaskEnqueued(ctx, task)
+	return task, nil
+}
+
+// EnqueueInvestigationTask starts one diagnostic run for an investigation.
+// The partial unique index on active investigation tasks closes concurrent
+// create/comment/retry races.
+func (s *TaskService) EnqueueInvestigationTask(ctx context.Context, investigation db.Investigation, actorUserID pgtype.UUID, attachmentIDs []pgtype.UUID, supplementalInput []string) (db.AgentTaskQueue, error) {
+	agent, err := s.Queries.GetAgent(ctx, investigation.AgentID)
+	if err != nil {
+		return db.AgentTaskQueue{}, fmt.Errorf("load investigation agent: %w", err)
+	}
+	if agent.ArchivedAt.Valid {
+		return db.AgentTaskQueue{}, fmt.Errorf("investigation agent is archived")
+	}
+	if !agent.RuntimeID.Valid {
+		return db.AgentTaskQueue{}, fmt.Errorf("investigation agent has no runtime")
+	}
+
+	payload := InvestigationTaskContext{
+		Type:              InvestigationTaskContextType,
+		InvestigationID:   util.UUIDToString(investigation.ID),
+		WorkspaceID:       util.UUIDToString(investigation.WorkspaceID),
+		Environment:       investigation.Environment,
+		Description:       investigation.Description,
+		SupplementalInput: supplementalInput,
+		CapabilityVersion: investigation.DiagnosticVersion,
+	}
+	for _, id := range attachmentIDs {
+		if id.Valid {
+			payload.AttachmentIDs = append(payload.AttachmentIDs, util.UUIDToString(id))
+		}
+	}
+	contextJSON, err := json.Marshal(payload)
+	if err != nil {
+		return db.AgentTaskQueue{}, fmt.Errorf("marshal investigation context: %w", err)
+	}
+
+	attr := attribution.DirectHumanRun(actorUserID, "", pgtype.UUID{})
+	attr, err = s.applyAttributionFallback(ctx, attr, agent)
+	if err != nil {
+		return db.AgentTaskQueue{}, err
+	}
+	attrSource, _, _, _ := attributionCreateParams(attr)
+	overlay := s.buildRuntimeMCPOverlay(ctx, attr.UserID, agent)
+	task, err := s.Queries.CreateInvestigationTask(ctx, db.CreateInvestigationTaskParams{
+		AgentID:              agent.ID,
+		RuntimeID:            agent.RuntimeID,
+		InvestigationID:      investigation.ID,
+		Priority:             priorityToInt("high"),
+		Context:              contextJSON,
+		OriginatorUserID:     attr.UserID,
+		AccountableUserID:    attr.AccountableUserID,
+		RuntimeMcpOverlay:    overlay.Overlay,
+		RuntimeConnectedApps: overlay.ConnectedApps,
+		OriginatorSource:     attrSource,
+	})
+	if isInvestigationTaskActiveErr(err) {
+		return db.AgentTaskQueue{}, ErrInvestigationTaskActive
+	}
+	if err != nil {
+		return db.AgentTaskQueue{}, fmt.Errorf("create investigation task: %w", err)
+	}
+
 	s.NotifyTaskEnqueued(ctx, task)
 	return task, nil
 }
@@ -5904,6 +5993,9 @@ func (s *TaskService) ResolveTaskWorkspaceID(ctx context.Context, task db.AgentT
 			}
 		}
 	}
+	if investigation, ok := parseInvestigationTaskContext(task); ok {
+		return investigation.WorkspaceID
+	}
 	// Quick-create tasks have no issue / chat / autopilot link — workspace
 	// lives in the context JSONB. Returning "" here is what blocked
 	// requireDaemonTaskAccess (404 on /start, /progress, /complete, /fail
@@ -5934,6 +6026,23 @@ func (s *TaskService) ResolveTaskWorkspaceID(ctx context.Context, task db.AgentT
 		return pmoCtx.WorkspaceID
 	}
 	return ""
+}
+
+func parseInvestigationTaskContext(task db.AgentTaskQueue) (InvestigationTaskContext, bool) {
+	if !task.InvestigationID.Valid || task.IssueID.Valid || task.ChatSessionID.Valid || task.AutopilotRunID.Valid || len(task.Context) == 0 {
+		return InvestigationTaskContext{}, false
+	}
+	var value InvestigationTaskContext
+	if json.Unmarshal(task.Context, &value) != nil || value.Type != InvestigationTaskContextType || value.WorkspaceID == "" || value.InvestigationID != util.UUIDToString(task.InvestigationID) {
+		return InvestigationTaskContext{}, false
+	}
+	return value, true
+}
+
+// ParseInvestigationTaskContext validates the typed investigation envelope for
+// handler and daemon claim paths.
+func ParseInvestigationTaskContext(task db.AgentTaskQueue) (InvestigationTaskContext, bool) {
+	return parseInvestigationTaskContext(task)
 }
 
 func (s *TaskService) broadcastChatDone(ctx context.Context, task db.AgentTaskQueue, msg *db.ChatMessage, quickActionsPending bool) {

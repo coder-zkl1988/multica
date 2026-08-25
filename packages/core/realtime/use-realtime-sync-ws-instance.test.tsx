@@ -10,6 +10,7 @@ import { defaultStorage } from "../platform/storage";
 import { issueKeys } from "../issues/queries";
 import { chatKeys } from "../chat/queries";
 import { designKeys } from "../designs/keys";
+import { investigationKeys } from "../investigations/queries";
 import { workspaceWorkingAgentsKeys } from "../agents/queries";
 import { workspaceKeys } from "../workspace/queries";
 import { dingtalkKeys } from "../dingtalk/queries";
@@ -346,6 +347,26 @@ describe("useRealtimeSync — Table server membership invalidation", () => {
     });
     expect(invalidate).toHaveBeenCalledWith({
       queryKey: ["designs", "ws-1", "documents"],
+    });
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: investigationKeys.all("ws-1"),
+    });
+  });
+
+  it("invalidates investigations after an investigation event", () => {
+    vi.useFakeTimers();
+    const ws = createMockWs();
+    const invalidate = vi.spyOn(qc, "invalidateQueries");
+    renderHook(() => useRealtimeSync(ws, stores), {
+      wrapper: createWrapper(qc),
+    });
+    const onAny = vi.mocked(ws.onAny).mock.calls[0]?.[0];
+
+    onAny!({ type: "investigation:changed", payload: {} } as never);
+    vi.advanceTimersByTime(100);
+
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: investigationKeys.all("ws-1"),
     });
   });
 

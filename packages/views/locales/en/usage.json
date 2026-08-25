@@ -1,6 +1,7 @@
 {
   "title": "Analytics",
   "tab_usage": "Usage",
+  "tab_investigations": "Investigations",
   "header": {
     "timezone_and_updated": "{{tz}} · updated {{time}}",
     "refresh": "Refresh"

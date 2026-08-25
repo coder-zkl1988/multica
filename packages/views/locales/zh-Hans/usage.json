@@ -1,6 +1,7 @@
 {
   "title": "统计",
   "tab_usage": "用量",
+  "tab_investigations": "问题排查",
   "header": {
     "timezone_and_updated": "{{tz}} · 更新于 {{time}}",
     "refresh": "刷新"

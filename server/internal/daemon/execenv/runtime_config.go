@@ -599,7 +599,7 @@ func buildMetaSkillContentFull(provider string, ctx TaskContextForEnv) string {
 	// issue (comment-triggered or assignment-triggered). Chat / quick-create /
 	// run-only autopilot don't carry an issue id and would just generate a
 	// failed `metadata list` call on every entry.
-	hasIssueContext := ctx.ChatSessionID == "" && ctx.QuickCreatePrompt == "" && ctx.UIDraftCreateContext == "" && ctx.DesignRestoreContext == "" && ctx.DesignSystemProfileAnalyzeContext == "" && ctx.ProjectDesignSystemContext == "" && ctx.DesignDocumentContext == "" && ctx.AutopilotRunID == ""
+	hasIssueContext := ctx.ChatSessionID == "" && ctx.QuickCreatePrompt == "" && ctx.UIDraftCreateContext == "" && ctx.DesignRestoreContext == "" && ctx.DesignSystemProfileAnalyzeContext == "" && ctx.ProjectDesignSystemContext == "" && ctx.DesignDocumentContext == "" && ctx.PMOSyncContext == "" && ctx.InvestigationContext == "" && ctx.AutopilotRunID == ""
 	if hasIssueContext {
 		b.WriteString("## Issue Metadata\n\n")
 		b.WriteString("Each issue carries a small KV `metadata` bag — a high-signal scratchpad where agents pin the handful of facts that future runs on this same issue will look up over and over (the PR URL, the deploy URL, what we're blocked on). It is NOT a place to record every fact you discover — that's what comments and the description are for. Most runs write **zero** new keys; that's the expected case, not a failure.\n\n")

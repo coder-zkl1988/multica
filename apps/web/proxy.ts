@@ -14,6 +14,7 @@ import { isOfficialMarketingHost } from "./lib/public-host";
 const LEGACY_ROUTE_SEGMENTS = new Set([
   "issues",
   "projects",
+  "investigations",
   "agents",
   "squads",
   "inbox",

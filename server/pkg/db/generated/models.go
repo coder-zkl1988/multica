@@ -163,6 +163,7 @@ type AgentTaskQueue struct {
 	RegenerateQuickActionsFor pgtype.UUID `json:"regenerate_quick_actions_for"`
 	PluginExecutionManifestID pgtype.UUID `json:"plugin_execution_manifest_id"`
 	BranchName                pgtype.Text `json:"branch_name"`
+	InvestigationID           pgtype.UUID `json:"investigation_id"`
 }
 
 type AgentToLabel struct {
@@ -172,21 +173,22 @@ type AgentToLabel struct {
 }
 
 type Attachment struct {
-	ID            pgtype.UUID        `json:"id"`
-	WorkspaceID   pgtype.UUID        `json:"workspace_id"`
-	IssueID       pgtype.UUID        `json:"issue_id"`
-	CommentID     pgtype.UUID        `json:"comment_id"`
-	UploaderType  string             `json:"uploader_type"`
-	UploaderID    pgtype.UUID        `json:"uploader_id"`
-	Filename      string             `json:"filename"`
-	Url           string             `json:"url"`
-	ContentType   string             `json:"content_type"`
-	SizeBytes     int64              `json:"size_bytes"`
-	CreatedAt     pgtype.Timestamptz `json:"created_at"`
-	ChatSessionID pgtype.UUID        `json:"chat_session_id"`
-	ChatMessageID pgtype.UUID        `json:"chat_message_id"`
-	TaskID        pgtype.UUID        `json:"task_id"`
-	TestRunCaseID pgtype.UUID        `json:"test_run_case_id"`
+	ID              pgtype.UUID        `json:"id"`
+	WorkspaceID     pgtype.UUID        `json:"workspace_id"`
+	IssueID         pgtype.UUID        `json:"issue_id"`
+	CommentID       pgtype.UUID        `json:"comment_id"`
+	UploaderType    string             `json:"uploader_type"`
+	UploaderID      pgtype.UUID        `json:"uploader_id"`
+	Filename        string             `json:"filename"`
+	Url             string             `json:"url"`
+	ContentType     string             `json:"content_type"`
+	SizeBytes       int64              `json:"size_bytes"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	ChatSessionID   pgtype.UUID        `json:"chat_session_id"`
+	ChatMessageID   pgtype.UUID        `json:"chat_message_id"`
+	TaskID          pgtype.UUID        `json:"task_id"`
+	TestRunCaseID   pgtype.UUID        `json:"test_run_case_id"`
+	InvestigationID pgtype.UUID        `json:"investigation_id"`
 }
 
 type Autopilot struct {
@@ -1002,21 +1004,85 @@ type GithubPullRequestCheckSuite struct {
 }
 
 type InboxItem struct {
-	ID            pgtype.UUID        `json:"id"`
-	WorkspaceID   pgtype.UUID        `json:"workspace_id"`
-	RecipientType string             `json:"recipient_type"`
-	RecipientID   pgtype.UUID        `json:"recipient_id"`
-	Type          string             `json:"type"`
-	Severity      string             `json:"severity"`
-	IssueID       pgtype.UUID        `json:"issue_id"`
-	Title         string             `json:"title"`
-	Body          pgtype.Text        `json:"body"`
-	Read          bool               `json:"read"`
-	Archived      bool               `json:"archived"`
-	CreatedAt     pgtype.Timestamptz `json:"created_at"`
-	ActorType     pgtype.Text        `json:"actor_type"`
-	ActorID       pgtype.UUID        `json:"actor_id"`
-	Details       []byte             `json:"details"`
+	ID              pgtype.UUID        `json:"id"`
+	WorkspaceID     pgtype.UUID        `json:"workspace_id"`
+	RecipientType   string             `json:"recipient_type"`
+	RecipientID     pgtype.UUID        `json:"recipient_id"`
+	Type            string             `json:"type"`
+	Severity        string             `json:"severity"`
+	IssueID         pgtype.UUID        `json:"issue_id"`
+	Title           string             `json:"title"`
+	Body            pgtype.Text        `json:"body"`
+	Read            bool               `json:"read"`
+	Archived        bool               `json:"archived"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	ActorType       pgtype.Text        `json:"actor_type"`
+	ActorID         pgtype.UUID        `json:"actor_id"`
+	Details         []byte             `json:"details"`
+	InvestigationID pgtype.UUID        `json:"investigation_id"`
+}
+
+type Investigation struct {
+	ID                   pgtype.UUID        `json:"id"`
+	WorkspaceID          pgtype.UUID        `json:"workspace_id"`
+	Title                string             `json:"title"`
+	Description          string             `json:"description"`
+	Environment          string             `json:"environment"`
+	AgentID              pgtype.UUID        `json:"agent_id"`
+	Status               string             `json:"status"`
+	CurrentTaskID        pgtype.UUID        `json:"current_task_id"`
+	RootCause            pgtype.Text        `json:"root_cause"`
+	Evidence             []byte             `json:"evidence"`
+	Confidence           pgtype.Text        `json:"confidence"`
+	Category             pgtype.Text        `json:"category"`
+	Recommendations      []byte             `json:"recommendations"`
+	OpenQuestions        []byte             `json:"open_questions"`
+	ProjectID            pgtype.UUID        `json:"project_id"`
+	DiagnosticCapability string             `json:"diagnostic_capability"`
+	DiagnosticVersion    string             `json:"diagnostic_version"`
+	CreatedBy            pgtype.UUID        `json:"created_by"`
+	FirstStartedAt       pgtype.Timestamptz `json:"first_started_at"`
+	NeedsInputAt         pgtype.Timestamptz `json:"needs_input_at"`
+	ConclusionAt         pgtype.Timestamptz `json:"conclusion_at"`
+	ConfirmedAt          pgtype.Timestamptz `json:"confirmed_at"`
+	ConvertedAt          pgtype.Timestamptz `json:"converted_at"`
+	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
+}
+
+type InvestigationComment struct {
+	ID              pgtype.UUID        `json:"id"`
+	WorkspaceID     pgtype.UUID        `json:"workspace_id"`
+	InvestigationID pgtype.UUID        `json:"investigation_id"`
+	ParentID        pgtype.UUID        `json:"parent_id"`
+	AuthorType      string             `json:"author_type"`
+	AuthorID        pgtype.UUID        `json:"author_id"`
+	Content         string             `json:"content"`
+	Type            string             `json:"type"`
+	TaskID          pgtype.UUID        `json:"task_id"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+}
+
+type InvestigationFeedback struct {
+	ID                pgtype.UUID        `json:"id"`
+	WorkspaceID       pgtype.UUID        `json:"workspace_id"`
+	InvestigationID   pgtype.UUID        `json:"investigation_id"`
+	Checkpoint        string             `json:"checkpoint"`
+	UserID            pgtype.UUID        `json:"user_id"`
+	Score             int32              `json:"score"`
+	Attribution       pgtype.Text        `json:"attribution"`
+	Comment           string             `json:"comment"`
+	AgentID           pgtype.UUID        `json:"agent_id"`
+	TaskID            pgtype.UUID        `json:"task_id"`
+	CapabilityVersion string             `json:"capability_version"`
+	Environment       string             `json:"environment"`
+	TaskStatus        string             `json:"task_status"`
+	FailureReason     string             `json:"failure_reason"`
+	RetryCount        int32              `json:"retry_count"`
+	DurationMs        int64              `json:"duration_ms"`
+	AppVersion        string             `json:"app_version"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
 }
 
 type Issue struct {

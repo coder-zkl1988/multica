@@ -380,6 +380,7 @@ type AgentTaskResponse struct {
 	DesignRestoreContext              json.RawMessage        `json:"design_restore_context,omitempty"`                    // typed context for Gallery Native restore execution tasks
 	TestGenerationContext             json.RawMessage        `json:"test_generation_context,omitempty"`                   // typed context for AI test case generation runs
 	TestRunContext                    json.RawMessage        `json:"test_run_context,omitempty"`                          // typed context for test execution rounds
+	InvestigationContext              json.RawMessage        `json:"investigation_context,omitempty"`                     // typed context for controlled problem investigation runs
 	DesignSystemProfileAnalyzeContext json.RawMessage        `json:"design_system_profile_analyze_context,omitempty"`     // typed context for UI specification profile analysis tasks
 	TemplateBlueprintAnalyzeContext   json.RawMessage        `json:"design_template_blueprint_analyze_context,omitempty"` // typed context for template Blueprint analysis tasks
 	ProjectDesignSystemContext        json.RawMessage        `json:"project_design_system_context,omitempty"`             // typed context for project design-system generation tasks

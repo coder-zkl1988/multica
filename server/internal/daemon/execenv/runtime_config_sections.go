@@ -802,6 +802,9 @@ func writeOutput(b *strings.Builder, kind taskKind, ctx TaskContextForEnv) {
 	case kindUIDraftCreate, kindDesignRestore, kindDesignSystemProfileAnalyze, kindPMOSync:
 		b.WriteString("This is a server-managed design task. Your final assistant output is captured automatically and processed by the server; do not post an issue comment. Follow the exact output schema in the user message.\n\n")
 		b.WriteString("**Delivering files here:** the captured result is text-only. Keep generated artifacts in the target repository when the task requires them, and reference repository paths as inline code rather than local links.\n")
+	case kindInvestigation:
+		b.WriteString("This is a server-managed problem investigation. Your structured result is captured automatically and processed by the server; do not post an issue comment. Follow the exact output schema in the user message.\n\n")
+		b.WriteString("**Delivering files here:** the captured result is text-only. Reference repository evidence as inline paths rather than local links.\n")
 	default:
 		if ctx.IsSquadLeader {
 			b.WriteString("⚠️ **Final results MUST be delivered via `multica issue comment add`** — unless your outcome is `no_action`. When you evaluate a trigger and decide no action is needed, calling `multica squad activity <issue-id> no_action --reason \"...\"` alone is sufficient; you MUST exit without posting any comment. DO NOT post a comment that announces no_action, acknowledges another agent, or says you are exiting silently — such comments are noise. For all other outcomes (`action`, `failed`), a comment is still mandatory.\n\n")
@@ -897,6 +900,8 @@ func buildMetaSkillContentSlim(provider string, ctx TaskContextForEnv) string {
 		writeWorkflowDesignSystemProfileAnalyze(&b)
 	case kindPMOSync:
 		writeWorkflowPMOSync(&b)
+	case kindInvestigation:
+		b.WriteString("**This is a controlled problem investigation.** Follow the environment and structured-result contract in the current user message. Do not use issue lifecycle or comment commands.\n\n")
 	case kindIssue:
 		writeWorkflowIssue(&b, ctx)
 	}

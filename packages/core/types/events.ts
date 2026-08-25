@@ -70,6 +70,7 @@ export type WSEventType =
   | "project:created"
   | "project:updated"
   | "project:deleted"
+  | "investigation:changed"
   | "design:ready"
   | "design_template:ready"
   | "design_draft:ready"
@@ -592,6 +593,7 @@ export interface WSEventPayloadMap {
   "project:created": ProjectCreatedPayload;
   "project:updated": ProjectUpdatedPayload;
   "project:deleted": ProjectDeletedPayload;
+  "investigation:changed": unknown;
   "design:ready": DesignReadyPayload;
   "design_template:ready": DesignReadyPayload;
   "design_draft:ready": DesignDraftReadyPayload;

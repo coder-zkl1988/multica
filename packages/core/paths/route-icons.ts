@@ -25,6 +25,7 @@ export type RouteIconName =
   | "CircleUser"
   | "ListTodo"
   | "FolderKanban"
+  | "SearchCheck"
   | "Network"
   | "Palette"
   | "ClipboardList"
@@ -54,6 +55,7 @@ export type NavLabelKey =
   | "issues"
   | "products"
   | "projects"
+  | "investigations"
   | "pmo"
   | "designs"
   | "tests"
@@ -73,6 +75,7 @@ export type WorkspacePageKey =
   | "issues"
   | "products"
   | "projects"
+  | "investigations"
   | "pmo"
   | "designs"
   | "tests"
@@ -104,6 +107,7 @@ export const WORKSPACE_PAGES: Record<WorkspacePageKey, WorkspacePage> = {
   issues: { segment: "issues", icon: "ListTodo", navKey: "issues" },
   products: { segment: "products", icon: "Network", navKey: "products" },
   projects: { segment: "projects", icon: "FolderKanban", navKey: "projects" },
+  investigations: { segment: "investigations", icon: "SearchCheck", navKey: "investigations" },
   pmo: { segment: "pmo", icon: "ClipboardList", navKey: "pmo" },
   designs: { segment: "designs", icon: "Palette", navKey: "designs" },
   tests: { segment: "tests", icon: "FlaskConical", navKey: "tests" },
