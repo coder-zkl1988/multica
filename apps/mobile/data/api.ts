@@ -63,12 +63,15 @@ import type {
   UpdateProjectRequest,
   User,
   Workspace,
+  WorkspaceSubscriptionSummary,
 } from "@multica/core/types";
 import {
+  AppConfigSchema,
   DashboardAgentRunTimeListSchema,
   DashboardRunTimeDailyListSchema,
   DashboardUsageByAgentListSchema,
   DashboardUsageDailyListSchema,
+  EMPTY_APP_CONFIG,
   EMPTY_LIST_ISSUE_STATUSES_RESPONSE,
   EMPTY_LIST_ISSUES_RESPONSE,
   EMPTY_TIMELINE_ENTRIES,
@@ -76,7 +79,9 @@ import {
   ListIssuesResponseSchema,
   ListIssueStatusesResponseSchema,
   TimelineEntriesSchema,
+  WorkspaceSubscriptionSummarySchema,
 } from "@multica/core/api/schemas";
+import type { AppConfigResponse } from "@multica/core/api/schemas";
 import {
   ActiveTasksResponseSchema,
   AgentListSchema,
@@ -157,10 +162,6 @@ export interface LoginResponse {
   token: string;
   user: User;
   expires_at?: string;
-}
-
-export interface AppConfigResponse {
-  use_sy_sso: boolean;
 }
 
 /** Mobile file payload for `uploadFile`. RN doesn't have a browser `File`
@@ -389,10 +390,6 @@ class ApiClient {
   }
 
   // --- Auth ---
-  async getConfig(): Promise<AppConfigResponse> {
-    return this.fetch<AppConfigResponse>("/api/config");
-  }
-
   async sendCode(email: string): Promise<void> {
     await this.fetch<void>("/auth/send-code", {
       method: "POST",
@@ -430,6 +427,26 @@ class ApiClient {
       UserSchema,
       EMPTY_USER,
       { ...opts, endpoint: "getMe" },
+    );
+  }
+
+  async getConfig(opts?: { signal?: AbortSignal }): Promise<AppConfigResponse> {
+    return this.fetchValidated<AppConfigResponse>(
+      "/api/config",
+      AppConfigSchema,
+      EMPTY_APP_CONFIG,
+      { ...opts, endpoint: "getConfig" },
+    );
+  }
+
+  async getWorkspaceSubscriptionSummary(opts?: {
+    signal?: AbortSignal;
+  }): Promise<WorkspaceSubscriptionSummary | null> {
+    return this.fetchValidated<WorkspaceSubscriptionSummary | null>(
+      "/api/cloud-subscriptions/summary",
+      WorkspaceSubscriptionSummarySchema,
+      null,
+      { ...opts, endpoint: "getWorkspaceSubscriptionSummary" },
     );
   }
 
