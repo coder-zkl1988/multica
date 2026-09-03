@@ -85,6 +85,7 @@ func TestIsAgentError(t *testing.T) {
 		ReasonEnvironmentPrepareFailed,
 		ReasonInvalidTaskIdentity,
 		ReasonIssueWindowRestricted,
+		ReasonToolBudgetExceeded,
 	}
 	for _, r := range platformSide {
 		if r.IsAgentError() {
