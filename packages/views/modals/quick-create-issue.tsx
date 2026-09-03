@@ -12,16 +12,15 @@ import {
   MoreHorizontal,
   Settings2,
   X as XIcon,
+  Zap,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { DialogTitle } from "@multica/ui/components/ui/dialog";
 import {
   DropdownMenu,
-  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@multica/ui/components/ui/dropdown-menu";
 import { Button } from "@multica/ui/components/ui/button";
@@ -657,6 +656,8 @@ export function AgentCreatePanel({
               setAgent({ actorType: next.type, actorId: next.id });
               setError(null);
             }}
+            conciseMode={conciseMode}
+            onConciseModeChange={(checked) => setAgent({ conciseMode: checked })}
             t={t}
           />
         </div>
@@ -810,15 +811,6 @@ export function AgentCreatePanel({
                   {t(($) => $.create_issue.agent.set_due_date)}
                 </DropdownMenuItem>
               )}
-              <DropdownMenuCheckboxItem
-                checked={conciseMode}
-                aria-label={t(($) => $.create_issue.agent.concise_mode_aria)}
-                title={t(($) => $.create_issue.agent.concise_mode_description)}
-                onCheckedChange={(checked) => setAgent({ conciseMode: checked === true })}
-              >
-                {t(($) => $.create_issue.agent.concise_mode)}
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuSeparator />
               <DropdownMenuItem
                 render={
                   <AppLink
@@ -946,6 +938,8 @@ function ActorPicker({
   selectedAgent,
   selectedSquad,
   onPick,
+  conciseMode,
+  onConciseModeChange,
   t,
 }: {
   actor: ActorSelection | null;
@@ -954,6 +948,8 @@ function ActorPicker({
   selectedAgent: Agent | undefined;
   selectedSquad: Squad | undefined;
   onPick: (next: ActorSelection) => void;
+  conciseMode: boolean;
+  onConciseModeChange: (checked: boolean) => void;
   t: ReturnType<typeof useT<"modals">>["t"];
 }) {
   const [open, setOpen] = useState(false);
@@ -1004,6 +1000,24 @@ function ActorPicker({
             <span>{t(($) => $.create_issue.agent.pick_an_agent)}</span>
           )}
         </span>
+      }
+      footer={
+        // Outside the arrow-key listbox on purpose: mode is a creation-time
+        // option, not another actor to keyboard through.
+        <label
+          className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-caption text-muted-foreground hover:bg-accent transition-colors"
+          title={t(($) => $.create_issue.agent.concise_mode_description)}
+        >
+          <input
+            type="checkbox"
+            checked={conciseMode}
+            aria-label={t(($) => $.create_issue.agent.concise_mode_aria)}
+            onChange={(e) => onConciseModeChange(e.target.checked)}
+            className="h-3.5 w-3.5 accent-foreground"
+          />
+          <Zap className="size-3.5" />
+          <span>{t(($) => $.create_issue.agent.concise_mode)}</span>
+        </label>
       }
     >
       {filteredAgents.length === 0 && filteredSquads.length === 0 ? (

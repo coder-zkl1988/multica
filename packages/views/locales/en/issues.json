@@ -769,7 +769,10 @@
       "agents_group": "Agents",
       "squads_group": "Squads",
       "agent_runtime_required": "Bind a runtime before assigning work to this agent",
-      "squad_runtime_required": "Bind a runtime to this squad's leader before assigning work"
+      "squad_runtime_required": "Bind a runtime to this squad's leader before assigning work",
+      "concise_mode": "Concise agent mode",
+      "concise_mode_description": "Send only the task inputs and context needed to complete this flow",
+      "concise_mode_aria": "Use concise agent mode"
     },
     "start_date": {
       "trigger_label": "Start date",

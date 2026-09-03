@@ -446,7 +446,22 @@ vi.mock("../issues/components", () => ({
   StatusPicker: () => <div data-testid="status-picker" />,
   PriorityPicker: () => <div data-testid="priority-picker" />,
   StagePicker: () => <div data-testid="stage-picker" />,
-  AssigneePicker: () => <div data-testid="assignee-picker" />,
+  AssigneePicker: ({
+    conciseMode,
+    onConciseModeChange,
+  }: {
+    conciseMode?: boolean;
+    onConciseModeChange?: (checked: boolean) => void;
+  }) => (
+    <div data-testid="assignee-picker">
+      <input
+        type="checkbox"
+        checked={conciseMode ?? false}
+        aria-label="Use concise agent mode"
+        onChange={(e) => onConciseModeChange?.(e.target.checked)}
+      />
+    </div>
+  ),
   // Surface open/onOpenChange so tests can assert progressive-disclosure
   // behavior (mounted only when the user has opted in or has a value).
   StartDatePicker: ({ open, onOpenChange }: { open?: boolean; onOpenChange?: (v: boolean) => void }) => (
@@ -887,11 +902,11 @@ describe("CreateIssueModal", () => {
     );
   });
 
-  it("toggles concise mode from the manual overflow menu", async () => {
+  it("toggles concise mode from the assignee picker footer", async () => {
     const user = userEvent.setup();
     renderModal(<CreateIssueModal onClose={vi.fn()} />);
 
-    await user.click(screen.getByRole("menuitemcheckbox", { name: "Concise agent mode" }));
+    await user.click(screen.getByRole("checkbox", { name: "Use concise agent mode" }));
 
     expect(mockSetManual).toHaveBeenCalledWith({ conciseMode: true });
   });

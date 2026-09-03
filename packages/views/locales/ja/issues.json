@@ -738,7 +738,10 @@
       "agents_group": "エージェント",
       "squads_group": "スクワッド",
       "agent_runtime_required": "作業を割り当てる前に、このエージェントにランタイムをバインドしてください",
-      "squad_runtime_required": "作業を割り当てる前に、このスクワッドのリーダーにランタイムをバインドしてください"
+      "squad_runtime_required": "作業を割り当てる前に、このスクワッドのリーダーにランタイムをバインドしてください",
+      "concise_mode": "簡易エージェントモード",
+      "concise_mode_description": "このフローを完了するのに必要なタスク入力とコンテキストのみを送信します",
+      "concise_mode_aria": "簡易エージェントモードを使用"
     },
     "start_date": {
       "trigger_label": "開始日",
