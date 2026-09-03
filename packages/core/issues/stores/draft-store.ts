@@ -56,6 +56,10 @@ export interface IssueCreateManual {
    *  a plain id list rather than full Label objects. */
   labelIds: string[];
   propertyValues: IssuePropertyValues;
+  /** Task-level concise execution for the run this create assigns. Kept in
+   *  the manual slot (not shared) so each panel remembers its own last choice,
+   *  mirroring how agent.conciseMode persists across the agent panel. */
+  conciseMode: boolean;
 }
 
 export interface IssueCreateAgent {
@@ -88,6 +92,7 @@ const emptyManual = (): IssueCreateManual => ({
   assigneeId: undefined,
   labelIds: [],
   propertyValues: {},
+  conciseMode: false,
 });
 
 const emptyAgent = (): IssueCreateAgent => ({

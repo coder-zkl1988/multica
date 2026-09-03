@@ -40,6 +40,7 @@ import {
 } from "@multica/ui/components/ui/dialog";
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
@@ -246,6 +247,7 @@ export function ManualCreatePanel({
   const keepOpen = useQuickCreateStore((s) => s.keepOpen);
   const setKeepOpen = useQuickCreateStore((s) => s.setKeepOpen);
   const manualFields = useIssueCreateSettingsStore((s) => s.manualCreateFields);
+  const conciseMode = draft.manual.conciseMode;
 
   const sendShortcut = useShortcut("send");
   const [title, setTitle] = useState(draft.manual.title);
@@ -502,9 +504,9 @@ export function ManualCreatePanel({
               start_date: startDate || undefined,
               due_date: dueDate || undefined,
               attachment_ids: activeAttachmentIds.length > 0 ? activeAttachmentIds : undefined,
-              label_ids: labelIds.length > 0 ? labelIds : undefined,
               stage: parentIssueId && stage != null ? stage : undefined,
               project_id: projectId,
+              concise_mode: conciseMode || undefined,
             },
           },
         });
@@ -529,6 +531,7 @@ export function ManualCreatePanel({
           // Stage is only meaningful for a sub-issue (relative to its siblings).
           stage: parentIssueId && stage != null ? stage : undefined,
           project_id: projectId,
+          concise_mode: conciseMode || undefined,
         });
       }
 
@@ -1291,6 +1294,15 @@ export function ManualCreatePanel({
                       </DropdownMenuSubContent>
                     </DropdownMenuSub>
                   )}
+                  <DropdownMenuSeparator />
+                  <DropdownMenuCheckboxItem
+                    checked={conciseMode}
+                    aria-label={t(($) => $.create_issue.agent.concise_mode_aria)}
+                    title={t(($) => $.create_issue.agent.concise_mode_description)}
+                    onCheckedChange={(checked) => setManual({ conciseMode: checked === true })}
+                  >
+                    {t(($) => $.create_issue.agent.concise_mode)}
+                  </DropdownMenuCheckboxItem>
                   <DropdownMenuSeparator />
                   {/* Field visibility lives in Settings → Issue; the modal
                       closes first so the dialog doesn't linger over the
