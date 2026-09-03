@@ -1141,12 +1141,17 @@ func (b *codexBackend) executeOnce(ctx context.Context, prompt string, opts Exec
 				lastAgentMessage = msg.Content
 				outputMu.Unlock()
 			}
-			if msg.Type == MessageToolUse {
+			if msg.Type == MessageToolUse && msg.Tool != "todo_write" {
 				// Daemon-side tool-call budget (concise mode): codex's
 				// app-server protocol has no native turn cap, so count tool
-				// uses here. A denied call kills the process tree and the
-				// budget flag below files the failure before any
-				// aborted/crashed classifier can claim it.
+				// uses here. todo_write is excluded: it is not a tool call
+				// but this backend's normalisation of the turn/plan/updated
+				// NOTIFICATION into the shared todo renderer's shape (see
+				// handleRawNotification) — charging it would spend the
+				// budget on planning rather than tool invocation. A denied
+				// call kills the process tree and the budget flag below
+				// files the failure before any aborted/crashed classifier
+				// can claim it.
 				if !toolBudget.Allow() {
 					budgetExhausted.Store(true)
 					signalProcessGroup(cmd, syscall.SIGKILL)

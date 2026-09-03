@@ -233,15 +233,22 @@ func (b *openclawBackend) Execute(ctx context.Context, prompt string, opts ExecO
 			b.cfg.Logger.Debug("openclaw session transcript unavailable", "session_id", sessionID, "error", err)
 		} else {
 			for _, message := range messages {
-				if message.Type == MessageToolUse && !toolBudget.Allow() {
-					// OpenClaw 2026.5.x writes tool calls only to the
-					// transcript, so this is necessarily post-hoc. Still
-					// kill any process-group descendants that lingered past
-					// cmd.Wait, and do not forward the denied call or later
-					// transcript messages.
-					scanResult.budgetExhausted = true
-					signalProcessGroup(cmd, syscall.SIGKILL)
-					break
+				if message.Type == MessageToolUse && !scanResult.countedBudget.take(message.CallID) {
+					// take consumed a live admission for this CallID (the
+					// NDJSON path already charged it) — a miss means the
+					// transcript row is the call's only charge point (the
+					// 2026.5.x blob path) or a recurrence of an ID whose
+					// admission was already consumed, which charges afresh.
+					// Calls with no ID take from the unIDed-live pool only
+					// while it lasts; after that they charge in transcript
+					// order. A denied call kills any process-group
+					// descendants that lingered past cmd.Wait and stops
+					// forwarding.
+					if !toolBudget.Allow() {
+						scanResult.budgetExhausted = true
+						signalProcessGroup(cmd, syscall.SIGKILL)
+						break
+					}
 				}
 				trySend(msgCh, message)
 			}
@@ -483,6 +490,12 @@ type openclawEventResult struct {
 	// must not overwrite the failure, and Execute kills the process group
 	// before cmd.Wait.
 	budgetExhausted bool
+	// countedBudget is the set of tool calls already charged to the budget
+	// (live NDJSON admissions, plus any unterminated-final-line charges from
+	// the fallback parse). Execute's session-transcript pass skips these
+	// CallIDs so the same call is never charged twice across stream and
+	// transcript. Nil when no budget is active.
+	countedBudget *liveAdmittedCalls
 }
 
 func (b *openclawBackend) processOutputWithoutFinalText(r io.Reader, ch chan<- Message, toolBudget *toolCallBudget, onBudgetExceeded func()) openclawEventResult {
@@ -522,10 +535,12 @@ func (b *openclawBackend) processOutput(r io.Reader, ch chan<- Message) openclaw
 func (b *openclawBackend) processOutputWithFinalText(r io.Reader, ch chan<- Message, emitFinalText bool, toolBudget *toolCallBudget, onBudgetExceeded func()) openclawEventResult {
 	var (
 		budgetExhausted atomic.Bool
-		liveToolCalls   atomic.Int64
-		liveDeniedAt    atomic.Int64
+		// live admissions: each live tool_use line consumed budget exactly
+		// once at read time via Allow; counted records them so the final
+		// parse and the session-transcript pass skip those calls' duplicates
+		// instead of charging them a second time.
+		counted liveAdmittedCalls
 	)
-	liveDeniedAt.Store(-1)
 	onLine := func(line string) {
 		if toolBudget == nil {
 			return
@@ -534,17 +549,18 @@ func (b *openclawBackend) processOutputWithFinalText(r io.Reader, ch chan<- Mess
 		if !ok || event.Type != "tool_use" {
 			return
 		}
-		ordinal := liveToolCalls.Add(1)
-		if !toolBudget.allowsObserved(ordinal) && liveDeniedAt.CompareAndSwap(-1, ordinal) {
+		if !toolBudget.Allow() {
 			budgetExhausted.Store(true)
 			if onBudgetExceeded != nil {
 				onBudgetExceeded()
 			}
+			return
 		}
+		counted.addLive(event.CallID)
 	}
 	buf, cutShort, readErr := readOpenclawStdout(r, openclawResultIdleGrace, onLine)
 	if readErr != nil {
-		return openclawEventResult{status: "failed", errMsg: fmt.Sprintf("read stdout: %v", readErr), budgetExhausted: budgetExhausted.Load()}
+		return openclawEventResult{status: "failed", errMsg: fmt.Sprintf("read stdout: %v", readErr), budgetExhausted: budgetExhausted.Load(), countedBudget: &counted}
 	}
 
 	// Whole-buffer fast path: openclaw 2026.5.x emits a single pretty-printed
@@ -556,14 +572,18 @@ func (b *openclawBackend) processOutputWithFinalText(r io.Reader, ch chan<- Mess
 		res := b.buildOpenclawEventResult(result, ch, &output, emitFinalText)
 		res.cutShort = cutShort
 		res.budgetExhausted = budgetExhausted.Load()
+		res.countedBudget = &counted
 		return res
 	}
 
 	// Fall-back path: parse the buffered NDJSON for transcript/output
 	// delivery. Budget enforcement already happened in real time in onLine
-	// above as each complete tool_use line arrived; this pass must not consume
-	// the same budget again. OpenClaw 2026.5.x emits a single final blob rather
-	// than NDJSON, but legacy/future streaming formats get a true in-flight cap.
+	// above as each complete tool_use line arrived — Allow consumed the
+	// budget there — so this pass must not charge those calls again: skip
+	// duplicates via counted. Only a tool_use line the reader never saw
+	// (an unterminated final line) is charged here, exactly once.
+	// OpenClaw 2026.5.x emits a single final blob rather than NDJSON, but
+	// legacy/future streaming formats get a true in-flight cap.
 	scanner := newAgentStreamScanner(bytes.NewReader(buf))
 	var output strings.Builder
 	var sessionID string
@@ -572,7 +592,6 @@ func (b *openclawBackend) processOutputWithFinalText(r io.Reader, ch chan<- Mess
 	finalStatus := "completed"
 	var finalError string
 	gotEvents := false // true if we parsed at least one streaming event or result
-	var parsedLiveToolCalls int64
 
 	var rawLines []string
 	for scanner.Scan() {
@@ -600,20 +619,20 @@ func (b *openclawBackend) processOutputWithFinalText(r io.Reader, ch chan<- Mess
 				if event.Input != nil {
 					_ = json.Unmarshal(event.Input, &input)
 				}
-				parsedLiveToolCalls++
-				liveCount := liveToolCalls.Load()
-				if parsedLiveToolCalls <= liveCount {
-					// The reader callback previewed this complete NDJSON
-					// line. Do not call Allow again; suppress the denied
-					// ordinal and anything after it.
-					if deniedAt := liveDeniedAt.Load(); deniedAt >= 0 && parsedLiveToolCalls >= deniedAt {
+				if toolBudget != nil && !counted.peek(event.CallID) {
+					// A line the live reader never charged: either the run
+					// used no live reader path at all, or this is the
+					// unterminated final line the reader never delivered.
+					// Charge it here and register the admission so the
+					// session-transcript pass can take it — the transcript
+					// is this call's only other sighting and must not
+					// re-charge. peek (not take) for live-sighted lines:
+					// their admissions belong to the transcript pass.
+					if !toolBudget.Allow() {
+						budgetExhausted.Store(true)
 						continue
 					}
-				} else if toolBudget != nil && !toolBudget.Allow() {
-					// An unterminated final line was not callback-observed;
-					// count it exactly once during final parsing.
-					budgetExhausted.Store(true)
-					continue
+					counted.addLive(event.CallID)
 				}
 				trySend(ch, Message{
 					Type:   MessageToolUse,
@@ -681,7 +700,16 @@ func (b *openclawBackend) processOutputWithFinalText(r io.Reader, ch chan<- Mess
 	}
 
 	if err := scanner.Err(); err != nil {
-		return openclawEventResult{status: "failed", errMsg: fmt.Sprintf("read stdout: %v", err)}
+		// Carry the budget verdict and the already-charged set even on a
+		// mid-parse failure: Execute's transcript pass still runs, and
+		// without countedBudget it would re-charge every live-admitted
+		// call.
+		return openclawEventResult{
+			status:          "failed",
+			errMsg:          fmt.Sprintf("read stdout: %v", err),
+			budgetExhausted: budgetExhausted.Load(),
+			countedBudget:   &counted,
+		}
 	}
 
 	// If we got no events at all, fall back to raw output. The whole-buffer
@@ -692,12 +720,13 @@ func (b *openclawBackend) processOutputWithFinalText(r io.Reader, ch chan<- Mess
 	if !gotEvents {
 		trimmed := strings.TrimSpace(strings.Join(rawLines, "\n"))
 		if trimmed != "" {
-			return openclawEventResult{status: "completed", output: trimmed, budgetExhausted: budgetExhausted.Load()}
+			return openclawEventResult{status: "completed", output: trimmed, budgetExhausted: budgetExhausted.Load(), countedBudget: &counted}
 		}
 		return openclawEventResult{
 			status:          "failed",
 			errMsg:          openclawNoParseableOutput,
 			budgetExhausted: budgetExhausted.Load(),
+			countedBudget:   &counted,
 		}
 	}
 
@@ -707,7 +736,6 @@ func (b *openclawBackend) processOutputWithFinalText(r io.Reader, ch chan<- Mess
 		finalStatus = "failed"
 		finalError = ErrToolBudgetExceeded.Error()
 	}
-
 	return openclawEventResult{
 		status:          finalStatus,
 		errMsg:          finalError,
@@ -716,6 +744,7 @@ func (b *openclawBackend) processOutputWithFinalText(r io.Reader, ch chan<- Mess
 		usage:           usage,
 		model:           model,
 		budgetExhausted: budgetExhausted.Load(),
+		countedBudget:   &counted,
 	}
 }
 
