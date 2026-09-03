@@ -133,6 +133,7 @@ const emptyIssueDraft = () => ({
     assigneeId: undefined as string | undefined,
     labelIds: [] as string[],
     propertyValues: {} as Record<string, string | number | boolean | string[]>,
+    conciseMode: false,
   },
   agent: {
     prompt: "",
@@ -845,6 +846,62 @@ describe("CreateIssueModal", () => {
       issueId: "issue-123",
       labelId: "bbbbbbbb-1111-2222-3333-444444444444",
     });
+  });
+
+  it("sends concise_mode when the manual draft opted in", async () => {
+    const user = userEvent.setup();
+    mockDraftStore.draft.manual.conciseMode = true;
+
+    renderModal(<CreateIssueModal onClose={vi.fn()} />);
+
+    fireEvent.change(screen.getByPlaceholderText("Issue title"), {
+      target: { value: "Concise manual issue" },
+    });
+    await user.click(screen.getByRole("button", { name: "Create Issue" }));
+
+    await waitFor(() => {
+      expect(mockCreateIssue).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Concise manual issue",
+          concise_mode: true,
+        }),
+      );
+    });
+  });
+
+  it("omits concise_mode for a normal manual create", async () => {
+    const user = userEvent.setup();
+
+    renderModal(<CreateIssueModal onClose={vi.fn()} />);
+
+    fireEvent.change(screen.getByPlaceholderText("Issue title"), {
+      target: { value: "Normal manual issue" },
+    });
+    await user.click(screen.getByRole("button", { name: "Create Issue" }));
+
+    await waitFor(() => {
+      expect(mockCreateIssue).toHaveBeenCalledTimes(1);
+    });
+    expect(mockCreateIssue).toHaveBeenCalledWith(
+      expect.not.objectContaining({ concise_mode: expect.anything() }),
+    );
+  });
+
+  it("toggles concise mode from the manual overflow menu", async () => {
+    const user = userEvent.setup();
+    renderModal(<CreateIssueModal onClose={vi.fn()} />);
+
+    await user.click(screen.getByRole("menuitemcheckbox", { name: "Concise agent mode" }));
+
+    expect(mockSetManual).toHaveBeenCalledWith({ conciseMode: true });
+  });
+
+  it("keeps the manual concise choice out of the agent panel slot", async () => {
+    mockDraftStore.draft.manual.conciseMode = true;
+
+    renderModal(<CreateIssueModal onClose={vi.fn()} />);
+
+    expect(mockDraftStore.draft.agent.conciseMode).toBe(false);
   });
 
   it("keeps manual mode open and clears content when create another is enabled", async () => {
