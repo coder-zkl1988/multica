@@ -734,6 +734,11 @@ func NormalizeServerBaseURL(raw string) (string, error) {
 // would otherwise scan the default root and silently report the wrong tree.
 const TaskWorkspacesRootEnv = "MULTICA_TASK_WORKSPACES_ROOT"
 
+// TaskCLIPathEnv carries the absolute path of the multica binary the daemon
+// itself runs, so an agent can invoke that exact binary even when its shell
+// resolves `multica` to a stale install elsewhere on PATH.
+const TaskCLIPathEnv = "MULTICA_CLI"
+
 // ResolveWorkspacesRoot returns the absolute path that the daemon and CLI
 // should treat as the workspaces root. Resolution order: explicit override >
 // MULTICA_WORKSPACES_ROOT env > default ($HOME/multica_workspaces, or

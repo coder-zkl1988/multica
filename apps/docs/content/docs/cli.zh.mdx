@@ -272,6 +272,7 @@ CLI 配置文件包含可代表你访问 Multica 的令牌。不要提交到仓�
 | | `member list/add/set-role/remove` | 管理小队成员 | |
 | | `activity <issue-id> <outcome>` | 记录队长评价 | |
 | `chat` | `history`、`thread [id]` | 读取智能体当前正在处理的外部聊天会话 | `--limit`、`--before` |
+| `design` | `audit` | 在设计稿任务结束前，对产物包运行平台门禁（收集、静态审计、无头 Chromium 预览）；平台会拒绝时以退出码 1 列出每条失败规则和文件 | `--dir`（默认 `$MULTICA_OUTPUT_DIR`）、`--context`（默认 `.agent_context/design_document/context/task.json`）、`--task-id`（默认 `$MULTICA_TASK_ID`）、`--preview`（默认开启）、`--timeout`、`--output` |
 
 ### Runtime
 
