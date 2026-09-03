@@ -242,9 +242,17 @@ func (r ProjectDesignContextResolver) resolveExplicit(
 // builtinDesignContextDigest pins the exact catalogue bytes this run designs
 // under, so a later bundle update cannot silently change what a revision was
 // constrained by.
+//
+// The value travels into the design document task context as
+// design_system_digest and from there into the package binding on both the
+// daemon and the server side, where it is validated as a "sha256:<hex>"
+// reference — the same form a saved design system's manifest digest takes.
+// A bare hex digest here rejected every finished package of a run pinned to
+// a catalogue system with "invalid project design system digest", after the
+// agent had already produced it.
 func builtinDesignContextDigest(builtin BuiltinDesignContext) string {
 	sum := sha256.Sum256([]byte(builtin.Slug + "\x00" + builtin.DesignMarkdown + "\x00" + builtin.TokensCSS))
-	return hex.EncodeToString(sum[:])
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 // resolveScope loads one scope's saved package. A nil result means "this

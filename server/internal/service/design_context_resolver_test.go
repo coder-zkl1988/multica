@@ -267,9 +267,11 @@ func TestProjectDesignContextResolverInlinesABuiltinCatalogueSystem(t *testing.T
 		t.Fatalf("resolved builtin = %#v", resolved.Builtin)
 	}
 	// The digest pins the exact bytes, so a later bundle update cannot change
-	// what this revision was designed under without changing the digest.
-	if len(resolved.Digest) != 64 {
-		t.Fatalf("resolved digest = %q, want a sha256 hex digest", resolved.Digest)
+	// what this revision was designed under without changing the digest. It
+	// takes the same "sha256:<hex>" reference form as a saved package digest,
+	// because the design document package binding validates it as one.
+	if !strings.HasPrefix(resolved.Digest, "sha256:") || len(resolved.Digest) != len("sha256:")+64 {
+		t.Fatalf("resolved digest = %q, want a sha256:<hex> reference", resolved.Digest)
 	}
 	changed := *resolved.Builtin
 	changed.TokensCSS = ":root { --accent: #000000; }"
@@ -355,24 +357,24 @@ func validSavedDesignContextFixture(
 	}
 	savedAt := time.Date(2026, time.July, 30, 3, 58, 25, 0, time.UTC)
 	return db.ProjectDesignSystem{
-			ID:          systemID,
-			WorkspaceID: workspaceID,
-			ProjectID:   projectID,
-			Name:        "Atlas",
-			Platform:    "web",
-			SavedAt:     pgtype.Timestamptz{Time: savedAt, Valid: true},
-		}, db.ProjectDesignSystemPackage{
-			DesignSystemID:  systemID,
-			Slot:            "saved",
-			DesignMd:        artifacts.DesignMD,
-			TokensCss:       artifacts.TokensCSS,
-			ComponentsHtml:  artifacts.ComponentsHTML,
-			Manifest:        manifest,
-			Validation:      validation,
-			IntegritySha256: validated.Manifest.Digest,
-			SourceTaskID:    sourceTaskID,
-			RenderStatus:    "passed",
-		}
+		ID:          systemID,
+		WorkspaceID: workspaceID,
+		ProjectID:   projectID,
+		Name:        "Atlas",
+		Platform:    "web",
+		SavedAt:     pgtype.Timestamptz{Time: savedAt, Valid: true},
+	}, db.ProjectDesignSystemPackage{
+		DesignSystemID:  systemID,
+		Slot:            "saved",
+		DesignMd:        artifacts.DesignMD,
+		TokensCss:       artifacts.TokensCSS,
+		ComponentsHtml:  artifacts.ComponentsHTML,
+		Manifest:        manifest,
+		Validation:      validation,
+		IntegritySha256: validated.Manifest.Digest,
+		SourceTaskID:    sourceTaskID,
+		RenderStatus:    "passed",
+	}
 }
 
 func mustDesignContextUUID(t *testing.T, value string) pgtype.UUID {
