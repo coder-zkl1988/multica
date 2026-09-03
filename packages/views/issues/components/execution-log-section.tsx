@@ -17,7 +17,7 @@ import {
 import { ActorAvatar } from "../../common/actor-avatar";
 import { formatDuration } from "../../agents/components/agent-activity-hover-content";
 import { TranscriptButton } from "../../common/task-transcript";
-import { cancelReasonLabel, failureReasonLabel } from "../../agents/components/tabs/task-failure";
+import { cancelReasonLabel, failureReasonLabel, isToolBudgetExhausted } from "../../agents/components/tabs/task-failure";
 import { useT } from "../../i18n";
 import {
   formatTokens,
@@ -479,6 +479,10 @@ function PastRow({ task, issueId }: { task: AgentTask; issueId: string }) {
   // (e.g. reassignment, squad worker, or a one-off @-mention agent).
   const canRetry = task.status === "failed" || task.status === "cancelled";
 
+  // A budget stop resumes the same session with a fresh budget on rerun, so
+  // the affordance says "continue", not "retry" — the run never went wrong.
+  const budgetExhausted = isToolBudgetExhausted(task.failure_reason, task.error);
+
   const handleRetry = async () => {
     if (retrying) return;
     setRetrying(true);
@@ -528,7 +532,7 @@ function PastRow({ task, issueId }: { task: AgentTask; issueId: string }) {
                   type="button"
                   onClick={handleRetry}
                   disabled={retrying}
-                  aria-label={t(($) => $.execution_log.retry_task_aria)}
+                  aria-label={t(($) => $.execution_log[budgetExhausted ? "continue_task_aria" : "retry_task_aria"])}
                 />
               }
               className="flex items-center justify-center rounded p-1 text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
@@ -539,7 +543,7 @@ function PastRow({ task, issueId }: { task: AgentTask; issueId: string }) {
                 <RotateCcw className="h-3.5 w-3.5" />
               )}
             </TooltipTrigger>
-            <TooltipContent>{t(($) => $.execution_log.retry_task_tooltip)}</TooltipContent>
+            <TooltipContent>{t(($) => $.execution_log[budgetExhausted ? "continue_task_tooltip" : "retry_task_tooltip"])}</TooltipContent>
           </Tooltip>
         )}
       </RowActions>

@@ -434,6 +434,53 @@ func TestNormalizeDaemonReason(t *testing.T) {
 			raw:    "API Error: the model is overloaded",
 			want:   ReasonAgentUnknown,
 		},
+
+		// --- Tool-call budget exhaustion (concise mode). An un-upgraded
+		// daemon reports the catchall for the budget stop; the upgrade keeps
+		// the failure off the agent-blame copy and lets the UI offer
+		// "continue" semantics, since a rerun resumes the session with a
+		// fresh budget.
+		{
+			name:   "old daemon catchall on the budget stop is upgraded",
+			reason: string(ReasonAgentUnknown),
+			raw:    "pi: agent tool-call budget exceeded (cap 40)",
+			want:   ReasonToolBudgetExceeded,
+		},
+		{
+			name:   "pre-MUL-1949 coarse reason on the budget stop is upgraded",
+			reason: "agent_error",
+			raw:    "omp: agent tool-call budget exceeded (cap 40)",
+			want:   ReasonToolBudgetExceeded,
+		},
+		{
+			// The wrapper label varies by backend (pi/omp/codex/grok/
+			// openclaw), so the witness is a contains-match.
+			name:   "any backend label prefix is upgraded",
+			reason: string(ReasonAgentUnknown),
+			raw:    "grok: agent tool-call budget exceeded (cap 120)",
+			want:   ReasonToolBudgetExceeded,
+		},
+		{
+			// A current daemon already sends the right reason; nothing to do.
+			name:   "current daemon budget reason passes through",
+			reason: string(ReasonToolBudgetExceeded),
+			raw:    "pi: agent tool-call budget exceeded (cap 40)",
+			want:   ReasonToolBudgetExceeded,
+		},
+		{
+			// A refined reason means the old daemon matched an earlier rule
+			// on this same text; that says more than the witness does.
+			name:   "refined reason with the budget witness is left alone",
+			reason: string(ReasonAgentProcessFailure),
+			raw:    "codex: agent tool-call budget exceeded (cap 40)",
+			want:   ReasonAgentProcessFailure,
+		},
+		{
+			name:   "catchall without the budget witness is left alone",
+			reason: string(ReasonAgentUnknown),
+			raw:    "pi: some other agent failure",
+			want:   ReasonAgentUnknown,
+		},
 	}
 
 	for _, tc := range cases {

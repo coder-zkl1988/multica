@@ -581,6 +581,8 @@
     "cancel_task_aria": "取消 task",
     "retry_task_tooltip": "重试 task",
     "retry_task_aria": "重试 task",
+    "continue_task_tooltip": "继续执行（恢复会话，预算重置）",
+    "continue_task_aria": "继续执行 task",
     "retry_failed": "重试 task 失败",
     "retry_blocked": "未重试——你没有该智能体的使用权限",
     "transcript_tooltip": "查看记录",

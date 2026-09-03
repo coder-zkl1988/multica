@@ -604,6 +604,8 @@
     "cancel_task_aria": "Cancel task",
     "retry_task_tooltip": "Retry task",
     "retry_task_aria": "Retry task",
+    "continue_task_tooltip": "Continue (resumes the session with a fresh budget)",
+    "continue_task_aria": "Continue task",
     "retry_failed": "Failed to retry task",
     "retry_blocked": "Not retried — you don't have permission to use this agent",
     "transcript_tooltip": "View transcript",
