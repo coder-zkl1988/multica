@@ -78,10 +78,7 @@ func TestAutopilotCreateFirstCompletionPublishesRunStartBeforeRunDone(t *testing
 	`, testWorkspaceID, "Autopilot create-first project").Scan(&projectID); err != nil {
 		t.Fatalf("create project: %v", err)
 	}
-	var agentID string
-	if err := testPool.QueryRow(ctx, `SELECT id FROM agent WHERE workspace_id = $1 LIMIT 1`, testWorkspaceID).Scan(&agentID); err != nil {
-		t.Fatalf("load agent: %v", err)
-	}
+	agentID := createHandlerTestAgent(t, "Autopilot create-first agent", nil)
 	w := httptest.NewRecorder()
 	req := newRequest("POST", "/api/autopilots?workspace_id="+testWorkspaceID, map[string]any{
 		"title": "Create-first completion autopilot", "assignee_id": agentID,
@@ -197,10 +194,7 @@ func TestAutopilotCreateCommitFailurePublishesMatchingRunDone(t *testing.T) {
 			_, _ = testPool.Exec(ctx, `DELETE FROM autopilot WHERE id = $1`, autopilotID)
 		}
 	})
-	var agentID string
-	if err := testPool.QueryRow(ctx, `SELECT id FROM agent WHERE workspace_id = $1 LIMIT 1`, testWorkspaceID).Scan(&agentID); err != nil {
-		t.Fatalf("load agent: %v", err)
-	}
+	agentID := createHandlerTestAgent(t, "Autopilot commit-failure agent", nil)
 	w := httptest.NewRecorder()
 	req := newRequest("POST", "/api/autopilots?workspace_id="+testWorkspaceID, map[string]any{
 		"title": "Commit failure autopilot", "assignee_id": agentID,

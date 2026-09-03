@@ -1183,8 +1183,7 @@ func TestAutopilotDispatchWaitsForCompletedProjectAndSkips(t *testing.T) {
 		RETURNING id::text
 	`, testWorkspaceID, "Autopilot project target", testUserID).Scan(&projectID)
 
-	var agentID string
-	dbfx.QueryRow(t, `SELECT id FROM agent WHERE workspace_id = $1 LIMIT 1`, testWorkspaceID).Scan(&agentID)
+	agentID := createHandlerTestAgent(t, "Autopilot completed-project agent", nil)
 
 	req := newRequest("POST", "/api/autopilots?workspace_id="+testWorkspaceID, map[string]any{
 		"title":                "Project-linked autopilot",
