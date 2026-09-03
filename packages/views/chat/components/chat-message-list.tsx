@@ -983,6 +983,7 @@ function FailureBubble({
     cancelled: t(($) => $.message_list.failure.manual),
     skill_bundle_unavailable: t(($) => $.message_list.failure.skill_bundle_unavailable),
     runtime_cli_timeout: t(($) => $.message_list.failure.runtime_cli_timeout),
+    issue_window_restricted: t(($) => $.message_list.failure.issue_window_restricted),
     "agent_error.provider_network": t(($) => $.message_list.failure.provider_network),
     "agent_error.provider_auth_or_access": t(($) => $.message_list.failure.provider_auth_or_access),
     "agent_error.provider_quota_limit": t(($) => $.message_list.failure.provider_quota_limit),

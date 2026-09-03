@@ -33,6 +33,7 @@ type WorkerConfig struct {
 	BatchSize         int32
 	MaxAttempts       int32
 	Logger            *slog.Logger
+	Metrics           WorkerMetrics
 }
 
 type workerQueries interface {
@@ -44,7 +45,15 @@ type workerQueries interface {
 	GetInvitation(context.Context, pgtype.UUID) (db.WorkspaceInvitation, error)
 	MarkClaimedSeatCapacityIntentDeadLettered(context.Context, db.MarkClaimedSeatCapacityIntentDeadLetteredParams) (int64, error)
 	MarkClaimedSeatCapacityIntentFailed(context.Context, db.MarkClaimedSeatCapacityIntentFailedParams) (int64, error)
+	SeatCapacityOutboxStats(context.Context) ([]db.SeatCapacityOutboxStatsRow, error)
 	TransitionClaimedSeatCapacityIntent(context.Context, db.TransitionClaimedSeatCapacityIntentParams) (int64, error)
+}
+
+type WorkerMetrics interface {
+	ResetOutbox()
+	SetOutbox(action string, pending, deadLettered int64, oldestPendingAgeSeconds float64)
+	RecordOutboxRefreshError()
+	SetOutboxRefreshUnavailable(unavailable bool)
 }
 
 // Worker settles durable product-side intents. Each row is claimed atomically
@@ -56,6 +65,7 @@ type Worker struct {
 	batchSize         int32
 	maxAttempts       int32
 	logger            *slog.Logger
+	metrics           WorkerMetrics
 	workspaceLocker   WorkspaceLocker
 	now               func() time.Time
 }
@@ -86,7 +96,7 @@ func newWorker(queries workerQueries, executor Executor, cfg WorkerConfig) *Work
 	return &Worker{
 		queries: queries, executor: executor, reconcileInterval: interval,
 		batchSize: batch, maxAttempts: maxAttempts, logger: logger,
-		now: time.Now,
+		metrics: cfg.Metrics, now: time.Now,
 	}
 }
 
@@ -125,12 +135,12 @@ func (w *Worker) ReconcileOnce(ctx context.Context) error {
 			break
 		}
 		if err != nil {
-			return err
+			return w.reconcileFailure(ctx, err)
 		}
 		workspaceID := uuidFromPG(intent.WorkspaceID)
 		if deferral, ok := workspaceDeferrals[workspaceID]; ok && deferral.until.After(w.now()) {
 			if err := w.deferClaimedUntil(ctx, intent, deferral.reason, deferral.until); err != nil {
-				return err
+				return w.reconcileFailure(ctx, err)
 			}
 			continue
 		}
@@ -139,7 +149,7 @@ func (w *Worker) ReconcileOnce(ctx context.Context) error {
 			if IsRateLimited(settleErr) {
 				deferredUntil, err := w.deferRateLimited(ctx, intent, settleErr)
 				if err != nil {
-					return errors.Join(settleErr, err)
+					return w.reconcileFailure(ctx, errors.Join(settleErr, err))
 				}
 				if RateLimitScopeOf(settleErr) == RateLimitScopeWorkspace {
 					workspaceDeferrals[workspaceID] = rateLimitDeferral{
@@ -155,7 +165,7 @@ func (w *Worker) ReconcileOnce(ctx context.Context) error {
 			w.recordFailure(ctx, intent, settleErr)
 		}
 	}
-	return nil
+	return w.refreshMetrics(ctx)
 }
 
 type rateLimitDeferral struct {
@@ -384,6 +394,31 @@ func (w *Worker) recordFailure(ctx context.Context, intent db.SeatCapacityOutbox
 			"workspace_id", workspaceIDString(intent.WorkspaceID), "action", intent.Action,
 			"attempt", intent.AttemptCount+1, "error", settleErr)
 	}
+}
+
+func (w *Worker) refreshMetrics(ctx context.Context) error {
+	if w.metrics == nil {
+		return nil
+	}
+	stats, err := w.queries.SeatCapacityOutboxStats(ctx)
+	if err != nil {
+		// Preserve the last successful sample so a transient database failure does
+		// not look like an empty backlog. The state metric tells operators that the
+		// values are stale until a later refresh succeeds.
+		w.metrics.RecordOutboxRefreshError()
+		w.metrics.SetOutboxRefreshUnavailable(true)
+		return err
+	}
+	w.metrics.ResetOutbox()
+	for _, stat := range stats {
+		w.metrics.SetOutbox(stat.Action, stat.PendingCount, stat.DeadLetteredCount, stat.OldestPendingAgeSeconds)
+	}
+	w.metrics.SetOutboxRefreshUnavailable(false)
+	return nil
+}
+
+func (w *Worker) reconcileFailure(ctx context.Context, operationErr error) error {
+	return errors.Join(operationErr, w.refreshMetrics(ctx))
 }
 
 func uuidFromPG(value pgtype.UUID) uuid.UUID {

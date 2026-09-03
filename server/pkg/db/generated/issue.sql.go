@@ -977,11 +977,54 @@ func (q *Queries) GetIssueInWorkspace(ctx context.Context, arg GetIssueInWorkspa
 	return i, err
 }
 
+const isIssueInCreationWindow = `-- name: IsIssueInCreationWindow :one
+WITH RECURSIVE issue_window_base AS MATERIALIZED (
+    SELECT id, parent_issue_id
+    FROM issue
+    WHERE workspace_id = $2::uuid
+    ORDER BY number DESC
+    LIMIT $3::bigint
+), issue_window_visible(id, parent_issue_id) AS (
+    SELECT id, parent_issue_id FROM issue_window_base
+    UNION
+    SELECT parent.id, parent.parent_issue_id
+    FROM issue parent
+    JOIN issue_window_visible child ON child.parent_issue_id = parent.id
+    WHERE parent.workspace_id = $2::uuid
+)
+SELECT EXISTS (
+    SELECT 1
+    FROM issue_window_visible
+    WHERE id = $1::uuid
+)
+`
+
+type IsIssueInCreationWindowParams struct {
+	IssueID          pgtype.UUID `json:"issue_id"`
+	WorkspaceID      pgtype.UUID `json:"workspace_id"`
+	IssueWindowLimit int64       `json:"issue_window_limit"`
+}
+
+// Returns true for one issue in the newest creation-number window or one of
+// the ancestors required to render a visible descendant.
+func (q *Queries) IsIssueInCreationWindow(ctx context.Context, arg IsIssueInCreationWindowParams) (bool, error) {
+	row := q.db.QueryRow(ctx, isIssueInCreationWindow, arg.IssueID, arg.WorkspaceID, arg.IssueWindowLimit)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const listChildIssues = `-- name: ListChildIssues :many
 SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at FROM issue
-WHERE parent_issue_id = $1
+WHERE workspace_id = $1
+  AND parent_issue_id = $2
 ORDER BY number ASC
 `
+
+type ListChildIssuesParams struct {
+	WorkspaceID   pgtype.UUID `json:"workspace_id"`
+	ParentIssueID pgtype.UUID `json:"parent_issue_id"`
+}
 
 // Order by number ASC so sub-issues display in stable creation order
 // (oldest first), matching how a parent's plan reads top-to-bottom. The
@@ -989,8 +1032,8 @@ ORDER BY number ASC
 // not relative to siblings, so ordering by it interleaves children
 // unpredictably across batches and statuses; number is a per-workspace
 // monotonic counter and is sibling-stable.
-func (q *Queries) ListChildIssues(ctx context.Context, parentIssueID pgtype.UUID) ([]Issue, error) {
-	rows, err := q.db.Query(ctx, listChildIssues, parentIssueID)
+func (q *Queries) ListChildIssues(ctx context.Context, arg ListChildIssuesParams) ([]Issue, error) {
+	rows, err := q.db.Query(ctx, listChildIssues, arg.WorkspaceID, arg.ParentIssueID)
 	if err != nil {
 		return nil, err
 	}

@@ -3,10 +3,10 @@ package daemon
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/multica-ai/multica/server/internal/designdocument"
 	"strings"
 
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
+	"github.com/multica-ai/multica/server/internal/designdocument"
 	"github.com/multica-ai/multica/server/internal/projectdesignsystem"
 )
 
@@ -224,6 +224,227 @@ func buildActiveSiblingRunsBlock(currentIssueID string, runs []ActiveSiblingRunD
 		fmt.Fprintf(&b, "; inspect: `multica issue run-messages %s`\n", run.TaskID)
 	}
 	b.WriteString("\n")
+	return b.String()
+}
+
+// BuildDirectPrompt returns the smallest flow-specific envelope needed to
+// complete a task without the normal Multica workflow brief. It keeps raw user
+// input intact while retaining only the identifiers and commands required for
+// delivery, issue updates, attachments, or exactly-once creation.
+func BuildDirectPrompt(task Task) string {
+	switch {
+	case task.ChatSessionID != "":
+		return buildDirectChatPrompt(task)
+	case task.TriggerCommentID != "":
+		return buildDirectCommentPrompt(task)
+	case task.AutopilotRunID != "":
+		return buildDirectAutopilotPrompt(task)
+	case task.QuickCreatePrompt != "":
+		return buildDirectQuickCreatePrompt(task)
+	case len(task.UIDraftCreateContext) > 0:
+		return string(task.UIDraftCreateContext)
+	case len(task.DesignRestoreContext) > 0:
+		return string(task.DesignRestoreContext)
+	case task.TestGenerationContext != "":
+		return task.TestGenerationContext
+	case task.TestRunContext != "":
+		return task.TestRunContext
+	case len(task.DesignSystemProfileAnalyzeContext) > 0:
+		return string(task.DesignSystemProfileAnalyzeContext)
+	case len(task.TemplateBlueprintAnalyzeContext) > 0:
+		return string(task.TemplateBlueprintAnalyzeContext)
+	case len(task.ProjectDesignSystemContext) > 0:
+		return string(task.ProjectDesignSystemContext)
+	case len(task.DesignDocumentContext) > 0:
+		return string(task.DesignDocumentContext)
+	case len(task.DesignDeliveryContext) > 0:
+		return string(task.DesignDeliveryContext)
+	case len(task.PMOSyncContext) > 0:
+		return string(task.PMOSyncContext)
+	case task.HandoffNote != "", task.IssueID != "":
+		return buildDirectAssignmentPrompt(task)
+	default:
+		return ""
+	}
+}
+
+func buildDirectChatPrompt(task Task) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Chat session: %s\n", task.ChatSessionID)
+	if task.ChatChannelType != "" {
+		fmt.Fprintf(&b, "Surface: %s", task.ChatChannelType)
+	} else {
+		b.WriteString("Surface: web")
+	}
+	if task.ChatType != "" {
+		fmt.Fprintf(&b, ", %s", task.ChatType)
+	}
+	if task.ChatInThread {
+		b.WriteString(", thread reply")
+	}
+	b.WriteString("\n\nUser message:\n")
+	b.WriteString(task.ChatMessage)
+	b.WriteByte('\n')
+	if len(task.ChatMessageAttachments) > 0 {
+		b.WriteString("\nAttachments:\n")
+		for _, attachment := range task.ChatMessageAttachments {
+			fmt.Fprintf(&b, "- %s", attachment.ID)
+			if attachment.Filename != "" {
+				fmt.Fprintf(&b, " %s", attachment.Filename)
+			}
+			if attachment.ContentType != "" {
+				fmt.Fprintf(&b, " (%s)", attachment.ContentType)
+			}
+			b.WriteByte('\n')
+		}
+		b.WriteString("Download an attachment when needed with `multica attachment download <id>`.\n")
+	}
+	b.WriteString("\nReply with the final answer only; stdout is delivered to this chat.\n")
+	switch {
+	case task.ChatChannelType == "":
+		b.WriteString("To include a produced file or image, run `multica attachment upload <local-path>`.\n")
+	case execenv.ChannelCarriesFiles(task.ChatChannelType, task.ChatChannelDeliversFiles):
+		fmt.Fprintf(&b, "To include a produced file or image, run `multica attachment upload <local-path>`; it is delivered to %s after the text.\n", channelDisplayName(task.ChatChannelType))
+	default:
+		fmt.Fprintf(&b, "This %s reply is text-only; describe any produced file instead of uploading it.\n", channelDisplayName(task.ChatChannelType))
+	}
+	return b.String()
+}
+
+func buildDirectCommentPrompt(task Task) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Issue: %s\nTrigger comment: %s", task.IssueID, task.TriggerCommentID)
+	if task.TriggerThreadID != "" {
+		fmt.Fprintf(&b, " (thread %s)", task.TriggerThreadID)
+	}
+	if task.TriggerAuthorType != "" || task.TriggerAuthorName != "" {
+		fmt.Fprintf(&b, "\nAuthor: %s", task.TriggerAuthorType)
+		if task.TriggerAuthorName != "" {
+			fmt.Fprintf(&b, " (%s)", task.TriggerAuthorName)
+		}
+	}
+	b.WriteString("\n\nTrigger comment content:\n")
+	b.WriteString(task.TriggerCommentContent)
+	b.WriteByte('\n')
+
+	if len(task.CoalescedComments) > 0 {
+		b.WriteString("\nAdditional comments:\n")
+		for _, comment := range task.CoalescedComments {
+			fmt.Fprintf(&b, "- comment %s", comment.ID)
+			if comment.ThreadID != "" {
+				fmt.Fprintf(&b, " [thread %s]", comment.ThreadID)
+			}
+			if comment.AuthorType != "" || comment.AuthorName != "" {
+				fmt.Fprintf(&b, " (%s", comment.AuthorType)
+				if comment.AuthorName != "" {
+					fmt.Fprintf(&b, ": %s", comment.AuthorName)
+				}
+				b.WriteByte(')')
+			}
+			if comment.CreatedAt != "" {
+				fmt.Fprintf(&b, " %s", comment.CreatedAt)
+			}
+			b.WriteString(":\n")
+			b.WriteString(comment.Content)
+			b.WriteString("\n")
+		}
+	} else if len(task.CoalescedCommentIDs) > 0 {
+		fmt.Fprintf(&b, "\nAdditional comment IDs: %s\n", strings.Join(task.CoalescedCommentIDs, ", "))
+	}
+
+	b.WriteString("\nReply to each request when a reply is warranted. Write the final body to ./reply.md, post it, then remove the file:\n")
+	if targets := commentReplyThreads(task); len(targets) >= 2 {
+		for _, target := range targets {
+			fmt.Fprintf(&b, "multica issue comment add %s --parent %s --content-file ./reply.md\n", task.IssueID, target.ParentID)
+		}
+	} else {
+		fmt.Fprintf(&b, "multica issue comment add %s --parent %s --content-file ./reply.md\n", task.IssueID, task.TriggerCommentID)
+	}
+	b.WriteString("rm ./reply.md\n")
+	if taskIsSquadLeader(task) {
+		fmt.Fprintf(&b, "If no action is needed, run `multica squad activity %s no_action --reason \"...\"` and do not post a comment.\n", task.IssueID)
+	}
+	return b.String()
+}
+
+func buildDirectAssignmentPrompt(task Task) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Issue: %s\n", task.IssueID)
+	fmt.Fprintf(&b, "Read it with `multica issue get %s --output json`, perform the requested work, then post the final result with `multica issue comment add %s --content-file ./reply.md` and run `multica issue status %s in_review`. Write the comment body to ./reply.md first and remove the file afterward.\n", task.IssueID, task.IssueID, task.IssueID)
+	if task.HandoffNote != "" {
+		b.WriteString("\nHandoff:\n")
+		b.WriteString(task.HandoffNote)
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+func buildDirectAutopilotPrompt(task Task) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Autopilot run: %s\n", task.AutopilotRunID)
+	if task.AutopilotID != "" {
+		fmt.Fprintf(&b, "Autopilot: %s\n", task.AutopilotID)
+	}
+	if task.AutopilotTitle != "" {
+		fmt.Fprintf(&b, "Title: %s\n", task.AutopilotTitle)
+	}
+	if task.AutopilotSource != "" {
+		fmt.Fprintf(&b, "Source: %s\n", task.AutopilotSource)
+	}
+	b.WriteString("\nDescription:\n")
+	b.WriteString(task.AutopilotDescription)
+	b.WriteString("\n\nTrigger payload:\n")
+	b.WriteString(string(task.AutopilotTriggerPayload))
+	b.WriteByte('\n')
+	return b.String()
+}
+
+func buildDirectQuickCreatePrompt(task Task) string {
+	var b strings.Builder
+	b.WriteString("Create exactly one issue from this request.\n\nUser request:\n")
+	b.WriteString(task.QuickCreatePrompt)
+	b.WriteString("\n\nSelected fields:\n")
+	assigneeID := task.SquadID
+	if assigneeID == "" {
+		if task.Agent != nil {
+			assigneeID = task.Agent.ID
+		}
+		if assigneeID == "" {
+			assigneeID = task.AgentID
+		}
+	}
+	if assigneeID != "" {
+		fmt.Fprintf(&b, "--assignee-id %s\n", assigneeID)
+	}
+	if task.QuickCreatePriority != "" {
+		fmt.Fprintf(&b, "--priority %s\n", task.QuickCreatePriority)
+	}
+	if task.QuickCreateDueDate != "" {
+		fmt.Fprintf(&b, "--due-date %s\n", task.QuickCreateDueDate)
+	}
+	if task.ProjectID != "" {
+		fmt.Fprintf(&b, "--project %s", task.ProjectID)
+		if task.ProjectTitle != "" {
+			fmt.Fprintf(&b, " (%s)", task.ProjectTitle)
+		}
+		b.WriteByte('\n')
+	}
+	if task.ParentIssueID != "" {
+		fmt.Fprintf(&b, "--parent %s", task.ParentIssueID)
+		if task.ParentIssueIdentifier != "" {
+			fmt.Fprintf(&b, " (%s)", task.ParentIssueIdentifier)
+		}
+		b.WriteByte('\n')
+	}
+	for _, attachmentID := range task.QuickCreateAttachmentIDs {
+		fmt.Fprintf(&b, "--attachment-id %s\n", attachmentID)
+	}
+	if len(task.QuickCreateSourceContext) > 0 {
+		b.WriteString("\nSource context (read-only historical context):\n")
+		b.Write(task.QuickCreateSourceContext)
+		b.WriteByte('\n')
+	}
+	b.WriteString("\nRun `multica issue create --output json` exactly once. Use --title and put any multi-line or rich description in ./description.md, passed with --description-file ./description.md. Print only the created identifier or id, then exit.\n")
 	return b.String()
 }
 

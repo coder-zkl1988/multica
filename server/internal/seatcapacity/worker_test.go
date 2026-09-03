@@ -60,6 +60,31 @@ func (e *workerTestExecutor) GetOperation(context.Context, uuid.UUID, uuid.UUID)
 	return e.decision, e.err
 }
 
+type workerTestMetrics struct {
+	resets             int
+	values             []db.SeatCapacityOutboxStatsRow
+	refreshErrors      int
+	refreshUnavailable bool
+}
+
+func (m *workerTestMetrics) ResetOutbox() {
+	m.resets++
+	m.values = nil
+}
+
+func (m *workerTestMetrics) SetOutbox(action string, pending, deadLettered int64, oldestPendingAgeSeconds float64) {
+	m.values = append(m.values, db.SeatCapacityOutboxStatsRow{
+		Action: action, PendingCount: pending, DeadLetteredCount: deadLettered,
+		OldestPendingAgeSeconds: oldestPendingAgeSeconds,
+	})
+}
+
+func (m *workerTestMetrics) RecordOutboxRefreshError() { m.refreshErrors++ }
+
+func (m *workerTestMetrics) SetOutboxRefreshUnavailable(unavailable bool) {
+	m.refreshUnavailable = unavailable
+}
+
 type workerTestQueries struct {
 	mu sync.Mutex
 
@@ -67,8 +92,11 @@ type workerTestQueries struct {
 	intents         []db.SeatCapacityOutbox
 	nextIntent      int
 	claimAvailable  bool
+	claimErr        error
 	invitation      db.WorkspaceInvitation
 	invitationError error
+	stats           []db.SeatCapacityOutboxStatsRow
+	statsErr        error
 	deferredUntil   pgtype.Timestamptz
 	deferredUntils  []pgtype.Timestamptz
 
@@ -85,6 +113,9 @@ func (q *workerTestQueries) ClaimNextDueSeatCapacityIntent(context.Context, pgty
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.claimCalls++
+	if q.claimErr != nil {
+		return db.SeatCapacityOutbox{}, q.claimErr
+	}
 	if len(q.intents) > 0 {
 		if q.nextIntent >= len(q.intents) {
 			return db.SeatCapacityOutbox{}, pgx.ErrNoRows
@@ -134,6 +165,10 @@ func (q *workerTestQueries) ExpireInvitationForCapacityRecovery(context.Context,
 
 func (q *workerTestQueries) GetInvitation(context.Context, pgtype.UUID) (db.WorkspaceInvitation, error) {
 	return q.invitation, q.invitationError
+}
+
+func (q *workerTestQueries) SeatCapacityOutboxStats(context.Context) ([]db.SeatCapacityOutboxStatsRow, error) {
+	return q.stats, q.statsErr
 }
 
 func (q *workerTestQueries) GetClaimedSeatCapacityIntent(_ context.Context, arg db.GetClaimedSeatCapacityIntentParams) (db.SeatCapacityOutbox, error) {
@@ -357,6 +392,68 @@ func TestWorkerDefersCloudRateLimitWithoutSpendingRetryBudget(t *testing.T) {
 	}
 	if want := now.Add(3 * time.Second); !deferredUntil.Equal(want) {
 		t.Fatalf("deferred until=%s, want %s", deferredUntil, want)
+	}
+}
+
+func TestWorkerRefreshesOutboxMetricsAfterReconcile(t *testing.T) {
+	queries := &workerTestQueries{
+		stats: []db.SeatCapacityOutboxStatsRow{{
+			Action:                  ActionRelease,
+			PendingCount:            3,
+			DeadLetteredCount:       1,
+			OldestPendingAgeSeconds: 42,
+		}},
+	}
+	metrics := &workerTestMetrics{}
+	worker := newWorker(queries, &workerTestExecutor{}, WorkerConfig{Metrics: metrics})
+
+	if err := worker.ReconcileOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if metrics.resets != 1 || len(metrics.values) != 1 {
+		t.Fatalf("metrics reset/value count = %d/%d, want 1/1", metrics.resets, len(metrics.values))
+	}
+	if got := metrics.values[0]; got.Action != ActionRelease || got.PendingCount != 3 || got.DeadLetteredCount != 1 || got.OldestPendingAgeSeconds != 42 {
+		t.Fatalf("unexpected metrics value: %#v", got)
+	}
+	if metrics.refreshErrors != 0 || metrics.refreshUnavailable {
+		t.Fatalf("successful refresh state = errors=%d unavailable=%v, want 0/false", metrics.refreshErrors, metrics.refreshUnavailable)
+	}
+}
+
+func TestWorkerPreservesOutboxMetricsWhenRefreshFails(t *testing.T) {
+	metrics := &workerTestMetrics{
+		values: []db.SeatCapacityOutboxStatsRow{{Action: ActionRelease, PendingCount: 9}},
+	}
+	queries := &workerTestQueries{
+		claimErr: errors.New("claim failed"),
+		stats:    []db.SeatCapacityOutboxStatsRow{{Action: ActionRelease, PendingCount: 3}},
+	}
+	worker := newWorker(queries, &workerTestExecutor{}, WorkerConfig{Metrics: metrics})
+
+	if err := worker.ReconcileOnce(context.Background()); err == nil {
+		t.Fatal("claim failure was swallowed")
+	}
+	if metrics.resets != 1 || len(metrics.values) != 1 || metrics.values[0].PendingCount != 3 {
+		t.Fatalf("claim failure did not refresh metrics: resets=%d values=%v", metrics.resets, metrics.values)
+	}
+	if metrics.refreshErrors != 0 || metrics.refreshUnavailable {
+		t.Fatalf("claim failure refresh state = errors=%d unavailable=%v, want 0/false", metrics.refreshErrors, metrics.refreshUnavailable)
+	}
+
+	metrics = &workerTestMetrics{
+		values: []db.SeatCapacityOutboxStatsRow{{Action: ActionRelease, PendingCount: 9}},
+	}
+	queries = &workerTestQueries{statsErr: errors.New("stats failed")}
+	worker = newWorker(queries, &workerTestExecutor{}, WorkerConfig{Metrics: metrics})
+	if err := worker.ReconcileOnce(context.Background()); err == nil {
+		t.Fatal("stats failure was swallowed")
+	}
+	if metrics.resets != 0 || len(metrics.values) != 1 || metrics.values[0].PendingCount != 9 {
+		t.Fatalf("stats failure discarded last good metrics: resets=%d values=%v", metrics.resets, metrics.values)
+	}
+	if metrics.refreshErrors != 1 || !metrics.refreshUnavailable {
+		t.Fatalf("stats failure refresh state = errors=%d unavailable=%v, want 1/true", metrics.refreshErrors, metrics.refreshUnavailable)
 	}
 }
 

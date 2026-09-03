@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/entitlement"
 	"github.com/multica-ai/multica/server/internal/logger"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -121,10 +122,31 @@ func (h *Handler) ListTestCaseIssues(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to list covered issues")
 		return
 	}
-	prefix := h.getIssuePrefix(r.Context(), testCase.WorkspaceID)
-	resp := make([]TestCaseIssueLinkResponse, len(rows))
+	policy, windowEnabled := h.issueWindowPolicy(r.Context(), testCase.WorkspaceID)
+	issueIDs := make([]pgtype.UUID, len(rows))
 	for i, row := range rows {
-		resp[i] = testCaseIssueLinkToResponse(row, prefix)
+		issueIDs[i] = row.IssueID
+	}
+	var visible map[pgtype.UUID]struct{}
+	if windowEnabled && policy.action == entitlement.ActionEnforce {
+		visible, err = h.visibleIssueIDSet(r.Context(), testCase.WorkspaceID, policy, issueIDs)
+		if err != nil {
+			slog.Error("check covered issue access failed", append(logger.RequestAttrs(r), "error", err)...)
+			writeError(w, http.StatusInternalServerError, "failed to check issue access")
+			return
+		}
+	} else if windowEnabled {
+		h.observeIssueWindow(r.Context(), testCase.WorkspaceID, policy, issueIDs, "test_case_issue_list")
+	}
+	prefix := h.getIssuePrefix(r.Context(), testCase.WorkspaceID)
+	resp := make([]TestCaseIssueLinkResponse, 0, len(rows))
+	for _, row := range rows {
+		if visible != nil {
+			if _, ok := visible[row.IssueID]; !ok {
+				continue
+			}
+		}
+		resp = append(resp, testCaseIssueLinkToResponse(row, prefix))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"issues": resp, "total": len(resp)})
 }
@@ -177,6 +199,10 @@ func (h *Handler) LinkTestCaseIssues(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "issue not found: "+raw)
 			return
 		}
+		if err := h.checkIssueWindowAuthorization(r, issueUUID, testCase.WorkspaceID, "test_case_issue_link"); err != nil {
+			writeIssueWindowAuthorizationError(w, err)
+			return
+		}
 		issueUUIDs = append(issueUUIDs, issueUUID)
 	}
 
@@ -227,6 +253,9 @@ func (h *Handler) UnlinkTestCaseIssue(w http.ResponseWriter, r *http.Request) {
 	}
 	issueUUID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "issueId"), "issue id")
 	if !ok {
+		return
+	}
+	if _, ok := h.loadIssueInWorkspaceAndAuthorize(w, r, issueUUID, testCase.WorkspaceID, "test_case_issue_unlink"); !ok {
 		return
 	}
 	if err := h.Queries.UnlinkTestCaseIssue(r.Context(), db.UnlinkTestCaseIssueParams{
@@ -297,6 +326,9 @@ func (h *Handler) linkGeneratedCaseIssues(
 		issueUUID, resolved := h.resolveGeneratedIssueRef(r, wsUUID, workspaceID, ref)
 		if !resolved {
 			continue
+		}
+		if err := h.checkIssueWindowAuthorization(r, issueUUID, wsUUID, "test_case_issue_generated_link"); err != nil {
+			return err
 		}
 		if _, err := qtx.LinkTestCaseIssue(r.Context(), db.LinkTestCaseIssueParams{
 			TestCaseID:  caseID,

@@ -33,8 +33,9 @@ import (
 )
 
 var (
-	version = "dev"
-	commit  = "unknown"
+	version         = "dev"
+	commit          = "unknown"
+	upstreamVersion = ""
 )
 
 func newNamedRedisClient(base *redis.Options, suffix string) *redis.Client {
@@ -294,7 +295,6 @@ func main() {
 		slog.Error("invalid USE_SY_SSO configuration", "error", err)
 		os.Exit(1)
 	}
-
 	// Warn about missing configuration
 	if err := jwtSecretBootError(os.Getenv("JWT_SECRET"), os.Getenv("APP_ENV")); err != nil {
 		slog.Error(
@@ -560,6 +560,7 @@ func main() {
 	var businessMetrics *obsmetrics.BusinessMetrics
 	var channelMediaMetrics *obsmetrics.ChannelMediaReconcilerMetrics
 	var channelLeaseMetrics *obsmetrics.ChannelLeaseMetrics
+	var seatCapacityMetrics *obsmetrics.SeatCapacityMetrics
 	var wecomMetrics *obsmetrics.WecomMetrics
 	if metricsConfig.Enabled() {
 		metricsRegistry := obsmetrics.NewRegistry(obsmetrics.RegistryOptions{
@@ -573,6 +574,7 @@ func main() {
 		businessMetrics = metricsRegistry.Business
 		channelMediaMetrics = metricsRegistry.ChannelMedia
 		channelLeaseMetrics = metricsRegistry.ChannelLease
+		seatCapacityMetrics = metricsRegistry.SeatCapacity
 		wecomMetrics = metricsRegistry.Wecom
 		// Forward inbound daemon WS frames into the per-kind counter so
 		// dashboards can split heartbeat / unknown / invalid traffic.
@@ -623,6 +625,7 @@ func main() {
 		HTTPMetrics:         httpMetrics,
 		BusinessMetrics:     businessMetrics,
 		ChannelLeaseMetrics: channelLeaseMetrics,
+		SeatCapacityMetrics: seatCapacityMetrics,
 		ChannelLeaseRedis:   channelLeaseRedis,
 		WecomMetrics:        wecomMetrics,
 		DaemonHub:           daemonHub,

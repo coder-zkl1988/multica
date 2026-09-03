@@ -173,6 +173,7 @@ WITH due AS (
     SELECT operation_token
     FROM seat_capacity_outbox
     WHERE dead_lettered_at IS NULL
+      AND delivered_at IS NULL
       AND next_attempt_at <= now()
     ORDER BY next_attempt_at, created_at
     FOR UPDATE SKIP LOCKED
@@ -185,6 +186,17 @@ SET next_attempt_at = sqlc.arg('lease_until'),
 FROM due
 WHERE outbox.operation_token = due.operation_token
 RETURNING outbox.*;
+
+-- name: SeatCapacityOutboxStats :many
+SELECT action,
+       count(*) FILTER (WHERE dead_lettered_at IS NULL AND delivered_at IS NULL)::bigint AS pending_count,
+       count(*) FILTER (WHERE dead_lettered_at IS NOT NULL)::bigint AS dead_lettered_count,
+       COALESCE(
+           EXTRACT(EPOCH FROM now() - min(created_at) FILTER (WHERE dead_lettered_at IS NULL AND delivered_at IS NULL)),
+           0
+       )::double precision AS oldest_pending_age_seconds
+FROM seat_capacity_outbox
+GROUP BY action;
 
 -- name: MarkSeatCapacityIntentDelivered :exec
 UPDATE seat_capacity_outbox

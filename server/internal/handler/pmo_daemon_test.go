@@ -179,6 +179,9 @@ func TestClaimPMOSyncTaskExposesSyncContext(t *testing.T) {
 	run := startPMORunForTest(t, config.ID)
 	taskID := *run.AgentTaskID
 
+	if _, err := testPool.Exec(context.Background(), `UPDATE agent_runtime SET status = 'online', last_seen_at = now() WHERE id = $1`, testRuntimeID); err != nil {
+		t.Fatalf("refresh PMO claim runtime heartbeat: %v", err)
+	}
 	claimReq := newDaemonTokenRequest("POST", "/api/daemon/runtimes/"+testRuntimeID+"/tasks/claim", nil, testWorkspaceID, "pmo-claim")
 	claimReq = withURLParam(claimReq, "runtimeId", testRuntimeID)
 	claimW := httptest.NewRecorder()

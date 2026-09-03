@@ -12,13 +12,16 @@ const SchemaVersion = 1
 type GateName string
 
 const (
+	// GateIssueWindow is a fork-local read gate. Cloud may omit it while the
+	// community issue-count gate remains enabled; consumers treat omission as off.
+	GateIssueWindow   GateName = "issue_window"
 	GateIssueCount    GateName = "issue_count"
 	GateAutopilotRuns GateName = "autopilot_runs"
 )
 
 func (n GateName) valid() bool {
 	switch n {
-	case GateIssueCount, GateAutopilotRuns:
+	case GateIssueWindow, GateIssueCount, GateAutopilotRuns:
 		return true
 	default:
 		return false

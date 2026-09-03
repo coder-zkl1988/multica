@@ -200,6 +200,16 @@ func normalizeServerVersion(v string) string {
 	return v
 }
 
+// normalizeUpstreamVersion keeps an unstamped build from claiming a
+// community base version. The value is injected independently from the fork
+// build version so a fork release can report both identities accurately.
+func normalizeUpstreamVersion(v string) string {
+	if v == "dev" {
+		return ""
+	}
+	return v
+}
+
 // NewRouter creates the fully-configured Chi router with all middleware and routes.
 // rdb is optional: when non-nil the runtime local-skill request stores are
 // swapped for Redis-backed implementations so multiple API nodes share the
@@ -216,6 +226,7 @@ type RouterOptions struct {
 	HTTPMetrics         *obsmetrics.HTTPMetrics
 	BusinessMetrics     *obsmetrics.BusinessMetrics
 	ChannelLeaseMetrics *obsmetrics.ChannelLeaseMetrics
+	SeatCapacityMetrics *obsmetrics.SeatCapacityMetrics
 	// ChannelLeaseRedis is a dedicated non-blocking Redis client/pool. It is
 	// required only when CHANNEL_WS_LEASE_BACKEND=redis.
 	ChannelLeaseRedis *redis.Client
@@ -445,6 +456,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		LLMDefaultModel:          strings.TrimSpace(os.Getenv("MULTICA_LLM_DEFAULT_MODEL")),
 		LLMMaxRetries:            opts.LLMMaxRetries,
 		ServerVersion:            normalizeServerVersion(version),
+		UpstreamVersion:          normalizeUpstreamVersion(upstreamVersion),
 		SSODesktopRedirectURI:    strings.TrimSpace(os.Getenv("SSO_DESKTOP_REDIRECT_URI")),
 		SSOMobileRedirectURI:     strings.TrimSpace(os.Getenv("SSO_MOBILE_REDIRECT_URI")),
 		DevAuthEmail:             opts.DevAuthEmail,
@@ -483,7 +495,9 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	capacityLocker := seatcapacity.NewWorkspaceLocker(pool)
 	h.SeatCapacityLocker = capacityLocker
 	if seatcapacity.CanRunWorker(h.SeatCapacity) {
-		h.SeatCapacityWorker = seatcapacity.NewWorker(queries, h.SeatCapacity, capacityLocker, seatcapacity.WorkerConfig{})
+		h.SeatCapacityWorker = seatcapacity.NewWorker(queries, h.SeatCapacity, capacityLocker, seatcapacity.WorkerConfig{
+			Metrics: opts.SeatCapacityMetrics,
+		})
 	}
 	if opts.BusinessMetrics != nil {
 		// Wire the BusinessMetrics receiver into the cloud runtime client
@@ -1258,6 +1272,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	// Cloud PAT verifier: validates mcn_ tokens against Multica Cloud
 	// Fleet. Returns nil when no Cloud URL is configured — the Auth /
 	// DaemonAuth middlewares treat nil as "mcn_ not supported" and
+	// reject with 401 instead of falling through to internal-token parsing.
 	// reject with 401, instead of falling through to mul_/JWT paths.
 	// Reuses MULTICA_CLOUD_URL (the same URL the cloud-runtime proxy uses) so a
 	// deployment has one authoritative multica-cloud connection.
@@ -1947,6 +1962,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// Issues
 			r.Route("/api/issues", func(r chi.Router) {
 				r.Get("/limit-usage", h.GetIssueLimitUsage)
+				r.Get("/window-usage", h.GetIssueWindowUsage)
 				r.Post("/table/groups", h.ListIssueTableGroups)
 				r.Post("/table/rows", h.ListIssueTableRows)
 				r.Post("/table/facets", h.ListIssueTableFacets)

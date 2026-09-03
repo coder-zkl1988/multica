@@ -73,6 +73,9 @@ func (h *Handler) AddReaction(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "comment not found")
 		return
 	}
+	if _, ok := h.loadIssueInWorkspaceAndAuthorize(w, r, comment.IssueID, wsUUID, "comment_reaction"); !ok {
+		return
+	}
 
 	var req struct {
 		Emoji string `json:"emoji"`
@@ -149,6 +152,9 @@ func (h *Handler) RemoveReaction(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		writeError(w, http.StatusNotFound, "comment not found")
+		return
+	}
+	if _, ok := h.loadIssueInWorkspaceAndAuthorize(w, r, comment.IssueID, wsUUID, "comment_reaction"); !ok {
 		return
 	}
 

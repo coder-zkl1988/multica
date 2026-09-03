@@ -164,6 +164,7 @@ export interface LoginResponse {
   expires_at?: string;
 }
 
+
 /** Mobile file payload for `uploadFile`. RN doesn't have a browser `File`
  *  object; the fetch `FormData` polyfill accepts `{ uri, name, type }`
  *  directly and streams from disk. expo-image-picker / expo-document-picker
@@ -390,6 +391,7 @@ class ApiClient {
   }
 
   // --- Auth ---
+
   async sendCode(email: string): Promise<void> {
     await this.fetch<void>("/auth/send-code", {
       method: "POST",

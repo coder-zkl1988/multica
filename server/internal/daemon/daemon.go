@@ -7187,6 +7187,10 @@ func qualifyTaskModel(
 	return qualified
 }
 
+func taskUsesDirectAgentMode(task Task, configuredDefault bool) bool {
+	return configuredDefault || task.ConciseMode
+}
+
 func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot int, taskLog *slog.Logger) (taskResult TaskResult, returnErr error) {
 	// A claim carries the task-row agent id both at the top level and inside
 	// the expanded agent configuration. The top-level id is authoritative
@@ -8066,10 +8070,24 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		gateCodexResumeToRolloutPresence(&task, &taskCtx, provider, env.CodexHome, taskLog)
 	}
 
-	// Inject runtime-specific config (meta skill) so the agent discovers .agent_context/.
-	runtimeBrief, err := execenv.InjectRuntimeConfig(env.WorkDir, provider, taskCtx)
-	if err != nil {
-		d.logger.Warn("execenv: inject runtime config failed (non-fatal)", "error", err)
+	// The task flag is authoritative for this run; the config flag remains a
+	// backwards-compatible daemon-wide default for existing deployments.
+	directAgentMode := taskUsesDirectAgentMode(task, d.cfg.DirectAgentMode)
+	// Direct mode intentionally bypasses both delivery channels for the
+	// Multica runtime workflow: the generated prompt and the provider context
+	// file / inline system prompt. Remove a marker left by a previous normal
+	// run when a persistent or reused workdir is selected.
+	runtimeBrief := ""
+	if directAgentMode {
+		if cerr := execenv.CleanupRuntimeConfig(env.WorkDir, provider); cerr != nil {
+			return TaskResult{}, fmt.Errorf("cleanup runtime config for direct mode: %w", cerr)
+		}
+	} else {
+		var injectErr error
+		runtimeBrief, injectErr = execenv.InjectRuntimeConfig(env.WorkDir, provider, taskCtx)
+		if injectErr != nil {
+			d.logger.Warn("execenv: inject runtime config failed (non-fatal)", "error", injectErr)
+		}
 	}
 	// An exempt turn runs in the user's directory without having queued for it,
 	// so a sibling coding task may be writing to the same tree right now. That
@@ -8091,7 +8109,12 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	if env.LocalWorktree != nil && len(env.LocalWorktree.ReplayConflicts) > 0 {
 		promptOptions = append(promptOptions, WithWorktreeReplayConflicts(env.LocalWorktree.ReplayConflicts))
 	}
-	prompt := BuildPrompt(task, provider, promptOptions...)
+	var prompt string
+	if directAgentMode {
+		prompt = BuildDirectPrompt(task)
+	} else {
+		prompt = BuildPrompt(task, provider, promptOptions...)
+	}
 
 	// Pass task-scoped auth credentials and context so the spawned agent CLI
 	// can call the Multica API and the local daemon (e.g. `multica repo checkout`).
@@ -8366,7 +8389,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// as always included, and a real kiro-cli 2.13.0 ACP smoke confirms it.
 	// Prepending the full runtime brief into the ACP user prompt duplicates that
 	// context and bloats every turn.
-	if providerNeedsInlineSystemPrompt(provider) {
+	if !directAgentMode && providerNeedsInlineSystemPrompt(provider) {
 		execOpts.SystemPrompt = runtimeBrief
 	}
 
@@ -8461,15 +8484,27 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		task.PriorSessionResumeUnavailable = true
 		execOpts.ResumeContinuityNotice = ""
 		taskCtx.PriorSessionResumed = false
-		if freshBrief, briefErr := execenv.InjectRuntimeConfig(env.WorkDir, provider, taskCtx); briefErr != nil {
-			taskLog.Warn("execenv: re-inject cold runtime config for fresh retry failed (non-fatal)", "error", briefErr)
+		if !directAgentMode {
+			if freshBrief, briefErr := execenv.InjectRuntimeConfig(env.WorkDir, provider, taskCtx); briefErr != nil {
+				taskLog.Warn("execenv: re-inject cold runtime config for fresh retry failed (non-fatal)", "error", briefErr)
+			} else {
+				runtimeBrief = freshBrief
+				if providerNeedsInlineSystemPrompt(provider) {
+					execOpts.SystemPrompt = runtimeBrief
+				}
+			}
 		} else {
-			runtimeBrief = freshBrief
-			if providerNeedsInlineSystemPrompt(provider) {
-				execOpts.SystemPrompt = runtimeBrief
+			// Keep a reused workdir free of any normal-mode marker on retry too.
+			if cerr := execenv.CleanupRuntimeConfig(env.WorkDir, provider); cerr != nil {
+				return TaskResult{}, fmt.Errorf("cleanup runtime config for direct retry: %w", cerr)
 			}
 		}
-		freshPrompt := BuildPrompt(task, provider, promptOptions...)
+		var freshPrompt string
+		if directAgentMode {
+			freshPrompt = BuildDirectPrompt(task)
+		} else {
+			freshPrompt = BuildPrompt(task, provider, promptOptions...)
+		}
 
 		retryResult, retryTools, retryErr := d.executeAndDrain(ctx, backend, freshPrompt, execOpts, taskLog, task.ID, env.CodexHome, &msgSeq)
 		if retryErr != nil {

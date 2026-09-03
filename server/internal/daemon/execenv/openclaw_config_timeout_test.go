@@ -238,21 +238,18 @@ func TestOpenclawActiveConfigPathSpendsOneBudgetAcrossBothAttempts(t *testing.T)
 // TestPrepareOpenclawConfigWorstCaseCLIBudgets pins the multiplier the budget
 // above depends on, and it counts *deadlines* rather than calls.
 //
-// That distinction is the review finding it exists for. The worst case is not the
-// common two calls: `config validate --json` can fail to answer and fall back to
-// `config file`, a 2026.6+ host falls back to the registry subcommand, and an
-// agent with a managed mcp_config additionally reads the full resolved config —
-// five invocations. The previous version of this test could not see the first of
-// those, because the stub synthesizes a `config validate --json` success from the
-// `config file` response, so the two never fired in the same run. With the
-// fallback carrying a fresh full deadline, five budgets at the 60s ceiling is 5m
-// of CLI time alone, landing exactly on daemon.defaultTaskPrepareTimeout — and
-// the specific, non-retryable ErrOpenclawCLITimeout collapses back into the
-// generic retryable one.
+// That distinction is the review finding it exists for. In this fork the worst
+// case is five invocations: `config validate --json` can fail to answer and fall
+// back to `config file`, a 2026.6+ host falls back to the registry subcommand,
+// and a selected agent additionally reads `skills.load.extraDirs`. The first
+// pair shares one deadline, while the managed-MCP snapshot reads the active
+// config file directly and therefore spends no CLI deadline. The previous
+// version of this test did not select an agent, so it observed only three
+// deadlines even though the production ceiling is four.
 //
-// So this drives the real worst case and asserts both halves: the call graph is
+// This drives the real worst case and asserts both halves: the call graph is
 // five invocations, and path resolution's two share one deadline, leaving four
-// budgets.
+// distinct deadlines.
 func TestPrepareOpenclawConfigWorstCaseCLIBudgets(t *testing.T) {
 	envRoot := t.TempDir()
 	workDir := filepath.Join(envRoot, "workdir")
@@ -271,14 +268,15 @@ func TestPrepareOpenclawConfigWorstCaseCLIBudgets(t *testing.T) {
 		"config file": {stdout: userConfigPath},
 		// 2. pre-2026.6 schema read, which this host does not have
 		"config get agents.list --json": {err: errors.New("Config path not found: agents.list")},
-		// 3. registry fallback
-		"agents list --json": {stdout: `[{"id":"scout"}]`},
-		// 4. full resolved config, reached only via a managed mcp_config
-		"config get --json": {stdout: `{"agents":{"list":[{"id":"scout"}]}}`},
+		// 3. registry fallback, including the selected agent's workspace
+		"agents list --json": {stdout: `[{"id":"scout","workspace":"/tmp/scout-workspace"}]`},
+		// 4. selected-agent skill directory lookup
+		"config get skills.load.extraDirs --json": {stdout: `[]`},
 	})
 
 	if _, err := prepareOpenclawConfig(envRoot, workDir, OpenclawConfigPrep{
 		OpenclawBin: stub.bin,
+		AgentID:     "scout",
 		McpConfig:   []byte(`{"mcpServers":{"fs":{"command":"fs-server"}}}`),
 	}); err != nil {
 		t.Fatalf("prepareOpenclawConfig: %v", err)
@@ -297,14 +295,13 @@ func TestPrepareOpenclawConfigWorstCaseCLIBudgets(t *testing.T) {
 	}
 
 	// The call graph itself, so a new invocation stays visible here even when it
-	// costs no extra budget.
-	// No trailing `config get --json`: this fork reads the active config file
-	// instead, because OpenClaw 2026.7.1 rejects the pathless form (PR #24).
+	// shares an existing budget.
 	wantInvocations := []string{
 		"config validate --json",
 		"config file",
 		"config get agents.list --json",
 		"agents list --json",
+		"config get skills.load.extraDirs --json",
 	}
 	if strings.Join(invocations, " | ") != strings.Join(wantInvocations, " | ") {
 		t.Errorf("worst-case invocations:\n got: %v\nwant: %v", invocations, wantInvocations)

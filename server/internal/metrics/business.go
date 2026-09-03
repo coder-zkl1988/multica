@@ -69,6 +69,7 @@ type BusinessMetrics struct {
 	entitlementDecision            *prometheus.CounterVec
 	entitlementVersionRegression   prometheus.Counter
 	autopilotQuotaDecision         *prometheus.CounterVec
+	issueWindowDecision            *prometheus.CounterVec
 
 	// agentRuntimeLookup counts single-row agent_runtime reads by product
 	// source. Every source shares one SQL fingerprint, so this is the only
@@ -271,6 +272,10 @@ func NewBusinessMetrics() *BusinessMetrics {
 			Namespace: "multica", Subsystem: "autopilot_quota", Name: "decision_total",
 			Help: "Total autopilot quota admission outcomes.",
 		}, metricLabels("multica_autopilot_quota_decision_total")),
+		issueWindowDecision: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "multica", Subsystem: "issue_window", Name: "decision_total",
+			Help: "Total recently-created issue window outcomes by request surface.",
+		}, metricLabels("multica_issue_window_decision_total")),
 		agentRuntimeLookup: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "multica", Subsystem: "agent_runtime", Name: "lookup_total",
 			Help: "Total single-row agent_runtime reads by product source and outcome.",
@@ -328,6 +333,7 @@ func (m *BusinessMetrics) Collectors() []prometheus.Collector {
 		m.entitlementDecision,
 		m.entitlementVersionRegression,
 		m.autopilotQuotaDecision,
+		m.issueWindowDecision,
 		m.agentRuntimeLookup,
 	}, m.events.collectors()...)
 }
@@ -390,6 +396,18 @@ func (m *BusinessMetrics) RecordAutopilotQuotaDecision(action, source, result st
 		source = "other"
 	}
 	m.autopilotQuotaDecision.WithLabelValues(action, source, result).Inc()
+}
+
+func (m *BusinessMetrics) RecordIssueWindowDecision(action, surface, result string) {
+	if m == nil {
+		return
+	}
+	switch surface {
+	case "direct", "list", "search", "grouped", "table", "children", "plugin", "inbox", "agent_context":
+	default:
+		surface = "other"
+	}
+	m.issueWindowDecision.WithLabelValues(action, surface, result).Inc()
 }
 
 func (m *BusinessMetrics) RecordRuntimeGCDeleted() {

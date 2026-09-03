@@ -368,6 +368,12 @@ func (h *Handler) ApplyPMORun(w http.ResponseWriter, r *http.Request) {
 
 	run, err := h.PMOService.ApplyRun(r.Context(), workspaceUUID, runID, resolutions)
 	if err != nil {
+		if writeIssueWindowViolation(w, err) {
+			return
+		}
+		if writeIssueLimitReached(w, err) {
+			return
+		}
 		switch {
 		case err == service.ErrPMORunNotFound:
 			writeError(w, http.StatusNotFound, "PMO run not found")

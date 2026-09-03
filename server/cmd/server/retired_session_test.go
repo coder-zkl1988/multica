@@ -37,6 +37,45 @@ func lastChatTaskSessionParams(chatSessionID string) db.GetLastChatTaskSessionPa
 	}
 }
 
+func TestGetLastChatTaskSessionSeparatesConciseModes(t *testing.T) {
+	if testPool == nil {
+		t.Skip("no database connection")
+	}
+
+	_, agentID, runtimeID := setupRerunTestFixture(t)
+	chatSessionID := newPoisonTestChatSession(t, agentID, runtimeID, "concise-mode-isolation")
+	ctx := context.Background()
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO agent_task_queue (agent_id, runtime_id, chat_session_id, status, priority, started_at, completed_at, session_id, work_dir, concise_mode)
+		VALUES ($1, $2, $3, 'completed', 0, now() - interval '2 minutes', now() - interval '2 minutes', 'CHAT-NORMAL', '/tmp/chat', FALSE),
+		       ($1, $2, $3, 'completed', 0, now() - interval '1 minute', now() - interval '1 minute', 'CHAT-CONCISE', '/tmp/chat', TRUE)
+	`, agentID, runtimeID, chatSessionID); err != nil {
+		t.Fatalf("insert mode-separated tasks: %v", err)
+	}
+
+	queries := db.New(testPool)
+	for _, tc := range []struct {
+		name    string
+		concise bool
+		want    string
+	}{
+		{name: "normal", concise: false, want: "CHAT-NORMAL"},
+		{name: "concise", concise: true, want: "CHAT-CONCISE"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			params := lastChatTaskSessionParams(chatSessionID)
+			params.ConciseMode = pgtype.Bool{Bool: tc.concise, Valid: true}
+			prior, err := queries.GetLastChatTaskSession(ctx, params)
+			if err != nil {
+				t.Fatalf("GetLastChatTaskSession failed: %v", err)
+			}
+			if !prior.SessionID.Valid || prior.SessionID.String != tc.want {
+				t.Fatalf("mode %s resumed session %q, want %q", tc.name, prior.SessionID.String, tc.want)
+			}
+		})
+	}
+}
+
 // TestGetLastChatTaskSessionDoesNotResurrectFromOlderCompletedRow is the Chat
 // half of the GH #5975 wormhole, which the issue query closed and the chat
 // query never did. Task A completed on session S; task B then resumed S, hit

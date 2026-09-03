@@ -109,6 +109,8 @@ func (s *PMOService) ApplyRun(ctx context.Context, workspaceID, runID pgtype.UUI
 	if s.IssueSvc == nil {
 		return db.PmoSyncRun{}, errors.New("pmo apply: issue service not wired")
 	}
+	issueCountPolicy := ResolveIssueCountPolicy(ctx, s.IssueSvc.Entitlements, workspaceID)
+	issueWindowPolicy := ResolveIssueWindowPolicy(ctx, s.IssueSvc.Entitlements, workspaceID)
 
 	tx, err := s.TxStarter.Begin(ctx)
 	if err != nil {
@@ -146,7 +148,7 @@ func (s *PMOService) ApplyRun(ctx context.Context, workspaceID, runID pgtype.UUI
 		return db.PmoSyncRun{}, err
 	}
 
-	result, err := s.applySnapshotInTx(ctx, tx, qtx, workspaceID, run, snapshot, resolutions, workloadPropertyID)
+	result, err := s.applySnapshotInTx(ctx, tx, qtx, workspaceID, run, snapshot, resolutions, workloadPropertyID, issueCountPolicy, issueWindowPolicy)
 	if err != nil {
 		return db.PmoSyncRun{}, err
 	}
@@ -225,6 +227,8 @@ func (s *PMOService) applySnapshotInTx(
 	snapshot PMOSnapshot,
 	resolutions []PMOConflictResolution,
 	workloadPropertyID pgtype.UUID,
+	issueCountPolicy IssueCountPolicy,
+	issueWindowPolicy IssueWindowPolicy,
 ) (pmoApplyResult, error) {
 	result := pmoApplyResult{}
 
@@ -296,7 +300,7 @@ func (s *PMOService) applySnapshotInTx(
 		var entityLocalID pgtype.UUID
 		switch entity.Action {
 		case PMOCreate:
-			localID, issueRow, createParams, createErr := s.createEntityInTx(ctx, tx, qtx, workspaceID, run, entity, createdIDs, workloadPropertyID, projectCompleted)
+			localID, issueRow, createParams, createErr := s.createEntityInTx(ctx, tx, qtx, workspaceID, run, entity, createdIDs, workloadPropertyID, projectCompleted, issueCountPolicy, issueWindowPolicy)
 			if createErr != nil {
 				return result, createErr
 			}
@@ -316,7 +320,7 @@ func (s *PMOService) applySnapshotInTx(
 		case PMOUpdate, PMOEntityUnchanged:
 			if link.ID.Valid && link.LocalID.Valid {
 				entityLocalID = link.LocalID
-				pending, statusChange, applyErr := s.applyEntityFields(ctx, qtx, workspaceID, workloadPropertyID, entity, link, resolutionByKey, completedProjectID)
+				pending, statusChange, applyErr := s.applyEntityFields(ctx, qtx, workspaceID, workloadPropertyID, entity, link, resolutionByKey, completedProjectID, issueWindowPolicy)
 				if applyErr != nil {
 					return result, applyErr
 				}
@@ -390,6 +394,9 @@ func (s *PMOService) applySnapshotInTx(
 		previousByID := make(map[string]string, len(previous))
 		for _, issue := range previous {
 			previousByID[util.UUIDToString(issue.ID)] = issue.Status
+			if err := checkIssueInWindow(ctx, qtx, workspaceID, issue.ID, issueWindowPolicy); err != nil {
+				return result, fmt.Errorf("pmo apply: complete project issues: %w", err)
+			}
 		}
 		completed, err := qtx.CompleteProjectIssues(ctx, db.CompleteProjectIssuesParams{
 			ProjectID: localProjectID, WorkspaceID: workspaceID,
@@ -604,6 +611,8 @@ func (s *PMOService) createEntityInTx(
 	createdIDs map[string]pgtype.UUID,
 	workloadPropertyID pgtype.UUID,
 	projectCompleted bool,
+	issueCountPolicy IssueCountPolicy,
+	issueWindowPolicy IssueWindowPolicy,
 ) (pgtype.UUID, *db.Issue, *IssueCreateParams, error) {
 	nothing := pgtype.UUID{}
 	// Flatten the diff's external values into plain values for creation.
@@ -686,8 +695,7 @@ func (s *PMOService) createEntityInTx(
 		params.AssigneeType = pgtype.Text{String: pmoLocalTypeAgent, Valid: true}
 		params.AssigneeID = assigneeID
 	}
-	issueCountPolicy := ResolveIssueCountPolicy(ctx, s.IssueSvc.Entitlements, params.WorkspaceID)
-	res, err := s.IssueSvc.createInTx(ctx, tx, qtx, params, issueCountPolicy)
+	res, err := s.IssueSvc.createInTx(ctx, tx, qtx, params, issueCountPolicy, issueWindowPolicy)
 	if err != nil {
 		return nothing, nil, nil, fmt.Errorf("pmo apply: create issue: %w", err)
 	}
@@ -721,6 +729,7 @@ func (s *PMOService) applyEntityFields(
 	link db.PmoSyncLink,
 	resolutions map[string]PMOConflictResolution,
 	completedProjectID pgtype.UUID,
+	issueWindowPolicy IssueWindowPolicy,
 ) (int, *pmoIssueStatusChange, error) {
 	pending := 0
 	writes := map[string]any{}
@@ -751,7 +760,7 @@ func (s *PMOService) applyEntityFields(
 			return pending, nil, err
 		}
 	case PMOLocalIssue:
-		statusChange, err := s.applyIssueFields(ctx, qtx, workspaceID, link.LocalID, workloadPropertyID, writes, completedProjectID)
+		statusChange, err := s.applyIssueFields(ctx, qtx, workspaceID, link.LocalID, workloadPropertyID, writes, completedProjectID, issueWindowPolicy)
 		if err != nil {
 			return pending, nil, err
 		}
@@ -810,10 +819,13 @@ func (s *PMOService) applyProjectFields(ctx context.Context, qtx *db.Queries, wo
 
 // applyIssueFields mirrors applyProjectFields for issue rows, writing the
 // workload property separately when it is among the changed fields.
-func (s *PMOService) applyIssueFields(ctx context.Context, qtx *db.Queries, workspaceID pgtype.UUID, issueID pgtype.UUID, workloadPropertyID pgtype.UUID, writes map[string]any, completedProjectID pgtype.UUID) (*pmoIssueStatusChange, error) {
-	current, err := qtx.GetIssue(ctx, issueID)
+func (s *PMOService) applyIssueFields(ctx context.Context, qtx *db.Queries, workspaceID pgtype.UUID, issueID pgtype.UUID, workloadPropertyID pgtype.UUID, writes map[string]any, completedProjectID pgtype.UUID, issueWindowPolicy IssueWindowPolicy) (*pmoIssueStatusChange, error) {
+	current, err := qtx.GetIssueInWorkspace(ctx, db.GetIssueInWorkspaceParams{ID: issueID, WorkspaceID: workspaceID})
 	if err != nil {
 		return nil, fmt.Errorf("pmo apply: reload issue: %w", err)
+	}
+	if err := checkIssueInWindow(ctx, qtx, workspaceID, current.ID, issueWindowPolicy); err != nil {
+		return nil, fmt.Errorf("pmo apply: update issue: %w", err)
 	}
 	params := db.UpdateIssueParams{
 		ID:            issueID,
@@ -861,6 +873,11 @@ func (s *PMOService) applyIssueFields(ctx context.Context, qtx *db.Queries, work
 	if v, ok := writes["parent_issue_id"]; ok {
 		parentID, _ := pmoAnyToUUID(v)
 		params.ParentIssueID = parentID
+		if parentID.Valid {
+			if err := checkIssueInWindow(ctx, qtx, workspaceID, parentID, issueWindowPolicy); err != nil {
+				return nil, fmt.Errorf("pmo apply: update issue parent: %w", err)
+			}
+		}
 	}
 	if completedProjectID.Valid && params.ProjectID == completedProjectID {
 		if current.Status == "done" || current.Status == "cancelled" {

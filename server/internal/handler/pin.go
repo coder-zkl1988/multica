@@ -123,6 +123,9 @@ func (h *Handler) CreatePin(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "issue not found")
 			return
 		}
+		if !h.authorizeIssueWindow(w, r, itemUUID, wsUUID, "issue_pin") {
+			return
+		}
 	case "project":
 		if _, err := h.Queries.GetProjectInWorkspace(r.Context(), db.GetProjectInWorkspaceParams{
 			ID: itemUUID, WorkspaceID: wsUUID,

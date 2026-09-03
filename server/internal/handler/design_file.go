@@ -2901,6 +2901,11 @@ func (h *Handler) CreateDesignRestoreTask(w http.ResponseWriter, r *http.Request
 			return
 		}
 	}
+	if issueUUID.Valid {
+		if _, ok := h.loadIssueInWorkspaceAndAuthorize(w, r, issueUUID, wsUUID, "design_restore_create"); !ok {
+			return
+		}
+	}
 	if issueUUID.Valid && !deliveryID.Valid {
 		existing, err := h.Queries.GetReusableDesignRestoreTaskByIssue(r.Context(), db.GetReusableDesignRestoreTaskByIssueParams{WorkspaceID: wsUUID, IssueID: issueUUID, FileID: file.ID, RevisionID: revision.ID})
 		if err == nil {
@@ -3270,9 +3275,8 @@ func (h *Handler) DispatchDesignRestoreTask(w http.ResponseWriter, r *http.Reque
 	}
 	issueProjectID := pgtype.UUID{Valid: false}
 	if issueUUID.Valid {
-		issue, err := h.Queries.GetIssueInWorkspace(r.Context(), db.GetIssueInWorkspaceParams{ID: issueUUID, WorkspaceID: wsUUID})
-		if err != nil {
-			writeError(w, http.StatusNotFound, "issue not found")
+		issue, ok := h.loadIssueInWorkspaceAndAuthorize(w, r, issueUUID, wsUUID, "design_restore_dispatch")
+		if !ok {
 			return
 		}
 		issueProjectID = issue.ProjectID

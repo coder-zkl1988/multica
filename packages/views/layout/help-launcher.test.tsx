@@ -103,6 +103,7 @@ beforeEach(() => {
 
 afterEach(() => {
   configStore.getState().setServerVersion("");
+  configStore.getState().setUpstreamVersion("");
   configStore.getState().setDaemonConfig({});
   delete (window as { updater?: unknown }).updater;
 });
@@ -149,6 +150,15 @@ describe("HelpLauncher", () => {
     configStore.getState().setServerVersion("1.2.3");
     render(<HelpLauncher />);
     expect(screen.getByText("Server version 1.2.3")).toBeInTheDocument();
+  });
+
+  it("shows the community base separately from the fork server build", () => {
+    configStore.getState().setServerVersion("fork-abcdef123");
+    configStore.getState().setUpstreamVersion("v0.4.37");
+    render(<HelpLauncher />);
+
+    expect(screen.getByText("Server version fork-abcdef123")).toBeInTheDocument();
+    expect(screen.getByText("Community base version v0.4.37")).toBeInTheDocument();
   });
 
   // MUL-4819: the version row's DropdownMenuLabel must sit inside a

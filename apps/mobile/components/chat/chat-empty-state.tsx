@@ -6,7 +6,7 @@
  *
  *   - first-time (the workspace has never started a chat) → educate and
  *     offer conversation starters so the composer is not a blank dead end.
- *   - returning (at least one prior session exists) → lead with starter
+ *   - returning (at least one prior session exists) → lead with conversation
  *     starters. Tapping prefills the draft so the user can edit before sending.
  *
  * Copy mirrors the web `chat.json` namespace 1:1, and goes through mobile's
@@ -18,7 +18,6 @@ import { useTranslation } from "react-i18next";
 import type { Agent, AgentConversationStarter } from "@multica/core/types";
 import { Text } from "@/components/ui/text";
 import { Button } from "@/components/ui/button";
-
 
 interface Props {
   hasSessions: boolean;

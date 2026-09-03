@@ -133,8 +133,8 @@ describe("getAutopilotQuotaBody", () => {
       }),
     );
 
-    expect(body).toContain("Daily triage");
-    expect(body).toContain("limit of 100 runs");
+    expect(body).not.toContain("Daily triage");
+    expect(body).toContain("This workspace has reached its limit of 100 autopilot runs");
     expect(body).not.toContain("2026-09-01T00:00:00Z");
   });
 

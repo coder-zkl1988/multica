@@ -70,6 +70,9 @@ const REASON_CLASS: Record<string, FailureClass> = {
   // fix is on the host running the daemon — a faster CLI or a raised timeout —
   // not with the model provider, which was never contacted.
   runtime_cli_timeout: "runtime",
+  // The workspace policy blocked the issue before execution started. There is
+  // no dedicated entitlement bucket, so keep it countable in the catchall.
+  issue_window_restricted: "other",
 
   // The agent process itself produced the failure.
   "agent_error.process_failure": "agent",

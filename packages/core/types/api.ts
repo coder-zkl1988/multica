@@ -21,6 +21,8 @@ export interface CreateIssueRequest {
   /** Issue-scoped label IDs to attach in the same transaction as the create.
    *  Unknown or non-issue ids are rejected by the server with 400. */
   label_ids?: string[];
+  /** Opt this issue's automatically queued run into concise execution. */
+  concise_mode?: boolean;
 }
 
 export interface CreateCommentSubIssueManualRequest {
@@ -40,6 +42,7 @@ export interface CreateCommentSubIssueAgentRequest {
     due_date?: string;
     project_id?: string | null;
     attachment_ids?: string[];
+    concise_mode?: boolean;
   };
 }
 
@@ -81,6 +84,8 @@ export interface UpdateIssueRequest {
    *  context (MUL-3375). Only consumed when a run actually starts. Control
    *  field — strip from optimistic cache patches. */
   handoff_note?: string;
+  /** Opt the run started by this write into concise execution. */
+  concise_mode?: boolean;
 }
 
 /**

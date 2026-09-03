@@ -1514,6 +1514,9 @@ func (h *Handler) OpenTestRunCaseDefect(w http.ResponseWriter, r *http.Request) 
 		ActorID: userID,
 	})
 	if err != nil {
+		if writeIssueWindowViolation(w, err) {
+			return
+		}
 		slog.Error("create defect issue failed", append(logger.RequestAttrs(r), "error", err)...)
 		writeError(w, http.StatusInternalServerError, "failed to create defect issue")
 		return

@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/storage"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -499,12 +501,8 @@ func (h *Handler) UploadFile(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return
 			}
-			issue, err := h.Queries.GetIssueInWorkspace(r.Context(), db.GetIssueInWorkspaceParams{
-				ID:          issueUUID,
-				WorkspaceID: parseUUID(workspaceID),
-			})
-			if err != nil {
-				writeError(w, http.StatusForbidden, "invalid issue_id")
+			issue, ok := h.loadIssueInWorkspaceAndAuthorize(w, r, issueUUID, parseUUID(workspaceID), "attachment_upload")
+			if !ok {
 				return
 			}
 			params.IssueID = issue.ID
@@ -514,9 +512,14 @@ func (h *Handler) UploadFile(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return
 			}
-			comment, err := h.Queries.GetComment(r.Context(), commentUUID)
-			if err != nil || uuidToString(comment.WorkspaceID) != workspaceID {
+			comment, err := h.Queries.GetCommentInWorkspace(r.Context(), db.GetCommentInWorkspaceParams{
+				ID: commentUUID, WorkspaceID: parseUUID(workspaceID),
+			})
+			if err != nil {
 				writeError(w, http.StatusForbidden, "invalid comment_id")
+				return
+			}
+			if _, ok := h.loadIssueInWorkspaceAndAuthorize(w, r, comment.IssueID, parseUUID(workspaceID), "attachment_upload"); !ok {
 				return
 			}
 			params.CommentID = comment.ID
@@ -879,6 +882,29 @@ func (h *Handler) GetAttachmentByID(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+func (h *Handler) authorizeAttachmentIssue(w http.ResponseWriter, r *http.Request, attachment db.Attachment, surface string) bool {
+	if attachment.IssueID.Valid {
+		_, ok := h.loadIssueInWorkspaceAndAuthorize(w, r, attachment.IssueID, attachment.WorkspaceID, surface)
+		return ok
+	}
+	if !attachment.CommentID.Valid {
+		return true
+	}
+	comment, err := h.Queries.GetCommentInWorkspace(r.Context(), db.GetCommentInWorkspaceParams{
+		ID: attachment.CommentID, WorkspaceID: attachment.WorkspaceID,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "attachment not found")
+		return false
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load attachment comment")
+		return false
+	}
+	_, ok := h.loadIssueInWorkspaceAndAuthorize(w, r, comment.IssueID, attachment.WorkspaceID, surface)
+	return ok
+}
+
 func (h *Handler) loadAttachmentForRequest(w http.ResponseWriter, r *http.Request) (db.Attachment, bool) {
 	attachmentID := chi.URLParam(r, "id")
 	workspaceID := h.resolveWorkspaceID(r)
@@ -902,6 +928,9 @@ func (h *Handler) loadAttachmentForRequest(w http.ResponseWriter, r *http.Reques
 	})
 	if err != nil {
 		writeError(w, http.StatusNotFound, "attachment not found")
+		return db.Attachment{}, false
+	}
+	if !h.authorizeAttachmentIssue(w, r, att, "attachment_read") {
 		return db.Attachment{}, false
 	}
 
@@ -952,6 +981,9 @@ func (h *Handler) loadAttachmentForDownload(w http.ResponseWriter, r *http.Reque
 		return db.Attachment{}, false
 	}
 	if h.MembershipCache.Get(r.Context(), userID, workspaceID) {
+		if !h.authorizeAttachmentIssue(w, r, att, "attachment_download") {
+			return db.Attachment{}, false
+		}
 		return att, true
 	}
 	if _, err := h.getWorkspaceMember(r.Context(), userID, workspaceID); err != nil {
@@ -959,6 +991,9 @@ func (h *Handler) loadAttachmentForDownload(w http.ResponseWriter, r *http.Reque
 		return db.Attachment{}, false
 	}
 	h.MembershipCache.Set(r.Context(), userID, workspaceID)
+	if !h.authorizeAttachmentIssue(w, r, att, "attachment_download") {
+		return db.Attachment{}, false
+	}
 	return att, true
 }
 
@@ -1570,6 +1605,9 @@ func (h *Handler) DeleteAttachment(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		writeError(w, http.StatusNotFound, "attachment not found")
+		return
+	}
+	if !h.authorizeAttachmentIssue(w, r, att, "attachment_delete") {
 		return
 	}
 	// Captured-context attachments are immutable historical copies. They are

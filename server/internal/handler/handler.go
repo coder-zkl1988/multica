@@ -151,7 +151,11 @@ type Config struct {
 	// value main.go stamps via -X main.version and reports on /metrics).
 	// Surfaced through /api/config so self-hosted operators can confirm which
 	// server build is deployed. Empty in dev builds.
-	ServerVersion         string
+	ServerVersion string
+	// UpstreamVersion is the plain-semver community Multica release this fork
+	// was based on. It is stamped separately from ServerVersion because fork
+	// builds use their own version identity.
+	UpstreamVersion       string
 	SSODesktopRedirectURI string
 	SSOMobileRedirectURI  string
 	DevAuthEmail          string
@@ -181,9 +185,13 @@ type DaemonPendingWorkNotifier interface {
 }
 
 type Handler struct {
-	Queries                *db.Queries
-	DB                     dbExecutor
-	TxStarter              txStarter
+	Queries   *db.Queries
+	DB        dbExecutor
+	TxStarter txStarter
+	// issueTableWindowCache is initialized only on the request-local Handler
+	// copy used by a repeatable-read table request. It lets facets reuse one
+	// visible-id snapshot without adding mutable state to the shared Handler.
+	issueTableWindowCache  *issueTableWindowCache
 	Hub                    *realtime.Hub
 	DaemonHub              *daemonws.Hub
 	DaemonProfileRefresh   RuntimeProfileRefreshNotifier
@@ -997,6 +1005,9 @@ func (h *Handler) loadIssueForUser(w http.ResponseWriter, r *http.Request, issue
 	// silently returns false for non-identifier strings, falling through to
 	// the UUID path below.
 	if issue, ok := h.resolveIssueByIdentifier(r.Context(), issueID, workspaceID); ok {
+		if !h.authorizeIssueWindow(w, r, issue.ID, issue.WorkspaceID, "direct") {
+			return db.Issue{}, false
+		}
 		return issue, true
 	}
 
@@ -1018,6 +1029,9 @@ func (h *Handler) loadIssueForUser(w http.ResponseWriter, r *http.Request, issue
 	})
 	if err != nil {
 		writeError(w, http.StatusNotFound, "issue not found")
+		return db.Issue{}, false
+	}
+	if !h.authorizeIssueWindow(w, r, issue.ID, issue.WorkspaceID, "direct") {
 		return db.Issue{}, false
 	}
 	return issue, true
@@ -1189,6 +1203,9 @@ func (h *Handler) loadInboxItemForUser(w http.ResponseWriter, r *http.Request, i
 
 	if item.RecipientType != "member" || uuidToString(item.RecipientID) != userID {
 		writeError(w, http.StatusNotFound, "inbox item not found")
+		return db.InboxItem{}, false
+	}
+	if item.IssueID.Valid && !h.authorizeIssueWindow(w, r, item.IssueID, item.WorkspaceID, "inbox") {
 		return db.InboxItem{}, false
 	}
 	return item, true

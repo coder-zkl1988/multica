@@ -42,7 +42,8 @@
     "check_for_updates": "检查更新",
     "update_ready": "新版本 {{version}} 已准备好下载",
     "up_to_date": "已是最新版本",
-    "server_version": "服务器版本 {{version}}"
+    "server_version": "服务器版本 {{version}}",
+    "upstream_base_version": "社区版基座版本 {{version}}"
   },
   "workspace_loader": {
     "loading_workspace": "正在加载工作区...",

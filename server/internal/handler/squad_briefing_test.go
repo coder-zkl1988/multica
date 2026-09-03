@@ -507,6 +507,9 @@ func TestClaimTask_NonLeaderGetsNoBriefing(t *testing.T) {
 	}
 
 	queueSquadIssueTaskFor(t, util.UUIDToString(squad.ID), helperID, helperRuntime, 95002)
+	if _, err := testPool.Exec(ctx, `UPDATE agent_runtime SET status = 'online', last_seen_at = now() WHERE id = $1`, helperRuntime); err != nil {
+		t.Fatalf("refresh non-leader claim runtime heartbeat: %v", err)
+	}
 
 	agent := claimAndDecodeAgent(t, helperRuntime)
 	for _, mustNot := range []string{

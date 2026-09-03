@@ -55,6 +55,31 @@ func TestDeliverRefusesADocumentWithNoSavedRevision(t *testing.T) {
 	}
 }
 
+func TestDeliverMissingIssueKeepsProjectDesignSystemEnvelope(t *testing.T) {
+	fixture := createDesignDocumentRevisionFixture(t)
+	if _, err := db.New(testPool).SaveDesignDocumentDraft(context.Background(), db.SaveDesignDocumentDraftParams{
+		ID:                      fixture.Document.ID,
+		WorkspaceID:             parseUUID(testWorkspaceID),
+		ExpectedDraftRevisionID: fixture.Revision.ID,
+	}); err != nil {
+		t.Fatalf("save draft: %v", err)
+	}
+
+	response := performDesignDocumentDeliver(t, uuidToString(fixture.Document.ID), map[string]any{
+		"issue_id": "11111111-1111-1111-1111-111111111111",
+	})
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("missing issue status = %d, want 404: %s", response.Code, response.Body.String())
+	}
+	var body map[string]string
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode missing issue response: %v", err)
+	}
+	if body["code"] != "issue_not_found" || body["error"] != "issue not found" {
+		t.Fatalf("unexpected missing issue response: %#v", body)
+	}
+}
+
 // The whole point of the slice: a saved design reaches the task that
 // implements it, as the exact revision that was saved.
 func TestDeliverLinksTheIssueAndReachesTheImplementingTask(t *testing.T) {

@@ -21,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/channelmedia"
 	"github.com/multica-ai/multica/server/internal/dispatch"
+	"github.com/multica-ai/multica/server/internal/entitlement"
 	"github.com/multica-ai/multica/server/internal/issueguard"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
 	"github.com/multica-ai/multica/server/internal/logger"
@@ -620,7 +621,7 @@ type searchResult struct {
 // It uses LOWER(column) LIKE for case-insensitive matching compatible with pg_bigm 1.2 GIN indexes.
 // Search patterns are lowercased in Go to avoid redundant LOWER() on the pattern side in SQL.
 // LIKE patterns are pre-built in Go (e.g. "%html%") so pg_bigm can extract bigrams from a single parameter value.
-func buildSearchQuery(phrase string, terms []string, queryNum int, hasNum bool, includeClosed bool, terminalStatusKeys []string) (string, []any) {
+func buildSearchQuery(phrase string, terms []string, queryNum int, hasNum bool, includeClosed bool, terminalStatusKeys []string, creationWindowLimits ...*int64) (string, []any) {
 	// Lowercase in Go so SQL only needs LOWER() on the column side.
 	phrase = strings.ToLower(phrase)
 	for i, t := range terms {
@@ -706,6 +707,14 @@ func buildSearchQuery(phrase string, terms []string, queryNum int, hasNum bool, 
 		// searchable instead of disappearing from the default result set.
 		terminalStatusesParam := nextArg(terminalStatusKeys)
 		whereClause += fmt.Sprintf(" AND NOT (i.status = ANY(%s::text[]))", terminalStatusesParam)
+	}
+	var creationWindowLimit *int64
+	if len(creationWindowLimits) > 0 {
+		creationWindowLimit = creationWindowLimits[0]
+	}
+	if creationWindowLimit != nil {
+		limitRef := nextArg(*creationWindowLimit)
+		whereClause = issueWindowPredicate("i", wsParam, limitRef) + " AND " + whereClause
 	}
 
 	// --- ORDER BY clause ---
@@ -927,7 +936,12 @@ func (h *Handler) SearchIssues(w http.ResponseWriter, r *http.Request) {
 		terminalStatusKeys = resolvedKeys
 	}
 
-	sqlQuery, args := buildSearchQuery(q, terms, queryNum, hasNum, includeClosed, terminalStatusKeys)
+	policy, windowEnabled := h.issueWindowPolicy(ctx, wsUUID)
+	var creationWindowLimit *int64
+	if windowEnabled && policy.action == entitlement.ActionEnforce {
+		creationWindowLimit = &policy.limit
+	}
+	sqlQuery, args := buildSearchQuery(q, terms, queryNum, hasNum, includeClosed, terminalStatusKeys, creationWindowLimit)
 	// Fill placeholder args: $4 = workspace_id, last two = limit, offset
 	args[3] = wsUUID
 	args[len(args)-2] = limit
@@ -993,6 +1007,13 @@ func (h *Handler) SearchIssues(w http.ResponseWriter, r *http.Request) {
 	if len(results) > 0 {
 		total = results[0].totalCount
 	}
+	resultIDs := make([]pgtype.UUID, len(results))
+	for i, result := range results {
+		resultIDs[i] = result.issue.ID
+	}
+	if windowEnabled {
+		h.observeIssueWindow(ctx, wsUUID, policy, resultIDs, "search")
+	}
 
 	prefix := h.getIssuePrefix(ctx, wsUUID)
 	fillSearch := h.newStatusCategoryFiller(ctx, wsUUID)
@@ -1057,6 +1078,7 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	windowPolicy, windowEnabled := h.issueWindowPolicy(ctx, wsUUID)
 
 	// Parse optional filter params. Malformed UUIDs in filters return 400 —
 	// silently coercing them to a zero UUID would mask a client bug and let
@@ -1161,6 +1183,26 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to list issues")
 			return
+		}
+		openIDs := make([]pgtype.UUID, len(issues))
+		for i, issue := range issues {
+			openIDs[i] = issue.ID
+		}
+		if windowEnabled && windowPolicy.action == entitlement.ActionEnforce {
+			visible, visibleErr := h.visibleIssueIDSet(ctx, wsUUID, windowPolicy, openIDs)
+			if visibleErr != nil {
+				writeError(w, http.StatusInternalServerError, "failed to list issues")
+				return
+			}
+			filtered := issues[:0]
+			for _, issue := range issues {
+				if _, ok := visible[issue.ID]; ok {
+					filtered = append(filtered, issue)
+				}
+			}
+			issues = filtered
+		} else if windowEnabled {
+			h.observeIssueWindow(ctx, wsUUID, windowPolicy, openIDs, "list")
 		}
 
 		prefix := h.getIssuePrefix(ctx, wsUUID)
@@ -1474,6 +1516,10 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 )`, ref))
 	}
 
+	if windowEnabled {
+		where = appendIssueWindow(where, addArg, windowPolicy, "$1", "i")
+	}
+
 	whereSql := strings.Join(where, " AND ")
 
 	// Build ORDER BY clause.
@@ -1569,6 +1615,9 @@ LIMIT %s OFFSET %s`, whereSql, orderBy, limitRef, offsetRef)
 	ids := make([]pgtype.UUID, len(issues))
 	for i, issue := range issues {
 		ids[i] = issue.ID
+	}
+	if windowEnabled {
+		h.observeIssueWindow(ctx, wsUUID, windowPolicy, ids, "list")
 	}
 	labelsMap := h.labelsByIssue(ctx, wsUUID, ids)
 	resp := make([]IssueResponse, len(issues))
@@ -1764,6 +1813,7 @@ func (h *Handler) ListGroupedIssues(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	windowPolicy, windowEnabled := h.issueWindowPolicy(ctx, wsUUID)
 
 	limit := 50
 	offset := 0
@@ -2011,6 +2061,10 @@ func (h *Handler) ListGroupedIssues(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if windowEnabled {
+		where = appendIssueWindow(where, addArg, windowPolicy, "$1", "i")
+	}
+
 	sortCol := "position"
 	sortIsExpr := false
 	sortIsProperty := false
@@ -2173,6 +2227,9 @@ ORDER BY
 	for i, row := range groupedRows {
 		ids[i] = row.ID
 	}
+	if windowEnabled {
+		h.observeIssueWindow(ctx, wsUUID, windowPolicy, ids, "grouped")
+	}
 	labelsMap := h.labelsByIssue(ctx, wsUUID, ids)
 	prefix := h.getIssuePrefix(ctx, wsUUID)
 	// One Resolver for the whole page — a per-row filler would query the
@@ -2266,10 +2323,34 @@ func (h *Handler) ListChildIssues(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	children, err := h.Queries.ListChildIssues(r.Context(), issue.ID)
+	children, err := h.Queries.ListChildIssues(r.Context(), db.ListChildIssuesParams{
+		WorkspaceID:   issue.WorkspaceID,
+		ParentIssueID: issue.ID,
+	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list child issues")
 		return
+	}
+	windowPolicy, windowEnabled := h.issueWindowPolicy(r.Context(), issue.WorkspaceID)
+	childIDs := make([]pgtype.UUID, len(children))
+	for i, child := range children {
+		childIDs[i] = child.ID
+	}
+	if windowEnabled && windowPolicy.action == entitlement.ActionEnforce {
+		visible, visibleErr := h.visibleIssueIDSet(r.Context(), issue.WorkspaceID, windowPolicy, childIDs)
+		if visibleErr != nil {
+			writeError(w, http.StatusInternalServerError, "failed to list child issues")
+			return
+		}
+		filtered := children[:0]
+		for _, child := range children {
+			if _, ok := visible[child.ID]; ok {
+				filtered = append(filtered, child)
+			}
+		}
+		children = filtered
+	} else if windowEnabled {
+		h.observeIssueWindow(r.Context(), issue.WorkspaceID, windowPolicy, childIDs, "children")
 	}
 	prefix := h.getIssuePrefix(r.Context(), issue.WorkspaceID)
 	ids := make([]pgtype.UUID, len(children))
@@ -2357,6 +2438,27 @@ func (h *Handler) ListChildrenByParents(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, "failed to list child issues")
 		return
 	}
+	windowPolicy, windowEnabled := h.issueWindowPolicy(r.Context(), wsUUID)
+	childIDs := make([]pgtype.UUID, len(children))
+	for i, child := range children {
+		childIDs[i] = child.ID
+	}
+	if windowEnabled && windowPolicy.action == entitlement.ActionEnforce {
+		visible, visibleErr := h.visibleIssueIDSet(r.Context(), wsUUID, windowPolicy, childIDs)
+		if visibleErr != nil {
+			writeError(w, http.StatusInternalServerError, "failed to list child issues")
+			return
+		}
+		filtered := children[:0]
+		for _, child := range children {
+			if _, ok := visible[child.ID]; ok {
+				filtered = append(filtered, child)
+			}
+		}
+		children = filtered
+	} else if windowEnabled {
+		h.observeIssueWindow(r.Context(), wsUUID, windowPolicy, childIDs, "children")
+	}
 	prefix := h.getIssuePrefix(r.Context(), wsUUID)
 	ids := make([]pgtype.UUID, len(children))
 	for i, child := range children {
@@ -2391,31 +2493,66 @@ func (h *Handler) ChildIssueProgress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	terminalStatusKeys, err := h.terminalIssueStatusKeys(r.Context(), wsUUID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to resolve status categories")
-		return
-	}
-	rows, err := h.Queries.ChildIssueProgress(r.Context(), db.ChildIssueProgressParams{
-		WorkspaceID:        wsUUID,
-		TerminalStatusKeys: terminalStatusKeys,
-	})
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to get child issue progress")
-		return
-	}
-
 	type progressEntry struct {
 		ParentIssueID string `json:"parent_issue_id"`
 		Total         int64  `json:"total"`
 		Done          int64  `json:"done"`
 	}
-	resp := make([]progressEntry, len(rows))
-	for i, row := range rows {
-		resp[i] = progressEntry{
-			ParentIssueID: uuidToString(row.ParentIssueID),
-			Total:         row.Total,
-			Done:          row.Done,
+	policy, windowEnabled := h.issueWindowPolicy(r.Context(), wsUUID)
+	resp := []progressEntry{}
+	terminalStatusKeys, err := h.terminalIssueStatusKeys(r.Context(), wsUUID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to resolve status categories")
+		return
+	}
+	if windowEnabled && policy.action == entitlement.ActionEnforce {
+		query := fmt.Sprintf(`WITH visible_issue_ids AS MATERIALIZED (
+			%s
+		)
+		SELECT i.parent_issue_id,
+			COUNT(child_visible.id)::bigint AS total,
+			COUNT(child_visible.id) FILTER (WHERE i.status = ANY($3::text[]))::bigint AS done
+		FROM issue i
+		JOIN visible_issue_ids parent_visible ON parent_visible.id = i.parent_issue_id
+		JOIN visible_issue_ids child_visible ON child_visible.id = i.id
+		WHERE i.workspace_id = $1
+		  AND i.parent_issue_id IS NOT NULL
+		GROUP BY i.parent_issue_id`, issueWindowVisibleSetSQL("$1", "$2"))
+		rows, err := h.DB.Query(r.Context(), query, wsUUID, policy.limit, terminalStatusKeys)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to get child issue progress")
+			return
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var parentID pgtype.UUID
+			var entry progressEntry
+			if err := rows.Scan(&parentID, &entry.Total, &entry.Done); err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to get child issue progress")
+				return
+			}
+			entry.ParentIssueID = uuidToString(parentID)
+			resp = append(resp, entry)
+		}
+		if err := rows.Err(); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to get child issue progress")
+			return
+		}
+	} else {
+		rows, err := h.Queries.ChildIssueProgress(r.Context(), db.ChildIssueProgressParams{
+			WorkspaceID:        wsUUID,
+			TerminalStatusKeys: terminalStatusKeys,
+		})
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to get child issue progress")
+			return
+		}
+		for _, row := range rows {
+			resp = append(resp, progressEntry{
+				ParentIssueID: uuidToString(row.ParentIssueID),
+				Total:         row.Total,
+				Done:          row.Done,
+			})
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -2455,6 +2592,8 @@ type QuickCreateIssueRequest struct {
 	ProjectID     string   `json:"project_id,omitempty"`
 	ParentIssueID string   `json:"parent_issue_id,omitempty"`
 	AttachmentIDs []string `json:"attachment_ids,omitempty"`
+	// ConciseMode selects lightweight execution for the queued quick-create task.
+	ConciseMode bool `json:"concise_mode,omitempty"`
 }
 
 // QuickCreateIssueResponse echoes the queued task id so the frontend can
@@ -2654,7 +2793,7 @@ func (h *Handler) QuickCreateIssue(w http.ResponseWriter, r *http.Request) {
 		parentIssueUUID = pid
 	}
 
-	task, err := h.TaskService.EnqueueQuickCreateTask(r.Context(), wsUUID, requesterUUID, agentUUID, squadUUID, prompt, priority, dueDate, projectUUID, parentIssueUUID, attachmentIDs)
+	task, err := h.TaskService.EnqueueQuickCreateTaskWithMode(r.Context(), wsUUID, requesterUUID, agentUUID, squadUUID, prompt, priority, dueDate, projectUUID, parentIssueUUID, attachmentIDs, req.ConciseMode)
 	if err != nil {
 		if writeIssueLimitReached(w, err) {
 			return
@@ -2790,6 +2929,9 @@ type CreateIssueRequest struct {
 	OriginID   *string `json:"origin_id,omitempty"`
 
 	AllowDuplicate bool `json:"allow_duplicate,omitempty"`
+	// ConciseMode opts this created issue's assigned run into the lightweight
+	// task prompt. Omitted/false preserves the normal workflow prompt.
+	ConciseMode bool `json:"concise_mode,omitempty"`
 }
 
 func duplicateIssueMessage(issue IssueResponse) string {
@@ -3042,6 +3184,7 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		ActorID:          actualCreatorID,
 		AnalyticsAgentID: analyticsAgentID,
 		Platform:         func() string { p, _, _ := middleware.ClientMetadataFromContext(r.Context()); return p }(),
+		ConciseMode:      req.ConciseMode,
 		BroadcastPayload: func(issue db.Issue, atts []db.Attachment, labels []db.IssueLabel) map[string]any {
 			payload := issueToResponse(issue, prefix)
 			// The event other tabs receive must carry the category too — filling
@@ -3074,6 +3217,9 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 	}
 	if errors.Is(err, service.ErrParentIssueNotFound) {
 		writeError(w, http.StatusBadRequest, "parent issue not found in this workspace")
+		return
+	}
+	if writeIssueWindowViolation(w, err) {
 		return
 	}
 	if errors.Is(err, service.ErrProjectNotFound) {
@@ -3151,6 +3297,8 @@ type UpdateIssueRequest struct {
 	// MUL-3375). Only consumed when a run actually starts: SuppressRun=true or
 	// a parked/non-triggering write drops it. Never fabricates a comment.
 	HandoffNote string `json:"handoff_note,omitempty"`
+	// ConciseMode applies only to a run started by this write.
+	ConciseMode bool `json:"concise_mode,omitempty"`
 }
 
 func mergeIssueChannelMediaDescription(current, incoming string, base *string, attachments []db.Attachment) string {
@@ -3503,6 +3651,9 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusBadRequest, "parent issue not found in this workspace")
 				return
 			}
+			if !h.authorizeIssueWindow(w, r, newParentID, prevIssue.WorkspaceID, "issue_reparent") {
+				return
+			}
 			// Cycle detection: walk up from the new parent to ensure we don't reach this issue.
 			cursor := newParentID
 			for depth := 0; depth < 10; depth++ {
@@ -3703,7 +3854,7 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		},
 		h.issueTriggerWriteProbe(r, actorType, actorID, issue),
 	); ok && !req.SuppressRun {
-		h.dispatchIssueRun(r.Context(), issue, trigger, actorType, actorID, req.HandoffNote)
+		h.dispatchIssueRun(r.Context(), issue, trigger, actorType, actorID, req.HandoffNote, req.ConciseMode)
 	}
 
 	// Platform-driven parent notification: when this issue transitions into
@@ -4178,16 +4329,39 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		}
 		batchProjectID = projectUUID
 	}
+	// A shared parent is authorized before the mutation loop. Otherwise a
+	// visible target could be reparented under a hidden issue before the window
+	// check runs, exposing that issue as an ancestor.
+	batchParentID := pgtype.UUID{Valid: false}
+	if _, touched := rawUpdates["parent_issue_id"]; touched && req.Updates.ParentIssueID != nil {
+		parentID, ok := parseUUIDOrBadRequest(w, *req.Updates.ParentIssueID, "parent_issue_id")
+		if !ok {
+			return
+		}
+		parent, err := h.Queries.GetIssueInWorkspace(r.Context(), db.GetIssueInWorkspaceParams{
+			ID: parentID, WorkspaceID: wsUUID,
+		})
+		if err != nil {
+			if !isNotFound(err) {
+				slog.Error("batch update issues: validate parent scope",
+					append(logger.RequestAttrs(r), "parent_issue_id", uuidToString(parentID), "error", err)...)
+				writeError(w, http.StatusInternalServerError, "failed to validate parent issue")
+				return
+			}
+			writeError(w, http.StatusBadRequest, "parent issue not found in this workspace")
+			return
+		}
+		batchParentID = parent.ID
+		if !h.authorizeIssueWindow(w, r, parent.ID, parent.WorkspaceID, "issue_reparent") {
+			return
+		}
+	}
 
-	updated := 0
-	skipped := []BatchUpdateIssueSkippedResponse{}
-	// One Resolver for the whole batch — a per-issue filler would query the
-	// catalog once per custom-status row. (MUL-6243)
-	fillBatch := h.newStatusCategoryFiller(r.Context(), wsUUID)
-	// Children that transitioned into a terminal status this batch, collected so
-	// the parent/stage notification is evaluated once against the final state
-	// after the loop (MUL-4155) rather than per-child mid-batch.
-	var childDoneCompleted []db.Issue
+	type batchUpdateTarget struct {
+		requestID string
+		issue     db.Issue
+	}
+	targets := make([]batchUpdateTarget, 0, len(req.IssueIDs))
 	for _, issueID := range req.IssueIDs {
 		issueUUID, err := util.ParseUUID(issueID)
 		if err != nil {
@@ -4200,6 +4374,29 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			continue
 		}
+		targets = append(targets, batchUpdateTarget{requestID: issueID, issue: prevIssue})
+	}
+	// Authorize the complete target set before the first UPDATE. A batch that
+	// mixes visible and hidden issues must not partially commit before returning
+	// the window entitlement response for the hidden issue.
+	for _, target := range targets {
+		if !h.authorizeIssueWindow(w, r, target.issue.ID, target.issue.WorkspaceID, "batch_update") {
+			return
+		}
+	}
+
+	updated := 0
+	skipped := []BatchUpdateIssueSkippedResponse{}
+	// One Resolver for the whole batch — a per-issue filler would query the
+	// catalog once per custom-status row. (MUL-6243)
+	fillBatch := h.newStatusCategoryFiller(r.Context(), wsUUID)
+	// Children that transitioned into a terminal status this batch, collected so
+	// the parent/stage notification is evaluated once against the final state
+	// after the loop (MUL-4155) rather than per-child mid-batch.
+	var childDoneCompleted []db.Issue
+	for _, target := range targets {
+		issueID := target.requestID
+		prevIssue := target.issue
 
 		params := db.UpdateIssueParams{
 			ID:            prevIssue.ID,
@@ -4270,19 +4467,9 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 
 		if _, ok := rawUpdates["parent_issue_id"]; ok {
 			if req.Updates.ParentIssueID != nil {
-				newParentID, err := util.ParseUUID(*req.Updates.ParentIssueID)
-				if err != nil {
-					continue
-				}
+				newParentID := batchParentID
 				// Cannot set self as parent.
 				if newParentID == prevIssue.ID {
-					continue
-				}
-				// Validate parent exists in the same workspace.
-				if _, err := h.Queries.GetIssueInWorkspace(r.Context(), db.GetIssueInWorkspaceParams{
-					ID:          newParentID,
-					WorkspaceID: prevIssue.WorkspaceID,
-				}); err != nil {
 					continue
 				}
 				// Cycle detection: walk up from the new parent to ensure we don't reach this issue.
@@ -4409,7 +4596,7 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 			},
 			h.issueTriggerWriteProbe(r, actorType, actorID, issue),
 		); ok && !req.Updates.SuppressRun {
-			h.dispatchIssueRun(r.Context(), issue, trigger, actorType, actorID, req.Updates.HandoffNote)
+			h.dispatchIssueRun(r.Context(), issue, trigger, actorType, actorID, req.Updates.HandoffNote, req.Updates.ConciseMode)
 		}
 
 		// No status change — not even → cancelled — cancels active tasks here,
@@ -4498,6 +4685,16 @@ func (h *Handler) BatchDeleteIssues(w http.ResponseWriter, r *http.Request) {
 
 		seenIssueIDs[issueUUID] = struct{}{}
 		issues = append(issues, issue)
+	}
+	// Complete authorization before task cancellation or deletion side effects,
+	// so a mixed batch cannot mutate an earlier visible issue before a hidden
+	// issue is rejected.
+	for _, issue := range issues {
+		if !h.authorizeIssueWindow(w, r, issue.ID, issue.WorkspaceID, "batch_delete") {
+			return
+		}
+	}
+	for _, issue := range issues {
 		excludedIDs = append(excludedIDs, issue.ID)
 		h.TaskService.CancelTasksForIssue(r.Context(), issue.ID)
 		_ = h.AutopilotService.FailAutopilotRunsByIssue(r.Context(), issue.ID)

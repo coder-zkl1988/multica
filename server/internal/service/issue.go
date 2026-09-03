@@ -142,6 +142,9 @@ type IssueCreateOpts struct {
 	// the same resources (local directory locks, runtime capacity) with
 	// nothing to show for it beyond a stray transcript on the issue.
 	SuppressAssigneeRun bool
+	// ConciseMode selects the task-level lightweight execution path. It is
+	// persisted on the queued task and defaults to normal workflow execution.
+	ConciseMode bool
 }
 
 // ErrActiveDuplicate signals that the duplicate guard found an active
@@ -230,6 +233,7 @@ type IssueCreateResult struct {
 // required, RFC3339 date format, assignee pair sanity.
 func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts IssueCreateOpts) (IssueCreateResult, error) {
 	issueCountPolicy := ResolveIssueCountPolicy(ctx, s.Entitlements, p.WorkspaceID)
+	issueWindowPolicy := ResolveIssueWindowPolicy(ctx, s.Entitlements, p.WorkspaceID)
 	tx, err := s.TxStarter.Begin(ctx)
 	if err != nil {
 		return IssueCreateResult{}, fmt.Errorf("begin tx: %w", err)
@@ -237,7 +241,7 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 	defer tx.Rollback(ctx)
 	qtx := s.Queries.WithTx(tx)
 
-	res, err := s.createInTx(ctx, tx, qtx, p, issueCountPolicy)
+	res, err := s.createInTx(ctx, tx, qtx, p, issueCountPolicy, issueWindowPolicy)
 	if err != nil {
 		// The duplicate guard aborts before any insert commits; surface the
 		// blocking row so the handler renders a 409 with the existing issue.
@@ -252,7 +256,9 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 		// task. Inserting both rows through qtx makes the unique-index winner
 		// deterministic: any observer that can discover the committed issue also
 		// sees the inert deferred task and must merge into it.
-		assignedTask, err := s.TaskService.createDeferredChannelIssueTaskWithQueries(ctx, qtx, res.Issue, opts.AssignedAgentRunFireAt)
+		assignedTask, err := s.TaskService.createDeferredChannelIssueTaskWithQueries(
+			ctx, qtx, res.Issue, opts.AssignedAgentRunFireAt, opts.ConciseMode,
+		)
 		if err != nil {
 			return IssueCreateResult{}, fmt.Errorf("create deferred channel issue task: %w", err)
 		}
@@ -275,15 +281,13 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 // with the same validation semantics. p.AllowDuplicate lets the caller opt
 // out of the duplicate guard — PMO apply passes true because it owns entity
 // identity through pmo_sync_link.
-func (s *IssueService) createInTx(ctx context.Context, tx pgx.Tx, qtx *db.Queries, p IssueCreateParams, issueCountPolicy IssueCountPolicy) (IssueCreateResult, error) {
+func (s *IssueService) createInTx(ctx context.Context, tx pgx.Tx, qtx *db.Queries, p IssueCreateParams, issueCountPolicy IssueCountPolicy, issueWindowPolicy IssueWindowPolicy) (IssueCreateResult, error) {
 	// Workspace is the root lock for workspace-scoped writes. Take it before
 	// project rows so workspace deletion (workspace -> project) cannot deadlock
 	// with issue creation (project -> workspace counter).
-	issueNumber, err := AllocateIssueNumber(ctx, qtx, p.WorkspaceID, issueCountPolicy)
-	if err != nil {
-		return IssueCreateResult{}, fmt.Errorf("allocate issue number: %w", err)
+	if _, err := qtx.LockWorkspaceForIssueCounterWrite(ctx, p.WorkspaceID); err != nil {
+		return IssueCreateResult{}, fmt.Errorf("lock workspace: %w", err)
 	}
-
 	if p.SourceContext != nil {
 		if _, err := qtx.LockIssueForDescriptionUpdate(ctx, db.LockIssueForDescriptionUpdateParams{
 			ID: p.SourceContext.SourceIssueID, WorkspaceID: p.WorkspaceID,
@@ -342,6 +346,21 @@ func (s *IssueService) createInTx(ctx context.Context, tx pgx.Tx, qtx *db.Querie
 		if err != nil || !parent.ID.Valid {
 			return IssueCreateResult{}, ErrParentIssueNotFound
 		}
+		if issueWindowPolicy.Action == entitlement.ActionEnforce {
+			visible, err := qtx.IsIssueInCreationWindow(ctx, db.IsIssueInCreationWindowParams{
+				WorkspaceID:      p.WorkspaceID,
+				IssueWindowLimit: issueWindowPolicy.Limit,
+				IssueID:          p.ParentIssueID,
+			})
+			if err != nil {
+				return IssueCreateResult{}, fmt.Errorf("check parent issue creation window: %w", err)
+			}
+			if !visible {
+				return IssueCreateResult{}, &IssueOutsideCreationWindowError{
+					Limit: issueWindowPolicy.Limit, PolicyRevision: issueWindowPolicy.PolicyRevision,
+				}
+			}
+		}
 		// Back-fill project from parent when the caller did not pin
 		// one explicitly. Matches the long-standing HTTP behavior: a
 		// sub-issue inherits its parent's project unless overridden.
@@ -378,6 +397,11 @@ func (s *IssueService) createInTx(ctx context.Context, tx pgx.Tx, qtx *db.Querie
 	if found {
 		dup := duplicate
 		return IssueCreateResult{DuplicateIssue: &dup}, ErrActiveDuplicate
+	}
+
+	issueNumber, err := AllocateIssueNumber(ctx, qtx, p.WorkspaceID, issueCountPolicy)
+	if err != nil {
+		return IssueCreateResult{}, fmt.Errorf("allocate issue number: %w", err)
 	}
 
 	// New issues sort to the top of their (workspace, status) column for
@@ -592,7 +616,7 @@ func (s *IssueService) afterCreate(ctx context.Context, res IssueCreateResult, p
 	}
 	s.captureCreatedAnalytics(issue, p.CreatorType, actorID, opts)
 	if opts.AssignedAgentRunFireAt.IsZero() && !opts.SuppressAssigneeRun {
-		assignedTaskID = s.maybeEnqueueOnAssign(ctx, issue, p.CreatorType, actorID, opts.AssignedAgentRunFireAt)
+		assignedTaskID = s.maybeEnqueueOnAssign(ctx, issue, p.CreatorType, actorID, opts.AssignedAgentRunFireAt, opts.ConciseMode)
 	}
 
 	res.AssignedTaskID = assignedTaskID
@@ -916,7 +940,7 @@ func classifyOrigin(issue db.Issue, opts IssueCreateOpts) (source, taskID, autop
 	}
 }
 
-func (s *IssueService) maybeEnqueueOnAssign(ctx context.Context, issue db.Issue, creatorType, actorID string, agentRunFireAt time.Time) pgtype.UUID {
+func (s *IssueService) maybeEnqueueOnAssign(ctx context.Context, issue db.Issue, creatorType, actorID string, agentRunFireAt time.Time, conciseMode bool) pgtype.UUID {
 	if !issue.AssigneeType.Valid || !issue.AssigneeID.Valid {
 		return pgtype.UUID{}
 	}
@@ -939,9 +963,9 @@ func (s *IssueService) maybeEnqueueOnAssign(ctx context.Context, issue db.Issue,
 		var task db.AgentTaskQueue
 		var err error
 		if agentRunFireAt.IsZero() {
-			task, err = s.TaskService.EnqueueTaskForIssueCreate(ctx, issue, pgtype.UUID{})
+			task, err = s.TaskService.EnqueueTaskForIssueCreateWithMode(ctx, issue, pgtype.UUID{}, conciseMode)
 		} else {
-			task, err = s.TaskService.EnqueueDeferredChannelIssueTask(ctx, issue, agentRunFireAt)
+			task, err = s.TaskService.EnqueueDeferredChannelIssueTaskWithMode(ctx, issue, agentRunFireAt, conciseMode)
 		}
 		if err != nil {
 			log := slog.Warn
@@ -956,7 +980,7 @@ func (s *IssueService) maybeEnqueueOnAssign(ctx context.Context, issue db.Issue,
 		}
 	}
 	if s.shouldEnqueueSquadLeaderOnAssign(ctx, issue) {
-		s.enqueueSquadLeaderTask(ctx, issue, pgtype.UUID{}, creatorType, actorID)
+		s.enqueueSquadLeaderTask(ctx, issue, pgtype.UUID{}, creatorType, actorID, conciseMode)
 	}
 	return pgtype.UUID{}
 }
@@ -1038,7 +1062,7 @@ func (s *IssueService) isSquadLeaderReady(ctx context.Context, issue db.Issue) b
 	return verdict.Ready()
 }
 
-func (s *IssueService) enqueueSquadLeaderTask(ctx context.Context, issue db.Issue, triggerCommentID pgtype.UUID, authorType, authorID string) {
+func (s *IssueService) enqueueSquadLeaderTask(ctx context.Context, issue db.Issue, triggerCommentID pgtype.UUID, authorType, authorID string, conciseMode ...bool) {
 	squad, err := s.Queries.GetSquadInWorkspace(ctx, db.GetSquadInWorkspaceParams{
 		ID:          issue.AssigneeID,
 		WorkspaceID: issue.WorkspaceID,
@@ -1055,7 +1079,7 @@ func (s *IssueService) enqueueSquadLeaderTask(ctx context.Context, issue db.Issu
 	if err != nil || hasPending {
 		return
 	}
-	if _, err := s.TaskService.EnqueueTaskForSquadLeaderOnIssueCreate(ctx, issue, squad.LeaderID, squad.ID, pgtype.UUID{}); err != nil {
+	if _, err := s.TaskService.EnqueueTaskForSquadLeaderOnIssueCreateWithMode(ctx, issue, squad.LeaderID, squad.ID, pgtype.UUID{}, len(conciseMode) > 0 && conciseMode[0]); err != nil {
 		slog.Warn("enqueue squad leader task on create failed",
 			"issue_id", util.UUIDToString(issue.ID),
 			"squad_id", util.UUIDToString(squad.ID),

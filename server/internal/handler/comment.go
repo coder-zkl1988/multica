@@ -3236,6 +3236,10 @@ func (h *Handler) UpdateComment(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "comment not found")
 		return
 	}
+	issue, ok := h.loadIssueInWorkspaceAndAuthorize(w, r, existing.IssueID, wsUUID, "comment_update")
+	if !ok {
+		return
+	}
 
 	member, ok := h.workspaceMember(w, r, workspaceID)
 	if !ok {
@@ -3310,12 +3314,6 @@ func (h *Handler) UpdateComment(w http.ResponseWriter, r *http.Request) {
 	var triggerIssue *db.Issue
 	var cancelled []db.AgentTaskQueue
 	if oldContent != req.Content {
-		issue, err := h.Queries.GetIssue(r.Context(), existing.IssueID)
-		if err != nil {
-			slog.Warn("load issue for edit post-processing failed", "issue_id", uuidToString(existing.IssueID), "error", err)
-			writeError(w, http.StatusInternalServerError, "failed to load issue")
-			return
-		}
 		triggerIssue = &issue
 		// A content edit is a NEW action, so its delegation lineage must key on THIS
 		// edit. Only the AGENT author re-editing its OWN comment carries the lineage
@@ -3519,18 +3517,23 @@ func (h *Handler) DeleteComment(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "only comment author or admin can delete")
 		return
 	}
-	issue, err := h.Queries.GetIssue(r.Context(), comment.IssueID)
-	hasIssue := err == nil
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		slog.Warn("load issue for delete post-processing failed", "issue_id", uuidToString(comment.IssueID), "error", err)
+	issue, issueErr := h.Queries.GetIssueInWorkspace(r.Context(), db.GetIssueInWorkspaceParams{
+		ID: comment.IssueID, WorkspaceID: wsUUID,
+	})
+	hasIssue := issueErr == nil
+	if issueErr != nil && !errors.Is(issueErr, pgx.ErrNoRows) {
+		slog.Warn("load issue for delete post-processing failed", "issue_id", uuidToString(comment.IssueID), "error", issueErr)
 		writeError(w, http.StatusInternalServerError, "failed to load issue")
 		return
 	}
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(issueErr, pgx.ErrNoRows) {
 		// The issue delete may have won the race after GetCommentInWorkspace.
 		// Continue so DeleteComment can report whether the comment itself still
 		// existed; touching issue activity is intentionally best effort.
 		slog.Info("comment parent issue no longer exists", "issue_id", uuidToString(comment.IssueID), "comment_id", commentId)
+	}
+	if hasIssue && !h.authorizeIssueWindow(w, r, issue.ID, issue.WorkspaceID, "comment_delete") {
+		return
 	}
 
 	// Collect attachment URLs before CASCADE delete removes them.
@@ -3716,6 +3719,9 @@ func (h *Handler) loadCommentForActor(w http.ResponseWriter, r *http.Request) (d
 	})
 	if err != nil {
 		writeError(w, http.StatusNotFound, "comment not found")
+		return db.Comment{}, "", "", "", false
+	}
+	if _, ok := h.loadIssueInWorkspaceAndAuthorize(w, r, comment.IssueID, wsUUID, "comment_resolve"); !ok {
 		return db.Comment{}, "", "", "", false
 	}
 	actorType, actorID := h.resolveActor(r, userID, workspaceID)

@@ -22,6 +22,67 @@ func (e *IssueLimitReachedError) Error() string {
 	return fmt.Sprintf("workspace issue limit reached: limit %d", e.Limit)
 }
 
+const maxIssueWindowLimit int64 = 1_000_000
+
+// IssueWindowPolicy is the validated fork-local instruction for restricting
+// reads and child creation to the newest issue-number window. Cloud may omit
+// this gate while the community issue-count gate remains active.
+type IssueWindowPolicy struct {
+	Action         entitlement.Action
+	Limit          int64
+	PolicyRevision int64
+}
+
+func ResolveIssueWindowPolicy(ctx context.Context, provider entitlement.Provider, workspaceID pgtype.UUID) IssueWindowPolicy {
+	if provider == nil || !workspaceID.Valid {
+		return IssueWindowPolicy{Action: entitlement.ActionOff}
+	}
+	decision := provider.Gate(ctx, uuid.UUID(workspaceID.Bytes), entitlement.GateIssueWindow)
+	policy := IssueWindowPolicy{
+		Action:         decision.Gate.Action,
+		PolicyRevision: decision.PolicyRevision,
+	}
+	if decision.Gate.Limit != nil {
+		policy.Limit = int64(*decision.Gate.Limit)
+	}
+	if (policy.Action != entitlement.ActionObserve && policy.Action != entitlement.ActionEnforce) ||
+		policy.Limit <= 0 || policy.Limit > maxIssueWindowLimit {
+		return IssueWindowPolicy{Action: entitlement.ActionOff}
+	}
+	return policy
+}
+
+// IssueOutsideCreationWindowError carries the Cloud policy needed by HTTP and
+// other transport adapters to return a structured entitlement response.
+type IssueOutsideCreationWindowError struct {
+	Limit          int64
+	PolicyRevision int64
+}
+
+func checkIssueInWindow(ctx context.Context, qtx *db.Queries, workspaceID, issueID pgtype.UUID, policy IssueWindowPolicy) error {
+	if policy.Action != entitlement.ActionEnforce {
+		return nil
+	}
+	visible, err := qtx.IsIssueInCreationWindow(ctx, db.IsIssueInCreationWindowParams{
+		WorkspaceID:      workspaceID,
+		IssueWindowLimit: policy.Limit,
+		IssueID:          issueID,
+	})
+	if err != nil {
+		return fmt.Errorf("check issue creation window: %w", err)
+	}
+	if !visible {
+		return &IssueOutsideCreationWindowError{
+			Limit: policy.Limit, PolicyRevision: policy.PolicyRevision,
+		}
+	}
+	return nil
+}
+
+func (e *IssueOutsideCreationWindowError) Error() string {
+	return fmt.Sprintf("parent issue is outside the workspace creation window: limit %d", e.Limit)
+}
+
 // IssueCountPolicy is the validated mechanical instruction received from
 // Cloud. Resolve it before opening a database transaction so a network call
 // never holds product-database locks.

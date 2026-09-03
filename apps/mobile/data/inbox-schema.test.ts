@@ -9,17 +9,15 @@ import { InboxListSchema } from "./schemas";
  * this client REACTS to a given payload. They cannot fail when the Go server
  * starts sending something new — nothing here executes server code.
  *
- * The matching server-side guarantee is structural rather than a test: every
- * `details` map in server/cmd/server/notification_listeners.go is typed
- * `map[string]string`, so a non-string value is a compile error there.
+ * The server stores `details` as JSON and some notification producers include
+ * numeric metrics (for example, autopilot failure counts). Mobile normalizes
+ * scalar values to strings because the shared `InboxItem` type and row labels
+ * consume string detail values.
  *
- * Why both halves exist: during MUL-5483 a new inbox type was added and the
- * mobile label map was updated so `tsc` passed — but a NUMBER went into
- * `details.child_count`, and `details` is `z.record(z.string(), z.string())`.
- * Because the endpoint parses an ARRAY, one bad row fails the whole parse and
- * `listInbox` falls back to `EMPTY_INBOX_LIST`: the entire mobile inbox
- * renders empty, not just that row. The blast radius is what these tests
- * document; the compile-time type is what prevents it.
+ * Why this boundary matters: because the endpoint parses an ARRAY, one schema
+ * failure would make `listInbox` fall back to `EMPTY_INBOX_LIST`, blanking the
+ * entire mobile inbox instead of only one row. The coercion keeps valid rows
+ * visible while malformed detail shapes remain rejected.
  */
 describe("inbox list schema", () => {
   it("parses a row shaped like the documented server payload", () => {
@@ -38,8 +36,8 @@ describe("inbox list schema", () => {
       read: false,
       archived: false,
       created_at: "2026-07-30T00:00:00Z",
-      // Every value is a string. A number here drops the whole list.
-      details: { from: "in_progress", to: "in_review" },
+      // Numeric server metrics are coerced to strings at the mobile boundary.
+      details: { from: "in_progress", to: "in_review", failed_runs: 3 },
     };
 
     const parsed = InboxListSchema.safeParse([serverRow]);
@@ -48,36 +46,52 @@ describe("inbox list schema", () => {
     expect(parsed.success && parsed.data[0]?.details?.to).toBe("in_review");
   });
 
-  it("rejects a numeric details value", () => {
-    const badRow = {
+  it("coerces numeric details values", () => {
+    const serverRow = {
       id: "inbox-2",
       recipient_type: "member",
+      type: "autopilot_paused",
+      details: { failed_runs: 3, fail_pct: 75.5 },
+    };
+
+    const parsed = InboxListSchema.safeParse([serverRow]);
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data[0]?.details).toEqual({
+      failed_runs: "3",
+      fail_pct: "75.5",
+    });
+  });
+
+  it("rejects a malformed details shape", () => {
+    const badRow = {
+      id: "inbox-3",
+      recipient_type: "member",
       type: "status_changed",
-      details: { child_count: 3 },
+      details: "not-an-object",
     };
 
     expect(InboxListSchema.safeParse([badRow]).success).toBe(false);
   });
-
-  it("keeps one malformed row from emptying the entire list observable", () => {
-    // Documents the blast radius that made this a P1 rather than a cosmetic bug:
-    // the schema is an array, so a single bad row invalidates every good one.
+  it("keeps a malformed row from emptying the entire list observable", () => {
+    // The schema is an array, so a malformed detail shape invalidates every
+    // row and listInbox falls back to EMPTY_INBOX_LIST.
     const good = {
-      id: "inbox-3",
+      id: "inbox-4",
       recipient_type: "member",
       type: "status_changed",
       details: { from: "todo", to: "in_review" },
     };
     const bad = {
-      id: "inbox-4",
+      id: "inbox-5",
       recipient_type: "member",
       type: "status_changed",
-      details: { child_count: 3 },
+      details: "not-an-object",
     };
 
     expect(InboxListSchema.safeParse([good]).success).toBe(true);
     expect(InboxListSchema.safeParse([good, bad]).success).toBe(false);
   });
+
 
   it("renders an unknown server type instead of dropping the row", () => {
     // Mirrors the root CLAUDE.md API-compatibility rule and mobile's own

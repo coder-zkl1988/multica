@@ -41,6 +41,7 @@ const DOWNLOAD_URL = "https://multica.ai/download";
 export function HelpLauncher() {
   const { t } = useT("layout");
   const serverVersion = useConfigStore((state) => state.serverVersion);
+  const upstreamVersion = useConfigStore((state) => state.upstreamVersion);
   const downloadUrl = useDownloadPageUrl();
 
   const checkForUpdates = async () => {
@@ -155,7 +156,7 @@ export function HelpLauncher() {
             {t(($) => $.help.check_for_updates)}
           </DropdownMenuItem>
         )}
-        {serverVersion && (
+        {(serverVersion || upstreamVersion) && (
           <>
             <DropdownMenuSeparator />
             {/* DropdownMenuLabel renders Base UI's Menu.GroupLabel, which reads
@@ -164,9 +165,18 @@ export function HelpLauncher() {
                 Help menu crashes the whole app on open (no error boundary sits
                 above the sidebar). */}
             <DropdownMenuGroup>
-              <DropdownMenuLabel className="font-normal break-words">
-                {t(($) => $.help.server_version, { version: serverVersion })}
-              </DropdownMenuLabel>
+              {serverVersion && (
+                <DropdownMenuLabel className="font-normal break-words">
+                  {t(($) => $.help.server_version, { version: serverVersion })}
+                </DropdownMenuLabel>
+              )}
+              {upstreamVersion && (
+                <DropdownMenuLabel className="font-normal break-words">
+                  {t(($) => $.help.upstream_base_version, {
+                    version: upstreamVersion,
+                  })}
+                </DropdownMenuLabel>
+              )}
             </DropdownMenuGroup>
           </>
         )}

@@ -23,9 +23,6 @@ export function getAutopilotQuotaBody(item: InboxItem): string | null {
   const details = item.details ?? {};
   const resetAt = formatResetAt(details.reset_at);
   if (!details.limit || !resetAt) return item.body;
-  if (details.autopilot_title) {
-    return `Autopilot “${details.autopilot_title}” was not started because this workspace has reached its limit of ${details.limit} runs for the current period. The allowance resets ${resetAt}.`;
-  }
   return `This workspace has reached its limit of ${details.limit} autopilot runs for the current period. This execution was not started. The allowance resets ${resetAt}.`;
 }
 

@@ -23,6 +23,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/auth"
 	"github.com/multica-ai/multica/server/internal/daemonws"
 	"github.com/multica-ai/multica/server/internal/designpreview"
+	"github.com/multica-ai/multica/server/internal/entitlement"
 	"github.com/multica-ai/multica/server/internal/integrations/slack"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
@@ -1968,9 +1969,8 @@ func (h *Handler) failClaimedTaskBeforeLaunch(
 func chatSessionResumeFallbackNeeded(priorSessionID, priorWorkDir string) bool {
 	return priorSessionID == "" || priorWorkDir == ""
 }
-
 func rerunSourceMatchesTaskScope(task, source db.AgentTaskQueue) bool {
-	if task.AgentID != source.AgentID {
+	if task.AgentID != source.AgentID || task.ConciseMode != source.ConciseMode {
 		return false
 	}
 	if task.IssueID.Valid {
@@ -1997,6 +1997,36 @@ func claimResponseAgentIdentityMatches(resp AgentTaskResponse) bool {
 func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQueue, runtime db.AgentRuntime, runtimeID, runtimeWorkspaceID string) (resp AgentTaskResponse, deliveredCommentIDs []pgtype.UUID, agentSkillCount, builtinSkillCount int, failure *claimBuildFailure) {
 	// Build response with fresh agent data (name + skills + custom_env + custom_args).
 	resp = taskToResponse(*task, runtimeWorkspaceID)
+	if task.IssueID.Valid {
+		if policy, enabled := h.issueWindowPolicy(r.Context(), runtime.WorkspaceID); enabled {
+			visible, visibilityErr := h.issueIDsWithinWindow(r.Context(), runtime.WorkspaceID, policy, []pgtype.UUID{task.IssueID})
+			if visibilityErr != nil {
+				h.recordIssueWindow(policy.action, "agent_context", "error")
+				if policy.action == entitlement.ActionEnforce {
+					if _, requeueErr := h.TaskService.RequeueTaskAfterClaimFailure(r.Context(), *task); requeueErr != nil {
+						slog.Error("daemon claim: requeue after issue window failure failed", "task_id", uuidToString(task.ID), "error", requeueErr)
+					}
+					return resp, nil, 0, 0, &claimBuildFailure{
+						outcome: "error_issue_window_check", status: http.StatusInternalServerError, message: "failed to check issue access",
+					}
+				}
+			} else if !visible {
+				if policy.action == entitlement.ActionObserve {
+					h.recordIssueWindow(policy.action, "agent_context", "would_block")
+				} else {
+					h.recordIssueWindow(policy.action, "agent_context", "blocked")
+					return resp, nil, 0, 0, h.failClaimedTaskBeforeLaunch(
+						r.Context(), task,
+						"This issue is outside the workspace's recently created issue window.",
+						taskfailure.ReasonIssueWindowRestricted,
+						"error_issue_window_restricted", http.StatusPaymentRequired, "issue is outside the recently created window",
+					)
+				}
+			} else {
+				h.recordIssueWindow(policy.action, "agent_context", "allowed")
+			}
+		}
+	}
 	var issueNumber int32
 	// Claim-only capability: this server resolves the squad-leader role on the
 	// wire (is_leader_task / squad_id), so the daemon must not re-derive it
@@ -2589,8 +2619,9 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 			// prompt.go defends against inheriting the prior turn's "Done."
 			// marker, and GetLastTaskSession already excludes poisoned sessions.
 			if prior, err := h.Queries.GetLastTaskSession(r.Context(), db.GetLastTaskSessionParams{
-				AgentID: task.AgentID,
-				IssueID: task.IssueID,
+				AgentID:     task.AgentID,
+				IssueID:     task.IssueID,
+				ConciseMode: pgtype.Bool{Bool: task.ConciseMode, Valid: true},
 			}); err == nil && prior.SessionID.Valid {
 				if prior.RuntimeID == task.RuntimeID {
 					resp.PriorSessionID = prior.SessionID.String
@@ -2606,8 +2637,9 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 			// be carried over — even when that older session resumes cleanly,
 			// which the resume-presence gate would otherwise pass silently.
 			if missing, err := h.Queries.GetLatestTaskRolloutMissing(r.Context(), db.GetLatestTaskRolloutMissingParams{
-				AgentID: task.AgentID,
-				IssueID: task.IssueID,
+				AgentID:     task.AgentID,
+				IssueID:     task.IssueID,
+				ConciseMode: pgtype.Bool{Bool: task.ConciseMode, Valid: true},
 			}); err == nil && missing {
 				resp.PriorSessionResumeUnavailable = true
 			}
@@ -2676,36 +2708,9 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 			}
 		}
 		projectCtx.applyTo(&resp)
-		if !task.ForceFreshSession && !task.ChannelContextRevision.Valid {
-			// Resume chat sessions only when the stored pointer was produced
-			// by the same runtime as the claiming task. When the chat_session
-			// pointer is missing (legacy NULL runtime_id), stale (last task
-			// failed before reporting completion), or runtime-mismatched, fall
-			// back to the most recent task row that recorded a session_id —
-			// otherwise a single failed turn would silently drop the entire
-			// conversation memory on the next message. The fallback also
-			// requires runtime to match.
-			if cs.SessionID.Valid && cs.RuntimeID.Valid && cs.RuntimeID == task.RuntimeID {
-				resp.PriorSessionID = cs.SessionID.String
-			}
-			if cs.WorkDir.Valid {
-				resp.PriorWorkDir = cs.WorkDir.String
-			}
-		}
-		// Resolve the user-message input batch for this run. A task-owned
-		// task (chat_input_task_id set) reads exactly the user messages
-		// tagged with its own input owner, so a message that arrived after
-		// this turn was sealed can never be absorbed here. Direct-chat
-		// tasks have owned their single message since MUL-4351; channel
-		// (Slack/Lark) tasks now seal their trailing batch at enqueue too.
-		// Only legacy tasks created before that deploy carry a NULL owner
-		// and keep the trailing-message selector — the run of user messages
-		// after the last assistant row, which also covers a debounced burst
-		// (MUL-2968: "看上海天气" then "还有青岛" must both be delivered) —
-		// so a rolling deploy never replays their history. Attachments are
-		// collected per included message so the agent can
-		// `multica attachment download <id>` (the inline markdown URL is
-		// signed + 30-min expiring on the CDN).
+		// Resolve the user-message input batch before consulting resume
+		// history. A task-owned task reads exactly its sealed input messages;
+		// legacy tasks retain the trailing-history fallback.
 		var unanswered []db.ChatMessage
 		var inputLoadErr error
 		if task.ChatInputTaskID.Valid {
@@ -2715,10 +2720,6 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 		} else {
 			inputLoadErr = err
 		}
-		// A read failure must NOT masquerade as "zero input". Preserve the
-		// just-dispatched task (the stale-dispatched reclaim redelivers it)
-		// and reject the claim with 5xx, rather than cancelling a valid direct
-		// task on a transient DB error (MUL-4351 review).
 		if inputLoadErr != nil {
 			slog.Error("chat claim: load chat input messages failed; preserving task for redelivery",
 				"task_id", uuidToString(task.ID),
@@ -2730,55 +2731,71 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 				message: "failed to load chat input",
 			}
 		}
-
-		// Input ownership is the claim's fail-closed boundary. Resume-history
-		// reads belong after it: a task that cannot load its input is preserved
-		// for redelivery and must not spend two more queries before returning.
 		if !task.ForceFreshSession {
+			// The chat_session pointer predates task-level concise mode and
+			// cannot identify which prompt mode produced it. Always resolve
+			// the authoritative terminal task row with the current mode so a
+			// normal task never resumes a concise session, or vice versa.
 			contextRevision := pgtype.Int8{}
 			if task.ChannelContextRevision.Valid {
 				contextRevision = task.ChannelContextRevision
 			}
-			// GetLastChatTaskSession currently has exactly two consumers: the
-			// prior session and prior workdir fields. Keep this guard coupled to
-			// both so adding a third consumer cannot silently skip its fallback.
-			// Context-scoped channel tasks always resolve both fields from task
-			// rows in their own generation; the Chat-wide pointer may belong to a
-			// different generation when independent debounce timers race.
-			if task.ChannelContextRevision.Valid || chatSessionResumeFallbackNeeded(resp.PriorSessionID, resp.PriorWorkDir) {
+			pointerSessionID, pointerWorkDir := "", ""
+			if cs.SessionID.Valid {
+				pointerSessionID = cs.SessionID.String
+			}
+			if cs.WorkDir.Valid {
+				pointerWorkDir = cs.WorkDir.String
+			}
+			// The legacy pointer is intentionally not a resume source because
+			// it carries no concise-mode metadata. It still tells the metric
+			// whether the authoritative lookup was needed.
+			fallbackNeeded := chatSessionResumeFallbackNeeded(pointerSessionID, pointerWorkDir)
+			if fallbackNeeded {
 				h.Metrics.RecordChatClaimSessionFallbackNeeded()
-				started := time.Now()
-				prior, err := h.Queries.GetLastChatTaskSession(r.Context(), db.GetLastChatTaskSessionParams{
-					ChatSessionID:          cs.ID,
-					ChannelContextRevision: contextRevision,
-				})
-				h.Metrics.ObserveChatClaimLastSessionQuery(time.Since(started).Seconds())
-				switch {
-				case err == nil && prior.SessionID.Valid:
+			}
+			resp.PriorSessionID = ""
+			resp.PriorWorkDir = ""
+			started := time.Now()
+			prior, err := h.Queries.GetLastChatTaskSession(r.Context(), db.GetLastChatTaskSessionParams{
+				ChatSessionID:          cs.ID,
+				ConciseMode:            pgtype.Bool{Bool: task.ConciseMode, Valid: true},
+				ChannelContextRevision: contextRevision,
+			})
+			h.Metrics.ObserveChatClaimLastSessionQuery(time.Since(started).Seconds())
+			switch {
+			case err == nil && prior.SessionID.Valid:
+				if fallbackNeeded {
 					h.Metrics.RecordChatClaimSessionFallbackHit()
-					if resp.PriorSessionID == "" && prior.RuntimeID == task.RuntimeID {
-						resp.PriorSessionID = prior.SessionID.String
-					}
-					if prior.WorkDir.Valid && resp.PriorWorkDir == "" {
-						resp.PriorWorkDir = prior.WorkDir.String
-					}
-				case errors.Is(err, pgx.ErrNoRows):
+				}
+				if prior.RuntimeID == task.RuntimeID {
+					resp.PriorSessionID = prior.SessionID.String
+				}
+				if prior.WorkDir.Valid {
+					resp.PriorWorkDir = prior.WorkDir.String
+				}
+			case errors.Is(err, pgx.ErrNoRows):
+				if fallbackNeeded {
 					h.Metrics.RecordChatClaimSessionFallbackMiss()
-				case err == nil:
-					// Defensive only: the SQL excludes NULL session ids, but
-					// preserve miss semantics if that contract ever changes.
+				}
+			case err == nil:
+				// Defensive only: the SQL excludes NULL session ids, but
+				// preserve miss semantics if that contract ever changes.
+				if fallbackNeeded {
 					h.Metrics.RecordChatClaimSessionFallbackMiss()
-				default:
+				}
+			default:
+				if fallbackNeeded {
 					h.Metrics.RecordChatClaimSessionFallbackError()
 				}
 			}
 
-			// MUL-5305: continuity-gap disclosure is independent of whether
-			// either pointer field needed fallback, so this query stays
-			// unconditional for non-force-fresh chat claims.
-			started := time.Now()
+			// Continuity-gap disclosure is independent of whether the
+			// mode-filtered session lookup found a resumable row.
+			started = time.Now()
 			missing, err := h.Queries.GetLatestChatTaskRolloutMissing(r.Context(), db.GetLatestChatTaskRolloutMissingParams{
 				ChatSessionID:          cs.ID,
+				ConciseMode:            pgtype.Bool{Bool: task.ConciseMode, Valid: true},
 				ChannelContextRevision: contextRevision,
 			})
 			h.Metrics.ObserveChatClaimRolloutMissingQuery(time.Since(started).Seconds())

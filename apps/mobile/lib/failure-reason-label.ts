@@ -29,6 +29,7 @@ const LABELS: Record<string, string> = {
   api_invalid_request: "Rejected by the model API",
   skill_bundle_unavailable: "Couldn't download the agent's skills",
   runtime_cli_timeout: "Local runtime CLI timed out",
+  issue_window_restricted: "Issue is outside the creation window",
 
   // Agent process side — provider.
   "agent_error.provider_auth_or_access": "Provider auth failed",

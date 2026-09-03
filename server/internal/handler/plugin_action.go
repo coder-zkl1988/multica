@@ -240,6 +240,10 @@ func (h *Handler) pluginIssueForUser(w http.ResponseWriter, r *http.Request, cal
 		publicapiv1.WriteProblem(w, r, http.StatusNotFound, "not_found", "issue not found")
 		return db.Issue{}, false
 	}
+	if err := h.checkIssueWindowAuthorization(r, issue.ID, issue.WorkspaceID, "plugin"); err != nil {
+		writeIssueWindowPublicProblem(w, r, err)
+		return db.Issue{}, false
+	}
 	return issue, true
 }
 

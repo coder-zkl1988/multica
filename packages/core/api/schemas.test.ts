@@ -2046,9 +2046,16 @@ describe("AppConfigSchema cdn_signed drift", () => {
     expect(parsed.feature_flags).toEqual({});
   });
 
-  it("parses server_version and leaves it undefined when the server omits it", () => {
+  it("parses server_version and upstream_version independently", () => {
+    const parsed = AppConfigSchema.parse({
+      server_version: "fork-abcdef123",
+      upstream_version: "v0.4.37",
+    });
+    expect(parsed.server_version).toBe("fork-abcdef123");
+    expect(parsed.upstream_version).toBe("v0.4.37");
     expect(AppConfigSchema.parse({ server_version: "1.2.3" }).server_version).toBe("1.2.3");
     expect(AppConfigSchema.parse({}).server_version).toBeUndefined();
+    expect(AppConfigSchema.parse({}).upstream_version).toBeUndefined();
   });
 });
 

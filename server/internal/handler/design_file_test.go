@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/auth"
+	"github.com/multica-ai/multica/server/internal/entitlement"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -3924,6 +3925,35 @@ func TestCreateDesignRestoreTaskUsesCurrentRevisionAndStoresInput(t *testing.T) 
 	}
 	if selection["frameId"] != "frame-1" {
 		t.Fatalf("input selection frameId = %v, want frame-1", selection["frameId"])
+	}
+}
+func TestCreateDesignRestoreTaskRejectsHiddenIssue(t *testing.T) {
+	created := createDesignFileForTest(t, "Hidden Restore Issue Window Design")
+	if created.CurrentRevision == nil {
+		t.Fatal("expected current revision")
+	}
+	projectID := createProjectForDesignTest(t, "Hidden Restore Issue Window Project")
+	hiddenIssueID := createIssueForDesignTest(t, "Hidden Restore Issue", projectID)
+	_ = createIssueForDesignTest(t, "Visible Restore Issue", projectID)
+
+	h := *testHandler
+	h.Entitlements = issueWindowProvider(entitlement.ActionEnforce, 1)
+	req := newRequest("POST", "/api/design-restore-tasks?workspace_id="+testWorkspaceID, map[string]any{
+		"file_id":  created.File.ID,
+		"issue_id": hiddenIssueID,
+		"input":    map[string]any{"projectId": projectID},
+	})
+	w := httptest.NewRecorder()
+	h.CreateDesignRestoreTask(w, req)
+	if w.Code != http.StatusPaymentRequired {
+		t.Fatalf("hidden issue restore status = %d: %s", w.Code, w.Body.String())
+	}
+	var taskCount int
+	if err := testPool.QueryRow(context.Background(), `SELECT count(*) FROM design_restore_task WHERE issue_id = $1`, hiddenIssueID).Scan(&taskCount); err != nil {
+		t.Fatalf("count hidden issue restore tasks: %v", err)
+	}
+	if taskCount != 0 {
+		t.Fatalf("hidden issue restore task count = %d, want 0", taskCount)
 	}
 }
 

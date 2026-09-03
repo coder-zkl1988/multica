@@ -37,6 +37,60 @@ func TestWriteSourceContextErrorHidesInternalDetails(t *testing.T) {
 	}
 }
 
+func TestPreviewCommentSubIssueRejectsHiddenIssue(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	baseNumber := int(time.Now().UnixNano()%100000) + 9_300_000
+	var sourceIssueID, visibleIssueID, commentID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO issue (workspace_id, title, creator_type, creator_id, number)
+		VALUES ($1, 'hidden source context issue', 'member', $2, $3)
+		RETURNING id
+	`, testWorkspaceID, testUserID, baseNumber).Scan(&sourceIssueID); err != nil {
+		t.Fatalf("insert hidden source issue: %v", err)
+	}
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO issue (workspace_id, title, creator_type, creator_id, number)
+		VALUES ($1, 'visible issue window anchor', 'member', $2, $3)
+		RETURNING id
+	`, testWorkspaceID, testUserID, baseNumber+1).Scan(&visibleIssueID); err != nil {
+		t.Fatalf("insert visible issue: %v", err)
+	}
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO comment (issue_id, workspace_id, author_type, author_id, content)
+		VALUES ($1, $2, 'member', $3, 'hidden source context comment')
+		RETURNING id
+	`, sourceIssueID, testWorkspaceID, testUserID).Scan(&commentID); err != nil {
+		t.Fatalf("insert hidden source comment: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM comment WHERE id = $1`, commentID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, visibleIssueID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, sourceIssueID)
+	})
+	previousEntitlements := testHandler.Entitlements
+	testHandler.Entitlements = issueWindowProvider(entitlement.ActionEnforce, 1)
+	t.Cleanup(func() { testHandler.Entitlements = previousEntitlements })
+
+	recorder := httptest.NewRecorder()
+	request := withURLParam(newRequest(http.MethodGet, "/api/comments/"+commentID+"/sub-issue-preview", nil), "commentId", commentID)
+	testHandler.PreviewCommentSubIssue(recorder, request)
+	if recorder.Code != http.StatusPaymentRequired {
+		t.Fatalf("hidden source preview status = %d: %s", recorder.Code, recorder.Body.String())
+	}
+	var body struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode hidden source preview response: %v", err)
+	}
+	if body.Code != issueWindowErrorCode {
+		t.Fatalf("hidden source preview code = %q, want %q", body.Code, issueWindowErrorCode)
+	}
+}
+
 func TestRetrySourceContextQuickCreateReturnsIssueLimitRecovery(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

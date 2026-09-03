@@ -354,6 +354,26 @@ func TestNormalizeServerVersion(t *testing.T) {
 	}
 }
 
+func TestNormalizeUpstreamVersion(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"unstamped_dev_default_becomes_empty", "dev", ""},
+		{"already_empty_stays_empty", "", ""},
+		{"plain_semver_tag_passes_through", "v0.4.37", "v0.4.37"},
+		{"fork_version_passes_through_without_reinterpretation", "fork-abcdef123", "fork-abcdef123"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := normalizeUpstreamVersion(tt.in); got != tt.want {
+				t.Errorf("normalizeUpstreamVersion(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestEnvBool(t *testing.T) {
 	tests := []struct {
 		name  string

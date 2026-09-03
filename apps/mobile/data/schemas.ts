@@ -534,7 +534,7 @@ export const AgentTaskSchema: z.ZodType<AgentTask> = z.object({
   // so downstream truthy checks (`if (task.failure_reason)`) don't have to
   // special-case both null/undefined AND "".
   failure_reason: z
-    .enum(["agent_error", "timeout", "runtime_offline", "runtime_recovery", "manual", ""])
+    .enum(["agent_error", "timeout", "runtime_offline", "runtime_recovery", "manual", "issue_window_restricted", ""])
     .optional()
     .catch("")
     .transform((v) => (v === "" ? undefined : v)),
@@ -674,7 +674,7 @@ const InboxItemSchema: z.ZodType<InboxItem> = z.object({
   read: z.boolean().default(false),
   archived: z.boolean().default(false),
   created_at: z.string().default(""),
-  details: z.record(z.string(), z.string()).nullable().default(null),
+  details: z.record(z.string(), z.coerce.string()).nullable().default(null),
 }).loose();
 
 export const InboxListSchema = z.array(InboxItemSchema).default([]);

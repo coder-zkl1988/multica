@@ -23,6 +23,7 @@ describe("failureClassOf", () => {
     // not hand its own stored thread back — so this reads as an agent-side
     // failure, not a runtime one.
     expect(failureClassOf("codex_resume_oversized")).toBe("agent");
+    expect(failureClassOf("issue_window_restricted")).toBe("other");
   });
 
   it("keeps pre-MUL-1949 coarse reasons countable", () => {

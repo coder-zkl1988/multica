@@ -810,6 +810,8 @@ export interface AppConfigResponse {
    * silently ignored the unknown field, so absent must be treated as false. */
   agent_conversation_starters_supported?: boolean;
   server_version?: string;
+  /** Plain-semver community Multica release this fork is based on. */
+  upstream_version?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -1008,6 +1010,7 @@ export const AppConfigSchema = z.object({
   local_worktree_supported: BooleanWithDefaultSchema(false),
   agent_conversation_starters_supported: BooleanWithDefaultSchema(false),
   server_version: OptionalStringSchema,
+  upstream_version: OptionalStringSchema,
 }).loose();
 
 export const EMPTY_APP_CONFIG: AppConfigResponse = {
@@ -1026,6 +1029,7 @@ export const EMPTY_APP_CONFIG: AppConfigResponse = {
   // Fail closed: old servers returned success while dropping the field.
   agent_conversation_starters_supported: false,
   feature_flags: {},
+  upstream_version: "",
 };
 
 // Preference keys may grow over time, so keep both the key and value spaces
@@ -2876,6 +2880,7 @@ export const AgentTaskSchema = z.object({
   delivered_comment_ids: OptionalStringArraySchema,
   trigger_summary: z.string().optional(),
   handoff_note: z.string().optional(),
+  concise_mode: z.boolean().optional(),
   kind: z.string().optional(),
   work_dir: z.string().optional().catch(undefined),
   relative_work_dir: z.string().optional().catch(undefined),

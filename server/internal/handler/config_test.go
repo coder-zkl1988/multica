@@ -413,6 +413,33 @@ func TestGetConfigExposesServerVersion(t *testing.T) {
 	}
 }
 
+// TestGetConfigExposesUpstreamVersion verifies the separately stamped
+// community base version is available to self-hosted clients without
+// replacing the fork build version.
+func TestGetConfigExposesUpstreamVersion(t *testing.T) {
+	origCfg := testHandler.cfg
+	defer func() { testHandler.cfg = origCfg }()
+
+	t.Setenv("MULTICA_APP_URL", "https://multica.self-hosted.example")
+	t.Setenv("FRONTEND_ORIGIN", "")
+	testHandler.cfg.ServerVersion = "fork-abcdef123"
+	testHandler.cfg.UpstreamVersion = "v0.4.37"
+
+	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+	w := httptest.NewRecorder()
+	testHandler.GetConfig(w, req)
+	var cfg AppConfig
+	if err := json.Unmarshal(w.Body.Bytes(), &cfg); err != nil {
+		t.Fatalf("decode config: %v", err)
+	}
+	if cfg.ServerVersion != "fork-abcdef123" {
+		t.Fatalf("server_version: want fork-abcdef123, got %q", cfg.ServerVersion)
+	}
+	if cfg.UpstreamVersion != "v0.4.37" {
+		t.Fatalf("upstream_version: want v0.4.37, got %q", cfg.UpstreamVersion)
+	}
+}
+
 // TestGetConfigOmitsServerVersionOnOfficialCloud verifies the build version is
 // suppressed on the managed cloud (frontend host multica.ai) even when the
 // binary is stamped, while a self-hosted frontend origin still reports it. The
@@ -421,6 +448,7 @@ func TestGetConfigOmitsServerVersionOnOfficialCloud(t *testing.T) {
 	origCfg := testHandler.cfg
 	defer func() { testHandler.cfg = origCfg }()
 	testHandler.cfg.ServerVersion = "1.2.3"
+	testHandler.cfg.UpstreamVersion = "v0.4.37"
 
 	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
 
@@ -436,6 +464,9 @@ func TestGetConfigOmitsServerVersionOnOfficialCloud(t *testing.T) {
 	if cfg.ServerVersion != "" {
 		t.Fatalf("server_version: want omitted on official cloud, got %q", cfg.ServerVersion)
 	}
+	if cfg.UpstreamVersion != "" {
+		t.Fatalf("upstream_version: want omitted on official cloud, got %q", cfg.UpstreamVersion)
+	}
 
 	// Self-hosted: operator's own frontend origin -> version reported.
 	t.Setenv("MULTICA_APP_URL", "https://multica.self-hosted.example")
@@ -446,6 +477,9 @@ func TestGetConfigOmitsServerVersionOnOfficialCloud(t *testing.T) {
 	}
 	if cfg.ServerVersion != "1.2.3" {
 		t.Fatalf("server_version: want 1.2.3 on self-hosted, got %q", cfg.ServerVersion)
+	}
+	if cfg.UpstreamVersion != "v0.4.37" {
+		t.Fatalf("upstream_version: want v0.4.37 on self-hosted, got %q", cfg.UpstreamVersion)
 	}
 }
 

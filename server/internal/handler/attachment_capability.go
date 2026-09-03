@@ -222,6 +222,9 @@ func (h *Handler) DownloadAttachmentWithCapability(w http.ResponseWriter, r *htt
 		writeError(w, http.StatusNotFound, "attachment not found")
 		return
 	}
+	if !h.authorizeAttachmentIssue(w, r, att, "attachment_capability_download") {
+		return
+	}
 	if h.Storage == nil {
 		writeError(w, http.StatusServiceUnavailable, "storage not configured")
 		return

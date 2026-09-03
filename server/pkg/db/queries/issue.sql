@@ -81,6 +81,29 @@ WHERE workspace_id = sqlc.arg('workspace_id')
 SELECT * FROM issue
 WHERE id = $1 AND workspace_id = $2;
 
+-- name: IsIssueInCreationWindow :one
+-- Returns true for one issue in the newest creation-number window or one of
+-- the ancestors required to render a visible descendant.
+WITH RECURSIVE issue_window_base AS MATERIALIZED (
+    SELECT id, parent_issue_id
+    FROM issue
+    WHERE workspace_id = sqlc.arg('workspace_id')::uuid
+    ORDER BY number DESC
+    LIMIT sqlc.arg('issue_window_limit')::bigint
+), issue_window_visible(id, parent_issue_id) AS (
+    SELECT id, parent_issue_id FROM issue_window_base
+    UNION
+    SELECT parent.id, parent.parent_issue_id
+    FROM issue parent
+    JOIN issue_window_visible child ON child.parent_issue_id = parent.id
+    WHERE parent.workspace_id = sqlc.arg('workspace_id')::uuid
+)
+SELECT EXISTS (
+    SELECT 1
+    FROM issue_window_visible
+    WHERE id = sqlc.arg('issue_id')::uuid
+);
+
 -- name: ListOpenProjectIssueStatusesForUpdate :many
 SELECT id, status FROM issue
 WHERE project_id = sqlc.arg('project_id')
@@ -578,7 +601,8 @@ WHERE i.workspace_id = $1
 -- unpredictably across batches and statuses; number is a per-workspace
 -- monotonic counter and is sibling-stable.
 SELECT * FROM issue
-WHERE parent_issue_id = $1
+WHERE workspace_id = sqlc.arg('workspace_id')
+  AND parent_issue_id = sqlc.arg('parent_issue_id')
 ORDER BY number ASC;
 
 -- name: ListChildrenByParents :many

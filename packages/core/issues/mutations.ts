@@ -141,6 +141,7 @@ export function useUpdateIssue() {
       const {
         suppress_run: _suppressRun,
         handoff_note: _handoffNote,
+        concise_mode: _conciseMode,
         description: _description,
         description_base: _descriptionBase,
         title_base: _titleBase,
@@ -252,6 +253,7 @@ export function useUpdateIssue() {
       const {
         suppress_run: _suppressRun,
         handoff_note: _handoffNote,
+        concise_mode: _conciseMode,
         description_base: _descriptionBase,
         move_intent: _moveIntent,
         id: _id,
@@ -446,6 +448,7 @@ export function useBatchUpdateIssues() {
       const {
         suppress_run: _suppressRun,
         handoff_note: _handoffNote,
+        concise_mode: _conciseMode,
         description: _description,
         description_base: _descriptionBase,
         ...patch

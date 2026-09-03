@@ -1172,7 +1172,7 @@ func commentMentionsAnyone(content string) bool {
 // same trigger set.
 // enqueueSquadLeaderTask returns true when it actually enqueued a leader task
 // (so the caller can record a handoff trace only on a real run start).
-func (h *Handler) enqueueSquadLeaderTask(ctx context.Context, issue db.Issue, triggerCommentID pgtype.UUID, authorType, authorID, handoffNote string) bool {
+func (h *Handler) enqueueSquadLeaderTask(ctx context.Context, issue db.Issue, triggerCommentID pgtype.UUID, authorType, authorID, handoffNote string, conciseMode ...bool) bool {
 	squad, err := h.Queries.GetSquadInWorkspace(ctx, db.GetSquadInWorkspaceParams{
 		ID:          issue.AssigneeID,
 		WorkspaceID: issue.WorkspaceID,
@@ -1217,7 +1217,7 @@ func (h *Handler) enqueueSquadLeaderTask(ctx context.Context, issue db.Issue, tr
 	// The member who performed the assign/promote is the accountable human for the
 	// leader run (MUL-4302 §4) — the same principal the gate above judged. An agent
 	// author is not a human, so only a member actor is threaded.
-	if _, err := h.TaskService.EnqueueTaskForSquadLeaderWithHandoff(ctx, issue, squad.LeaderID, squad.ID, handoffNote, memberActorUserID(authorType, authorID)); err != nil {
+	if _, err := h.TaskService.EnqueueTaskForSquadLeaderWithHandoffAndMode(ctx, issue, squad.LeaderID, squad.ID, handoffNote, memberActorUserID(authorType, authorID), len(conciseMode) > 0 && conciseMode[0]); err != nil {
 		slog.Warn("enqueue squad leader task failed",
 			"issue_id", uuidToString(issue.ID),
 			"squad_id", uuidToString(squad.ID),

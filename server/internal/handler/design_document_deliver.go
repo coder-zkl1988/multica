@@ -3,13 +3,11 @@ package handler
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -75,15 +73,8 @@ func (h *Handler) DeliverDesignDocument(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
-	issue, err := h.Queries.GetIssueInWorkspace(r.Context(), db.GetIssueInWorkspaceParams{
-		ID: issueUUID, WorkspaceID: workspaceUUID,
-	})
-	if errors.Is(err, pgx.ErrNoRows) {
-		writeProjectDesignSystemError(w, http.StatusNotFound, "issue_not_found", "issue not found")
-		return
-	}
-	if err != nil {
-		writeProjectDesignSystemError(w, http.StatusInternalServerError, "issue_lookup_failed", "failed to load issue")
+	issue, ok := h.loadIssueInWorkspaceAndAuthorizeForProjectDesignSystem(w, r, issueUUID, workspaceUUID, "design_document_delivery")
+	if !ok {
 		return
 	}
 	// Same project, for the same reason creation requires it: a design

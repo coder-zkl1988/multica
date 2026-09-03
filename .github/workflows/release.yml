@@ -134,6 +134,14 @@ jobs:
 
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Resolve community base version
+        id: upstream
+        shell: bash
+        run: |
+          upstream_version="$(git describe --tags --match 'v[0-9]*.[0-9]*.[0-9]*' --exclude 'v*-sso*' --exclude 'desktop-*' --abbrev=0 HEAD 2>/dev/null || true)"
+          echo "version=$upstream_version" >> "$GITHUB_OUTPUT"
 
       - name: Compute backend image labels
         id: meta
@@ -168,6 +176,7 @@ jobs:
           build-args: |
             VERSION=${{ needs.verify.outputs.tag_name }}
             COMMIT=${{ github.sha }}
+            UPSTREAM_VERSION=${{ steps.upstream.outputs.version }}
           outputs: type=image,name=ghcr.io/${{ github.repository_owner }}/multica-backend,push-by-digest=true,name-canonical=true,push=true
 
       - name: Export digest

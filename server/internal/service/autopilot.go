@@ -661,18 +661,6 @@ func (s *AutopilotService) dispatchCreateIssue(ctx context.Context, ap db.Autopi
 	defer tx.Rollback(ctx)
 
 	qtx := s.Queries.WithTx(tx)
-	issueNumber, err := AllocateIssueNumber(ctx, qtx, ap.WorkspaceID, issueCountPolicy)
-	if err != nil {
-		var limitErr *IssueLimitReachedError
-		if errors.As(err, &limitErr) {
-			return &errDispatchSkipped{
-				reason: "workspace has reached its issue limit",
-				code:   dispatch.ReasonIssueLimitReached,
-			}
-		}
-		return fmt.Errorf("allocate issue number: %w", err)
-	}
-
 	title := s.interpolateTemplate(ap, *run, triggerTimezone)
 	description := s.buildIssueDescription(ap, *run, triggerTimezone)
 
@@ -704,6 +692,18 @@ func (s *AutopilotService) dispatchCreateIssue(ctx context.Context, ap db.Autopi
 		return fmt.Errorf("recent duplicate guard: %w", err)
 	} else if found {
 		return &errDispatchSkipped{reason: "recent duplicate autopilot issue: " + util.UUIDToString(duplicate.ID), code: dispatch.ReasonAlreadyActive}
+	}
+
+	issueNumber, err := AllocateIssueNumber(ctx, qtx, ap.WorkspaceID, issueCountPolicy)
+	if err != nil {
+		var limitErr *IssueLimitReachedError
+		if errors.As(err, &limitErr) {
+			return &errDispatchSkipped{
+				reason: "workspace has reached its issue limit",
+				code:   dispatch.ReasonIssueLimitReached,
+			}
+		}
+		return fmt.Errorf("allocate issue number: %w", err)
 	}
 
 	newPosition, err := issueposition.NextTopPosition(ctx, tx, ap.WorkspaceID, "todo")

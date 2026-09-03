@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/entitlement"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -61,8 +62,7 @@ func (h *Handler) ListDesignDeliveries(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if _, err := h.Queries.GetIssueInWorkspace(r.Context(), db.GetIssueInWorkspaceParams{ID: issueUUID, WorkspaceID: wsUUID}); err != nil {
-		writeError(w, http.StatusNotFound, "issue not found")
+	if _, ok := h.loadIssueInWorkspaceAndAuthorize(w, r, issueUUID, wsUUID, "design_delivery_list"); !ok {
 		return
 	}
 	rows, err := h.Queries.ListDesignDeliveriesByIssue(r.Context(), db.ListDesignDeliveriesByIssueParams{WorkspaceID: wsUUID, SourceIssueID: issueUUID})
@@ -70,8 +70,34 @@ func (h *Handler) ListDesignDeliveries(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to list design deliveries")
 		return
 	}
+
+	policy, windowEnabled := h.issueWindowPolicy(r.Context(), wsUUID)
+	var visible map[pgtype.UUID]struct{}
+	if windowEnabled {
+		issueIDs := make([]pgtype.UUID, 0, len(rows)*2)
+		for _, row := range rows {
+			issueIDs = append(issueIDs, row.SourceIssueID, row.TargetIssueID)
+		}
+		if policy.action == entitlement.ActionEnforce {
+			visible, err = h.visibleIssueIDSet(r.Context(), wsUUID, policy, issueIDs)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to list design deliveries")
+				return
+			}
+		} else {
+			h.observeIssueWindow(r.Context(), wsUUID, policy, issueIDs, "design_delivery_list")
+		}
+	}
+
 	resp := make([]DesignDeliveryResponse, 0, len(rows))
 	for _, row := range rows {
+		if visible != nil {
+			_, sourceVisible := visible[row.SourceIssueID]
+			_, targetVisible := visible[row.TargetIssueID]
+			if !sourceVisible || !targetVisible {
+				continue
+			}
+		}
 		resp = append(resp, designDeliveryToResponse(row))
 	}
 	writeJSON(w, http.StatusOK, DesignDeliveryListResponse{Deliveries: resp})
@@ -116,14 +142,12 @@ func (h *Handler) CreateDesignDelivery(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	sourceIssue, err := h.Queries.GetIssueInWorkspace(r.Context(), db.GetIssueInWorkspaceParams{ID: sourceIssueID, WorkspaceID: wsUUID})
-	if err != nil {
-		writeError(w, http.StatusNotFound, "source issue not found")
+	sourceIssue, ok := h.loadIssueInWorkspaceAndAuthorize(w, r, sourceIssueID, wsUUID, "design_delivery_create")
+	if !ok {
 		return
 	}
-	targetIssue, err := h.Queries.GetIssueInWorkspace(r.Context(), db.GetIssueInWorkspaceParams{ID: targetIssueID, WorkspaceID: wsUUID})
-	if err != nil {
-		writeError(w, http.StatusNotFound, "target issue not found")
+	targetIssue, ok := h.loadIssueInWorkspaceAndAuthorize(w, r, targetIssueID, wsUUID, "design_delivery_create")
+	if !ok {
 		return
 	}
 	file, err := h.Queries.GetDesignFileInWorkspace(r.Context(), db.GetDesignFileInWorkspaceParams{ID: fileID, WorkspaceID: wsUUID})
@@ -250,6 +274,12 @@ func (h *Handler) CancelDesignDelivery(w http.ResponseWriter, r *http.Request) {
 	existing, err := h.Queries.GetDesignDeliveryInWorkspace(r.Context(), db.GetDesignDeliveryInWorkspaceParams{ID: deliveryID, WorkspaceID: wsUUID})
 	if err != nil {
 		writeError(w, http.StatusNotFound, "design delivery not found")
+		return
+	}
+	if _, ok := h.loadIssueInWorkspaceAndAuthorize(w, r, existing.SourceIssueID, wsUUID, "design_delivery_cancel"); !ok {
+		return
+	}
+	if _, ok := h.loadIssueInWorkspaceAndAuthorize(w, r, existing.TargetIssueID, wsUUID, "design_delivery_cancel"); !ok {
 		return
 	}
 	if existing.Status != "active" {

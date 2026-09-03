@@ -215,5 +215,10 @@ func (h *Handler) loadDesignDocumentForRequester(w http.ResponseWriter, r *http.
 		writeProjectDesignSystemError(w, http.StatusInternalServerError, "lookup_failed", "failed to load the design document")
 		return db.DesignDocument{}, pgtype.UUID{}, pgtype.UUID{}, false
 	}
+	if document.IssueID.Valid {
+		if _, ok := h.loadIssueInWorkspaceAndAuthorizeForProjectDesignSystem(w, r, document.IssueID, workspaceUUID, "design_document"); !ok {
+			return db.DesignDocument{}, pgtype.UUID{}, pgtype.UUID{}, false
+		}
+	}
 	return document, workspaceUUID, requesterUUID, true
 }

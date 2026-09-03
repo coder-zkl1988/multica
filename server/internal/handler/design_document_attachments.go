@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/service"
@@ -72,7 +73,7 @@ func designDocumentAttachmentAllowed(contentType string) bool {
 // pinned snapshot entries. Every attachment must exist in the workspace, be of
 // an accepted type and size, and be readable from storage — its digest is
 // computed here, once, so the daemon can verify the exact bytes later.
-func (h *Handler) resolveDesignDocumentAttachments(ctx context.Context, workspaceID pgtype.UUID, raw json.RawMessage) ([]designDocumentAttachmentSnapshot, *projectDesignSystemRequestError) {
+func (h *Handler) resolveDesignDocumentAttachments(ctx context.Context, r *http.Request, workspaceID pgtype.UUID, raw json.RawMessage) ([]designDocumentAttachmentSnapshot, *projectDesignSystemRequestError) {
 	trimmed := strings.TrimSpace(string(raw))
 	if trimmed == "" || trimmed == "null" {
 		return []designDocumentAttachmentSnapshot{}, nil
@@ -102,6 +103,33 @@ func (h *Handler) resolveDesignDocumentAttachments(ctx context.Context, workspac
 		attachment, err := h.Queries.GetAttachment(ctx, db.GetAttachmentParams{ID: attachmentID, WorkspaceID: workspaceID})
 		if err != nil {
 			return nil, &projectDesignSystemRequestError{status: http.StatusNotFound, code: "attachment_not_found", message: "attachment not found"}
+		}
+		issueID := attachment.IssueID
+		if !issueID.Valid && attachment.CommentID.Valid {
+			comment, commentErr := h.Queries.GetCommentInWorkspace(ctx, db.GetCommentInWorkspaceParams{ID: attachment.CommentID, WorkspaceID: workspaceID})
+			if errors.Is(commentErr, pgx.ErrNoRows) {
+				return nil, &projectDesignSystemRequestError{status: http.StatusNotFound, code: "attachment_not_found", message: "attachment not found"}
+			}
+			if commentErr != nil {
+				return nil, &projectDesignSystemRequestError{status: http.StatusInternalServerError, code: "attachment_lookup_failed", message: "failed to load attachment owner"}
+			}
+			issueID = comment.IssueID
+		}
+		if issueID.Valid {
+			issue, issueErr := h.loadIssueInWorkspace(ctx, issueID, workspaceID)
+			if errors.Is(issueErr, pgx.ErrNoRows) {
+				return nil, &projectDesignSystemRequestError{status: http.StatusNotFound, code: "attachment_not_found", message: "attachment not found"}
+			}
+			if issueErr != nil {
+				return nil, &projectDesignSystemRequestError{status: http.StatusInternalServerError, code: "attachment_lookup_failed", message: "failed to load attachment owner"}
+			}
+			if windowErr := h.checkIssueWindowAuthorization(r, issue.ID, workspaceID, "design_document_attachment"); windowErr != nil {
+				var outsideWindow *service.IssueOutsideCreationWindowError
+				if errors.As(windowErr, &outsideWindow) {
+					return nil, &projectDesignSystemRequestError{status: http.StatusPaymentRequired, code: issueWindowErrorCode, message: "This issue is outside the workspace's recently created issue window."}
+				}
+				return nil, &projectDesignSystemRequestError{status: http.StatusInternalServerError, code: "issue_window_lookup_failed", message: "failed to check issue access"}
+			}
 		}
 		if !designDocumentAttachmentAllowed(attachment.ContentType) {
 			return nil, &projectDesignSystemRequestError{status: http.StatusUnsupportedMediaType, code: "attachment_type_unsupported", message: "attachment type is not supported as a design reference"}

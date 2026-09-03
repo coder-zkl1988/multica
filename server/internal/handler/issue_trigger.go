@@ -3,9 +3,11 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/service"
@@ -82,15 +84,15 @@ func (h *Handler) shouldSuppressActiveSelfAssignment(ctx context.Context, actorT
 // WillEnqueueRun, carrying an optional handoff note into the run's opening
 // context. The squad path still flows through enqueueSquadLeaderTask so the
 // leader access gate and pending dedup stay in one place.
-func (h *Handler) dispatchIssueRun(ctx context.Context, issue db.Issue, trigger service.IssueRunTrigger, actorType, actorID, handoffNote string) {
+func (h *Handler) dispatchIssueRun(ctx context.Context, issue db.Issue, trigger service.IssueRunTrigger, actorType, actorID, handoffNote string, conciseMode bool) {
 	switch trigger.AssigneeType {
 	case "agent":
 		// The member who performed this assign/promote is the accountable human
 		// for the run (MUL-4302 §4). An agent actor is not a human, so only a
 		// member actor is threaded; otherwise attribution falls back to the chain.
-		_, _ = h.TaskService.EnqueueTaskForIssueWithHandoff(ctx, issue, handoffNote, memberActorUserID(actorType, actorID))
+		_, _ = h.TaskService.EnqueueTaskForIssueWithHandoffAndMode(ctx, issue, handoffNote, memberActorUserID(actorType, actorID), conciseMode)
 	case "squad":
-		h.enqueueSquadLeaderTask(ctx, issue, pgtype.UUID{}, actorType, actorID, handoffNote)
+		h.enqueueSquadLeaderTask(ctx, issue, pgtype.UUID{}, actorType, actorID, handoffNote, conciseMode)
 	}
 }
 
@@ -229,11 +231,17 @@ func (h *Handler) PreviewIssueTrigger(w http.ResponseWriter, r *http.Request) {
 			continue // malformed id contributes no trigger; deterministic
 		}
 		loaded, err := h.Queries.GetIssueInWorkspace(r.Context(), db.GetIssueInWorkspaceParams{
-			ID:          issueUUID,
-			WorkspaceID: parseUUID(workspaceID),
+			ID: issueUUID, WorkspaceID: parseUUID(workspaceID),
 		})
+		if errors.Is(err, pgx.ErrNoRows) {
+			continue // unknown or cross-workspace id contributes no trigger
+		}
 		if err != nil {
-			continue // cross-workspace / unknown id contributes no trigger
+			writeError(w, http.StatusInternalServerError, "failed to load issue")
+			return
+		}
+		if !h.authorizeIssueWindow(w, r, loaded.ID, loaded.WorkspaceID, "trigger_preview") {
+			return
 		}
 
 		post := loaded

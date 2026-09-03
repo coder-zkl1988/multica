@@ -3,6 +3,14 @@ export type DaemonTokenPlan =
   | { kind: "cached_pat"; token: string }
   | { kind: "mint_pat" };
 
+export function daemonCredentialChanged(
+  previousToken: unknown,
+  finalToken: string,
+  userChanged: boolean,
+): boolean {
+  return userChanged || previousToken !== finalToken;
+}
+
 interface PlanDaemonTokenInput {
   tokenFromRenderer: string;
   cachedToken?: unknown;

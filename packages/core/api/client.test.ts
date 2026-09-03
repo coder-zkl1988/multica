@@ -3277,7 +3277,6 @@ describe("ApiClient built-in design systems", () => {
       .resolves.toMatchObject({ slug: "apple", tokens_css: "", design_markdown: "" });
     });
   });
-
 describe("importSkillArchive", () => {
   it("POSTs multipart form data without a JSON content-type", async () => {
     const skill = {

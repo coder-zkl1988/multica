@@ -56,7 +56,7 @@ func TestChatSessionResumeFallbackNeeded(t *testing.T) {
 	}
 }
 
-func TestClaimTaskChatCompletePointerSkipsSessionFallbackQuery(t *testing.T) {
+func TestClaimTaskChatPointerRequiresModeMatchedTask(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -96,8 +96,8 @@ func TestClaimTaskChatCompletePointerSkipsSessionFallbackQuery(t *testing.T) {
 	if resp.Task == nil {
 		t.Fatal("expected a claimed task")
 	}
-	if resp.Task.PriorSessionID != "pointer-session" || resp.Task.PriorWorkDir != "/pointer-workdir" {
-		t.Fatalf("claim pointer = (%q, %q), want direct chat-session pointer", resp.Task.PriorSessionID, resp.Task.PriorWorkDir)
+	if resp.Task.PriorSessionID != "" || resp.Task.PriorWorkDir != "" {
+		t.Fatalf("claim reused an unscoped chat-session pointer = (%q, %q)", resp.Task.PriorSessionID, resp.Task.PriorWorkDir)
 	}
 
 	registry := prometheus.NewRegistry()
@@ -107,6 +107,7 @@ func TestClaimTaskChatCompletePointerSkipsSessionFallbackQuery(t *testing.T) {
 		t.Fatalf("gather claim metrics: %v", err)
 	}
 	seenRolloutQuery := false
+	seenLastSessionQuery := false
 	for _, family := range families {
 		switch family.GetName() {
 		case "multica_chat_claim_session_fallback_needed_total":
@@ -125,7 +126,7 @@ func TestClaimTaskChatCompletePointerSkipsSessionFallbackQuery(t *testing.T) {
 					case "rollout_missing":
 						seenRolloutQuery = true
 					case "last_session":
-						t.Fatal("complete pointer unexpectedly ran GetLastChatTaskSession")
+						seenLastSessionQuery = true
 					}
 				}
 			}
@@ -133,6 +134,9 @@ func TestClaimTaskChatCompletePointerSkipsSessionFallbackQuery(t *testing.T) {
 	}
 	if !seenRolloutQuery {
 		t.Fatal("independent rollout-missing query was not observed")
+	}
+	if !seenLastSessionQuery {
+		t.Fatal("mode-filtered last-session query was not observed")
 	}
 }
 

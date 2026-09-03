@@ -67,11 +67,11 @@ WHERE t.id = $1
 //
 // Cancellation is the one terminal state that never reports back: the daemon
 // discards its result and only sends a cancel-ack, so neither CompleteTask nor
-// FailTask — the only other writers of chat_session.session_id — ever runs. The
-// claim handler reads this pointer BEFORE falling back to
-// GetLastChatTaskSession, so on a chat that already has history a pointer left
-// on the previous turn shadows the cancelled turn's session no matter what the
-// fallback would have found.
+// FailTask — the only other writers of chat_session.session_id — ever runs.
+// The claim handler resolves the mode-filtered GetLastChatTaskSession query
+// instead of trusting this legacy pointer. The pointer advance remains useful
+// for older clients and for keeping chat_session metadata aligned with a
+// cancelled task's recorded session.
 //
 // Two callers, one statement, because both are races the other cannot cover:
 // the cancel path runs it inside the status-flip transaction (so no follow-up
@@ -180,11 +180,11 @@ type ClearChatSessionSessionIfMatchesParams struct {
 // Drops the chat session's resume pointer, but only while it still points at
 // the exact session the caller proved unresumable.
 //
-// The claim handler reads chat_session.session_id FIRST and only falls back to
-// GetLastChatTaskSession when it is empty, so a poisoned pointer here bypasses
-// every filter that query applies. Declining to OVERWRITE the pointer on a
-// resume-unsafe failure — which is all the fail path used to do — leaves the
-// dead session in place and the next turn resumes it (GH #6066).
+// The claim handler does not trust chat_session.session_id for resume because
+// that legacy pointer has no task-level concise-mode marker. It resolves
+// GetLastChatTaskSession with the claimed task's mode instead, preventing a
+// normal task from resuming a concise session (or vice versa). Clearing the
+// pointer still protects older clients and keeps stale state from resurfacing.
 //
 // The session_id + runtime_id predicate is what makes this safe to run in the
 // fail transaction: a concurrent turn that has already written a NEW pointer
@@ -367,7 +367,7 @@ func (q *Queries) CreateChatSession(ctx context.Context, arg CreateChatSessionPa
 const createChatTask = `-- name: CreateChatTask :one
 INSERT INTO agent_task_queue (
     agent_id, runtime_id, issue_id, status, priority, chat_session_id,
-    initiator_user_id, originator_user_id, accountable_user_id, force_fresh_session, runtime_mcp_overlay,
+    initiator_user_id, originator_user_id, accountable_user_id, force_fresh_session, concise_mode, runtime_mcp_overlay,
     runtime_connected_apps, originator_source, trigger_evidence_kind, trigger_evidence_ref_id,
     fire_at, channel_context_revision, id
 )
@@ -378,16 +378,17 @@ SELECT
     $7,
     $8,
     COALESCE($9::boolean, FALSE),
-    $10,
+    COALESCE($10::boolean, FALSE),
     $11,
     $12,
     $13,
     $14,
+    $15,
     $6::timestamptz,
-    $15::bigint,
-    COALESCE($16::uuid, gen_random_uuid())
+    $16::bigint,
+    COALESCE($17::uuid, gen_random_uuid())
 WHERE lock_task_owner_rows($1, NULL, $2)
-RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, handoff_note, prepare_lease_expires_at, squad_id, runtime_mcp_overlay, escalation_for_task_id, fire_at, originator_user_id, runtime_connected_apps, coalesced_comment_ids, delivered_comment_ids, chat_input_task_id, chat_finalize_deferred_at, originator_source, delegated_from_task_id, retry_of_task_id, rerun_of_task_id, rule_version_id, trigger_evidence_kind, trigger_evidence_ref_id, accountable_user_id, session_rollout_missing, retired_session_id, quick_actions_disabled, regenerate_quick_actions_for, branch_name, durable_work_dir, channel_context_revision
+RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, handoff_note, prepare_lease_expires_at, squad_id, runtime_mcp_overlay, escalation_for_task_id, fire_at, originator_user_id, runtime_connected_apps, coalesced_comment_ids, delivered_comment_ids, chat_input_task_id, chat_finalize_deferred_at, originator_source, delegated_from_task_id, retry_of_task_id, rerun_of_task_id, rule_version_id, trigger_evidence_kind, trigger_evidence_ref_id, accountable_user_id, session_rollout_missing, retired_session_id, quick_actions_disabled, regenerate_quick_actions_for, branch_name, durable_work_dir, channel_context_revision, concise_mode
 `
 
 type CreateChatTaskParams struct {
@@ -400,6 +401,7 @@ type CreateChatTaskParams struct {
 	OriginatorUserID       pgtype.UUID        `json:"originator_user_id"`
 	AccountableUserID      pgtype.UUID        `json:"accountable_user_id"`
 	ForceFreshSession      pgtype.Bool        `json:"force_fresh_session"`
+	ConciseMode            pgtype.Bool        `json:"concise_mode"`
 	RuntimeMcpOverlay      []byte             `json:"runtime_mcp_overlay"`
 	RuntimeConnectedApps   []byte             `json:"runtime_connected_apps"`
 	OriginatorSource       pgtype.Text        `json:"originator_source"`
@@ -427,6 +429,7 @@ func (q *Queries) CreateChatTask(ctx context.Context, arg CreateChatTaskParams) 
 		arg.OriginatorUserID,
 		arg.AccountableUserID,
 		arg.ForceFreshSession,
+		arg.ConciseMode,
 		arg.RuntimeMcpOverlay,
 		arg.RuntimeConnectedApps,
 		arg.OriginatorSource,
@@ -491,6 +494,7 @@ func (q *Queries) CreateChatTask(ctx context.Context, arg CreateChatTaskParams) 
 		&i.BranchName,
 		&i.DurableWorkDir,
 		&i.ChannelContextRevision,
+		&i.ConciseMode,
 	)
 	return i, err
 }
@@ -570,7 +574,7 @@ FROM (
 WHERE task.id = $1
   AND pending.max_until IS NOT NULL
   AND (task.fire_at IS NULL OR task.fire_at < pending.max_until)
-RETURNING task.id, task.agent_id, task.issue_id, task.status, task.priority, task.dispatched_at, task.started_at, task.completed_at, task.result, task.error, task.created_at, task.context, task.runtime_id, task.session_id, task.work_dir, task.trigger_comment_id, task.chat_session_id, task.autopilot_run_id, task.attempt, task.max_attempts, task.parent_task_id, task.failure_reason, task.trigger_summary, task.force_fresh_session, task.is_leader_task, task.wait_reason, task.initiator_user_id, task.handoff_note, task.prepare_lease_expires_at, task.squad_id, task.runtime_mcp_overlay, task.escalation_for_task_id, task.fire_at, task.originator_user_id, task.runtime_connected_apps, task.coalesced_comment_ids, task.delivered_comment_ids, task.chat_input_task_id, task.chat_finalize_deferred_at, task.originator_source, task.delegated_from_task_id, task.retry_of_task_id, task.rerun_of_task_id, task.rule_version_id, task.trigger_evidence_kind, task.trigger_evidence_ref_id, task.accountable_user_id, task.session_rollout_missing, task.retired_session_id, task.quick_actions_disabled, task.regenerate_quick_actions_for, task.branch_name, task.durable_work_dir, task.channel_context_revision
+RETURNING task.id, task.agent_id, task.issue_id, task.status, task.priority, task.dispatched_at, task.started_at, task.completed_at, task.result, task.error, task.created_at, task.context, task.runtime_id, task.session_id, task.work_dir, task.trigger_comment_id, task.chat_session_id, task.autopilot_run_id, task.attempt, task.max_attempts, task.parent_task_id, task.failure_reason, task.trigger_summary, task.force_fresh_session, task.is_leader_task, task.wait_reason, task.initiator_user_id, task.handoff_note, task.prepare_lease_expires_at, task.squad_id, task.runtime_mcp_overlay, task.escalation_for_task_id, task.fire_at, task.originator_user_id, task.runtime_connected_apps, task.coalesced_comment_ids, task.delivered_comment_ids, task.chat_input_task_id, task.chat_finalize_deferred_at, task.originator_source, task.delegated_from_task_id, task.retry_of_task_id, task.rerun_of_task_id, task.rule_version_id, task.trigger_evidence_kind, task.trigger_evidence_ref_id, task.accountable_user_id, task.session_rollout_missing, task.retired_session_id, task.quick_actions_disabled, task.regenerate_quick_actions_for, task.branch_name, task.durable_work_dir, task.channel_context_revision, task.concise_mode
 `
 
 // Closes the enqueue-vs-append race: under READ COMMITTED a media message can
@@ -637,6 +641,7 @@ func (q *Queries) DeferChatTaskForSealedPendingMedia(ctx context.Context, taskID
 		&i.BranchName,
 		&i.DurableWorkDir,
 		&i.ChannelContextRevision,
+		&i.ConciseMode,
 	)
 	return i, err
 }
@@ -932,8 +937,12 @@ WITH retired_sessions AS (
     FROM agent_task_queue r
     WHERE r.chat_session_id = $1
       AND (
-        $2::bigint IS NULL
-        OR COALESCE(r.channel_context_revision, 1) = $2::bigint
+        $2::boolean IS NULL
+        OR r.concise_mode = $2::boolean
+      )
+      AND (
+        $3::bigint IS NULL
+        OR COALESCE(r.channel_context_revision, 1) = $3::bigint
       )
       AND r.retired_session_id IS NOT NULL
 ), resume_overflow_at AS (
@@ -945,8 +954,12 @@ WITH retired_sessions AS (
     FROM agent_task_queue t
     WHERE t.chat_session_id = $1
       AND (
-        $2::bigint IS NULL
-        OR COALESCE(t.channel_context_revision, 1) = $2::bigint
+        $2::boolean IS NULL
+        OR t.concise_mode = $2::boolean
+      )
+      AND (
+        $3::bigint IS NULL
+        OR COALESCE(t.channel_context_revision, 1) = $3::bigint
       )
       AND t.status = 'failed'
       AND (
@@ -959,8 +972,12 @@ WITH retired_sessions AS (
     FROM agent_task_queue t
     WHERE t.chat_session_id = $1
       AND (
-        $2::bigint IS NULL
-        OR COALESCE(t.channel_context_revision, 1) = $2::bigint
+        $2::boolean IS NULL
+        OR t.concise_mode = $2::boolean
+      )
+      AND (
+        $3::bigint IS NULL
+        OR COALESCE(t.channel_context_revision, 1) = $3::bigint
       )
       AND t.session_id IS NOT NULL
       AND t.status IN ('completed', 'failed', 'cancelled')
@@ -989,11 +1006,9 @@ WHERE session_id NOT IN (SELECT session_id FROM retired_sessions)
     )
   )
   -- MUL-5722, mirroring GetLastTaskSession: an overflowed resume records no
-  -- session, so exclude by time instead of by matching the failed row. Note
-  -- this only guards the FALLBACK for legacy tasks — the claim handler reads
-  -- chat_session.session_id first for them, so a pointer still naming the
-  -- oversized thread has to be cleared at fail time (see FailTask) to be
-  -- covered. Context-scoped channel tasks resolve directly from this query.
+  -- session, so exclude by time instead of by matching the failed row. This
+  -- protects every mode-filtered claim lookup, including the current handler;
+  -- the failed task's missing session cannot otherwise identify the old thread.
   AND (
     (SELECT at FROM resume_overflow_at) IS NULL
     OR completed_at > (SELECT at FROM resume_overflow_at)
@@ -1004,6 +1019,7 @@ LIMIT 1
 
 type GetLastChatTaskSessionParams struct {
 	ChatSessionID          pgtype.UUID `json:"chat_session_id"`
+	ConciseMode            pgtype.Bool `json:"concise_mode"`
 	ChannelContextRevision pgtype.Int8 `json:"channel_context_revision"`
 }
 
@@ -1016,12 +1032,13 @@ type GetLastChatTaskSessionRow struct {
 // Returns the most recent task in this chat session that managed to record a
 // session_id. Includes completed, failed AND cancelled tasks: each of them may
 // have established a real agent session, and we'd rather resume there than
-// start over and lose conversation memory. Used as a fallback when
-// chat_session.session_id is NULL, and as the authoritative generation-scoped
-// source for channel tasks. Resume-unsafe failures are excluded because
-// replaying those sessions deterministically reproduces the same terminal
-// state. Keep this list in sync with resumeUnsafeFailureReason and
-// GetLastTaskSession.
+// start over and lose conversation memory. Resume-unsafe failures are excluded
+// because replaying those sessions deterministically reproduces the same
+// terminal state. Used as the authoritative source for non-force-fresh chat
+// claims and auto-retry. The optional concise_mode and
+// channel_context_revision filters keep independent prompt generations from
+// sharing a provider session. Keep this list in sync with
+// resumeUnsafeFailureReason and GetLastTaskSession.
 //
 // The plan depends on idx_agent_task_queue_chat_terminal_resume for the
 // terminal/cutoff scans and idx_agent_task_queue_chat_retired_session for the
@@ -1054,7 +1071,7 @@ type GetLastChatTaskSessionRow struct {
 // poisoned row invalidates the whole session, while a genuinely different
 // healthy session stays eligible.
 func (q *Queries) GetLastChatTaskSession(ctx context.Context, arg GetLastChatTaskSessionParams) (GetLastChatTaskSessionRow, error) {
-	row := q.db.QueryRow(ctx, getLastChatTaskSession, arg.ChatSessionID, arg.ChannelContextRevision)
+	row := q.db.QueryRow(ctx, getLastChatTaskSession, arg.ChatSessionID, arg.ConciseMode, arg.ChannelContextRevision)
 	var i GetLastChatTaskSessionRow
 	err := row.Scan(&i.SessionID, &i.WorkDir, &i.RuntimeID)
 	return i, err
@@ -2880,7 +2897,7 @@ WHERE task.chat_session_id = $1
         AND message.role = 'user'
         AND message.channel_media_pending_until > now()
   )
-RETURNING task.id, task.agent_id, task.issue_id, task.status, task.priority, task.dispatched_at, task.started_at, task.completed_at, task.result, task.error, task.created_at, task.context, task.runtime_id, task.session_id, task.work_dir, task.trigger_comment_id, task.chat_session_id, task.autopilot_run_id, task.attempt, task.max_attempts, task.parent_task_id, task.failure_reason, task.trigger_summary, task.force_fresh_session, task.is_leader_task, task.wait_reason, task.initiator_user_id, task.handoff_note, task.prepare_lease_expires_at, task.squad_id, task.runtime_mcp_overlay, task.escalation_for_task_id, task.fire_at, task.originator_user_id, task.runtime_connected_apps, task.coalesced_comment_ids, task.delivered_comment_ids, task.chat_input_task_id, task.chat_finalize_deferred_at, task.originator_source, task.delegated_from_task_id, task.retry_of_task_id, task.rerun_of_task_id, task.rule_version_id, task.trigger_evidence_kind, task.trigger_evidence_ref_id, task.accountable_user_id, task.session_rollout_missing, task.retired_session_id, task.quick_actions_disabled, task.regenerate_quick_actions_for, task.branch_name, task.durable_work_dir, task.channel_context_revision
+RETURNING task.id, task.agent_id, task.issue_id, task.status, task.priority, task.dispatched_at, task.started_at, task.completed_at, task.result, task.error, task.created_at, task.context, task.runtime_id, task.session_id, task.work_dir, task.trigger_comment_id, task.chat_session_id, task.autopilot_run_id, task.attempt, task.max_attempts, task.parent_task_id, task.failure_reason, task.trigger_summary, task.force_fresh_session, task.is_leader_task, task.wait_reason, task.initiator_user_id, task.handoff_note, task.prepare_lease_expires_at, task.squad_id, task.runtime_mcp_overlay, task.escalation_for_task_id, task.fire_at, task.originator_user_id, task.runtime_connected_apps, task.coalesced_comment_ids, task.delivered_comment_ids, task.chat_input_task_id, task.chat_finalize_deferred_at, task.originator_source, task.delegated_from_task_id, task.retry_of_task_id, task.rerun_of_task_id, task.rule_version_id, task.trigger_evidence_kind, task.trigger_evidence_ref_id, task.accountable_user_id, task.session_rollout_missing, task.retired_session_id, task.quick_actions_disabled, task.regenerate_quick_actions_for, task.branch_name, task.durable_work_dir, task.channel_context_revision, task.concise_mode
 `
 
 // Media completion may race with the 3s run batcher. Promote every original
@@ -2953,6 +2970,7 @@ func (q *Queries) PromoteChannelChatTasksIfMediaReady(ctx context.Context, chatS
 			&i.BranchName,
 			&i.DurableWorkDir,
 			&i.ChannelContextRevision,
+			&i.ConciseMode,
 		); err != nil {
 			return nil, err
 		}
@@ -3383,7 +3401,7 @@ const setChatTaskInputOwnerSelf = `-- name: SetChatTaskInputOwnerSelf :one
 UPDATE agent_task_queue
 SET chat_input_task_id = id
 WHERE id = $1
-RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, handoff_note, prepare_lease_expires_at, squad_id, runtime_mcp_overlay, escalation_for_task_id, fire_at, originator_user_id, runtime_connected_apps, coalesced_comment_ids, delivered_comment_ids, chat_input_task_id, chat_finalize_deferred_at, originator_source, delegated_from_task_id, retry_of_task_id, rerun_of_task_id, rule_version_id, trigger_evidence_kind, trigger_evidence_ref_id, accountable_user_id, session_rollout_missing, retired_session_id, quick_actions_disabled, regenerate_quick_actions_for, branch_name, durable_work_dir, channel_context_revision
+RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, handoff_note, prepare_lease_expires_at, squad_id, runtime_mcp_overlay, escalation_for_task_id, fire_at, originator_user_id, runtime_connected_apps, coalesced_comment_ids, delivered_comment_ids, chat_input_task_id, chat_finalize_deferred_at, originator_source, delegated_from_task_id, retry_of_task_id, rerun_of_task_id, rule_version_id, trigger_evidence_kind, trigger_evidence_ref_id, accountable_user_id, session_rollout_missing, retired_session_id, quick_actions_disabled, regenerate_quick_actions_for, branch_name, durable_work_dir, channel_context_revision, concise_mode
 `
 
 // Stamps a freshly-created direct-chat task as the owner of its own input batch
@@ -3451,6 +3469,7 @@ func (q *Queries) SetChatTaskInputOwnerSelf(ctx context.Context, id pgtype.UUID)
 		&i.BranchName,
 		&i.DurableWorkDir,
 		&i.ChannelContextRevision,
+		&i.ConciseMode,
 	)
 	return i, err
 }

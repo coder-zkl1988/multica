@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/multica-ai/multica/server/internal/entitlement"
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -64,7 +65,8 @@ func TestResolveDesignDocumentAttachmentsPinsTheStoredBytes(t *testing.T) {
 	archive := createDesignDocumentAttachmentForTest(t, storage, "bundle.tar", "application/x-tar", []byte("tar"))
 
 	raw := json.RawMessage(`[{"attachment_id":"` + uuidToString(image.ID) + `"},{"attachment_id":"` + uuidToString(image.ID) + `"}]`)
-	resolved, requestErr := testHandler.resolveDesignDocumentAttachments(context.Background(), parseUUID(testWorkspaceID), raw)
+	request := httptest.NewRequest(http.MethodPost, "/api/design-documents", nil)
+	resolved, requestErr := testHandler.resolveDesignDocumentAttachments(context.Background(), request, parseUUID(testWorkspaceID), raw)
 	if requestErr != nil {
 		t.Fatalf("resolve: %v", requestErr.message)
 	}
@@ -77,7 +79,7 @@ func TestResolveDesignDocumentAttachmentsPinsTheStoredBytes(t *testing.T) {
 		t.Fatalf("pinned = %+v", pinned)
 	}
 
-	empty, requestErr := testHandler.resolveDesignDocumentAttachments(context.Background(), parseUUID(testWorkspaceID), nil)
+	empty, requestErr := testHandler.resolveDesignDocumentAttachments(context.Background(), request, parseUUID(testWorkspaceID), nil)
 	if requestErr != nil || len(empty) != 0 || empty == nil {
 		t.Fatalf("no attachments = %+v (%v)", empty, requestErr)
 	}
@@ -93,11 +95,39 @@ func TestResolveDesignDocumentAttachmentsPinsTheStoredBytes(t *testing.T) {
 		{name: "too many", raw: "[" + strings.TrimSuffix(strings.Repeat(`{"attachment_id":"`+uuidToString(image.ID)+`"},`, 9), ",") + "]", code: "too_many_attachments"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			_, requestErr := testHandler.resolveDesignDocumentAttachments(context.Background(), parseUUID(testWorkspaceID), json.RawMessage(tt.raw))
+			_, requestErr := testHandler.resolveDesignDocumentAttachments(context.Background(), request, parseUUID(testWorkspaceID), json.RawMessage(tt.raw))
 			if requestErr == nil || requestErr.code != tt.code {
 				t.Fatalf("error = %+v, want %s", requestErr, tt.code)
 			}
 		})
+	}
+}
+func TestResolveDesignDocumentAttachmentsRejectsHiddenIssueAttachment(t *testing.T) {
+	storage := &mockStorage{}
+	previousStorage := testHandler.Storage
+	previousEntitlements := testHandler.Entitlements
+	testHandler.Storage = storage
+	t.Cleanup(func() {
+		testHandler.Storage = previousStorage
+		testHandler.Entitlements = previousEntitlements
+	})
+	attachment := createDesignDocumentAttachmentForTest(t, storage, "hidden.png", "image/png", []byte("hidden reference"))
+	projectID := createProjectForDesignTest(t, "Hidden Attachment Window Project")
+	hiddenIssueID := createIssueForDesignTest(t, "Hidden Attachment Issue", projectID)
+	_ = createIssueForDesignTest(t, "Visible Attachment Issue", projectID)
+	if _, err := testPool.Exec(context.Background(), `UPDATE attachment SET issue_id = $1 WHERE id = $2`, hiddenIssueID, attachment.ID); err != nil {
+		t.Fatalf("link attachment to issue: %v", err)
+	}
+	testHandler.Entitlements = issueWindowProvider(entitlement.ActionEnforce, 1)
+
+	request := httptest.NewRequest(http.MethodPost, "/api/design-documents", nil)
+	raw := json.RawMessage(`[{"attachment_id":"` + uuidToString(attachment.ID) + `"}]`)
+	resolved, requestErr := testHandler.resolveDesignDocumentAttachments(context.Background(), request, parseUUID(testWorkspaceID), raw)
+	if requestErr == nil || requestErr.status != http.StatusPaymentRequired || requestErr.code != issueWindowErrorCode {
+		t.Fatalf("hidden issue attachment error = %+v, want payment-required issue-window error", requestErr)
+	}
+	if resolved != nil {
+		t.Fatalf("hidden issue attachment resolved unexpectedly: %+v", resolved)
 	}
 }
 

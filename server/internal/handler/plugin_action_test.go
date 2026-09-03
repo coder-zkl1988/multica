@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/multica-ai/multica/server/internal/entitlement"
 	publicapiv1 "github.com/multica-ai/multica/server/pkg/publicapi/v1"
 )
 
@@ -244,6 +245,32 @@ func TestPluginIssueUsesStableDTOAndRevisionETag(t *testing.T) {
 	}
 	if conflict.Code != "revision_conflict" {
 		t.Fatalf("conflict code = %q", conflict.Code)
+	}
+}
+
+func TestPluginIssueWindowDenialUsesProblemEnvelope(t *testing.T) {
+	priorEntitlements := testHandler.Entitlements
+	t.Cleanup(func() { testHandler.Entitlements = priorEntitlements })
+	testHandler.Entitlements = issueWindowProvider(entitlement.ActionEnforce, 1)
+	installationID := installPluginForAction(t, []string{"issues:read"})
+	oldIssueID := createTestIssue(t, "Plugin hidden issue", "todo", "none")
+	_ = createTestIssue(t, "Plugin newest issue", "todo", "none")
+
+	recorder := httptest.NewRecorder()
+	testHandler.GetPluginIssue(recorder, pluginActionRequest(http.MethodGet, "/v1/issues/"+oldIssueID, installationID, nil,
+		map[string]string{"issue_ref": oldIssueID}))
+	if recorder.Code != http.StatusPaymentRequired {
+		t.Fatalf("hidden plugin issue status = %d, want 402: %s", recorder.Code, recorder.Body.String())
+	}
+	if got := recorder.Header().Get("Content-Type"); got != publicapiv1.ProblemContentType {
+		t.Fatalf("plugin issue error content type = %q, want %q", got, publicapiv1.ProblemContentType)
+	}
+	var problem publicapiv1.Problem
+	if err := json.NewDecoder(recorder.Body).Decode(&problem); err != nil {
+		t.Fatalf("decode plugin issue problem: %v", err)
+	}
+	if problem.Status != http.StatusPaymentRequired || problem.Code != issueWindowErrorCode || problem.Error == "" {
+		t.Fatalf("unexpected plugin issue problem: %+v", problem)
 	}
 }
 

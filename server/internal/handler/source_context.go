@@ -399,6 +399,19 @@ func (h *Handler) PreviewCommentSubIssue(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
+	anchor, anchorErr := h.Queries.GetCommentInWorkspace(r.Context(), db.GetCommentInWorkspaceParams{ID: anchorCommentID, WorkspaceID: wsUUID})
+	if errors.Is(anchorErr, pgx.ErrNoRows) {
+		h.writeSourceContextError(w, service.ErrAnchorCommentDeleted, service.SourceContextLimitUsage{})
+		return
+	}
+	if anchorErr != nil {
+		h.writeSourceContextError(w, anchorErr, service.SourceContextLimitUsage{})
+		return
+	}
+	if err := h.checkIssueWindowAuthorization(r, anchor.IssueID, wsUUID, "comment_sub_issue_preview"); err != nil {
+		h.writeSourceContextError(w, err, service.SourceContextLimitUsage{})
+		return
+	}
 	build, err := service.BuildSourceContext(r.Context(), h.Queries, wsUUID, anchorCommentID)
 	if err != nil {
 		h.writeSourceContextError(w, err, build.Limits)
@@ -446,6 +459,9 @@ func (h *Handler) CreateCommentSubIssue(w http.ResponseWriter, r *http.Request) 
 	wantDigest, tokenIssueID, validToken := service.ParseSourceContextToken(strings.TrimSpace(req.CaptureToken))
 	if !validToken {
 		writeJSON(w, http.StatusConflict, map[string]any{"code": "source_context_changed", "error": "source context preview is invalid; refresh and try again"})
+		return
+	}
+	if _, ok := h.loadIssueInWorkspaceAndAuthorize(w, r, tokenIssueID, wsUUID, "comment_sub_issue_create"); !ok {
 		return
 	}
 	build, err := service.BuildSourceContext(r.Context(), h.Queries, wsUUID, anchorCommentID)
@@ -706,7 +722,8 @@ func (h *Handler) createManualCommentSubIssue(w http.ResponseWriter, r *http.Req
 		AttachmentIDs: attachmentIDs, LabelIDs: labelIDs, Stage: stage,
 		AllowDuplicate: input.AllowDuplicate, SourceContext: &capture,
 	}, service.IssueCreateOpts{
-		ActorID: util.UUIDToString(userID),
+		ActorID:     util.UUIDToString(userID),
+		ConciseMode: input.ConciseMode,
 		BroadcastPayload: func(issue db.Issue, _ []db.Attachment, labels []db.IssueLabel) map[string]any {
 			response := issueToResponse(issue, prefix)
 			labelResponses := labelsToResponse(labels)
@@ -731,6 +748,7 @@ type preparedAgentCommentSubIssue struct {
 	prompt, priority, dueDate   string
 	projectID                   pgtype.UUID
 	attachmentIDs               []pgtype.UUID
+	conciseMode                 bool
 }
 
 func (h *Handler) prepareAgentCommentSubIssue(w http.ResponseWriter, r *http.Request, workspaceID pgtype.UUID, input QuickCreateIssueRequest) (*preparedAgentCommentSubIssue, error) {
@@ -824,6 +842,7 @@ func (h *Handler) prepareAgentCommentSubIssue(w http.ResponseWriter, r *http.Req
 		agentID: agentID, squadID: squadID, runtimeID: agent.RuntimeID,
 		prompt: prompt, priority: priority, dueDate: dueDate,
 		projectID: projectID, attachmentIDs: attachmentIDs,
+		conciseMode: input.ConciseMode,
 	}, nil
 }
 
@@ -835,7 +854,7 @@ func (h *Handler) createAgentCommentSubIssue(w http.ResponseWriter, r *http.Requ
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"code": "source_context_quick_create_unsupported", "error": "selected agent runtime must be updated before using captured context"})
 		return errSourceContextResponseWritten
 	}
-	task, err := h.TaskService.EnqueueQuickCreateTaskWithSourceContext(r.Context(), workspaceID, userID, prepared.agentID, prepared.squadID, prepared.prompt, prepared.priority, prepared.dueDate, prepared.projectID, capture.SourceIssueID, prepared.attachmentIDs, capture)
+	task, err := h.TaskService.EnqueueQuickCreateTaskWithSourceContextAndMode(r.Context(), workspaceID, userID, prepared.agentID, prepared.squadID, prepared.prompt, prepared.priority, prepared.dueDate, prepared.projectID, capture.SourceIssueID, prepared.attachmentIDs, capture, prepared.conciseMode)
 	if err != nil {
 		return err
 	}
@@ -845,6 +864,9 @@ func (h *Handler) createAgentCommentSubIssue(w http.ResponseWriter, r *http.Requ
 }
 
 func (h *Handler) writeSourceContextError(w http.ResponseWriter, err error, limits service.SourceContextLimitUsage) {
+	if writeIssueWindowViolation(w, err) {
+		return
+	}
 	if writeIssueLimitReached(w, err) {
 		return
 	}

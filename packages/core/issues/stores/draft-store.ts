@@ -62,6 +62,7 @@ export interface IssueCreateAgent {
   prompt: string;
   actorType?: QuickCreateActorType;
   actorId?: string;
+  conciseMode: boolean;
 }
 
 export interface IssueCreateDraft {
@@ -93,6 +94,7 @@ const emptyAgent = (): IssueCreateAgent => ({
   prompt: "",
   actorType: undefined,
   actorId: undefined,
+  conciseMode: false,
 });
 
 interface IssueDraftStore {

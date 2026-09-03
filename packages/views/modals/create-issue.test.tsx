@@ -138,6 +138,7 @@ const emptyIssueDraft = () => ({
     prompt: "",
     actorType: undefined as "agent" | "squad" | undefined,
     actorId: undefined as string | undefined,
+    conciseMode: false,
   },
   activeMode: "manual" as "manual" | "agent",
 });
@@ -514,6 +515,24 @@ vi.mock("@multica/ui/components/ui/dropdown-menu", () => ({
   DropdownMenu: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   DropdownMenuTrigger: ({ render }: { render: React.ReactNode }) => <>{render}</>,
   DropdownMenuContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  DropdownMenuCheckboxItem: ({
+    children,
+    checked,
+    onCheckedChange,
+  }: {
+    children: React.ReactNode;
+    checked?: boolean;
+    onCheckedChange?: (checked: boolean) => void;
+  }) => (
+    <button
+      type="button"
+      role="menuitemcheckbox"
+      aria-checked={checked}
+      onClick={() => onCheckedChange?.(!checked)}
+    >
+      {children}
+    </button>
+  ),
   // `render` mirrors Base UI: an item can BE another element (an <AppLink>).
   // The real Item gives that element role="button", which is what the queries
   // below match on.

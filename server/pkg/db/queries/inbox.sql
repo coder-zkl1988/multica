@@ -3,7 +3,7 @@ SELECT i.*,
        iss.status AS issue_status,
        iss.priority AS issue_priority
 FROM inbox_item i
-LEFT JOIN issue iss ON iss.id = i.issue_id
+LEFT JOIN issue iss ON iss.id = i.issue_id AND iss.workspace_id = i.workspace_id
 WHERE i.workspace_id = $1 AND i.recipient_type = $2 AND i.recipient_id = $3 AND i.archived = false
 ORDER BY i.created_at DESC;
 
@@ -29,7 +29,23 @@ ORDER BY i.created_at DESC;
 -- comment landing without sending every historical notification in the group.
 -- Keep the materialized working set narrow: full row data is joined only for
 -- the final selected ids, not copied for every archived notification scanned.
-WITH eligible_archived AS MATERIALIZED (
+-- When issue_window_limit is supplied, the recursive visibility set is applied
+-- before limited_groups so visible older groups cannot be displaced by hidden
+-- newer groups. A NULL limit preserves the legacy query and includes all rows.
+WITH RECURSIVE issue_window_base AS MATERIALIZED (
+    SELECT recent.id, recent.parent_issue_id
+    FROM issue recent
+    WHERE recent.workspace_id = $1
+    ORDER BY recent.number DESC
+    LIMIT COALESCE(sqlc.narg('issue_window_limit')::bigint, 0)
+), issue_window_visible(id, parent_issue_id) AS (
+    SELECT id, parent_issue_id FROM issue_window_base
+    UNION
+    SELECT parent.id, parent.parent_issue_id
+    FROM issue parent
+    JOIN issue_window_visible child ON child.parent_issue_id = parent.id
+    WHERE parent.workspace_id = $1
+), eligible_archived AS MATERIALIZED (
     SELECT i.id,
            COALESCE(i.issue_id, i.id) AS group_id,
            i.created_at,
@@ -39,6 +55,11 @@ WITH eligible_archived AS MATERIALIZED (
       AND i.recipient_type = $2
       AND i.recipient_id = $3
       AND i.archived = true
+      AND (
+          sqlc.narg('issue_window_limit')::bigint IS NULL
+          OR i.issue_id IS NULL
+          OR i.issue_id IN (SELECT id FROM issue_window_visible)
+      )
       AND (i.issue_id IS NULL OR NOT EXISTS (
           SELECT 1
           FROM inbox_item active
@@ -78,7 +99,7 @@ SELECT i.*,
        iss.priority AS issue_priority
 FROM inbox_item i
 JOIN selected_ids selected ON selected.id = i.id
-LEFT JOIN issue iss ON iss.id = i.issue_id
+LEFT JOIN issue iss ON iss.id = i.issue_id AND iss.workspace_id = i.workspace_id
 ORDER BY i.created_at DESC, i.id DESC;
 
 -- name: GetInboxItem :one

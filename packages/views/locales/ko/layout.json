@@ -42,7 +42,8 @@
     "check_for_updates": "업데이트 확인",
     "update_ready": "버전 {{version}} 다운로드 준비 완료",
     "up_to_date": "최신 버전입니다",
-    "server_version": "서버 버전 {{version}}"
+    "server_version": "서버 버전 {{version}}",
+    "upstream_base_version": "커뮤니티 베이스 버전 {{version}}"
   },
   "workspace_loader": {
     "loading_workspace": "워크스페이스 로딩 중...",

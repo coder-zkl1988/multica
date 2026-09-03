@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/multica-ai/multica/server/internal/entitlement"
 )
 
 func createDesignDeliveryIssueForTest(t *testing.T, title, status, parentID, projectID string) string {
@@ -162,6 +164,42 @@ func TestCreateDesignDeliveryPromotesTargetAndSupersedesPrevious(t *testing.T) {
 	}
 	if listedScope["source_type"] != "raw_design_revision" || listedScope["fallback_policy"] != "frontend_full_restore_fallback" {
 		t.Fatalf("listed scope handoff metadata = %#v, want raw design fallback", listedScope)
+	}
+}
+
+func TestListDesignDeliveriesFiltersHiddenLinkedIssue(t *testing.T) {
+	created := createDesignFileForTest(t, "Design Delivery Issue Window Design")
+	if created.CurrentRevision == nil {
+		t.Fatal("expected current revision")
+	}
+	projectID := createProjectForDesignTest(t, "Design Delivery Issue Window Project")
+	if _, err := testPool.Exec(context.Background(), `UPDATE design_file SET project_id = $1 WHERE id = $2`, projectID, created.File.ID); err != nil {
+		t.Fatalf("attach design file to project: %v", err)
+	}
+	targetIssueID := createDesignDeliveryIssueForTest(t, "hidden delivery target", "todo", "", projectID)
+	sourceIssueID := createDesignDeliveryIssueForTest(t, "visible delivery source", "todo", "", projectID)
+
+	createW := httptest.NewRecorder()
+	createReq := newRequest("POST", "/api/design-deliveries?workspace_id="+testWorkspaceID, createDesignDeliveryRequestBody(sourceIssueID, targetIssueID, created.File.ID, created.CurrentRevision.ID, "frame-window"))
+	testHandler.CreateDesignDelivery(createW, createReq)
+	if createW.Code != http.StatusCreated {
+		t.Fatalf("CreateDesignDelivery: expected 201, got %d: %s", createW.Code, createW.Body.String())
+	}
+
+	h := *testHandler
+	h.Entitlements = issueWindowProvider(entitlement.ActionEnforce, 1)
+	listW := httptest.NewRecorder()
+	listReq := newRequest("GET", "/api/design-deliveries?workspace_id="+testWorkspaceID+"&issue_id="+sourceIssueID, nil)
+	h.ListDesignDeliveries(listW, listReq)
+	if listW.Code != http.StatusOK {
+		t.Fatalf("ListDesignDeliveries: expected 200, got %d: %s", listW.Code, listW.Body.String())
+	}
+	var listResp DesignDeliveryListResponse
+	if err := json.NewDecoder(listW.Body).Decode(&listResp); err != nil {
+		t.Fatalf("decode delivery list: %v", err)
+	}
+	if len(listResp.Deliveries) != 0 {
+		t.Fatalf("delivery list exposed hidden linked issue: %#v", listResp.Deliveries)
 	}
 }
 

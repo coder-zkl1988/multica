@@ -3608,6 +3608,14 @@ func TestClaimTask_ChatPriorSessionRuntimeGuard(t *testing.T) {
 		"work_dir":   "/tmp/same-chat-workdir",
 		"runtime_id": runtimeID,
 	})
+	dbfx.Exec(t, `
+        INSERT INTO agent_task_queue (
+            agent_id, runtime_id, chat_session_id,
+            status, priority, started_at, completed_at,
+            session_id, work_dir, concise_mode
+        )
+        VALUES ($1, $2, $3, 'completed', 0, now(), now(), 'same-chat-session', '/tmp/same-chat-workdir', FALSE)
+    `, agentID, runtimeID, resumeSessionID)
 
 	dbfx.Exec(t, `
 		INSERT INTO agent_task_queue (

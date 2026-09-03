@@ -138,6 +138,23 @@ func TestPreviewIssueTrigger_BatchAggregates(t *testing.T) {
 	}
 }
 
+func TestPreviewIssueTriggerIgnoresUnknownIssueID(t *testing.T) {
+	agentID := seededReadyAgentID(t)
+	issue := createIssueForTest(t, map[string]any{
+		"title":         "preview with unknown id",
+		"status":        "backlog",
+		"assignee_type": "agent",
+		"assignee_id":   agentID,
+	})
+	resp := previewIssueTrigger(t, map[string]any{
+		"issue_ids": []string{issue.ID, "11111111-1111-1111-1111-111111111111"},
+		"status":    "todo",
+	})
+	if resp.TotalCount != 1 || len(resp.Triggers) != 1 || resp.Triggers[0].IssueID != issue.ID {
+		t.Fatalf("valid trigger was discarded with unknown issue id: %+v", resp)
+	}
+}
+
 // TestPreviewIssueTrigger_MatchesWritePath is the core invariant: when preview
 // says a run will start, the real write path enqueues it; when preview says it
 // won't, the write path enqueues nothing.

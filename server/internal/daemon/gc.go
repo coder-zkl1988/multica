@@ -886,11 +886,9 @@ func (d *Daemon) cleanTaskDir(taskDir string) (bytes int64, removed bool) {
 	// The V2 native agent chain stamps the .agent_context/project_design_system/
 	// {context,reference,base} sidecar directories to 0o555 so the agent
 	// cannot mutate its inputs. os.RemoveAll cannot unlink children of
-	// a 0o555 directory (unlink needs write on the parent), so we have
-	// to restore writability on the workdir's sidecar tree before the
-	// removal. The chmod is best-effort: a failure here surfaces in the
-	// os.RemoveAll error as EACCES so the operator sees the leak instead
-	// of it being silently swallowed.
+	// a 0o555 directory (unlink needs write on the parent), so restore
+	// writability after ownership is proven and before removal. The chmod is
+	// best-effort; RemoveAll still reports any remaining failure.
 	if err := execenv.RestoreV2SidecarWritability(filepath.Join(taskDir, "workdir")); err != nil {
 		d.logger.Warn("gc: restore V2 sidecar writability failed", "dir", taskDir, "error", err)
 	}

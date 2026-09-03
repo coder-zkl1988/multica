@@ -64,6 +64,48 @@ func TestConnectedConfigValidation(t *testing.T) {
 	}
 }
 
+func TestNormalizePolicyKeepsIssueCountIndependentFromOptionalIssueWindow(t *testing.T) {
+	policy := samplePolicy(1, 0, 60, ActionEnforce)
+	windowLimit := 17
+	policy.Gates[string(GateIssueWindow)] = wireGate{Action: string(ActionObserve), Limit: &windowLimit}
+
+	normalized, err := normalizePolicy(policy)
+	if err != nil {
+		t.Fatalf("normalizePolicy with optional issue window: %v", err)
+	}
+	if got := normalized.snapshot.gates[GateIssueCount].Action; got != ActionEnforce {
+		t.Fatalf("issue_count action = %q, want %q", got, ActionEnforce)
+	}
+	if got := normalized.snapshot.gates[GateIssueWindow].Action; got != ActionObserve {
+		t.Fatalf("issue_window action = %q, want %q", got, ActionObserve)
+	}
+
+	delete(policy.Gates, string(GateIssueWindow))
+	normalized, err = normalizePolicy(policy)
+	if err != nil {
+		t.Fatalf("normalizePolicy without issue window: %v", err)
+	}
+	if got := normalized.snapshot.gates[GateIssueCount].Action; got != ActionEnforce {
+		t.Fatalf("issue_count action without issue window = %q, want %q", got, ActionEnforce)
+	}
+	if got := normalized.snapshot.gates[GateIssueWindow].Action; got != ActionOff {
+		t.Fatalf("missing issue_window action = %q, want %q", got, ActionOff)
+	}
+
+	policy = samplePolicy(1, 0, 60, ActionEnforce)
+	policy.Gates[string(GateIssueWindow)] = wireGate{Action: "invalid"}
+	normalized, err = normalizePolicy(policy)
+	if err != nil {
+		t.Fatalf("normalizePolicy with malformed optional issue window: %v", err)
+	}
+	if got := normalized.snapshot.gates[GateIssueCount].Action; got != ActionEnforce {
+		t.Fatalf("issue_count action with malformed issue window = %q, want %q", got, ActionEnforce)
+	}
+	if got := normalized.snapshot.gates[GateIssueWindow].Action; got != ActionOff {
+		t.Fatalf("malformed issue_window action = %q, want %q", got, ActionOff)
+	}
+}
+
 func TestGateFetchesMachinePolicyWithoutHumanIdentity(t *testing.T) {
 	workspaceID := uuid.New()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

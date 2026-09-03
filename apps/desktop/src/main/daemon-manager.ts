@@ -52,7 +52,10 @@ import {
   isAuthStatusError,
   type AuthProbeResult,
 } from "./daemon-auth-probe";
-import { planDaemonToken } from "./daemon-token-sync";
+import {
+  daemonCredentialChanged,
+  planDaemonToken,
+} from "./daemon-token-sync";
 
 const POLL_INTERVAL_MS = 5_000;
 const PREFS_PATH = join(homedir(), ".multica", "desktop_prefs.json");
@@ -736,7 +739,11 @@ async function syncToken(
     }
   }
 
-  const credentialChanged = config.token !== finalToken || userChanged;
+  const credentialChanged = daemonCredentialChanged(
+    config.token,
+    finalToken,
+    userChanged,
+  );
   config.token = finalToken;
   if (targetApiBaseUrl) config.server_url = targetApiBaseUrl;
   await writeProfileConfig(active.name, config);
@@ -750,24 +757,28 @@ async function restartDaemonAfterUserSwitch(
 ): Promise<void> {
   // If we just rotated credentials onto a running daemon, restart it so the
   // in-memory token in the Go process matches the new config.
-  const existing = await fetchHealthAtPort(active.port);
-  if (daemonStatusAlive(existing?.status)) {
-    // Restart whether it's "running" or still "starting" — a booting daemon
-    // already loaded the old token at startup, so it must be restarted to
-    // pick up the rotated credentials.
-    console.log(
-      "[daemon] credentials changed — restarting daemon with new credentials",
-    );
-    // Credential rotation is a one-shot login intent, not poll-driven
-    // maintenance: wait for bootstrap/recovery instead of dropping it.
-    const restarted = await lifecycleOperations.runForeground(() =>
-      restartDaemon(),
-    );
-    if (!restarted.success) {
-      console.warn(
-        `[daemon] restart-after-credential-change failed: ${restarted.error ?? "unknown error"}`,
+  try {
+    const existing = await fetchHealthAtPort(active.port);
+    if (daemonStatusAlive(existing?.status)) {
+      // Restart whether it's "running" or still "starting" — a booting daemon
+      // already loaded the old token at startup, so it must be restarted to
+      // pick up the rotated credentials.
+      console.log(
+        "[daemon] user switched — restarting daemon with new credentials",
       );
+      // Credential rotation is a one-shot login intent, not poll-driven
+      // maintenance: wait for bootstrap/recovery instead of dropping it.
+      const restarted = await lifecycleOperations.runForeground(() =>
+        restartDaemon(),
+      );
+      if (!restarted.success) {
+        console.warn(
+          `[daemon] restart-on-user-switch failed: ${restarted.error ?? "unknown error"}`,
+        );
+      }
     }
+  } catch (err) {
+    console.warn("[daemon] restart-on-user-switch failed:", err);
   }
 }
 

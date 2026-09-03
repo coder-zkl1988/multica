@@ -103,5 +103,20 @@ published only after their own transaction commits. Stored English title/body
 remain complete fallback copy for clients and delivery channels without
 structured localization; in-app quota views localize from `details`.
 
+## Recently-created issue window
+
+The fork-local optional `issue_window` gate restricts issue reads and issue
+mutations to the newest `limit` issues ordered by immutable workspace issue
+number. Ancestors of those issues remain visible so their hierarchy can still
+render, but unrelated older siblings do not. The gate also rejects creating a
+child under an issue outside that visible set. `off` preserves the legacy
+behavior and `observe` records would-block telemetry without changing
+responses; only `enforce` filters or rejects requests.
+
+This gate predates the community `issue_count` gate and is deliberately
+optional at the Cloud boundary. Missing or malformed `issue_window` data
+disables only this fork-local restriction; it must not disable issue-count or
+autopilot enforcement.
+
 Future consumers should depend on the small `Provider` interface. Tests can use
 `server/internal/entitlement/entitlementtest.Stub` without Cloud.

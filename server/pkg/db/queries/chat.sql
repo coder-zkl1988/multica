@@ -288,11 +288,11 @@ WHERE id = sqlc.arg('id');
 -- Drops the chat session's resume pointer, but only while it still points at
 -- the exact session the caller proved unresumable.
 --
--- The claim handler reads chat_session.session_id FIRST and only falls back to
--- GetLastChatTaskSession when it is empty, so a poisoned pointer here bypasses
--- every filter that query applies. Declining to OVERWRITE the pointer on a
--- resume-unsafe failure — which is all the fail path used to do — leaves the
--- dead session in place and the next turn resumes it (GH #6066).
+-- The claim handler does not trust chat_session.session_id for resume because
+-- that legacy pointer has no task-level concise-mode marker. It resolves
+-- GetLastChatTaskSession with the claimed task's mode instead, preventing a
+-- normal task from resuming a concise session (or vice versa). Clearing the
+-- pointer still protects older clients and keeps stale state from resurfacing.
 --
 -- The session_id + runtime_id predicate is what makes this safe to run in the
 -- fail transaction: a concurrent turn that has already written a NEW pointer
@@ -313,11 +313,11 @@ WHERE id = sqlc.arg('id')
 --
 -- Cancellation is the one terminal state that never reports back: the daemon
 -- discards its result and only sends a cancel-ack, so neither CompleteTask nor
--- FailTask — the only other writers of chat_session.session_id — ever runs. The
--- claim handler reads this pointer BEFORE falling back to
--- GetLastChatTaskSession, so on a chat that already has history a pointer left
--- on the previous turn shadows the cancelled turn's session no matter what the
--- fallback would have found.
+-- FailTask — the only other writers of chat_session.session_id — ever runs.
+-- The claim handler resolves the mode-filtered GetLastChatTaskSession query
+-- instead of trusting this legacy pointer. The pointer advance remains useful
+-- for older clients and for keeping chat_session metadata aligned with a
+-- cancelled task's recorded session.
 --
 -- Two callers, one statement, because both are races the other cannot cover:
 -- the cancel path runs it inside the status-flip transaction (so no follow-up
@@ -1061,7 +1061,7 @@ WHERE id = $1;
 -- bypass (MUL-4302 §2).
 INSERT INTO agent_task_queue (
     agent_id, runtime_id, issue_id, status, priority, chat_session_id,
-    initiator_user_id, originator_user_id, accountable_user_id, force_fresh_session, runtime_mcp_overlay,
+    initiator_user_id, originator_user_id, accountable_user_id, force_fresh_session, concise_mode, runtime_mcp_overlay,
     runtime_connected_apps, originator_source, trigger_evidence_kind, trigger_evidence_ref_id,
     fire_at, channel_context_revision, id
 )
@@ -1072,6 +1072,7 @@ SELECT
     sqlc.narg(originator_user_id),
     sqlc.narg(accountable_user_id),
     COALESCE(sqlc.narg('force_fresh_session')::boolean, FALSE),
+    COALESCE(sqlc.narg('concise_mode')::boolean, FALSE),
     sqlc.narg(runtime_mcp_overlay),
     sqlc.narg(runtime_connected_apps),
     sqlc.narg(originator_source),
@@ -1123,12 +1124,13 @@ RETURNING *;
 -- Returns the most recent task in this chat session that managed to record a
 -- session_id. Includes completed, failed AND cancelled tasks: each of them may
 -- have established a real agent session, and we'd rather resume there than
--- start over and lose conversation memory. Used as a fallback when
--- chat_session.session_id is NULL, and as the authoritative generation-scoped
--- source for channel tasks. Resume-unsafe failures are excluded because
--- replaying those sessions deterministically reproduces the same terminal
--- state. Keep this list in sync with resumeUnsafeFailureReason and
--- GetLastTaskSession.
+-- start over and lose conversation memory. Resume-unsafe failures are excluded
+-- because replaying those sessions deterministically reproduces the same
+-- terminal state. Used as the authoritative source for non-force-fresh chat
+-- claims and auto-retry. The optional concise_mode and
+-- channel_context_revision filters keep independent prompt generations from
+-- sharing a provider session. Keep this list in sync with
+-- resumeUnsafeFailureReason and GetLastTaskSession.
 --
 -- The plan depends on idx_agent_task_queue_chat_terminal_resume for the
 -- terminal/cutoff scans and idx_agent_task_queue_chat_retired_session for the
@@ -1165,6 +1167,10 @@ WITH retired_sessions AS (
     FROM agent_task_queue r
     WHERE r.chat_session_id = sqlc.arg('chat_session_id')
       AND (
+        sqlc.narg('concise_mode')::boolean IS NULL
+        OR r.concise_mode = sqlc.narg('concise_mode')::boolean
+      )
+      AND (
         sqlc.narg('channel_context_revision')::bigint IS NULL
         OR COALESCE(r.channel_context_revision, 1) = sqlc.narg('channel_context_revision')::bigint
       )
@@ -1177,6 +1183,10 @@ WITH retired_sessions AS (
     SELECT MAX(t.completed_at) AS at
     FROM agent_task_queue t
     WHERE t.chat_session_id = sqlc.arg('chat_session_id')
+      AND (
+        sqlc.narg('concise_mode')::boolean IS NULL
+        OR t.concise_mode = sqlc.narg('concise_mode')::boolean
+      )
       AND (
         sqlc.narg('channel_context_revision')::bigint IS NULL
         OR COALESCE(t.channel_context_revision, 1) = sqlc.narg('channel_context_revision')::bigint
@@ -1191,6 +1201,10 @@ WITH retired_sessions AS (
         t.session_id, t.work_dir, t.runtime_id, t.status, t.failure_reason, t.error, t.completed_at
     FROM agent_task_queue t
     WHERE t.chat_session_id = sqlc.arg('chat_session_id')
+      AND (
+        sqlc.narg('concise_mode')::boolean IS NULL
+        OR t.concise_mode = sqlc.narg('concise_mode')::boolean
+      )
       AND (
         sqlc.narg('channel_context_revision')::bigint IS NULL
         OR COALESCE(t.channel_context_revision, 1) = sqlc.narg('channel_context_revision')::bigint
@@ -1222,11 +1236,9 @@ WHERE session_id NOT IN (SELECT session_id FROM retired_sessions)
     )
   )
   -- MUL-5722, mirroring GetLastTaskSession: an overflowed resume records no
-  -- session, so exclude by time instead of by matching the failed row. Note
-  -- this only guards the FALLBACK for legacy tasks — the claim handler reads
-  -- chat_session.session_id first for them, so a pointer still naming the
-  -- oversized thread has to be cleared at fail time (see FailTask) to be
-  -- covered. Context-scoped channel tasks resolve directly from this query.
+  -- session, so exclude by time instead of by matching the failed row. This
+  -- protects every mode-filtered claim lookup, including the current handler;
+  -- the failed task's missing session cannot otherwise identify the old thread.
   AND (
     (SELECT at FROM resume_overflow_at) IS NULL
     OR completed_at > (SELECT at FROM resume_overflow_at)

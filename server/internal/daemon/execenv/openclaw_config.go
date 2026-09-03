@@ -121,18 +121,15 @@ const (
 //  2. `config get agents.list --json`   — pre-2026.6 agents schema
 //  3. `agents list --json`              — 2026.6+ registry fallback, only
 //     reached when (2) reports the config path is missing
-//  4. `config get --json`               — full resolved config, only for an
-//     agent with a managed mcp_config
+//  4. `config get skills.load.extraDirs --json` — selected-agent skill roots;
+//     managed-MCP snapshots are read from the active config file and do not
+//     consume another CLI deadline.
 //
-// Adding a deadline-bearing step means re-deriving the ceiling. The worst-case
-// test counts distinct deadlines rather than calls, so a new invocation that
-// shares an existing budget is free and one that brings its own fails loudly.
-//
-// Three, not upstream's four: this fork resolves the user config by reading the
-// active file rather than calling the pathless `openclaw config get --json`,
-// which OpenClaw 2026.7.1 rejects outright (fork PR #24). One fewer CLI step,
-// one fewer deadline.
-const openclawMaxCLIDeadlinesPerPreparation = 3
+// Adding a fifth deadline-bearing step means re-deriving the ceiling. The
+// worst-case test counts distinct deadlines rather than calls, so a new
+// invocation that shares an existing budget is free and one that brings its own
+// fails loudly.
+const openclawMaxCLIDeadlinesPerPreparation = 4
 
 // ErrOpenclawCLITimeout marks a task preparation that failed because the local
 // openclaw CLI did not answer within the deadline. It is a sentinel rather

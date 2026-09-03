@@ -144,6 +144,7 @@ type Config struct {
 	OpenCodeIdleWatchdog            time.Duration // OpenCode-specific no-message window; 0 falls back to AgentIdleWatchdog and values above it cannot extend the global bound
 	AgentIdleWatchdog               time.Duration // force-stop a run when the backend goes silent this long with an empty queue (0 = disabled)
 	AgentToolWatchdog               time.Duration // force-stop a run when a single tool call stays in flight (silent) this long (0 = never force-stop during a tool call); defaults to AgentIdleWatchdog, so operators tune one number unless they deliberately want a wider tool budget
+	DirectAgentMode                 bool          // skip Multica prompt/runtime injection and pass only the task's user input to the configured agent (default: false; MULTICA_DIRECT_AGENT_MODE)
 	ClaudeArgs                      []string
 	CodexArgs                       []string
 	CodebuddyArgs                   []string
@@ -599,6 +600,10 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	if overrides.DisableAutoReload {
 		autoReloadEnabled = false
 	}
+	// MULTICA_DIRECT_AGENT_MODE is an explicit escape hatch for short, direct
+	// agent calls. It is intentionally opt-in because direct mode also bypasses
+	// the workflow that reads the issue, updates status, and posts the result.
+	directAgentMode := boolFromEnv("MULTICA_DIRECT_AGENT_MODE", false)
 
 	return Config{
 		ServerBaseURL:                   serverBaseURL,
@@ -643,6 +648,7 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		OpenCodeIdleWatchdog:            openCodeIdleWatchdog,
 		AgentIdleWatchdog:               agentIdleWatchdog,
 		AgentToolWatchdog:               agentToolWatchdog,
+		DirectAgentMode:                 directAgentMode,
 		ClaudeArgs:                      claudeArgs,
 		CodexArgs:                       codexArgs,
 		CodebuddyArgs:                   codebuddyArgs,

@@ -378,7 +378,20 @@ func (q *Queries) GetInboxItemInWorkspace(ctx context.Context, arg GetInboxItemI
 }
 
 const listArchivedInboxItems = `-- name: ListArchivedInboxItems :many
-WITH eligible_archived AS MATERIALIZED (
+WITH RECURSIVE issue_window_base AS MATERIALIZED (
+    SELECT recent.id, recent.parent_issue_id
+    FROM issue recent
+    WHERE recent.workspace_id = $1
+    ORDER BY recent.number DESC
+    LIMIT COALESCE($4::bigint, 0)
+), issue_window_visible(id, parent_issue_id) AS (
+    SELECT id, parent_issue_id FROM issue_window_base
+    UNION
+    SELECT parent.id, parent.parent_issue_id
+    FROM issue parent
+    JOIN issue_window_visible child ON child.parent_issue_id = parent.id
+    WHERE parent.workspace_id = $1
+), eligible_archived AS MATERIALIZED (
     SELECT i.id,
            COALESCE(i.issue_id, i.id) AS group_id,
            i.created_at,
@@ -388,6 +401,11 @@ WITH eligible_archived AS MATERIALIZED (
       AND i.recipient_type = $2
       AND i.recipient_id = $3
       AND i.archived = true
+      AND (
+          $4::bigint IS NULL
+          OR i.issue_id IS NULL
+          OR i.issue_id IN (SELECT id FROM issue_window_visible)
+      )
       AND (i.issue_id IS NULL OR NOT EXISTS (
           SELECT 1
           FROM inbox_item active
@@ -427,14 +445,15 @@ SELECT i.id, i.workspace_id, i.recipient_type, i.recipient_id, i.type, i.severit
        iss.priority AS issue_priority
 FROM inbox_item i
 JOIN selected_ids selected ON selected.id = i.id
-LEFT JOIN issue iss ON iss.id = i.issue_id
+LEFT JOIN issue iss ON iss.id = i.issue_id AND iss.workspace_id = i.workspace_id
 ORDER BY i.created_at DESC, i.id DESC
 `
 
 type ListArchivedInboxItemsParams struct {
-	WorkspaceID   pgtype.UUID `json:"workspace_id"`
-	RecipientType string      `json:"recipient_type"`
-	RecipientID   pgtype.UUID `json:"recipient_id"`
+	WorkspaceID      pgtype.UUID `json:"workspace_id"`
+	RecipientType    string      `json:"recipient_type"`
+	RecipientID      pgtype.UUID `json:"recipient_id"`
+	IssueWindowLimit pgtype.Int8 `json:"issue_window_limit"`
 }
 
 type ListArchivedInboxItemsRow struct {
@@ -478,8 +497,16 @@ type ListArchivedInboxItemsRow struct {
 // comment landing without sending every historical notification in the group.
 // Keep the materialized working set narrow: full row data is joined only for
 // the final selected ids, not copied for every archived notification scanned.
+// When issue_window_limit is supplied, the recursive visibility set is applied
+// before limited_groups so visible older groups cannot be displaced by hidden
+// newer groups. A NULL limit preserves the legacy query and includes all rows.
 func (q *Queries) ListArchivedInboxItems(ctx context.Context, arg ListArchivedInboxItemsParams) ([]ListArchivedInboxItemsRow, error) {
-	rows, err := q.db.Query(ctx, listArchivedInboxItems, arg.WorkspaceID, arg.RecipientType, arg.RecipientID)
+	rows, err := q.db.Query(ctx, listArchivedInboxItems,
+		arg.WorkspaceID,
+		arg.RecipientType,
+		arg.RecipientID,
+		arg.IssueWindowLimit,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -521,7 +548,7 @@ SELECT i.id, i.workspace_id, i.recipient_type, i.recipient_id, i.type, i.severit
        iss.status AS issue_status,
        iss.priority AS issue_priority
 FROM inbox_item i
-LEFT JOIN issue iss ON iss.id = i.issue_id
+LEFT JOIN issue iss ON iss.id = i.issue_id AND iss.workspace_id = i.workspace_id
 WHERE i.workspace_id = $1 AND i.recipient_type = $2 AND i.recipient_id = $3 AND i.archived = false
 ORDER BY i.created_at DESC
 `

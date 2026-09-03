@@ -416,7 +416,7 @@ func (s *inMemoryCapabilityScanStore) complete(id string, failed bool) {
 // immediately so the caller can poll for the result.
 func (h *Handler) RequestRuntimeCapabilityScan(w http.ResponseWriter, r *http.Request) {
 	runtimeID := chi.URLParam(r, "runtimeId")
-	rt, _, ok := h.requireRuntimeCapabilityReadAccess(w, r, obsmetrics.RuntimeLookupSourceTestCapability, runtimeID)
+	rt, _, ok := h.requireRuntimeCapabilityReadAccess(w, r, obsmetrics.RuntimeLookupSourceRuntimeAPI, runtimeID)
 	if !ok {
 		return
 	}

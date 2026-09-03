@@ -42,7 +42,8 @@
     "check_for_updates": "更新を確認",
     "update_ready": "バージョン {{version}} のダウンロード準備ができました",
     "up_to_date": "最新の状態です",
-    "server_version": "サーバーバージョン {{version}}"
+    "server_version": "サーバーバージョン {{version}}",
+    "upstream_base_version": "コミュニティベースバージョン {{version}}"
   },
   "workspace_loader": {
     "loading_workspace": "ワークスペースを読み込み中…",

@@ -21,8 +21,8 @@ SHORT_NEW=${NEW_SHA:0:9}
 SHORT_OLD=${OLD_SHA:0:9}
 echo "=== old=$OLD_SHA new=$NEW_SHA stamp=$STAMP ==="
 
-echo "--- [1/8] fetch origin main ---"
-timeout 180 env GIT_TERMINAL_PROMPT=0 git -c http.lowSpeedLimit=1 -c http.lowSpeedTime=60 fetch --progress --prune origin main
+echo "--- [1/8] fetch origin main and tags ---"
+timeout 180 env GIT_TERMINAL_PROMPT=0 git -c http.lowSpeedLimit=1 -c http.lowSpeedTime=60 fetch --progress --prune --tags origin main
 echo "fetch_status=$?"
 FOUND=$(git rev-parse origin/main 2>/dev/null || echo "")
 echo "fetched_origin_main=$FOUND"
@@ -53,22 +53,45 @@ echo "--- [6/8] build backend/frontend/docs ---"
 export VERSION="fork-${SHORT_NEW}"
 export COMMIT="$NEW_SHA"
 export DATE=$(date -Iseconds)
-echo "build_version=$VERSION build_commit=$COMMIT build_date=$DATE"
+# The fork repo must not carry plain upstream semver tags (upstream's
+# release.yml matches v*.*.* and must not fire here), so derive the community
+# base from the fork's own sso release tag: v0.4.37-sso.2 -> v0.4.37.
+# Prefetch tags explicitly: a fresh deployment directory clones with no tags,
+# which is how upstream_version went empty on 91.
+git fetch --tags --force origin >/dev/null 2>&1 || true
+UPSTREAM_VERSION=$(
+  git tag --list 'v*-sso.*' --sort=-version:refname --format='%(refname:short)' --merged "$NEW_SHA" 2>/dev/null \
+  | grep -v '^desktop-' \
+  | head -n1 \
+  | sed -E 's/-sso\.[0-9]+$//'
+)
+export UPSTREAM_VERSION
+echo "build_version=$VERSION upstream_version=${UPSTREAM_VERSION:-unknown} build_commit=$COMMIT build_date=$DATE"
 docker compose --env-file .env -f docker-compose.selfhost.yml -f docker-compose.selfhost.build.yml -f .env.compose.cloud.yml build backend frontend docs
 echo "build_status=$?"
 
 echo "--- [7/8] rollback images + deploy ---"
-old_backend_image=$(docker inspect -f '{{.Image}}' multica-backend-1)
-old_frontend_image=$(docker inspect -f '{{.Image}}' multica-frontend-1)
-old_docs_image=$(docker inspect -f '{{.Image}}' multica-docs-1)
-docker image tag "$old_backend_image" "multica-backend:rollback-${SHORT_OLD}"
-docker image tag "$old_frontend_image" "multica-web:rollback-${SHORT_OLD}"
-docker image tag "$old_docs_image" "multica-docs:rollback-${SHORT_OLD}"
+# Capture rollback images BEFORE `up` replaces the containers. The previous
+# flow tagged the old image, then docker commit-ed the NEW container onto the
+# same rollback tag afterwards — destroying the rollback copy every deploy.
+# Fail closed instead: if any rollback capture fails, abort before deploying.
+rollback_ok=1
+for svc in backend web docs; do
+  container="multica-${svc}-1"
+  image_id=$(docker inspect -f '{{.Image}}' "$container" 2>/dev/null || true)
+  if [[ -z "$image_id" ]]; then
+    echo "rollback_capture_failed container=$container" >&2
+    rollback_ok=0
+    continue
+  fi
+  docker image tag "$image_id" "multica-${svc}:rollback-${SHORT_OLD}" || rollback_ok=0
+done
+if [[ "$rollback_ok" -ne 1 ]]; then
+  echo "ABORT: rollback image capture incomplete; not deploying" >&2
+  exit 1
+fi
 docker run --rm --entrypoint ./multica multica-backend:dev version
 docker compose --env-file .env -f docker-compose.selfhost.yml -f docker-compose.selfhost.build.yml -f .env.compose.cloud.yml up -d --no-build
-docker commit --pause=false multica-backend-1 "multica-backend:rollback-${SHORT_OLD}"
-docker commit --pause=false multica-frontend-1 "multica-web:rollback-${SHORT_OLD}"
-docker commit --pause=false multica-docs-1 "multica-docs:rollback-${SHORT_OLD}"
 echo "deploy_start_status=$?"
 
 echo "--- [8/8] health checks ---"

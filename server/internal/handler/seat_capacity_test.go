@@ -589,3 +589,42 @@ func TestClaimNextDueSeatCapacityIntentIsExclusiveAcrossReplicas(t *testing.T) {
 		t.Fatalf("claimed=%d empty=%d, want 1/1", claimed, empty)
 	}
 }
+
+func TestDeliveredSeatCapacityIntentIsNotClaimedOrPending(t *testing.T) {
+	ctx := context.Background()
+	queries := db.New(testPool)
+	token := uuid.New()
+	created, err := queries.UpsertSeatCapacityIntent(ctx, db.UpsertSeatCapacityIntentParams{
+		WorkspaceID: parseUUID(testWorkspaceID), OperationToken: uuidToPG(token),
+		Action: seatcapacity.ActionConfirm, MemberID: uuidToPG(uuid.New()),
+		NextAttemptAt: pgtype.Timestamptz{Time: time.Now().Add(-time.Minute), Valid: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(ctx, `DELETE FROM seat_capacity_outbox WHERE operation_token = $1`, token)
+	})
+
+	if err := queries.MarkSeatCapacityIntentDelivered(ctx, db.MarkSeatCapacityIntentDeliveredParams{
+		OperationToken: created.OperationToken,
+		Action:         created.Action,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := queries.ClaimNextDueSeatCapacityIntent(ctx, pgtype.Timestamptz{
+		Time: time.Now().Add(5 * time.Minute), Valid: true,
+	}); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("claim delivered intent error = %v, want pgx.ErrNoRows", err)
+	}
+
+	stats, err := queries.SeatCapacityOutboxStats(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stat := range stats {
+		if stat.Action == created.Action && (stat.PendingCount != 0 || stat.DeadLetteredCount != 0 || stat.OldestPendingAgeSeconds != 0) {
+			t.Fatalf("delivered intent stats = %+v, want no pending/dead-lettered work", stat)
+		}
+	}
+}

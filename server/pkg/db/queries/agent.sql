@@ -330,7 +330,7 @@ LIMIT 5;
 -- The same pattern is used by every INSERT listed in pkg/dbid's write table.
 INSERT INTO agent_task_queue (
     agent_id, runtime_id, issue_id, status, priority, trigger_comment_id,
-    coalesced_comment_ids, trigger_summary, force_fresh_session, is_leader_task, handoff_note,
+    coalesced_comment_ids, trigger_summary, force_fresh_session, is_leader_task, handoff_note, concise_mode,
     squad_id, context, originator_user_id, accountable_user_id, runtime_mcp_overlay, runtime_connected_apps,
     originator_source, delegated_from_task_id, rule_version_id, rerun_of_task_id, trigger_evidence_kind, trigger_evidence_ref_id,
     id
@@ -342,6 +342,7 @@ SELECT
     COALESCE(sqlc.narg('force_fresh_session')::boolean, FALSE),
     COALESCE(sqlc.narg('is_leader_task')::boolean, FALSE),
     sqlc.narg(handoff_note),
+    COALESCE(sqlc.narg('concise_mode')::boolean, FALSE),
     sqlc.narg(squad_id),
     CASE
         WHEN COALESCE(sqlc.narg('head_sha')::text, '') <> ''
@@ -378,7 +379,7 @@ RETURNING *;
 INSERT INTO agent_task_queue (
     agent_id, runtime_id, issue_id, status, priority, trigger_comment_id,
     coalesced_comment_ids, trigger_summary, force_fresh_session, is_leader_task, handoff_note,
-    squad_id, context, originator_user_id, accountable_user_id, runtime_mcp_overlay, runtime_connected_apps,
+    squad_id, context, originator_user_id, accountable_user_id, runtime_mcp_overlay, runtime_connected_apps, concise_mode,
     originator_source, delegated_from_task_id, rule_version_id, rerun_of_task_id,
     trigger_evidence_kind, trigger_evidence_ref_id, fire_at,
     id
@@ -399,6 +400,7 @@ SELECT
     sqlc.narg(accountable_user_id),
     sqlc.narg(runtime_mcp_overlay),
     sqlc.narg(runtime_connected_apps),
+    sqlc.narg('concise_mode')::boolean,
     sqlc.narg(originator_source),
     sqlc.narg(delegated_from_task_id),
     sqlc.narg(rule_version_id),
@@ -447,7 +449,7 @@ WHERE id = @id
 -- NULL-source enqueue bypass (MUL-4302 §2).
 INSERT INTO agent_task_queue (
     agent_id, runtime_id, issue_id, status, priority, context, originator_user_id,
-    accountable_user_id, runtime_mcp_overlay, runtime_connected_apps,
+    accountable_user_id, runtime_mcp_overlay, runtime_connected_apps, concise_mode,
     originator_source, trigger_evidence_kind, trigger_evidence_ref_id,
     id
 )
@@ -457,6 +459,7 @@ SELECT
     sqlc.narg(accountable_user_id),
     sqlc.narg(runtime_mcp_overlay),
     sqlc.narg(runtime_connected_apps),
+    COALESCE(sqlc.narg('concise_mode')::boolean, FALSE),
     sqlc.narg(originator_source),
     sqlc.narg(trigger_evidence_kind),
     sqlc.narg(trigger_evidence_ref_id),
@@ -478,7 +481,7 @@ RETURNING *;
 -- (MUL-4302 §2).
 INSERT INTO agent_task_queue (
     agent_id, runtime_id, issue_id, status, priority, trigger_comment_id,
-    trigger_summary, is_leader_task, squad_id, escalation_for_task_id, fire_at,
+    trigger_summary, is_leader_task, squad_id, escalation_for_task_id, fire_at, concise_mode,
     originator_user_id, accountable_user_id, originator_source,
     delegated_from_task_id, trigger_evidence_kind, trigger_evidence_ref_id,
     id
@@ -491,6 +494,7 @@ SELECT
     sqlc.narg(squad_id),
     @escalation_for_task_id,
     @fire_at,
+    COALESCE(sqlc.narg('concise_mode')::boolean, FALSE),
     sqlc.narg(originator_user_id),
     sqlc.narg(accountable_user_id),
     sqlc.narg(originator_source),
@@ -595,7 +599,7 @@ INSERT INTO agent_task_queue (
     status, priority, trigger_comment_id, coalesced_comment_ids, trigger_summary, context,
     session_id, work_dir,
     attempt, max_attempts, parent_task_id, force_fresh_session, is_leader_task,
-    squad_id, originator_user_id, accountable_user_id, runtime_mcp_overlay, runtime_connected_apps,
+    squad_id, concise_mode, originator_user_id, accountable_user_id, runtime_mcp_overlay, runtime_connected_apps,
     originator_source, delegated_from_task_id, rule_version_id,
     trigger_evidence_kind, trigger_evidence_ref_id, retry_of_task_id,
     chat_input_task_id, fire_at,
@@ -612,6 +616,7 @@ SELECT
     p.failure_reason IS NOT DISTINCT FROM 'codex_semantic_inactivity',
     p.is_leader_task,
     p.squad_id,
+    p.concise_mode,
     p.originator_user_id,
     p.accountable_user_id,
     sqlc.narg(runtime_mcp_overlay),
@@ -643,6 +648,7 @@ RETURNING *;
 INSERT INTO agent_task_queue (
     agent_id, runtime_id, status, priority, context,
     force_fresh_session, is_leader_task, squad_id,
+    concise_mode,
     originator_user_id, accountable_user_id,
     runtime_mcp_overlay, runtime_connected_apps,
     originator_source, rerun_of_task_id, id
@@ -650,6 +656,7 @@ INSERT INTO agent_task_queue (
 SELECT
     p.agent_id, p.runtime_id, 'queued', p.priority, p.context,
     TRUE, p.is_leader_task, p.squad_id,
+    p.concise_mode,
     sqlc.arg(actor_user_id), sqlc.arg(actor_user_id),
     sqlc.narg(runtime_mcp_overlay), sqlc.narg(runtime_connected_apps),
     'direct_human', p.id, sqlc.arg(new_task_id)
@@ -1152,11 +1159,19 @@ WITH retired_sessions AS (
     SELECT DISTINCT r.retired_session_id AS session_id
     FROM agent_task_queue r
     WHERE r.agent_id = $1 AND r.issue_id = $2
+      AND (
+        sqlc.narg('concise_mode')::boolean IS NULL
+        OR r.concise_mode = sqlc.narg('concise_mode')::boolean
+      )
       AND r.retired_session_id IS NOT NULL
 ), resume_overflow_at AS (
     SELECT MAX(COALESCE(t.completed_at, t.started_at, t.dispatched_at, t.created_at)) AS at
     FROM agent_task_queue t
     WHERE t.agent_id = $1 AND t.issue_id = $2
+      AND (
+        sqlc.narg('concise_mode')::boolean IS NULL
+        OR t.concise_mode = sqlc.narg('concise_mode')::boolean
+      )
       AND t.status = 'failed'
       AND (
         COALESCE(t.failure_reason, '') = 'codex_resume_oversized'
@@ -1168,6 +1183,10 @@ WITH retired_sessions AS (
         COALESCE(t.completed_at, t.started_at, t.dispatched_at, t.created_at) AS terminal_at
     FROM agent_task_queue t
     WHERE t.agent_id = $1 AND t.issue_id = $2
+      AND (
+        sqlc.narg('concise_mode')::boolean IS NULL
+        OR t.concise_mode = sqlc.narg('concise_mode')::boolean
+      )
       AND t.session_id IS NOT NULL
       AND t.status IN ('completed', 'failed', 'cancelled')
     ORDER BY t.session_id, COALESCE(t.completed_at, t.started_at, t.dispatched_at, t.created_at) DESC
@@ -1220,6 +1239,10 @@ LIMIT 1;
 -- most-recent row, so the disclosure fires once and then clears.
 SELECT COALESCE(session_rollout_missing, FALSE) FROM agent_task_queue
 WHERE agent_id = $1 AND issue_id = $2
+  AND (
+    sqlc.narg('concise_mode')::boolean IS NULL
+    OR concise_mode = sqlc.narg('concise_mode')::boolean
+  )
   AND status IN ('completed', 'failed')
   AND started_at IS NOT NULL
 ORDER BY COALESCE(completed_at, started_at, dispatched_at, created_at) DESC
@@ -1232,6 +1255,10 @@ LIMIT 1;
 -- an older session (or none), so it must disclose the continuity gap.
 SELECT COALESCE(session_rollout_missing, FALSE) FROM agent_task_queue
 WHERE chat_session_id = sqlc.arg('chat_session_id')
+  AND (
+    sqlc.narg('concise_mode')::boolean IS NULL
+    OR concise_mode = sqlc.narg('concise_mode')::boolean
+  )
   AND (
     sqlc.narg('channel_context_revision')::bigint IS NULL
     OR COALESCE(channel_context_revision, 1) = sqlc.narg('channel_context_revision')::bigint

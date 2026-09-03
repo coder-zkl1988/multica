@@ -1,5 +1,23 @@
 import { describe, expect, it } from "vitest";
-import { planDaemonToken } from "./daemon-token-sync";
+import { daemonCredentialChanged, planDaemonToken } from "./daemon-token-sync";
+
+describe("daemonCredentialChanged", () => {
+  it("detects a rotated token for the same user", () => {
+    expect(daemonCredentialChanged("mul_old", "mul_new", false)).toBe(true);
+  });
+
+  it("detects a missing cached token", () => {
+    expect(daemonCredentialChanged(undefined, "mul_new", false)).toBe(true);
+  });
+
+  it("keeps an unchanged same-user credential stable", () => {
+    expect(daemonCredentialChanged("mul_same", "mul_same", false)).toBe(false);
+  });
+
+  it("keeps the user-switch signal authoritative even for equal tokens", () => {
+    expect(daemonCredentialChanged("mul_same", "mul_same", true)).toBe(true);
+  });
+});
 
 describe("planDaemonToken", () => {
   it("uses the SSO internal token directly", () => {

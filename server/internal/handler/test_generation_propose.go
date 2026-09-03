@@ -174,6 +174,9 @@ func (h *Handler) ProposeTestCases(w http.ResponseWriter, r *http.Request) {
 		case "new":
 			created, repos, createErr := h.insertProposedTestCase(r, qtx, job, wsUUID, entry.item.Case, entry.repos)
 			if createErr != nil {
+				if writeIssueWindowViolation(w, createErr) {
+					return
+				}
 				h.writeTestGenerationWriteError(w, r, createErr, "create")
 				return
 			}

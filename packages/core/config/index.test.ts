@@ -15,6 +15,8 @@ beforeEach(() => {
     googleClientId: "",
     useSySso: null,
     authConfigError: null,
+    serverVersion: "",
+    upstreamVersion: "",
   });
 });
 
@@ -37,6 +39,21 @@ describe("configStore.loadConfig", () => {
       googleClientId: "google-client",
       useSySso: false,
       authConfigError: null,
+    });
+  });
+
+  it("loads fork and community base versions independently", async () => {
+    await configStore.getState().loadConfig(() =>
+      Promise.resolve({
+        ...legacyConfig,
+        server_version: "fork-abcdef123",
+        upstream_version: "v0.4.37",
+      }),
+    );
+
+    expect(configStore.getState()).toMatchObject({
+      serverVersion: "fork-abcdef123",
+      upstreamVersion: "v0.4.37",
     });
   });
 

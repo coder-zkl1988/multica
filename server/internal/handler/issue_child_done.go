@@ -125,7 +125,10 @@ func (h *Handler) notifyParentOfChildDone(ctx context.Context, prev, issue db.Is
 	// caused the surprise cascade. A completion that does not close a stage is
 	// silent: no comment, no wake. ListChildIssues already reflects this child's
 	// committed `done` status (the status update commits before this runs).
-	children, err := h.Queries.ListChildIssues(ctx, parent.ID)
+	children, err := h.Queries.ListChildIssues(ctx, db.ListChildIssuesParams{
+		WorkspaceID:   parent.WorkspaceID,
+		ParentIssueID: parent.ID,
+	})
 	if err != nil {
 		slog.Warn("child done: failed to list siblings for stage barrier",
 			"error", err,
@@ -151,7 +154,10 @@ func (h *Handler) promoteFrontendSiblingsAfterDesignDone(ctx context.Context, co
 	if !isUIDesignIssue(completedChild) || !h.uiDesignDelivered(ctx, completedChild) {
 		return
 	}
-	children, err := h.Queries.ListChildIssues(ctx, parent.ID)
+	children, err := h.Queries.ListChildIssues(ctx, db.ListChildIssuesParams{
+		WorkspaceID:   parent.WorkspaceID,
+		ParentIssueID: parent.ID,
+	})
 	if err != nil {
 		return
 	}
@@ -286,7 +292,10 @@ func (h *Handler) notifyParentsOfBatchChildDone(ctx context.Context, completed [
 			continue
 		}
 
-		children, err := h.Queries.ListChildIssues(ctx, parent.ID)
+		children, err := h.Queries.ListChildIssues(ctx, db.ListChildIssuesParams{
+			WorkspaceID:   parent.WorkspaceID,
+			ParentIssueID: parent.ID,
+		})
 		if err != nil {
 			slog.Warn("batch child done: failed to list siblings for stage barrier",
 				"error", err, "parent_id", uuidToString(parent.ID))

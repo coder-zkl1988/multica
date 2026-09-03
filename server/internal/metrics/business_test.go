@@ -67,6 +67,20 @@ func TestBusinessMetricsFailureReasonUsesCanonicalClassifier(t *testing.T) {
 	}
 }
 
+func TestBusinessMetricsIssueWindowDecisionNormalizesSurface(t *testing.T) {
+	m := NewBusinessMetrics()
+
+	m.RecordIssueWindowDecision("enforce", "direct", "blocked")
+	m.RecordIssueWindowDecision("enforce", "future_surface", "blocked")
+
+	if got := testutil.ToFloat64(m.issueWindowDecision.WithLabelValues("enforce", "direct", "blocked")); got != 1 {
+		t.Fatalf("direct issue window decision = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(m.issueWindowDecision.WithLabelValues("enforce", "other", "blocked")); got != 1 {
+		t.Fatalf("normalized issue window decision = %v, want 1", got)
+	}
+}
+
 func TestBusinessMetricsChatClaimResumeObservations(t *testing.T) {
 	m := NewBusinessMetrics()
 
@@ -183,6 +197,7 @@ func TestBusinessMetricsRegistryExposesAllFamilies(t *testing.T) {
 	m.RecordEntitlementDecision("autopilot_runs", "observe", "cache_fresh")
 	m.RecordEntitlementVersionRegression()
 	m.RecordAutopilotQuotaDecision("observe", "manual", "admitted")
+	m.RecordIssueWindowDecision("observe", "direct", "allowed")
 	m.ObserveRuntimeSweepStage(RuntimeSweepStageLiveness, time.Second, 2, 1)
 
 	families, err := registry.Gather()

@@ -49,6 +49,7 @@ const RESET_STATE = {
       prompt: "",
       actorType: undefined,
       actorId: undefined,
+      conciseMode: false,
     },
     activeMode: "manual" as const,
   },

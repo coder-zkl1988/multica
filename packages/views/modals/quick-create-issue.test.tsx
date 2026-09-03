@@ -81,6 +81,7 @@ const emptyIssueDraft = () => ({
     prompt: "",
     actorType: undefined as "agent" | "squad" | undefined,
     actorId: undefined as string | undefined,
+    conciseMode: false,
   },
   activeMode: "agent" as "agent" | "manual",
 });
@@ -290,6 +291,24 @@ vi.mock("@multica/ui/components/ui/dropdown-menu", () => ({
   DropdownMenu: ({ children }: { children: ReactNode }) => <>{children}</>,
   DropdownMenuTrigger: ({ render }: { render: ReactNode }) => <>{render}</>,
   DropdownMenuContent: ({ children }: { children: ReactNode }) => <>{children}</>,
+  DropdownMenuCheckboxItem: ({
+    children,
+    checked,
+    onCheckedChange,
+  }: {
+    children: ReactNode;
+    checked?: boolean;
+    onCheckedChange?: (checked: boolean) => void;
+  }) => (
+    <button
+      type="button"
+      role="menuitemcheckbox"
+      aria-checked={checked}
+      onClick={() => onCheckedChange?.(!checked)}
+    >
+      {children}
+    </button>
+  ),
   // `render` mirrors Base UI: an item can BE another element (an <AppLink>).
   // The real Item gives that element role="button", which the queries match.
   DropdownMenuItem: ({
@@ -627,6 +646,28 @@ describe("AgentCreatePanel", () => {
     expect(mockClearDraft).toHaveBeenCalled();
     expect(mockSetLastMode).toHaveBeenCalledWith("agent");
     expect(onClose).toHaveBeenCalled();
+  });
+  it("sends concise_mode for a concise quick-create draft", async () => {
+    const user = userEvent.setup();
+    mockIssueDraftStore.draft.agent.conciseMode = true;
+
+    renderPanel({ onClose: vi.fn(), isExpanded: false, setIsExpanded: vi.fn() });
+    await user.click(screen.getByRole("button", { name: /^Create$/i }));
+
+    await waitFor(() => {
+      expect(mockQuickCreateIssue).toHaveBeenCalledWith(
+        expect.objectContaining({ concise_mode: true }),
+      );
+    });
+  });
+
+  it("toggles concise mode from the overflow menu", async () => {
+    const user = userEvent.setup();
+    renderPanel({ onClose: vi.fn(), isExpanded: false, setIsExpanded: vi.fn() });
+
+    await user.click(screen.getByRole("menuitemcheckbox", { name: "Concise agent mode" }));
+
+    expect(mockSetAgent).toHaveBeenCalledWith({ conciseMode: true });
   });
 
   it("shows the upgrade recovery immediately when quick create is rejected by the issue preflight", async () => {
@@ -1098,6 +1139,25 @@ describe("AgentCreatePanel", () => {
       },
     ));
     expect(mockQuickCreateIssue).not.toHaveBeenCalled();
+  });
+  it("propagates concise mode through source-context agent create", async () => {
+    const user = userEvent.setup();
+    mockIssueDraftStore.draft.agent.conciseMode = true;
+    renderPanel({
+      onClose: vi.fn(),
+      isExpanded: false,
+      setIsExpanded: vi.fn(),
+      data: sourceContextPanelData,
+    });
+
+    await user.click(screen.getByRole("button", { name: /^Create$/i }));
+
+    await waitFor(() => expect(mockCreateCommentSubIssue).toHaveBeenCalledWith(
+      "comment-source",
+      expect.objectContaining({
+        quick_create: expect.objectContaining({ concise_mode: true }),
+      }),
+    ));
   });
 
   // MUL-4808 — Quick Create already gated Create; these pin the two gaps:

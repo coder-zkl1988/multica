@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/pkg/dbid"
 	"net/http"
 	"strings"
@@ -12,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -131,7 +131,7 @@ func (h *Handler) AdjustDesignDocument(w http.ResponseWriter, r *http.Request) {
 	// Resolved and pinned before the run is created, exactly as creation does:
 	// the frozen input records what the files ARE, so the run cannot later see
 	// different bytes under the same id.
-	turnAttachments, attachmentErr := h.resolveDesignDocumentAttachments(r.Context(), workspaceUUID, req.Attachments)
+	turnAttachments, attachmentErr := h.resolveDesignDocumentAttachments(r.Context(), r, workspaceUUID, req.Attachments)
 	if attachmentErr != nil {
 		writeProjectDesignSystemRequestError(w, attachmentErr)
 		return
@@ -196,11 +196,9 @@ func (h *Handler) createDesignDocumentAdjustTask(
 	if err != nil || agent.WorkspaceID != workspaceID {
 		return db.DesignDocument{}, db.AgentTaskQueue{}, &projectDesignSystemRequestError{status: http.StatusNotFound, code: "agent_not_found", message: "agent not found"}
 	}
-	verdict, err := service.AgentReadiness(ctx, service.RuntimeLookup{
-		Queries: queries,
-		Metrics: h.Metrics,
-		Source:  obsmetrics.RuntimeLookupSourceDesign,
-	}, agent)
+	readinessLookup := h.runtimeLookup(obsmetrics.RuntimeLookupSourceDesign)
+	readinessLookup.Queries = queries
+	verdict, err := service.AgentReadiness(ctx, readinessLookup, agent)
 	if err != nil {
 		return db.DesignDocument{}, db.AgentTaskQueue{}, projectDesignSystemInternalError("agent_check_failed", "failed to check agent readiness")
 	}
