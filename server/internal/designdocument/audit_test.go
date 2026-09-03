@@ -523,6 +523,25 @@ func TestAuditRejectsTemplateResidue(t *testing.T) {
 	}
 }
 
+// The coverage report is where the agent states that no placeholder text is
+// left, so its findings legitimately name the residue markers. A real run was
+// rejected for the finding "No lorem ipsum, numbered placeholder items ...
+// remain." — the report describing the check it passed must not fail it.
+func TestAuditAcceptsResidueMarkersNamedByTheCoverageSelfReport(t *testing.T) {
+	root := copyFixture(t)
+	coverage := loadCoverage(t, root)
+	coverage.TemplateResidue.Findings = append(coverage.TemplateResidue.Findings,
+		"No lorem ipsum, numbered placeholder items or TODO: markers remain in the prototype.")
+	writeCoverage(t, root, coverage)
+	collected, err := CollectDirectory(root, validBinding())
+	if err != nil {
+		t.Fatalf("CollectDirectory() error = %v; audit = %+v", err, collected.Audit.Diagnostics)
+	}
+	if !collected.Audit.Passed {
+		t.Fatalf("audit failed: %+v", collected.Audit.Diagnostics)
+	}
+}
+
 func TestValidateArchiveRepeatsTheAuditFromArchiveBytes(t *testing.T) {
 	collected := collectValid(t, validBinding())
 	entries := readZipEntries(t, collected.Archive)

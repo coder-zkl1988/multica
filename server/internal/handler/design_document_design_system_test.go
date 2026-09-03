@@ -4,9 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgtype"
+
+	"github.com/multica-ai/multica/server/internal/designdocument"
 	"github.com/multica-ai/multica/server/internal/service"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 // DC-060: design systems are workspace platform material, so the home composer
@@ -38,11 +45,12 @@ func TestCreateDesignDocumentPinsABuiltinDesignSystem(t *testing.T) {
 	})
 
 	var inputJSON, taskContextJSON []byte
+	var activeTaskID pgtype.UUID
 	if err := testPool.QueryRow(ctx, `
-		SELECT d.input_snapshot, task.context
+		SELECT d.input_snapshot, task.context, task.id
 		FROM design_document d, agent_task_queue task
 		WHERE d.id = $1 AND task.id = d.active_task_id
-	`, parseUUID(created.ID)).Scan(&inputJSON, &taskContextJSON); err != nil {
+	`, parseUUID(created.ID)).Scan(&inputJSON, &taskContextJSON, &activeTaskID); err != nil {
 		t.Fatalf("load frozen input/task context: %v", err)
 	}
 
@@ -77,8 +85,59 @@ func TestCreateDesignDocumentPinsABuiltinDesignSystem(t *testing.T) {
 	}
 	// Digest pins the exact bytes, so a later bundle update cannot silently
 	// change what this run designed under.
-	if len(design.Digest) != 64 {
-		t.Fatalf("design context digest = %q, want a sha256 hex digest", design.Digest)
+	if !strings.HasPrefix(design.Digest, "sha256:") || len(design.Digest) != len("sha256:")+64 {
+		t.Fatalf("design context digest = %q, want a sha256:<hex> reference", design.Digest)
+	}
+
+	// The digest is also the binding the finished package is judged against,
+	// on the daemon at collection and on the server at completion. A digest in
+	// any other form than the one the package contract validates rejected the
+	// agent's finished package with "invalid project design system digest" —
+	// after a full run — so the binding this context yields must be accepted
+	// by the real collector, not just look like a digest.
+	var fullContext service.DesignDocumentTaskContext
+	if err := json.Unmarshal(taskContextJSON, &fullContext); err != nil {
+		t.Fatalf("decode full task context: %v", err)
+	}
+	if fullContext.DesignSystemDigest != design.Digest {
+		t.Fatalf("design_system_digest = %q, want the design context digest %q", fullContext.DesignSystemDigest, design.Digest)
+	}
+	binding := designDocumentBindingFromContext(fullContext, db.AgentTaskQueue{ID: activeTaskID, Context: taskContextJSON})
+	fixture := copyDesignDocumentFixture(t)
+	// The agent copies the pinned digest from task.json into coverage.json,
+	// where the audit compares it with the binding; the fixture carries a
+	// placeholder digest, so stamp the real one the way a run would.
+	setDesignDocumentFixtureDesignSystemDigest(t, fixture, design.Digest)
+	if _, err := designdocument.CollectDirectory(fixture, binding); err != nil {
+		t.Fatalf("the package contract rejects the binding of a run pinned to a catalogue system: %v", err)
+	}
+}
+
+// setDesignDocumentFixtureDesignSystemDigest rewrites the design system digest
+// the fixture's coverage.json references, so a collection can be run against a
+// binding pinned to a specific system rather than the fixture's placeholder.
+func setDesignDocumentFixtureDesignSystemDigest(t *testing.T, fixture, digest string) {
+	t.Helper()
+	coveragePath := filepath.Join(fixture, "coverage.json")
+	raw, err := os.ReadFile(coveragePath)
+	if err != nil {
+		t.Fatalf("read fixture coverage: %v", err)
+	}
+	var coverage map[string]any
+	if err := json.Unmarshal(raw, &coverage); err != nil {
+		t.Fatalf("decode fixture coverage: %v", err)
+	}
+	consistency, ok := coverage["design_system_consistency"].(map[string]any)
+	if !ok {
+		t.Fatalf("fixture coverage has no design_system_consistency object: %#v", coverage["design_system_consistency"])
+	}
+	consistency["design_system_sha256"] = digest
+	updated, err := json.Marshal(coverage)
+	if err != nil {
+		t.Fatalf("encode fixture coverage: %v", err)
+	}
+	if err := os.WriteFile(coveragePath, updated, 0o644); err != nil {
+		t.Fatalf("write fixture coverage: %v", err)
 	}
 }
 

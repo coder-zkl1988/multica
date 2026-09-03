@@ -280,6 +280,7 @@ The tables below cover every current top-level command, grouped the way the CLI 
 | | `member list/add/set-role/remove` | Manage squad members | |
 | | `activity <issue-id> <outcome>` | Record a leader evaluation | |
 | `chat` | `history`, `thread [id]` | Read the external chat session an agent is currently handling | `--limit`, `--before` |
+| `design` | `audit` | Run the design document package gate (collection, static audit, headless Chromium preview) on a package before the task ends; exits 1 with every failing rule and file when the platform would reject it | `--dir` (default `$MULTICA_OUTPUT_DIR`), `--context` (default `.agent_context/design_document/context/task.json`), `--task-id` (default `$MULTICA_TASK_ID`), `--preview` (default on), `--timeout`, `--output` |
 
 ### Runtime
 

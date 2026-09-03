@@ -8229,6 +8229,12 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	if selfBin, err := resolveSelfExecutable(); err == nil {
 		binDir := filepath.Dir(selfBin)
 		agentEnv["PATH"] = binDir + string(os.PathListSeparator) + os.Getenv("PATH")
+		// PATH order is not enough: Codex runs commands through a login shell,
+		// and on macOS path_helper re-orders PATH so /usr/local/bin comes first
+		// again — a stale `multica` installed there shadows this binary and
+		// lacks the newer subcommands. Hand the agent the exact binary too, so
+		// prompts can name it (`"$MULTICA_CLI" design audit`).
+		agentEnv[TaskCLIPathEnv] = selfBin
 	}
 	// Point Codex to the per-task CODEX_HOME so it discovers skills natively
 	// without polluting the system ~/.codex/skills/.

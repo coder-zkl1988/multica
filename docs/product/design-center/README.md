@@ -1,7 +1,7 @@
 # Multica 设计中心长期产品记忆
 
 > 状态：持续维护
-> 最后更新：2026-08-19
+> 最后更新：2026-09-03
 > 适用范围：设计中心、设计体系、UI 规范、设计任务、UI Agent、设计稿生成、设计还原、设计 MCP、Open Design 能力接入
 
 ## 1. 这份模块解决什么问题
@@ -36,6 +36,7 @@
 - [open-design-engine-integration.md](./open-design-engine-integration.md)：已被替代的 Open Design 固定版本、headless worker 和 Runtime 接入实验，只用于保留技术证据；
 - [2026-08-05-multica-native-design-engine-design.md](../../superpowers/specs/2026-08-05-multica-native-design-engine-design.md)：以 Open Design 为核心参照、但不依赖 Worker/Runtime 的 Multica 原生设计引擎方案；
 - [2026-08-16-design-center-three-tab-migration-design.md](../../superpowers/specs/2026-08-16-design-center-three-tab-migration-design.md)：当前迁移范围（Open Design 首页 / 社区 / 设计体系三个 tab）、设计体系仓库化、tweaks 与 critique 边界，以及生产端契约对齐；
+- [open-design-gap-2026-09-03.md](./open-design-gap-2026-09-03.md)：对照 Open Design 0.21.1 的迁移缺口盘点与建议顺序；
 - [open-design-multica-mapping.md](./open-design-multica-mapping.md)：已被替代的早期云端实体映射，只用于理解历史；
 - [project-design-system-validation.md](./project-design-system-validation.md)：项目设计体系第一阶段的真实链路、持久化与失败保护证据，以及尚未完成的验收项；
 - [project-design-system-workspace-validation.md](./project-design-system-workspace-validation.md)：项目设计体系工作区的创建、渲染校验、保存、调整隔离和放弃恢复证据；
@@ -260,6 +261,10 @@ Agent 每次直接生成一套内部一致的设计体系草稿，不先生成�
 29. **三 tab 补齐与 tweaks / critique 落地**，`confirmed`（详见 DC-058）：官方设计体系详情以 Open Design 自带 showcase 为封面并逐章节展示 DESIGN.md，官方体系可作为项目体系创建的参考风格；社区卡片可打开实时示例与提示词的详情弹层；tweaks 以 prompt 约定加工作区预设指令落地，critique 以任务内五视角循环加 `critique.json` 报告与工作区“设计评审”面板落地，两者都不影响 draft 的形成条件。
 30. **设计文档任务上下文可领取并声明取证模式**，`confirmed`（详见 DC-059）：服务端上下文写 `execution_ready` 与 `input.repository_grounding`，claim 只交付文档绑定的那一个仓库，prompt 按取证模式说明 checkout 与 `work/repository-grounding.json` 的写回义务；在此之前每个设计文档任务都在 claim 被拒，真实生成从未跑通。
 
+2026-09-03 新增确认（详见 DC-063）：
+
+31. **设计稿生成首次真实跑通**，`confirmed`：内置目录体系摘要改为 `sha256:<hex>`、模板残留审计不再扫描 `coverage.json` 自述、新增任务内预检命令 `multica design audit`（与守护进程门禁同一份收集 / 审计 / Chromium 校验）并注入 `MULTICA_CLI`；真实 codex 任务 `01a0653d…` 在 15 分钟内产出通过门禁的 v1 草稿。视觉与业务质量验收仍属 A6。与 Open Design 的剩余缺口见 [open-design-gap-2026-09-03.md](./open-design-gap-2026-09-03.md)。
+
 当前尚未确认的细节只保留后续落地与独立切片问题：
 
 - A1 实施计划中如何在不破坏历史 `semantic_design_draft` 的前提下落地 Design Document、revision 和指针持久化；
@@ -299,7 +304,7 @@ Agent 每次直接生成一套内部一致的设计体系草稿，不先生成�
 
 新 Phase A 的产品方案已经确认。首页使用自然语言发起项目页面设计 task，项目和智能体必选、任务（Issue）可选；task 内自动完成有界只读仓库 grounding，并产出版本化 `multica.design-document/v1`。每个项目允许多份 Design Document，每份文档以不可变 revisions、draft/saved 指针和持续工作空间支持 Preview、调整、保存与放弃。Package 必须通过 Audit 和员工本地守护进程现有 `designpreview` 强制门禁，浏览器不可用时不降级。完整方案见 [Native Design Phase A：页面 Design Document 产品与技术方案](../../superpowers/specs/2026-08-12-native-design-phase-a-design-document-design.md) 和 DC-042 至 DC-046。
 
-A1 至 A5 已按确认规格完成自动化实现：A1 提供 Design Document 协议、持久化和对象存储基础，A2 提供首页/项目任务入口，A3 提供 task-owned workspace、只读仓库 Grounding 与固定输入，A4 提供静态 Audit、本地 Chrome 强制 Preview、immutable archive、原子 first revision/draft 和项目内 sandbox Preview，A5 提供固定 base revision 的语义范围调整、单文档单写者、完整 package 重验、新 revision/draft 以及保存与放弃。证据见 [Phase A A5 阶段报告](./native-design-phase-a5-validation.md)。按正式规格权重严格加权，当前 Phase A 工程进度为 **90%**；A6 真实 Agent 产物、视觉和业务质量人工验收尚未完成。工作区共享设计体系、官方模板、工作区成员模板发布和跨工作区社区模板继续按 DC-041 作为 Slice B 至 E 独立推进，不计入 Phase A。`feature/fengchen-fixed-v2` 只保留为取消路线的隔离 checkpoint，不属于当前产品进度或后续实现基线。
+A1 至 A5 已按确认规格完成自动化实现：A1 提供 Design Document 协议、持久化和对象存储基础，A2 提供首页/项目任务入口，A3 提供 task-owned workspace、只读仓库 Grounding 与固定输入，A4 提供静态 Audit、本地 Chrome 强制 Preview、immutable archive、原子 first revision/draft 和项目内 sandbox Preview，A5 提供固定 base revision 的语义范围调整、单文档单写者、完整 package 重验、新 revision/draft 以及保存与放弃。证据见 [Phase A A5 阶段报告](./native-design-phase-a5-validation.md)。按正式规格权重严格加权，当前 Phase A 工程进度为 **90%**；A6 真实 Agent 产物、视觉和业务质量人工验收尚未完成。2026-09-03 起这条链路已有第一份真实端到端证据（DC-063：真实 codex 任务通过守护进程门禁并形成 v1 草稿），A6 从"从未跑通"进入"可以开始验收"。工作区共享设计体系、官方模板、工作区成员模板发布和跨工作区社区模板继续按 DC-041 作为 Slice B 至 E 独立推进，不计入 Phase A。`feature/fengchen-fixed-v2` 只保留为取消路线的隔离 checkpoint，不属于当前产品进度或后续实现基线。
 
 2026-08-05 已确认的原生方向继续有效：Open Design Worker/Runtime 的直接接入不进入产品主线，Phase 0 和 Phase 2 已完成结果保留为真实执行、失败隔离、Audit、Preview 和草稿门禁证据。
 
