@@ -73,6 +73,61 @@ func TestLoadConfig_ConciseMaxTurns(t *testing.T) {
 	}
 }
 
+func TestLoadConfig_ConciseMaxToolCalls(t *testing.T) {
+	stageFakeAgent(t)
+
+	load := func(t *testing.T) Config {
+		t.Helper()
+		cfg, err := LoadConfig(Overrides{
+			ServerURL:      "http://localhost:8080",
+			WorkspacesRoot: t.TempDir(),
+		})
+		if err != nil {
+			t.Fatalf("LoadConfig: %v", err)
+		}
+		return cfg
+	}
+
+	t.Setenv("MULTICA_CONCISE_MAX_TOOL_CALLS", "40")
+	if got := load(t).ConciseMaxToolCalls; got != 40 {
+		t.Fatalf("ConciseMaxToolCalls = %d for %q, want 40", got, "40")
+	}
+
+	t.Setenv("MULTICA_CONCISE_MAX_TOOL_CALLS", "0")
+	if got := load(t).ConciseMaxToolCalls; got != 0 {
+		t.Fatalf("ConciseMaxToolCalls = %d for %q, want 0 (uncapped)", got, "0")
+	}
+
+	t.Setenv("MULTICA_CONCISE_MAX_TOOL_CALLS", "forty")
+	if _, err := LoadConfig(Overrides{
+		ServerURL:      "http://localhost:8080",
+		WorkspacesRoot: t.TempDir(),
+	}); err == nil {
+		t.Fatal("ConciseMaxToolCalls must reject a non-integer value")
+	}
+}
+
+func TestConciseMaxToolCallsFor(t *testing.T) {
+	cases := []struct {
+		name       string
+		task       Task
+		configured int
+		want       int
+	}{
+		{"concise task gets the cap", Task{ConciseMode: true}, 40, 40},
+		{"normal task is uncapped", Task{}, 40, 0},
+		{"disabled config leaves concise uncapped", Task{ConciseMode: true}, 0, 0},
+		{"negative config is treated as disabled", Task{ConciseMode: true}, -3, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := conciseMaxToolCallsFor(tc.task, tc.configured); got != tc.want {
+				t.Fatalf("conciseMaxToolCallsFor(concise=%v, configured=%d) = %d, want %d", tc.task.ConciseMode, tc.configured, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestConciseMaxTurnsFor(t *testing.T) {
 	cases := []struct {
 		name       string

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -197,6 +198,11 @@ func (b *grokBackend) Execute(ctx context.Context, prompt string, opts ExecOptio
 	// for Result.Output while retaining the full text for error detection.
 	var deliverable acpDeliverableTracker
 	var streamingCurrentTurn atomic.Bool
+	// Daemon-side tool-call budget (concise mode). See onMessage for the
+	// denial path; budgetExhausted is atomic because onMessage runs on the
+	// reader goroutine while the run goroutine reads it at result assembly.
+	toolBudget := newToolCallBudget(opts.MaxToolCalls)
+	var budgetExhausted atomic.Bool
 
 	promptDone := make(chan hermesPromptResult, 1)
 	activity := make(chan struct{}, 1)
@@ -220,6 +226,15 @@ func (b *grokBackend) Execute(ctx context.Context, prompt string, opts ExecOptio
 				return
 			}
 			if msg.Type == MessageToolUse {
+				// Daemon-side tool-call budget (concise mode): grok's ACP
+				// surface has no native turn limit, so count here. A denied
+				// call kills the process tree; the run goroutine files the
+				// budget failure from the flag below.
+				if !toolBudget.Allow() {
+					budgetExhausted.Store(true)
+					signalProcessGroup(cmd, syscall.SIGKILL)
+					return
+				}
 				// Re-normalise capitalised titles ("Read file: …") the same way
 				// kimi/traecli do so the UI sees consistent snake_case names.
 				msg.Tool = kimiToolNameFromTitle(msg.Tool)
@@ -487,6 +502,15 @@ func (b *grokBackend) Execute(ctx context.Context, prompt string, opts ExecOptio
 		// terminal upstream-LLM failure (auth / rate-limit / HTTP 4xx). It reads
 		// the full text stream, not the deliverable, so a give-up turn that
 		// lands before a tool call stays visible.
+		// Budget exhaustion is authoritative over every later classifier:
+		// the kill cancels the run context and can surface as cancelled /
+		// crashed, which would hide the actual cause. Check it after the
+		// existing terminal-status branches but before provider-error
+		// promotion, and never let a later classifier downgrade failed.
+		if budgetExhausted.Load() {
+			finalStatus = "failed"
+			finalError = fmt.Sprintf("grok: %s (cap %d)", ErrToolBudgetExceeded.Error(), opts.MaxToolCalls)
+		}
 		finalStatus, finalError = promoteACPResultOnProviderError(finalStatus, finalError, providerErrorOutput, providerErr)
 
 		u := c.accumulatedUsage()
