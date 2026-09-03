@@ -1226,7 +1226,9 @@ func TestAutopilotDispatchWaitsForCompletedProjectAndSkips(t *testing.T) {
 	}
 	dispatched := make(chan dispatchResult, 1)
 	go func() {
-		run, err := testHandler.AutopilotService.DispatchAutopilot(ctx, ap, pgtype.UUID{}, "manual", nil)
+		// Manual dispatch with an explicit actor (MUL-6951: a no-actor,
+		// no-trigger call would fail-closed on principal resolution).
+		run, _, err := testHandler.AutopilotService.DispatchAutopilotManual(ctx, ap, pgtype.UUID{}, nil, parseUUID(testUserID))
 		dispatched <- dispatchResult{run: run, err: err}
 	}()
 	select {

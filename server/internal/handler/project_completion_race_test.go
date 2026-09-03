@@ -148,7 +148,10 @@ func TestAutopilotCreateFirstCompletionPublishesRunStartBeforeRunDone(t *testing
 	}}
 	t.Cleanup(func() { testHandler.AutopilotService.TxStarter = originalStarter })
 
-	run, err := testHandler.AutopilotService.DispatchAutopilot(ctx, ap, pgtype.UUID{}, "manual", nil)
+	// Since MUL-6951 a dispatch with no actor resolves its principal from the
+	// trigger; these tests pass no trigger, so they must exercise the manual
+	// entry point with an explicit actor — the shape the UI actually produces.
+	run, _, err := testHandler.AutopilotService.DispatchAutopilotManual(ctx, ap, pgtype.UUID{}, nil, parseUUID(testUserID))
 	if err != nil {
 		t.Fatalf("DispatchAutopilot: %v", err)
 	}
@@ -232,7 +235,7 @@ func TestAutopilotCreateCommitFailurePublishesMatchingRunDone(t *testing.T) {
 	testHandler.AutopilotService.TxStarter = &rollbackOnCommitStarter{pool: testPool}
 	t.Cleanup(func() { testHandler.AutopilotService.TxStarter = originalStarter })
 
-	run, err := testHandler.AutopilotService.DispatchAutopilot(ctx, ap, pgtype.UUID{}, "manual", nil)
+	run, _, err := testHandler.AutopilotService.DispatchAutopilotManual(ctx, ap, pgtype.UUID{}, nil, parseUUID(testUserID))
 	if err == nil {
 		t.Fatal("DispatchAutopilot succeeded, want commit failure")
 	}
