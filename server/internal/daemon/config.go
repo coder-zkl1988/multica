@@ -145,6 +145,7 @@ type Config struct {
 	AgentIdleWatchdog               time.Duration // force-stop a run when the backend goes silent this long with an empty queue (0 = disabled)
 	AgentToolWatchdog               time.Duration // force-stop a run when a single tool call stays in flight (silent) this long (0 = never force-stop during a tool call); defaults to AgentIdleWatchdog, so operators tune one number unless they deliberately want a wider tool budget
 	DirectAgentMode                 bool          // skip Multica prompt/runtime injection and pass only the task's user input to the configured agent (default: false; MULTICA_DIRECT_AGENT_MODE)
+	ConciseMaxTurns                 int           // cap agent turns for task-level concise-mode runs (default: 15; 0 = uncapped; MULTICA_CONCISE_MAX_TURNS). Enforced only by backends that consume ExecOptions.MaxTurns (claude, codebuddy); others ignore or warn.
 	ClaudeArgs                      []string
 	CodexArgs                       []string
 	CodebuddyArgs                   []string
@@ -604,7 +605,13 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	// agent calls. It is intentionally opt-in because direct mode also bypasses
 	// the workflow that reads the issue, updates status, and posts the result.
 	directAgentMode := boolFromEnv("MULTICA_DIRECT_AGENT_MODE", false)
-
+	// Concise-mode turn cap. Only consulted for task.ConciseMode runs — the
+	// daemon-wide DirectAgentMode default deliberately does NOT inherit it,
+	// so existing direct-mode deployments keep their uncapped behaviour.
+	conciseMaxTurns, err := intFromEnv("MULTICA_CONCISE_MAX_TURNS", 15)
+	if err != nil {
+		return Config{}, err
+	}
 	return Config{
 		ServerBaseURL:                   serverBaseURL,
 		DaemonID:                        daemonID,
@@ -649,6 +656,7 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		AgentIdleWatchdog:               agentIdleWatchdog,
 		AgentToolWatchdog:               agentToolWatchdog,
 		DirectAgentMode:                 directAgentMode,
+		ConciseMaxTurns:                 conciseMaxTurns,
 		ClaudeArgs:                      claudeArgs,
 		CodexArgs:                       codexArgs,
 		CodebuddyArgs:                   codebuddyArgs,
