@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -81,6 +82,16 @@ func (b *openclawBackend) Execute(ctx context.Context, prompt string, opts ExecO
 	}
 	stateDir := b.openclawStateDir()
 	transcriptOffset := openclawSessionSize(stateDir, agentID, sessionID)
+	// Daemon-side tool-call budget (concise mode). OpenClaw 2026.5.x does
+	// not stream tool_use events to stdout — tool calls land in the session
+	// transcript and the final result blob — so this budget is enforced
+	// post-hoc: after stdout settles the transcript's tool calls are
+	// counted, and an over-budget run is failed and its process group
+	// killed. The kill still matters: production has seen the process
+	// linger long after emitting its result blob, holding the task's
+	// execution slot. A legacy NDJSON stream with live tool_use events is
+	// checked at parse time instead (see processOutputWithFinalText).
+	toolBudget := newToolCallBudget(opts.MaxToolCalls)
 	args := buildOpenclawArgs(prompt, sessionID, opts, b.cfg.Logger)
 
 	cmd := b.cfg.commandAt(execPath).exec(runCtx, args...)
@@ -146,7 +157,9 @@ func (b *openclawBackend) Execute(ctx context.Context, prompt string, opts ExecO
 		defer close(resCh)
 
 		startTime := time.Now()
-		scanResult := b.processOutputWithoutFinalText(stdout, msgCh)
+		scanResult := b.processOutputWithoutFinalText(stdout, msgCh, toolBudget, func() {
+			signalProcessGroup(cmd, syscall.SIGKILL)
+		})
 
 		// openclaw delivered a complete result but would not exit. Cancel the
 		// run context so CommandContext kills it and cmd.Wait can return —
@@ -158,6 +171,13 @@ func (b *openclawBackend) Execute(ctx context.Context, prompt string, opts ExecO
 				"treating the complete result as the protocol boundary",
 				"pid", cmd.Process.Pid)
 			cancel()
+		}
+
+		// A denied live tool_use (NDJSON path) means the run is over budget
+		// right now; kill before waiting so a lingering process cannot hold
+		// the task's execution slot.
+		if scanResult.budgetExhausted {
+			signalProcessGroup(cmd, syscall.SIGKILL)
 		}
 
 		// Wait for process exit.
@@ -213,6 +233,23 @@ func (b *openclawBackend) Execute(ctx context.Context, prompt string, opts ExecO
 			b.cfg.Logger.Debug("openclaw session transcript unavailable", "session_id", sessionID, "error", err)
 		} else {
 			for _, message := range messages {
+				if message.Type == MessageToolUse && !scanResult.countedBudget.take(message.CallID) {
+					// take consumed a live admission for this CallID (the
+					// NDJSON path already charged it) — a miss means the
+					// transcript row is the call's only charge point (the
+					// 2026.5.x blob path) or a recurrence of an ID whose
+					// admission was already consumed, which charges afresh.
+					// Calls with no ID take from the unIDed-live pool only
+					// while it lasts; after that they charge in transcript
+					// order. A denied call kills any process-group
+					// descendants that lingered past cmd.Wait and stops
+					// forwarding.
+					if !toolBudget.Allow() {
+						scanResult.budgetExhausted = true
+						signalProcessGroup(cmd, syscall.SIGKILL)
+						break
+					}
+				}
 				trySend(msgCh, message)
 			}
 		}
@@ -237,6 +274,17 @@ func (b *openclawBackend) Execute(ctx context.Context, prompt string, opts ExecO
 				model = "unknown"
 			}
 			usage = map[string]TokenUsage{model: u}
+		}
+
+		if scanResult.budgetExhausted {
+			// Post-hoc enforcement: the run already happened, but budget
+			// semantics still apply — the task fails with the budget named,
+			// and any still-lingering process group is killed. Check before
+			// the Result is assembled so every classifier above is
+			// overridden.
+			scanResult.status = "failed"
+			scanResult.errMsg = fmt.Sprintf("openclaw: %s (cap %d)", ErrToolBudgetExceeded.Error(), opts.MaxToolCalls)
+			signalProcessGroup(cmd, syscall.SIGKILL)
 		}
 
 		resCh <- Result{
@@ -435,11 +483,35 @@ type openclawEventResult struct {
 	// EOF. The caller must cancel the run context before cmd.Wait() in that
 	// case — otherwise it waits on a process that never leaves — and must not
 	// report the resulting cancellation as an abort. Same treatment
-	// cursor-agent's `resultSeen` gets.
+	// cursor-agent gets on its terminal `result` event.
 	cutShort bool
+	// budgetExhausted is the sticky tool-call-budget verdict. Once a live
+	// tool_use event is denied (NDJSON path) it stays true: later events
+	// must not overwrite the failure, and Execute kills the process group
+	// before cmd.Wait.
+	budgetExhausted bool
+	// countedBudget is the set of tool calls already charged to the budget
+	// (live NDJSON admissions, plus any unterminated-final-line charges from
+	// the fallback parse). Execute's session-transcript pass skips these
+	// CallIDs so the same call is never charged twice across stream and
+	// transcript. Nil when no budget is active.
+	countedBudget *liveAdmittedCalls
 }
 
-// processOutput reads the JSON output from openclaw --json stdout and returns
+func (b *openclawBackend) processOutputWithoutFinalText(r io.Reader, ch chan<- Message, toolBudget *toolCallBudget, onBudgetExceeded func()) openclawEventResult {
+	return b.processOutputWithFinalText(r, ch, false, toolBudget, onBudgetExceeded)
+}
+
+// processOutput is the legacy wrapper used by unit tests: no budget.
+func (b *openclawBackend) processOutput(r io.Reader, ch chan<- Message) openclawEventResult {
+	return b.processOutputWithFinalText(r, ch, true, nil, nil)
+}
+
+// processOutputWithFinalText reads openclaw's stdout until the stream
+// settles, then parses the buffer as a final result blob and/or NDJSON
+// events. toolBudget, when non-nil, counts live tool_use events against the
+// daemon-side concise-mode cap.
+//
 // the parsed result. OpenClaw writes its JSON output to stdout; stderr carries
 // log overflow and is captured separately by the caller. The stream may
 // contain:
@@ -460,18 +532,35 @@ type openclawEventResult struct {
 // fails do we fall through to the line-by-line NDJSON scanner. This makes
 // the dominant happy path (one pretty-printed JSON blob) deterministic
 // while keeping NDJSON event support intact.
-func (b *openclawBackend) processOutput(r io.Reader, ch chan<- Message) openclawEventResult {
-	return b.processOutputWithFinalText(r, ch, true)
-}
-
-func (b *openclawBackend) processOutputWithoutFinalText(r io.Reader, ch chan<- Message) openclawEventResult {
-	return b.processOutputWithFinalText(r, ch, false)
-}
-
-func (b *openclawBackend) processOutputWithFinalText(r io.Reader, ch chan<- Message, emitFinalText bool) openclawEventResult {
-	buf, cutShort, readErr := readOpenclawStdout(r, openclawResultIdleGrace)
+func (b *openclawBackend) processOutputWithFinalText(r io.Reader, ch chan<- Message, emitFinalText bool, toolBudget *toolCallBudget, onBudgetExceeded func()) openclawEventResult {
+	var (
+		budgetExhausted atomic.Bool
+		// live admissions: each live tool_use line consumed budget exactly
+		// once at read time via Allow; counted records them so the final
+		// parse and the session-transcript pass skip those calls' duplicates
+		// instead of charging them a second time.
+		counted liveAdmittedCalls
+	)
+	onLine := func(line string) {
+		if toolBudget == nil {
+			return
+		}
+		event, ok := tryParseOpenclawEvent(line)
+		if !ok || event.Type != "tool_use" {
+			return
+		}
+		if !toolBudget.Allow() {
+			budgetExhausted.Store(true)
+			if onBudgetExceeded != nil {
+				onBudgetExceeded()
+			}
+			return
+		}
+		counted.addLive(event.CallID)
+	}
+	buf, cutShort, readErr := readOpenclawStdout(r, openclawResultIdleGrace, onLine)
 	if readErr != nil {
-		return openclawEventResult{status: "failed", errMsg: fmt.Sprintf("read stdout: %v", readErr)}
+		return openclawEventResult{status: "failed", errMsg: fmt.Sprintf("read stdout: %v", readErr), budgetExhausted: budgetExhausted.Load(), countedBudget: &counted}
 	}
 
 	// Whole-buffer fast path: openclaw 2026.5.x emits a single pretty-printed
@@ -482,19 +571,20 @@ func (b *openclawBackend) processOutputWithFinalText(r io.Reader, ch chan<- Mess
 		var output strings.Builder
 		res := b.buildOpenclawEventResult(result, ch, &output, emitFinalText)
 		res.cutShort = cutShort
+		res.budgetExhausted = budgetExhausted.Load()
+		res.countedBudget = &counted
 		return res
 	}
 
-	// Fall-back path: NDJSON line scanner. Note that because we already
-	// drained the full buffer with io.ReadAll above, this path is no longer
-	// truly streaming — events accumulate until the subprocess closes
-	// stdout, then drain all at once. OpenClaw 2026.5.x does not emit
-	// streaming events, so this regression is invisible today; if a future
-	// backend on this code path emits real NDJSON streams and needs live
-	// progress updates, we'll need to split the fast path off a streaming
-	// reader instead of io.ReadAll.
+	// Fall-back path: parse the buffered NDJSON for transcript/output
+	// delivery. Budget enforcement already happened in real time in onLine
+	// above as each complete tool_use line arrived — Allow consumed the
+	// budget there — so this pass must not charge those calls again: skip
+	// duplicates via counted. Only a tool_use line the reader never saw
+	// (an unterminated final line) is charged here, exactly once.
+	// OpenClaw 2026.5.x emits a single final blob rather than NDJSON, but
+	// legacy/future streaming formats get a true in-flight cap.
 	scanner := newAgentStreamScanner(bytes.NewReader(buf))
-
 	var output strings.Builder
 	var sessionID string
 	var model string
@@ -528,6 +618,21 @@ func (b *openclawBackend) processOutputWithFinalText(r io.Reader, ch chan<- Mess
 				var input map[string]any
 				if event.Input != nil {
 					_ = json.Unmarshal(event.Input, &input)
+				}
+				if toolBudget != nil && !counted.peek(event.CallID) {
+					// A line the live reader never charged: either the run
+					// used no live reader path at all, or this is the
+					// unterminated final line the reader never delivered.
+					// Charge it here and register the admission so the
+					// session-transcript pass can take it — the transcript
+					// is this call's only other sighting and must not
+					// re-charge. peek (not take) for live-sighted lines:
+					// their admissions belong to the transcript pass.
+					if !toolBudget.Allow() {
+						budgetExhausted.Store(true)
+						continue
+					}
+					counted.addLive(event.CallID)
 				}
 				trySend(ch, Message{
 					Type:   MessageToolUse,
@@ -595,7 +700,16 @@ func (b *openclawBackend) processOutputWithFinalText(r io.Reader, ch chan<- Mess
 	}
 
 	if err := scanner.Err(); err != nil {
-		return openclawEventResult{status: "failed", errMsg: fmt.Sprintf("read stdout: %v", err)}
+		// Carry the budget verdict and the already-charged set even on a
+		// mid-parse failure: Execute's transcript pass still runs, and
+		// without countedBudget it would re-charge every live-admitted
+		// call.
+		return openclawEventResult{
+			status:          "failed",
+			errMsg:          fmt.Sprintf("read stdout: %v", err),
+			budgetExhausted: budgetExhausted.Load(),
+			countedBudget:   &counted,
+		}
 	}
 
 	// If we got no events at all, fall back to raw output. The whole-buffer
@@ -606,21 +720,31 @@ func (b *openclawBackend) processOutputWithFinalText(r io.Reader, ch chan<- Mess
 	if !gotEvents {
 		trimmed := strings.TrimSpace(strings.Join(rawLines, "\n"))
 		if trimmed != "" {
-			return openclawEventResult{status: "completed", output: trimmed}
+			return openclawEventResult{status: "completed", output: trimmed, budgetExhausted: budgetExhausted.Load(), countedBudget: &counted}
 		}
 		return openclawEventResult{
-			status: "failed",
-			errMsg: openclawNoParseableOutput,
+			status:          "failed",
+			errMsg:          openclawNoParseableOutput,
+			budgetExhausted: budgetExhausted.Load(),
+			countedBudget:   &counted,
 		}
 	}
 
+	// budgetExhausted wins over any streamed terminal status: a completed
+	// blob after a denied call is still an over-budget run.
+	if budgetExhausted.Load() {
+		finalStatus = "failed"
+		finalError = ErrToolBudgetExceeded.Error()
+	}
 	return openclawEventResult{
-		status:    finalStatus,
-		errMsg:    finalError,
-		output:    output.String(),
-		sessionID: sessionID,
-		usage:     usage,
-		model:     model,
+		status:          finalStatus,
+		errMsg:          finalError,
+		output:          output.String(),
+		sessionID:       sessionID,
+		usage:           usage,
+		model:           model,
+		budgetExhausted: budgetExhausted.Load(),
+		countedBudget:   &counted,
 	}
 }
 

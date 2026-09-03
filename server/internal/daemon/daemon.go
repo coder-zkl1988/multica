@@ -7255,6 +7255,26 @@ func taskUsesDirectAgentMode(task Task, configuredDefault bool) bool {
 	return configuredDefault || task.ConciseMode
 }
 
+// conciseMaxTurnsFor reports the turn cap for a run. The budget applies only
+// to runs the user explicitly opted into via task-level concise mode; a
+// daemon-wide DirectAgentMode default deliberately does not inherit it, and a
+// non-positive configured cap disables the limit entirely. Backends that do
+// not consume ExecOptions.MaxTurns ignore the value (claude and codebuddy
+// enforce it today).
+func conciseMaxTurnsFor(task Task, configured int) int {
+	if task.ConciseMode && configured > 0 {
+		return configured
+	}
+	return 0
+}
+
+func conciseMaxToolCallsFor(task Task, configured int) int {
+	if task.ConciseMode && configured > 0 {
+		return configured
+	}
+	return 0
+}
+
 func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot int, taskLog *slog.Logger) (taskResult TaskResult, returnErr error) {
 	// A claim carries the task-row agent id both at the top level and inside
 	// the expanded agent configuration. The top-level id is authoritative
@@ -8436,6 +8456,21 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		OpenclawMode:           openclawMode,
 		ClaudeSettingsPath:     env.ClaudeSettingsPath,
 		QwenpawWorkspace:       env.QwenpawWorkspace,
+	}
+	// Concise-mode turn cap: gated on the task flag alone. A daemon-wide
+	// DirectAgentMode deployment keeps its uncapped behaviour — only runs the
+	// user explicitly opted into concise mode get the budget. Backends that do
+	// not consume MaxTurns (see ExecOptions docs) ignore it, mirroring
+	// ThinkingLevel's incremental adoption contract.
+	if turns := conciseMaxTurnsFor(task, d.cfg.ConciseMaxTurns); turns > 0 {
+		execOpts.MaxTurns = turns
+	}
+	// Daemon-side tool-call cap for concise mode, distinct from MaxTurns:
+	// one turn issues several tool calls, and the four ACP/event-stream
+	// backends without a native turn limit (pi, codex, grok, openclaw)
+	// enforce it by counting tool-call events and force-stopping the run.
+	if calls := conciseMaxToolCallsFor(task, d.cfg.ConciseMaxToolCalls); calls > 0 {
+		execOpts.MaxToolCalls = calls
 	}
 	// Some providers do not reliably load the per-task runtime config files we
 	// write into the task workdir:

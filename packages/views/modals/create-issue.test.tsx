@@ -1454,6 +1454,49 @@ describe("CreateIssueModal", () => {
     expect(mockCreateIssue).not.toHaveBeenCalled();
   });
 
+  // Regression: PR #67 dropped label_ids from the anchor sub-issue payload
+  // while adding concise_mode. The label picker stays visible in anchor mode,
+  // and the server persists label_ids in the same transaction, so dropping
+  // the field silently lost the user's labels — the legacy per-label fallback
+  // cannot rescue it because the anchor response always echoes `labels`.
+  it("forwards selected labels on the anchor sub-issue payload too", async () => {
+    const user = userEvent.setup();
+    mockDraftStore.draft.manual.labelIds = [
+      "aaaaaaaa-1111-2222-3333-444444444444",
+      "bbbbbbbb-1111-2222-3333-444444444444",
+    ];
+    renderModal(
+      <ManualCreatePanel
+        onClose={vi.fn()}
+        onSwitchMode={vi.fn()}
+        data={sourceContextPanelData()}
+        isExpanded={false}
+        setIsExpanded={vi.fn()}
+      />,
+    );
+
+    await user.type(screen.getByPlaceholderText("Issue title"), "Labeled anchor sub-issue");
+    await user.click(screen.getByRole("button", { name: "Create Issue" }));
+
+    await waitFor(() => expect(mockCreateCommentSubIssue).toHaveBeenCalledWith(
+      "comment-source",
+      {
+        mode: "manual",
+        capture_token: "sha256:preview-token",
+        issue: expect.objectContaining({
+          title: "Labeled anchor sub-issue",
+          label_ids: [
+            "aaaaaaaa-1111-2222-3333-444444444444",
+            "bbbbbbbb-1111-2222-3333-444444444444",
+          ],
+        }),
+      },
+    ));
+    // Backend echoed `labels` on this endpoint, so the atomic path handles it.
+    expect(mockAttachLabel).not.toHaveBeenCalled();
+    expect(mockCreateIssue).not.toHaveBeenCalled();
+  });
+
   // Start date is a low-frequency field — by default it lives behind the
   // ⋯ overflow menu and is not rendered inline. Clicking the overflow
   // entry opens it (and mounts the inline pill so the popover has an
