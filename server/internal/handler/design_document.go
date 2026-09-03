@@ -509,20 +509,6 @@ func (h *Handler) ListDesignDocuments(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"documents": responses})
 }
 
-// designDocumentStatus derives the user-visible state from the pointers, so
-// there is no status column that can disagree with them.
-// isTerminalTaskStatus reports whether an agent task has finished for good.
-// Anything else — queued, dispatched, running, waiting, deferred — is still
-// on its way to one of these.
-func isTerminalTaskStatus(status string) bool {
-	switch status {
-	case "completed", "failed", "cancelled":
-		return true
-	default:
-		return false
-	}
-}
-
 // designDocumentStatus derives the status from the document's own pointers.
 //
 // `task` is the row `active_task_id` points at. It is consulted only to

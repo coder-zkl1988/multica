@@ -19,6 +19,7 @@ export const FAILURE_REASON_I18N_KEYS = {
   skill_bundle_unavailable: "skill_bundle_unavailable",
   runtime_cli_timeout: "runtime_cli_timeout",
   issue_window_restricted: "issue_window_restricted",
+  environment_prepare_failed: "environment_prepare_failed",
   invalid_task_identity: "invalid_task_identity",
 
   // Agent process side — provider.
