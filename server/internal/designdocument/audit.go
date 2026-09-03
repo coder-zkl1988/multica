@@ -109,10 +109,14 @@ func auditPrototypeIdentity(index *briefIndex, previewTargets []PreviewTarget) [
 }
 
 // auditTemplateResidue is the platform side of the template residue check. It
-// never consults the agent self-report in coverage.json.
+// never consults the agent self-report in coverage.json — and it does not scan
+// that report either: coverage.json is where the agent is asked to state that
+// no placeholder text remains, so its findings name the very markers this
+// scan looks for ("No lorem ipsum ... remain."), and scanning it rejected a
+// finished package for describing the check it had passed.
 func auditTemplateResidue(entry ArtifactIndexEntry, contents []byte) []Diagnostic {
 	switch entry.Role {
-	case "brief", "coverage", "prototype_entry", "prototype_page", "prototype_style", "prototype_script":
+	case "brief", "prototype_entry", "prototype_page", "prototype_style", "prototype_script":
 	default:
 		return nil
 	}
