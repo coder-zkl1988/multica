@@ -50,8 +50,8 @@ func TestLoadConfig_ConciseMaxTurns(t *testing.T) {
 	}
 
 	t.Setenv("MULTICA_CONCISE_MAX_TURNS", "")
-	if got := load(t).ConciseMaxTurns; got != 15 {
-		t.Fatalf("ConciseMaxTurns default = %d, want 15", got)
+	if got := load(t).ConciseMaxTurns; got != 40 {
+		t.Fatalf("ConciseMaxTurns default = %d, want 40", got)
 	}
 
 	t.Setenv("MULTICA_CONCISE_MAX_TURNS", "0")
@@ -86,6 +86,11 @@ func TestLoadConfig_ConciseMaxToolCalls(t *testing.T) {
 			t.Fatalf("LoadConfig: %v", err)
 		}
 		return cfg
+	}
+
+	t.Setenv("MULTICA_CONCISE_MAX_TOOL_CALLS", "")
+	if got := load(t).ConciseMaxToolCalls; got != 120 {
+		t.Fatalf("ConciseMaxToolCalls default = %d, want 120", got)
 	}
 
 	t.Setenv("MULTICA_CONCISE_MAX_TOOL_CALLS", "40")

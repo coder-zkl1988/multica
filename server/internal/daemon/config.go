@@ -145,8 +145,8 @@ type Config struct {
 	AgentIdleWatchdog               time.Duration // force-stop a run when the backend goes silent this long with an empty queue (0 = disabled)
 	AgentToolWatchdog               time.Duration // force-stop a run when a single tool call stays in flight (silent) this long (0 = never force-stop during a tool call); defaults to AgentIdleWatchdog, so operators tune one number unless they deliberately want a wider tool budget
 	DirectAgentMode                 bool          // skip Multica prompt/runtime injection and pass only the task's user input to the configured agent (default: false; MULTICA_DIRECT_AGENT_MODE)
-	ConciseMaxTurns                 int           // cap agent turns for task-level concise-mode runs (default: 15; 0 = uncapped; MULTICA_CONCISE_MAX_TURNS). Enforced only by backends that consume ExecOptions.MaxTurns (claude, codebuddy); others ignore or warn.
-	ConciseMaxToolCalls             int           // cap tool calls for task-level concise-mode runs on backends with no native turn limit (default: 40; 0 = uncapped; MULTICA_CONCISE_MAX_TOOL_CALLS). Daemon-side enforcement: the run is force-stopped when the count is reached.
+	ConciseMaxTurns                 int           // cap agent turns for task-level concise-mode runs (default: 40; 0 = uncapped; MULTICA_CONCISE_MAX_TURNS). Enforced only by backends that consume ExecOptions.MaxTurns (claude, codebuddy); others ignore or warn.
+	ConciseMaxToolCalls             int           // cap tool calls for task-level concise-mode runs on backends with no native turn limit (default: 120; 0 = uncapped; MULTICA_CONCISE_MAX_TOOL_CALLS). Daemon-side enforcement: the run is force-stopped when the count is reached. Raised from 15/40 after real exploration tasks (repo mapping, multi-repo surveys) kept exhausting 40 calls mid-investigation.
 	ClaudeArgs                      []string
 	CodexArgs                       []string
 	CodebuddyArgs                   []string
@@ -608,7 +608,7 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	directAgentMode := boolFromEnv("MULTICA_DIRECT_AGENT_MODE", false)
 	// Concise-mode caps. Only consulted for task.ConciseMode runs — the
 	// daemon-wide DirectAgentMode default deliberately does NOT inherit them.
-	conciseMaxTurns, err := intFromEnv("MULTICA_CONCISE_MAX_TURNS", 15)
+	conciseMaxTurns, err := intFromEnv("MULTICA_CONCISE_MAX_TURNS", 40)
 	if err != nil {
 		return Config{}, err
 	}
@@ -616,7 +616,7 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	// native turn limit (codex, pi/omp, openclaw, grok). Distinct from
 	// ConciseMaxTurns on purpose: one agent turn may issue several tool
 	// calls, so the two numbers are not interchangeable.
-	conciseMaxToolCalls, err := intFromEnv("MULTICA_CONCISE_MAX_TOOL_CALLS", 40)
+	conciseMaxToolCalls, err := intFromEnv("MULTICA_CONCISE_MAX_TOOL_CALLS", 120)
 	if err != nil {
 		return Config{}, err
 	}
