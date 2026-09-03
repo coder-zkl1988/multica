@@ -406,6 +406,23 @@ var legacyOpenclawCLITimeoutReasons = map[string]bool{
 	"agent_error":                      true,
 }
 
+// legacyToolBudgetWitness is the substring of
+// server/pkg/agent.ErrToolBudgetExceeded ("agent tool-call budget exceeded")
+// that every participating backend's wrapper preserves verbatim — pi, omp,
+// codex, grok and openclaw all format it as
+// "<label>: agent tool-call budget exceeded (cap N)". The label prefix varies
+// by backend, so the witness is a contains-match rather than a prefix.
+const legacyToolBudgetWitness = "tool-call budget exceeded"
+
+// legacyToolBudgetReasons are the buckets a daemon predating
+// ReasonToolBudgetExceeded lands a budget stop in: the catchall from its own
+// text classifier (taskRunFailureReason → Classify has no rule for the
+// phrase), and the pre-MUL-1949 coarse agent_error.
+var legacyToolBudgetReasons = map[string]bool{
+	string(ReasonAgentUnknown): true,
+	"agent_error":             true,
+}
+
 // legacyEnvironmentPrepareWitnesses are the two wrappers the daemon puts on a
 // failed execenv.Prepare / execenv.Reuse. Each opens the error at character
 // zero, and no other code path emits them, so the prefix alone establishes
@@ -519,6 +536,23 @@ func NormalizeDaemonReason(reason, rawError string) Reason {
 	// one names a specific cause inside this same phase and says strictly more.
 	if isAgentSideReason(reason) && hasAnyPrefix(lowerError, legacyEnvironmentPrepareWitnesses...) {
 		return ReasonEnvironmentPrepareFailed
+	}
+
+	// Tool-call budget exhaustion (concise mode). The witness is
+	// server/pkg/agent.ErrToolBudgetExceeded's text, wrapped by each
+	// participating backend as "<label>: agent tool-call budget exceeded
+	// (cap N)". A daemon that predates ReasonToolBudgetExceeded reports the
+	// catchall (its taskRunFailureReason → Classify has no rule for the
+	// phrase), which hides the one failure whose remedy is not "inspect the
+	// agent" but "click retry and continue": the session is intact and a
+	// rerun resumes it with a fresh budget. Upgrading here retires the
+	// mislabel the moment the server deploys, un-upgraded desktop daemons
+	// included. Narrower than the environment-prepare rule above on purpose:
+	// only the buckets this exact text is known to land in, so a refined
+	// reason an older daemon did match stays untouched.
+	if legacyToolBudgetReasons[reason] &&
+		strings.Contains(lowerError, legacyToolBudgetWitness) {
+		return ReasonToolBudgetExceeded
 	}
 	return Reason(reason)
 }

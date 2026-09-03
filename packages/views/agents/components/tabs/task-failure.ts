@@ -21,6 +21,7 @@ export const FAILURE_REASON_I18N_KEYS = {
   issue_window_restricted: "issue_window_restricted",
   environment_prepare_failed: "environment_prepare_failed",
   invalid_task_identity: "invalid_task_identity",
+  tool_budget_exceeded: "tool_budget_exceeded",
 
   // Agent process side — provider.
   "agent_error.provider_auth_or_access":
@@ -95,4 +96,25 @@ export function cancelReasonLabel(
   const reason = failureReasonLabel(task.failure_reason, t);
   if (reason) return reason;
   return task.error ? t(($) => $.task_failure.cancelled_by_system) : null;
+}
+
+/**
+ * Whether a failed task ended because the daemon's concise-mode tool-call
+ * budget ran out. Two shapes must match:
+ *  - `tool_budget_exceeded` on rows the upgraded server already normalised;
+ *  - legacy `agent_error.unknown` rows whose raw error still carries the
+ *    backend witness ("agent tool-call budget exceeded (cap N)") — written
+ *    before the server learned the reason, identified here so their retry
+ *    affordance can still say "continue".
+ * Such a retry resumes the same agent session with a fresh budget (the
+ * failure is not on the resume blacklist), which is what the "continue"
+ * copy promises.
+ */
+export function isToolBudgetExhausted(
+  reason: string | null | undefined,
+  error?: string | null,
+): boolean {
+  if (reason === "tool_budget_exceeded") return true;
+  if (reason !== "agent_error.unknown" && reason !== "agent_error") return false;
+  return (error ?? "").toLowerCase().includes("tool-call budget exceeded");
 }

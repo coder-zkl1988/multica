@@ -581,6 +581,8 @@
     "cancel_task_aria": "作業をキャンセル",
     "retry_task_tooltip": "作業を再試行",
     "retry_task_aria": "作業を再試行",
+    "continue_task_tooltip": "続行（セッションを再開し予算はリセット）",
+    "continue_task_aria": "作業を続行",
     "retry_failed": "作業を再試行できませんでした",
     "retry_blocked": "再試行されませんでした — このエージェントを使用する権限がありません",
     "transcript_tooltip": "トランスクリプトを表示",
