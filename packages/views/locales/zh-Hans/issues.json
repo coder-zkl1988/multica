@@ -738,7 +738,10 @@
       "agents_group": "智能体",
       "squads_group": "小队",
       "agent_runtime_required": "请先为该智能体绑定运行时，再分配工作",
-      "squad_runtime_required": "请先为该小队的负责人绑定运行时，再分配工作"
+      "squad_runtime_required": "请先为该小队的负责人绑定运行时，再分配工作",
+      "concise_mode": "极简代理模式",
+      "concise_mode_description": "仅发送完成此流程所需的任务输入与上下文",
+      "concise_mode_aria": "使用极简代理模式"
     },
     "start_date": {
       "trigger_label": "开始日期",

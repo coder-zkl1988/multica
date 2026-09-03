@@ -40,7 +40,6 @@ import {
 } from "@multica/ui/components/ui/dialog";
 import {
   DropdownMenu,
-  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
@@ -1015,6 +1014,8 @@ export function ManualCreatePanel({
                 <AssigneePicker
                   assigneeType={assigneeType ?? null}
                   assigneeId={assigneeId ?? null}
+                  conciseMode={conciseMode}
+                  onConciseModeChange={(checked) => setManual({ conciseMode: checked })}
                   onUpdate={(u) => updateAssignee(
                     u.assignee_type ?? undefined,
                     u.assignee_id ?? undefined,
@@ -1299,16 +1300,6 @@ export function ManualCreatePanel({
                       </DropdownMenuSubContent>
                     </DropdownMenuSub>
                   )}
-                  <DropdownMenuSeparator />
-                  <DropdownMenuCheckboxItem
-                    checked={conciseMode}
-                    aria-label={t(($) => $.create_issue.agent.concise_mode_aria)}
-                    title={t(($) => $.create_issue.agent.concise_mode_description)}
-                    onCheckedChange={(checked) => setManual({ conciseMode: checked === true })}
-                  >
-                    {t(($) => $.create_issue.agent.concise_mode)}
-                  </DropdownMenuCheckboxItem>
-                  <DropdownMenuSeparator />
                   {/* Field visibility lives in Settings → Issue; the modal
                       closes first so the dialog doesn't linger over the
                       settings page. The draft store already holds everything

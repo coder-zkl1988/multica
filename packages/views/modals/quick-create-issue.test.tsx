@@ -423,11 +423,13 @@ vi.mock("../issues/components/pickers/property-picker", () => ({
   PropertyPicker: ({
     trigger,
     children,
+    footer,
     searchPlaceholder,
     onSearchChange,
   }: {
     trigger: ReactNode;
     children: ReactNode;
+    footer?: ReactNode;
     searchPlaceholder?: string;
     onSearchChange?: (v: string) => void;
   }) => (
@@ -439,6 +441,7 @@ vi.mock("../issues/components/pickers/property-picker", () => ({
         onChange={(e) => onSearchChange?.(e.target.value)}
       />
       {children}
+      {footer}
     </>
   ),
   PickerItem: ({
@@ -661,11 +664,11 @@ describe("AgentCreatePanel", () => {
     });
   });
 
-  it("toggles concise mode from the overflow menu", async () => {
+  it("toggles concise mode from the actor picker footer", async () => {
     const user = userEvent.setup();
     renderPanel({ onClose: vi.fn(), isExpanded: false, setIsExpanded: vi.fn() });
 
-    await user.click(screen.getByRole("menuitemcheckbox", { name: "Concise agent mode" }));
+    await user.click(screen.getByRole("checkbox", { name: "Use concise agent mode" }));
 
     expect(mockSetAgent).toHaveBeenCalledWith({ conciseMode: true });
   });
@@ -1248,7 +1251,7 @@ describe("AgentCreatePanel", () => {
     it("keeps every footer control a direct child of the grid container", () => {
       const switchToManual = screen.getByRole("button", { name: /Switch to Manual/i });
       const create = screen.getByRole("button", { name: /^Create$/i });
-      const keepOpen = screen.getByRole("checkbox");
+      const keepOpen = screen.getByRole("checkbox", { name: /keep open|another/i });
       const attach = screen.getByRole("button", { name: "Upload file" });
 
       const footer = switchToManual.parentElement;
