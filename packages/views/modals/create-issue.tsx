@@ -505,7 +505,12 @@ export function ManualCreatePanel({
               due_date: dueDate || undefined,
               attachment_ids: activeAttachmentIds.length > 0 ? activeAttachmentIds : undefined,
               stage: parentIssueId && stage != null ? stage : undefined,
-              project_id: projectId,
+              // Same atomic-label contract as the plain create below: the
+              // server attaches them in the create transaction and echoes
+              // `issue.labels` back. Dropped once in PR #67 — labels on
+              // anchor sub-issues were silently lost because the legacy
+              // fallback never triggers when the response carries `labels`.
+              label_ids: labelIds.length > 0 ? labelIds : undefined,
               concise_mode: conciseMode || undefined,
             },
           },
