@@ -10,6 +10,24 @@ export default [
       globals: { ...globals.node },
     },
   },
+  // Renderer and sandboxed-preload dependencies are compiled into Vite output;
+  // keeping them in `dependencies` makes electron-builder copy the same modules
+  // (and the whole workspace dependency graph) into app.asar a second time.
+  // cli-bootstrap's workspace helper is likewise bundled into main, with the
+  // external-workspace guard in electron.vite.config.ts enforcing that pact.
+  {
+    files: [
+      "src/renderer/src/**/*.{ts,tsx}",
+      "src/preload/**/*.ts",
+      "src/main/cli-bootstrap.ts",
+    ],
+    rules: {
+      "import-x/no-extraneous-dependencies": [
+        "error",
+        { devDependencies: true },
+      ],
+    },
+  },
   // Security: every renderer-controlled URL that reaches the OS shell or the
   // native download system must flow through the safe wrappers in
   // src/main/external-url.ts (scheme allowlist). Enforce it statically so

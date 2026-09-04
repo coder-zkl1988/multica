@@ -114,7 +114,9 @@ if (hasGo()) {
     "dev";
   const commit = git("rev-parse", "--short", "HEAD") || "unknown";
   const date = new Date().toISOString().replace(/\.\d+Z$/, "Z");
-  const ldflags = `-X main.version=${version} -X main.commit=${commit} -X main.date=${date}`;
+  // Match the release CLI: debug/symbol tables are not needed at runtime and
+  // otherwise travel twice in packaged apps (ASAR input + unpacked resource).
+  const ldflags = `-s -w -X main.version=${version} -X main.commit=${commit} -X main.date=${date}`;
 
   console.log(
     `[bundle-cli] go build → ${srcBinary} (${goos}/${goarch}, version=${version} commit=${commit})`,
