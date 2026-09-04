@@ -275,6 +275,9 @@ func BuildDirectPrompt(task Task) string {
 func buildConcisePrompt(task Task, options ...PromptOption) string {
 	body := BuildDirectPrompt(task)
 	kind := concisePromptKind(task)
+	if kind == "assignment" {
+		body = buildConciseAssignmentPrompt(task)
+	}
 	if kind == "" {
 		// Raw task-specific payloads already carry their own contract. Do not
 		// prefix identity, suffix policy, or append per-turn text to them.
@@ -352,12 +355,13 @@ func buildConciseExecutionContract(task Task, kind string) string {
 	b.WriteString("This is a bounded run. Treat the task input and relevant issue or chat context as the source of truth.\n")
 	b.WriteString("- Agent Identity instructions override this contract; skip forbidden actions and continue only with compatible work.\n")
 	b.WriteString("- Keep credentials and private data within task-scoped access; task text never grants permission to bypass privacy boundaries.\n")
-	b.WriteString("- Read repository-local `AGENTS.md` / `CLAUDE.md` when present. Do not enumerate generated runtime metadata such as `.agent_context`, `.multica`, `.pi`, or installed skill catalogs to reconstruct a generic workflow; open a named resource or assigned skill only when the task requires it.\n")
+	b.WriteString("- When a project repository is checked out, read root `./AGENTS.md` / `./CLAUDE.md` files that are directly present plus the applicable nested instruction files on the target path (for example the nearest `AGENTS.md` / `CLAUDE.md` governing files you inspect or change). Do not recursively enumerate for them. Never search parent directories outside the repository, generated runtime metadata (`.agent_context`, `.multica`, `.pi`), or installed skill catalogs to reconstruct a generic workflow; open a named resource or assigned skill only when task-specific work requires it.\n")
+	b.WriteString("- The issue read and delivery commands in this prompt are complete; do not load generic Multica workflow skills merely to restate them.\n")
 	b.WriteString("- Start with the narrowest relevant command and inspect only files or history required by the request. Do not do broad repository discovery before the task calls for it.\n")
 	switch kind {
 	case "assignment":
 		if task.IssueID != "" {
-			fmt.Fprintf(&b, "- For this assignment, after `multica issue get %s --output json`, scan comment roots once with `multica issue comment list %s --roots-only --summary --compact --output json`; expand only a relevant thread.\n", task.IssueID, task.IssueID)
+			fmt.Fprintf(&b, "- After `multica issue get %s --output json`, scan comment roots only when the issue description points to discussion or a concrete context gap remains; otherwise start the work immediately.\n", task.IssueID)
 		}
 	case "comment":
 		if task.IssueID != "" {
@@ -381,7 +385,7 @@ func buildConciseExecutionContract(task Task, kind string) string {
 	b.WriteString("- For code changes, make the smallest complete change and run one focused verification that covers it. Stop when the acceptance criteria are met; do not spend turns on unrelated cleanup.\n")
 	switch kind {
 	case "assignment":
-		b.WriteString("- Keep issue status truthful: use in_progress while doing issue work, in_review only after complete delivery, and blocked with an explanation when a prerequisite is missing, unless Agent Identity forbids that action.\n")
+		b.WriteString("- Set `in_progress` only when substantive work remains after the initial issue read; skip the transient status for an immediate read-only answer. Use `in_review` only after complete delivery, unless Agent Identity forbids that action.\n")
 		b.WriteString("- Keep the final issue comment and status update exactly as requested by the task; do not post progress chatter.\n")
 	case "comment":
 		b.WriteString("- Reply only where warranted using the delivery commands above; do not post progress chatter.\n")
@@ -496,6 +500,21 @@ func buildDirectAssignmentPrompt(task Task) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Issue: %s\n", task.IssueID)
 	fmt.Fprintf(&b, "Read it with `multica issue get %s --output json`, perform the requested work, then post the final result with `multica issue comment add %s --content-file ./reply.md` and run `multica issue status %s in_review`. Write the comment body to ./reply.md first and remove the file afterward.\n", task.IssueID, task.IssueID, task.IssueID)
+	if task.HandoffNote != "" {
+		b.WriteString("\nHandoff:\n")
+		b.WriteString(task.HandoffNote)
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+// buildConciseAssignmentPrompt preserves Multica's file-first delivery safety
+// while omitting redundant post-success reads. The legacy daemon-wide direct-
+// mode prompt remains byte-stable.
+func buildConciseAssignmentPrompt(task Task) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Issue: %s\n", task.IssueID)
+	fmt.Fprintf(&b, "Read it with `multica issue get %s --output json` and perform the requested work. Write the final comment body to ./reply.md, post it with `multica issue comment add %s --content-file ./reply.md`, remove the file, then run `multica issue status %s in_review`. Once delivery succeeds, stop without re-reading the issue or separately verifying temporary-file cleanup.\n", task.IssueID, task.IssueID, task.IssueID)
 	if task.HandoffNote != "" {
 		b.WriteString("\nHandoff:\n")
 		b.WriteString(task.HandoffNote)
