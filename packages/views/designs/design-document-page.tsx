@@ -1746,7 +1746,7 @@ export function DesignDocumentPage({ documentId }: { documentId: string }) {
                         >
                           <div className="flex items-center gap-1.5">
                             <span
-                              className="flex size-4 shrink-0 items-center justify-center rounded-full bg-orange-600 text-[10px] font-semibold leading-4 text-white"
+                              className="flex size-4 shrink-0 items-center justify-center rounded-full bg-orange-600 text-micro font-semibold leading-4 text-white"
                               aria-hidden
                             >
                               {index + 1}

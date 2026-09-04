@@ -30,9 +30,10 @@ const FRESH = "/api/design-document-previews/ws/rev/digest/renewed-token";
 
 function withClient() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return ({ children }: { children: ReactNode }) => (
-    <QueryClientProvider client={client}>{children}</QueryClientProvider>
-  );
+  function Wrapper({ children }: { children: ReactNode }) {
+    return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+  }
+  return Wrapper;
 }
 
 function renderWithCapability(capability: string) {
