@@ -20,6 +20,17 @@ export interface AnnotationRegion {
   elements: ElementDescriptor[];
 }
 
+/** A freehand pen stroke, in the page's own CSS pixels. */
+export interface AnnotationInk {
+  points: Array<{ x: number; y: number }>;
+}
+
+/** A placed text marker (the pin's position, not its copy). */
+export interface AnnotationTextMark {
+  x: number;
+  y: number;
+}
+
 export interface Annotation {
   id: string;
   /** Package path of the page the mark was made on. */
@@ -30,6 +41,10 @@ export interface Annotation {
   element?: ElementDescriptor;
   /** Set for a marked rectangle. */
   region?: AnnotationRegion;
+  /** Set for a pen stroke. */
+  ink?: AnnotationInk;
+  /** Set for a placed text marker. */
+  textMark?: AnnotationTextMark;
   /** What the user wants changed there. */
   note: string;
 }
@@ -43,11 +58,24 @@ function anchorOf(annotation: Annotation): string {
     return `${annotation.element.label}（选择器 \`${annotation.element.selector}\`）`;
   }
   const region = annotation.region;
-  if (!region) return "整页";
-  const box = `矩形区域 x=${round(region.x)} y=${round(region.y)} 宽=${round(region.width)} 高=${round(region.height)}`;
-  if (region.elements.length === 0) return box;
-  const covered = region.elements.map((element) => `\`${element.selector}\``).join("、");
-  return `${box}，覆盖 ${covered}`;
+  if (region) {
+    const box = `矩形区域 x=${round(region.x)} y=${round(region.y)} 宽=${round(region.width)} 高=${round(region.height)}`;
+    if (region.elements.length === 0) return box;
+    const covered = region.elements.map((element) => `\`${element.selector}\``).join("、");
+    return `${box}，覆盖 ${covered}`;
+  }
+  const ink = annotation.ink;
+  if (ink) {
+    // An empty stroke carries no position; better a plain name than Infinity
+    // in the string the agent reads.
+    if (ink.points.length === 0) return "画笔标记";
+    const xs = ink.points.map((point) => point.x);
+    const ys = ink.points.map((point) => point.y);
+    return `画笔标记 x=${round(Math.min(...xs))} y=${round(Math.min(...ys))} 宽=${round(Math.max(...xs) - Math.min(...xs))} 高=${round(Math.max(...ys) - Math.min(...ys))}`;
+  }
+  const textMark = annotation.textMark;
+  if (textMark) return `文字标记 位置 x=${round(textMark.x)} y=${round(textMark.y)}`;
+  return "整页";
 }
 
 /**
@@ -85,7 +113,11 @@ export function annotationInstruction(annotations: Annotation[], summary: string
 export function annotationLabel(annotation: Annotation): string {
   if (annotation.element) return annotation.element.label;
   const region = annotation.region;
-  if (!region) return "整页";
-  if (region.elements.length > 0) return `区域 · ${region.elements[0]!.label}`;
-  return `区域 · ${round(region.width)}×${round(region.height)}`;
+  if (region) {
+    if (region.elements.length > 0) return `区域 · ${region.elements[0]!.label}`;
+    return `区域 · ${round(region.width)}×${round(region.height)}`;
+  }
+  if (annotation.ink) return "画笔标记";
+  if (annotation.textMark) return "文字标记";
+  return "整页";
 }

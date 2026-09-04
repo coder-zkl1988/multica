@@ -4,7 +4,7 @@ import { LoaderCircle } from "lucide-react";
 import type { DesignDocumentRevision } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import type { ElementDescriptor } from "./element-descriptor";
-import { PrototypeCanvas, usePrototypeDocument, type CanvasMode, type CanvasRegion } from "./prototype-canvas";
+import { PrototypeCanvas, usePrototypeDocument, type CanvasMode, type CanvasPin, type CanvasRegion, type CanvasStroke } from "./prototype-canvas";
 
 /**
  * The workbench's static rendering of one page: the inlined document, its
@@ -20,6 +20,11 @@ export function DesignDocumentStaticView({
   zoom,
   mode,
   pickedSelector,
+  pins,
+  onPinClick,
+  strokes,
+  onInk,
+  onTextPlace,
   onPick,
   onRegion,
   onPageLink,
@@ -32,6 +37,11 @@ export function DesignDocumentStaticView({
   zoom: number;
   mode: CanvasMode;
   pickedSelector?: string;
+  pins?: CanvasPin[];
+  onPinClick?: (id: string) => void;
+  strokes?: CanvasStroke[];
+  onInk?: (points: Array<{ x: number; y: number }>) => void;
+  onTextPlace?: (point: { x: number; y: number }) => void;
   onPick?: (descriptor: ElementDescriptor, element: Element) => void;
   onRegion?: (region: CanvasRegion) => void;
   onPageLink?: (packagePath: string) => void;
@@ -76,6 +86,11 @@ export function DesignDocumentStaticView({
             mode={mode}
             title={title}
             pickedSelector={pickedSelector}
+            pins={pins}
+            onPinClick={onPinClick}
+            strokes={strokes}
+            onInk={onInk}
+            onTextPlace={onTextPlace}
             onPick={onPick}
             onRegion={onRegion}
             onPageLink={onPageLink}

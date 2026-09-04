@@ -117,11 +117,18 @@ export function documentHeight(frameDocument: Document, maxHeight: number): numb
   return Math.max(1, Math.min(measured || 1, maxHeight));
 }
 
-async function decodeSvg(svg: string): Promise<HTMLImageElement> {
-  // A blob URL rather than a data URI: a full page of inlined assets makes a
-  // string far past what some browsers accept in a URL, and a blob inherits
-  // this origin so the canvas stays untainted.
-  const url = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml;charset=utf-8" }));
+async function decodeSvg(svg: string, transport: "blob" | "data"): Promise<HTMLImageElement> {
+  // A data URL never taints the canvas, in any browser, under any security
+  // policy — but some browsers cap how long a URL accepts, so a full page of
+  // inlined assets can exceed it. A blob URL takes any size and inherits this
+  // origin, EXCEPT in Electron with `webSecurity: false`, where blob origins
+  // are checked loosely enough that the drawn image reads as cross-origin and
+  // `toBlob` throws "Tainted canvases may not be exported" (A6 acceptance,
+  // 2026-09-03). So: data URL first — Chromium takes multi-megabyte ones — and
+  // the blob as the fallback for a data URL the browser refuses to load.
+  const url = transport === "blob"
+    ? URL.createObjectURL(new Blob([svg], { type: "image/svg+xml;charset=utf-8" }))
+    : `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
   try {
     const image = new Image();
     await new Promise<void>((resolve, reject) => {
@@ -132,8 +139,22 @@ async function decodeSvg(svg: string): Promise<HTMLImageElement> {
     return image;
   } finally {
     // Revoked after decode: the image keeps its own reference to the data.
-    URL.revokeObjectURL(url);
+    if (transport === "blob") URL.revokeObjectURL(url);
   }
+}
+
+/**
+ * The transport to try after `failed` threw `error`, or null when the failure
+ * is final. A data-URL failure — load refused OR a tainted draw — earns one
+ * more attempt through the blob, and vice versa; the two transports fail in
+ * opposite environments (browsers that cap URL length refuse the data URL,
+ * Electron with `webSecurity: false` taints the blob), so either error moves
+ * to the other form. Once both have failed there is nothing left to try.
+ * Exported for its own test: the decision is the fix for a real acceptance
+ * failure and should not refuse into the loop unnoticed.
+ */
+export function nextRasterTransport(failed: "data" | "blob", _error: unknown): "data" | "blob" | null {
+  return failed === "data" ? "blob" : null;
 }
 
 /** Rasterises one inlined page. */
@@ -145,32 +166,45 @@ export async function rasterizePage(html: string, options: RasterOptions): Promi
   return withMountedDocument(html, options.width, async (frameDocument) => {
     const pageHeight = documentHeight(frameDocument, maxHeight);
     const svg = documentToSvg(frameDocument, options.width, pageHeight);
-    const image = await decodeSvg(svg);
 
     const region = options.region ?? { x: 0, y: 0, width: options.width, height: pageHeight };
     const cropWidth = Math.max(1, Math.min(region.width, options.width - region.x));
     const cropHeight = Math.max(1, Math.min(region.height, pageHeight - region.y));
 
-    const canvas = window.document.createElement("canvas");
-    canvas.width = Math.round(cropWidth * scale);
-    canvas.height = Math.round(cropHeight * scale);
-    const context = canvas.getContext("2d");
-    if (!context) throw new Error("导出时无法创建画布");
-    if (type === "image/jpeg") {
-      // JPEG has no transparency; without this a transparent page comes out
-      // black rather than white.
-      context.fillStyle = "#ffffff";
-      context.fillRect(0, 0, canvas.width, canvas.height);
+    let lastError: unknown = null;
+    for (let transport: "data" | "blob" | null = "data"; transport; transport = nextRasterTransport(transport, lastError)) {
+      let image: HTMLImageElement;
+      try {
+        image = await decodeSvg(svg, transport);
+      } catch (error) {
+        lastError = error;
+        continue;
+      }
+      const canvas = window.document.createElement("canvas");
+      canvas.width = Math.round(cropWidth * scale);
+      canvas.height = Math.round(cropHeight * scale);
+      const context = canvas.getContext("2d");
+      if (!context) throw new Error("导出时无法创建画布");
+      if (type === "image/jpeg") {
+        // JPEG has no transparency; without this a transparent page comes out
+        // black rather than white.
+        context.fillStyle = "#ffffff";
+        context.fillRect(0, 0, canvas.width, canvas.height);
+      }
+      context.drawImage(
+        image,
+        region.x, region.y, cropWidth, cropHeight,
+        0, 0, canvas.width, canvas.height,
+      );
+      try {
+        const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, type, options.quality ?? 0.92));
+        if (!blob) throw new Error("导出时无法生成图片");
+        return { blob, width: canvas.width, height: canvas.height };
+      } catch (error) {
+        lastError = error;
+      }
     }
-    context.drawImage(
-      image,
-      region.x, region.y, cropWidth, cropHeight,
-      0, 0, canvas.width, canvas.height,
-    );
-
-    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, type, options.quality ?? 0.92));
-    if (!blob) throw new Error("导出时无法生成图片");
-    return { blob, width: canvas.width, height: canvas.height };
+    throw lastError instanceof Error ? lastError : new Error("导出时无法生成图片");
   });
 }
 
