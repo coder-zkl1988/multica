@@ -94,3 +94,4 @@ fengchenDoc/
 # Python (agent tooling)
 __pycache__/
 *.pyc
+.repo_memory/
