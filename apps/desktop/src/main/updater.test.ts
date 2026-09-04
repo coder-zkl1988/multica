@@ -375,6 +375,27 @@ describe("setupAutoUpdater", () => {
     await expect(manual).resolves.toBeUndefined();
   });
 
+  it("skips update checks while a legacy manual transfer is active", async () => {
+    const transfer = Promise.withResolvers<string[]>();
+    ctx.downloadUpdate.mockReturnValueOnce(transfer.promise);
+    setupAutoUpdater(() => null);
+    emitUpdater("update-available", { version: "0.3.18" });
+
+    const download = invokeIpc("updater:download");
+    await Promise.resolve();
+
+    await expect(invokeIpc("updater:check")).resolves.toEqual({
+      ok: true,
+      currentVersion: "0.3.17",
+      latestVersion: "0.3.18",
+      available: true,
+    });
+    expect(ctx.checkForUpdates).not.toHaveBeenCalled();
+
+    transfer.resolve(["update.zip"]);
+    await expect(download).resolves.toEqual(["update.zip"]);
+  });
+
   it("forwards update progress to a live renderer", () => {
     const { win, send } = makeWindow();
     setupAutoUpdater(() => win);

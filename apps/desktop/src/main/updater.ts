@@ -116,6 +116,11 @@ function checkForUpdatesOnce(
   onDownloadError?: (error: unknown) => void,
 ): Promise<unknown> {
   if (inFlightCheck) return inFlightCheck;
+  // A legacy renderer may start a manual transfer directly. Do not perform a
+  // metadata check while that package is in flight: electron-updater could
+  // emit update-available again, reset visible progress, and expose a second
+  // downloadPromise that cannot safely replace the active transfer.
+  if (inFlightDownload) return Promise.resolve(null);
   const forkReleaseRepository = (
     import.meta.env as ImportMetaEnv & {
       readonly VITE_DESKTOP_RELEASE_REPOSITORY?: string;
@@ -318,10 +323,18 @@ export function setupAutoUpdater(getMainWindow: () => BrowserWindow | null): voi
 
   ipcMain.handle("updater:check", async (): Promise<ManualUpdateCheckResult> => {
     try {
+      const currentVersion = app.getVersion();
+      if (inFlightDownload && updaterState.status === "downloading") {
+        return {
+          ok: true,
+          currentVersion,
+          latestVersion: updaterState.version,
+          available: true,
+        };
+      }
       const result = (await checkForUpdatesOnce(reportDownloadError)) as
         | { updateInfo: { version: string }; isUpdateAvailable?: boolean }
         | null;
-      const currentVersion = app.getVersion();
       // Trust electron-updater's own decision rather than re-deriving it from
       // a version-string compare. The two diverge for pre-release channels,
       // staged rollouts, downgrades, and minimum-system-version gates — in
