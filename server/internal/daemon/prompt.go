@@ -361,7 +361,7 @@ func buildConciseExecutionContract(task Task, kind string) string {
 	switch kind {
 	case "assignment":
 		if task.IssueID != "" {
-			fmt.Fprintf(&b, "- After `multica issue get %s --output json`, scan comment roots only when the issue description points to discussion or a concrete context gap remains; otherwise start the work immediately.\n", task.IssueID)
+			fmt.Fprintf(&b, "- After `multica issue get %s --output json`, scan comment roots once with `multica issue comment list %s --roots-only --summary --compact --output json`; expand only a relevant thread.\n", task.IssueID, task.IssueID)
 		}
 	case "comment":
 		if task.IssueID != "" {

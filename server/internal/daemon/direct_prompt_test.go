@@ -135,7 +135,7 @@ func TestBuildConcisePromptAddsOperationalContract(t *testing.T) {
 				"## Concise execution",
 				"multica issue get issue-1 --output json",
 				"multica issue comment add issue-1 --content-file ./reply.md",
-				"scan comment roots only when",
+				"multica issue comment list issue-1 --roots-only --summary --compact --output json",
 				"skip the transient status for an immediate read-only answer",
 				"stop without re-reading the issue",
 				"Never background work and yield",
@@ -190,9 +190,6 @@ func TestBuildConcisePromptAddsOperationalContract(t *testing.T) {
 			if strings.Contains(prompt, "You are running as a local coding agent") ||
 				strings.Contains(prompt, "## Available Commands") {
 				t.Errorf("concise prompt unexpectedly contains the full runtime brief:\n%s", prompt)
-			}
-			if tt.name == "assignment" && strings.Contains(prompt, "multica issue comment list issue-1") {
-				t.Errorf("concise assignment prompt mandates an unnecessary comment scan:\n%s", prompt)
 			}
 			if tt.name == "assignment" && strings.Contains(prompt, "--content \"") {
 				t.Errorf("concise assignment prompt permits shell-fragile inline comment bodies:\n%s", prompt)
