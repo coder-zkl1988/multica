@@ -682,6 +682,23 @@ Open Design 的两类预置资源按各自性质分别落地，不共用一套�
   - 旧文档冻结快照中的裸摘要不需要迁移：`regenerate` 与 `adjust` 都重新解析 `design_context`（已由本次运行验证）。
   - `internal/service` 的 7 个 `TestAutopilotQuota*` 因共享测试库 `multica` 缺少上游合并带来的迁移 448（`rejection_notified_at`）而失败，与本条无关。
 
+### DC-064 设计稿工作台 A6 首轮验收修复：跨 realm 门禁 bug 与 Open Design 预览交互补齐
+
+- 状态：`confirmed`
+- 日期：2026-09-03
+- 依据：用户对设计稿预览页的六项验收意见，要求对照 Open Design 修复。这是 A6 真人验收的第一批发现。
+- 根因（覆盖意见 2、3 及实际上全部画布交互）：`PrototypeCanvas` 的画布文档挂在 `blob:` iframe 里，节点属于 **iframe 自己的 global object**，而全部交互守卫用的是父窗口的 `instanceof Element` / `instanceof HTMLElement`——跨 realm 恒为 false。点击、悬停、框选、跨页链接、编辑回填（`repaintManualEdits` / `applyToCanvas`）在到达任何 handler 之前就被丢弃。jsdom 单 realm 永远无法复现，所以既有单测全绿而真实点击全部无效；DC-062 记录的「标注 → 智能体」「手动编辑面板」实际上是从未被真人点击过的。
+- 修复与补齐：
+  1. **跨 realm 守卫**：新增 `isElementNode` / `isStyleableElement`（读 `nodeType`，跨 realm 成立），替换画布点击、悬停、`isCanvasUi` 与三处手动编辑回填的全部 `instanceof`；矩阵测试钉住（`prototype-canvas.test.tsx`）。真实桌面端验证：编辑模式点击标题出现选中框、属性面板完整弹出。
+  2. **评论交互（OD comment pins）**：标注在画布上留下编号 pin（元素锚定用选择器解析、框选用矩形），点击 pin 滚动并高亮 composer 里对应条目；列表编号与画布一致；每条标注的说明输入原本就有，修复后真正可用。边界：标注仍是会话级草稿，随发送清空，不做 OD 的服务端持久评论与状态流转（需要新的存储模型，另行立项）。
+  3. **截图发送到对话**：推翻 DC-062 第 3 项「明确不做截图发对话」（用户本次明确要求）。截图菜单新增「截图发送到对话」，走普通附件路由进入本轮调整（`rasterizePage` → File → `stageAttachments`），智能体按参考文件读取；「复制到剪贴板」保留。
+  4. **演示模式**：工具栏新增播放按钮——整窗黑底只留活动预览（脚本运行，演示即播放），底部页码与上/下/退出控件，←/→/空格翻页、Esc 退出。
+  5. **历史版本查看**：版本区新增「历史版本」对话框（对应 OD versions 弹层）：左侧版本列表（徽标、说明、页数、智能体、时间），右侧所选版本的活动预览（按修订能力令牌加载）；「查看此版本」把工作台钉到该版本，「回退到此版本」沿用既有指针语义。侧栏行的钉住查看此前已存在。
+- 验证：views 全量 5499 通过（含新增演示模式/历史版本/截图三个组件测试与守卫矩阵）、typecheck 通过、lint 0 error；真实桌面端 HMR 验证编辑选中（见 1）；标注 pin 与演示/版本对话框的组件测试覆盖，真人复核因验收屏幕锁定暂缓一次。
+- 第二轮验收（2026-09-03，用户对照 OD 截图反馈）：①截图与 PNG/PDF 导出在桌面端报 `Tainted canvases may not be exported`——Electron `webSecurity: false` 下 blob-URL 解码的图被画布判为跨源，光栅化改为 data-URL 优先、blob 兜底、双向重试（`export-raster.ts`）。②标注工具栏重做为 OD 的浮动深色胶囊：框选/钢笔/文字/选元素四工具 + 撤销/重做 + 「为这个标记添加说明」输入直发（钢笔笔迹入包渲染、文字标记落点成 pin、帧外松手的搁浅笔迹按时序收笔）；编辑属性面板从侧栏改为跟随选中元素的浮动面板（坐标补 iframe 偏移与 zoom 缩放、随帧滚动更新）。③多视角对抗式审查（12 个子代理）确认并修复：StrictMode 下 undo/redo 在 setState 更新器里嵌套 setState 导致重做栈重复入队（提取纯转换 `annotation-history.ts`）、ink 图层缺 left/top 落在文档末尾、窄面板工具栏被裁剪、空笔迹产生 Infinity/NaN 锚点、应用修改前置条件提取为 `editApplyBlocker` 纯函数；对应补齐画布交互（doc.open/write/close 填充帧文档）、工具栏发送/排队、撤销重做矩阵、传输决策矩阵等全部测试。views 全量 5519 通过、typecheck/lint 干净。
+- 边界：OD 的评论持久化、看板模式、评论状态流转未迁（依赖服务端存储决策）；演讲者备注依赖 deck 产物形态，待 deck 可创建后随演示模式补齐。
+- 第三轮验收（2026-09-03 晚，用户报告）：①「点击标注页面渲染报错」定为瞬时环境问题——19:52 并行会话在共享 checkout 切分支时把 JSON/模块写了一半，Vite `vite-json` 对半成品报 `key must be a string` 并弹出错误遮罩；磁盘 JSON 现已全部可解析，模块转换 200，实机点击标注正常打开，无代码改动。②「工具栏跟随标注框」在同一时间窗内按旧模块图渲染所致：现行代码的标注工具栏为画布面板底部的 `absolute bottom-3` 深色胶囊（`design-document-page.tsx`），实机截图证实固定于底部中央；硬刷新（⌘R）后如仍复现再查。③截图发送到对话后，侧边栏附件 chip 现按对象 URL 渲染缩略图（图片类参考文件一律生效），行被移除、随调整发出或组件卸载时均回收 URL。④侧边栏滚动容器补 `overflow-x-hidden`（与库内其它面板惯例一致）——`overflow-y-auto` 会使另一轴同样变 auto，任何超宽子元素都会带出横向滚动条。测试：页面对象 URL stub + 缩略图/回收断言，views 39 项通过、typecheck、lint 0 error。
+
 ## 下一步
 
 新 Phase A 的首页入口、`multica.design-document/v1`、不可变 revisions、draft/saved、任务内仓库 Grounding、持续工作空间、现有本地浏览器强制门禁、任务（Issue）可选关联和 A1 至 A6 内部子切片均已确认。用户复核书面规格后，只为 A1 至 A6 编写详细实施计划；计划必须按 DC-040 限定每个子切片的产品、代码、API 和数据范围，并携带退役账本与真实验证门禁。不得恢复独立 Phase B、迁移 `feature/fengchen-fixed-v2`、继续 Open Design Worker/Runtime，或把 Slice B 至 E 混入 Phase A。

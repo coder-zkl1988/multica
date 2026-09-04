@@ -2,11 +2,14 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@multica/ui/components/ui/resizable";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@multica/ui/components/ui/dialog";
 import { useDefaultLayout } from "react-resizable-panels";
 import { useIsCompact } from "@multica/ui/hooks/use-mobile";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowUp,
+  ChevronLeft,
+  ChevronRight,
   CircleAlert,
   Code2,
   ExternalLink,
@@ -21,12 +24,17 @@ import {
   Camera,
   Download,
   Paintbrush,
+  Pen,
+  Play,
   RotateCcw,
   RotateCw,
   Scan,
   Smartphone,
   SquareDashedMousePointer,
   Tablet,
+  Type,
+  Undo2,
+  Redo2,
   X,
   ZoomIn,
   ZoomOut,
@@ -83,11 +91,13 @@ import { BreadcrumbHeader } from "../layout/breadcrumb-header";
 import { useNavigation } from "../navigation";
 import { useTimeAgo } from "../i18n/use-time-ago";
 import { annotationInstruction, annotationLabel, type Annotation } from "./annotation-instruction";
+import { emptyAnnotationHistory, pinsForPage, pushMark, redoMark, strokesForPage, undoMark, type AnnotationHistory } from "./annotation-history";
 import { exportDesignDocument, exportScopeLabel, captureScreenshot, type ExportFormat } from "./export-design-document";
 import { inlinePrototypePage } from "./inline-prototype";
 import type { ElementDescriptor } from "./element-descriptor";
 import {
   countDeclarations,
+  editApplyBlocker,
   submittableEdits,
   withDeclaration,
   withoutSelector,
@@ -99,7 +109,8 @@ import { DesignDocumentCritique, parseCritique } from "./design-document-critiqu
 import { DesignDocumentSourceView } from "./design-document-source-view";
 import { DesignDocumentStaticView } from "./design-document-static-view";
 import { AgentSetting, IssueSetting } from "./design-task-composer";
-import { revisionFileSource, safeQuery, type CanvasMode } from "./prototype-canvas";
+import { rasterizePage } from "./export-raster";
+import { isStyleableElement, revisionFileSource, safeQuery, type CanvasMode } from "./prototype-canvas";
 import { formatDuration, taskOperationLabel } from "./project-design-system-task-activity";
 import { DesignDocumentConversation } from "./design-document-conversation";
 import { DesignNextSteps } from "./design-next-steps";
@@ -271,6 +282,7 @@ export function DesignDocumentPage({ documentId }: { documentId: string }) {
   const paths = useWorkspacePaths();
   const navigation = useNavigation();
   const queryClient = useQueryClient();
+  const timeAgo = useTimeAgo();
 
   const documentQuery = useQuery(designDocumentDetailOptions(wsId, documentId));
   const document = documentQuery.data;
@@ -310,7 +322,10 @@ export function DesignDocumentPage({ documentId }: { documentId: string }) {
   // the agent, 预览 stays the live sandboxed frame, 代码 reads the package.
   const [viewMode, setViewMode] = useState<DocumentViewMode>("preview");
   const [markMode, setMarkMode] = useState<CanvasMode>("select");
-  const [annotations, setAnnotations] = useState<Annotation[]>([]);
+  // The mark list and its redo stack move together through the pure
+  // transitions in annotation-history.ts; undo is "the list is the undo".
+  const [history, setHistory] = useState<AnnotationHistory>(emptyAnnotationHistory);
+  const annotations = history.marks;
   // The designer's pending overrides, and the element the panel is bound to.
   // The picked node lives in a ref, not state: it belongs to a canvas document
   // that remounts on every page or revision change, and re-rendering against a
@@ -320,15 +335,27 @@ export function DesignDocumentPage({ documentId }: { documentId: string }) {
   const pickedElement = useRef<Element | null>(null);
   const [pickedComputed, setPickedComputed] = useState<CSSStyleDeclaration | null>(null);
   const annotationSeq = useRef(0);
+  // Open Design's toolbar input: the note typed there belongs to the mark just
+  // made; a mark committed with an empty input keeps its note for the list.
+  const [toolbarNote, setToolbarNote] = useState("");
   const addAnnotation = (annotation: Omit<Annotation, "id" | "pagePath" | "pageTitle">) => {
     annotationSeq.current += 1;
-    setAnnotations((current) => [...current, {
+    const consumed = annotation.note.trim() === "" && toolbarNote.trim() !== ""
+      ? toolbarNote.trim()
+      : annotation.note;
+    if (consumed !== annotation.note) setToolbarNote("");
+    // A fresh mark invalidates the redo stack, as any editor does.
+    setHistory((current) => pushMark(current, {
       ...annotation,
+      note: consumed,
       id: `annotation-${annotationSeq.current}`,
       pagePath: shownEntry,
       pageTitle: shownPage?.title ?? shownEntry,
-    }]);
+    }));
   };
+
+  const undoAnnotation = () => setHistory(undoMark);
+  const redoAnnotation = () => setHistory(redoMark);
   const [zoomIndex, setZoomIndex] = useState(ZOOM_DEFAULT_INDEX);
   const zoom = ZOOM_LEVELS[zoomIndex] ?? 1;
   const [reloadKey, setReloadKey] = useState(0);
@@ -341,6 +368,96 @@ export function DesignDocumentPage({ documentId }: { documentId: string }) {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [fullscreen]);
+
+  // 演示模式 (Open Design's present): the page takes the whole window with all
+  // chrome stripped, and the prototype's own scripts stay live — the run is
+  // the demo. Keyboard navigation walks the document's pages.
+  const [presenting, setPresenting] = useState(false);
+  const [presentIndex, setPresentIndex] = useState(0);
+  const presentEntry = entries[Math.min(presentIndex, Math.max(0, entries.length - 1))] ?? null;
+  const startPresenting = () => {
+    const index = entries.findIndex((entry) => entry.entry === shownEntry);
+    setPresentIndex(index >= 0 ? index : 0);
+    setPresenting(true);
+  };
+  useEffect(() => {
+    if (!presenting) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setPresenting(false);
+      else if ((event.key === "ArrowRight" || event.key === "PageDown" || event.key === " ") && presentIndex < entries.length - 1) {
+        event.preventDefault();
+        setPresentIndex((index) => index + 1);
+      } else if ((event.key === "ArrowLeft" || event.key === "PageUp") && presentIndex > 0) {
+        event.preventDefault();
+        setPresentIndex((index) => index - 1);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [presenting, presentIndex, entries.length]);
+
+  // Open Design's comment pins: every open mark is numbered on the canvas, so
+  // the list in the composer and the marks on the page read as one list.
+  const [focusedAnnotationId, setFocusedAnnotationId] = useState("");
+  const canvasPins = useMemo(() => pinsForPage(annotations, shownEntry), [annotations, shownEntry]);
+  const canvasStrokes = useMemo(() => strokesForPage(annotations, shownEntry), [annotations, shownEntry]);
+
+  // Where the edit popover opens, in THIS window's viewport coordinates. The
+  // picked node reports its rect in the frame's own viewport, so the anchor
+  // adds the iframe's offset inside this window and scales by the zoom the
+  // frame is displayed at. Recomputed while picked — the frame scrolls, and a
+  // capture listener on this window never hears a child document's scroll.
+  const [pickedAnchor, setPickedAnchor] = useState<{ left: number; top: number } | null>(null);
+  useEffect(() => {
+    if (!picked || !pickedElement.current) {
+      setPickedAnchor(null);
+      return;
+    }
+    const update = () => {
+      const element = pickedElement.current;
+      if (!(element && element.isConnected)) return;
+      // The frame element itself belongs to this window's DOM, so its rect is
+      // a parent-viewport rect; the element's own rect is frame-viewport and
+      // renders scaled by the frame's zoom transform.
+      const frameRect = (element.ownerDocument.defaultView?.frameElement as HTMLElement | null)?.getBoundingClientRect() ?? null;
+      const rect = element.getBoundingClientRect();
+      setPickedAnchor({
+        left: (frameRect?.left ?? 0) + rect.left * zoom,
+        top: (frameRect?.top ?? 0) + rect.top * zoom,
+      });
+    };
+    update();
+    const frameDocument = pickedElement.current.ownerDocument;
+    frameDocument.addEventListener("scroll", update, true);
+    window.addEventListener("scroll", update, true);
+    window.addEventListener("resize", update);
+    return () => {
+      frameDocument.removeEventListener("scroll", update, true);
+      window.removeEventListener("scroll", update, true);
+      window.removeEventListener("resize", update);
+    };
+  }, [picked, zoom, shownEntry]);
+  const focusAnnotation = (id: string) => {
+    setFocusedAnnotationId(id);
+    const row = window.document.getElementById(`annotation-row-${id}`);
+    row?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  };
+
+  // The 版本 dialog previews one pinned version at a time; the dialog owns
+  // that choice so browsing never moves the workbench until 查看此版本.
+  const [versionsOpen, setVersionsOpen] = useState(false);
+  const [versionPreviewId, setVersionPreviewId] = useState("");
+  const versionPreviewQuery = useQuery({
+    ...designDocumentRevisionOptions(wsId, documentId, versionPreviewId),
+    enabled: versionsOpen && !!versionPreviewId,
+  });
+  const versionPreview = versionPreviewQuery.data;
+  const versionPreviewEntry = versionPreview?.prototype_entry
+    || versionPreview?.pages?.[0]?.entry
+    || "";
+  const versionPreviewUrl = versionPreview && versionPreviewEntry
+    ? api.getDesignDocumentPreviewFileURL(versionPreview.resource_base_path, versionPreviewEntry)
+    : "";
 
   const [instruction, setInstruction] = useState("");
   const [agentOverride, setAgentOverride] = useState("");
@@ -412,10 +529,13 @@ export function DesignDocumentPage({ documentId }: { documentId: string }) {
       // Clear only the text that was sent — a queued flush must not wipe
       // whatever the user has started typing since.
       setInstruction((current) => (current === payload.instruction ? "" : current));
-      setAnnotations((current) => current.filter((row) => !payload.annotations.some((sent) => sent.id === row.id)));
+      setHistory((current) => ({
+        ...current,
+        marks: current.marks.filter((row) => !payload.annotations.some((sent) => sent.id === row.id)),
+      }));
     // Sent references belong to the turn that sent them, so the next message
     // starts empty rather than silently re-attaching them.
-    setTurnAttachments((current) => current.filter((row) => !payload.attachments.some((sent) => sent.id === row.id)));
+    dropTurnAttachments(new Set(payload.attachments.map((sent) => sent.id)));
       setPinnedRevisionId("");
       await refresh();
     },
@@ -494,7 +614,7 @@ export function DesignDocumentPage({ documentId }: { documentId: string }) {
     for (const edit of edits) {
       if (edit.page !== page) continue;
       const target = safeQuery(canvasDocument, edit.selector);
-      if (!(target instanceof HTMLElement)) continue;
+      if (!isStyleableElement(target)) continue;
       for (const [property, value] of Object.entries(edit.declarations)) {
         if (value.trim() === "") target.style.removeProperty(property);
         else target.style.setProperty(property, value, "important");
@@ -505,7 +625,7 @@ export function DesignDocumentPage({ documentId }: { documentId: string }) {
   /** Paints one override straight onto the canvas so the change is instant. */
   const applyToCanvas = (property: string, value: string) => {
     const element = pickedElement.current;
-    if (!(element instanceof HTMLElement)) return;
+    if (!isStyleableElement(element)) return;
     if (value.trim() === "") element.style.removeProperty(property);
     // "important" mirrors what the generated stylesheet will use, so the
     // canvas shows the same result the persisted revision will.
@@ -521,7 +641,7 @@ export function DesignDocumentPage({ documentId }: { documentId: string }) {
   const clearManualEdit = () => {
     const element = pickedElement.current;
     const current = manualEdits.find((edit) => edit.page === shownEntry && edit.selector === picked?.selector);
-    if (element instanceof HTMLElement && current) {
+    if (isStyleableElement(element) && current) {
       for (const property of Object.keys(current.declarations)) element.style.removeProperty(property);
     }
     if (picked) setManualEdits((edits) => withoutSelector(edits, shownEntry, picked.selector));
@@ -530,6 +650,12 @@ export function DesignDocumentPage({ documentId }: { documentId: string }) {
   // Applying the pending overrides. No agent runs — the daemon rewrites the
   // package deterministically — but the same Audit and browser gate decide
   // whether it becomes a revision (DC-062).
+  const manualEditBlocker = editApplyBlocker({
+    canAdjust,
+    running,
+    declarationCount: countDeclarations(manualEdits),
+    hasAgent: !!agentId,
+  });
   const manualEdit = useMutation({
     mutationFn: () => api.manualEditDesignDocument(documentId, {
       edits: submittableEdits(manualEdits),
@@ -593,6 +719,23 @@ export function DesignDocumentPage({ documentId }: { documentId: string }) {
     onError: (error) => toast.error(error instanceof Error ? error.message : "截图失败"),
   });
 
+  // Open Design's screenshot-to-chat: the capture lands in the composer as a
+  // reference file for THIS turn, the same route a manually attached file
+  // takes, so the agent reads it like any other attachment.
+  const screenshotToChat = useMutation({
+    mutationFn: async () => {
+      const html = await loadInlinedPage(shownEntry);
+      const raster = await rasterizePage(html, { width: frameWidth ?? 1280, type: "image/png" });
+      const name = `${title}-${shownPage?.title ?? shownEntry}`.replace(/[\\/:*?"<>|]+/g, "-").slice(0, 80);
+      return new File([raster.blob], `${name}.png`, { type: "image/png" });
+    },
+    onSuccess: async (file) => {
+      await stageAttachments([file]);
+      toast.success("截图已加入本轮对话的参考文件");
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "截图失败"),
+  });
+
   const deliver = useMutation({
     mutationFn: (issueId: string) => api.deliverDesignDocument(documentId, { issue_id: issueId }),
     onSuccess: async (next, issueId) => {
@@ -648,13 +791,6 @@ export function DesignDocumentPage({ documentId }: { documentId: string }) {
   const composerOpen = canAdjust || running;
   // A manual edit lands as a revision, so it needs the same preconditions an
   // adjustment does — plus something actually changed.
-  const manualEditBlocker = !canAdjust
-    ? (running ? "任务执行中，完成后可以继续编辑" : "还没有可以编辑的版本")
-    : countDeclarations(manualEdits) === 0
-      ? "在画布上选中元素后修改属性"
-      : !agentId
-        ? "选择一个智能体来运行校验"
-        : null;
   const instructionBlocker = !composerOpen
     ? "还没有可以调整的版本"
     // A mark carries its own message: the anchor plus its note is already an
@@ -666,6 +802,24 @@ export function DesignDocumentPage({ documentId }: { documentId: string }) {
         : instruction.length > INSTRUCTION_MAX_LENGTH
           ? "说明太长了"
           : null;
+
+  // The toolbar's send reads the toolbar input as the message and the marks as
+  // its anchors — the same payload the composer submits, one keystroke closer.
+  const toolbarAdjustBlocker = !composerOpen
+    || busy
+    || (!toolbarNote.trim() && annotations.length === 0)
+    || !agentId
+    || toolbarNote.length > INSTRUCTION_MAX_LENGTH;
+  const sendToolbarAdjustment = () => {
+    if (toolbarAdjustBlocker) return;
+    const summary = toolbarNote;
+    setToolbarNote("");
+    if (running) {
+      setQueuedAdjustment({ instruction: summary, annotations, attachments: turnAttachments });
+      return;
+    }
+    adjust.mutate({ instruction: summary, annotations, attachments: turnAttachments });
+  };
 
   // The newest turn's plan, for the bar pinned above the composer. Same query
   // key the thread reads, so this is the cache and not a second fetch.
@@ -679,22 +833,47 @@ export function DesignDocumentPage({ documentId }: { documentId: string }) {
   const { defaultLayout, onLayoutChanged } = useDefaultLayout({ id: "multica_design_document_layout" });
   // References staged for THIS turn. Uploaded through the ordinary route; only
   // the ids travel with the request, exactly as the home composer does it.
-  const [turnAttachments, setTurnAttachments] = useState<Array<{ id: string; name: string }>>([]);
+  // Image rows carry an object URL of the local file so the chip can show what
+  // is actually attached — a staged screenshot must not read as a name only.
+  const [turnAttachments, setTurnAttachments] = useState<Array<{ id: string; name: string; previewUrl?: string }>>([]);
+  // Mirror for the exits that cannot read fresh state: the unmount cleanup.
+  const turnAttachmentsRef = useRef(turnAttachments);
+  turnAttachmentsRef.current = turnAttachments;
   const attachmentInputRef = useRef<HTMLInputElement | null>(null);
   const { upload: uploadAttachment, uploading: attachmentUploading } = useFileUpload(
     api,
     (error: Error, file: File) => toast.error(`${file.name}：${error.message}`),
   );
+  // Rows leave the staged list three ways — removed by hand, consumed by a
+  // sent adjustment, or dropped with the component — and an image row's
+  // preview is a blob URL that every one of those paths must release.
+  const dropTurnAttachments = (ids: ReadonlySet<string>) => {
+    for (const row of turnAttachmentsRef.current) {
+      if (ids.has(row.id) && row.previewUrl) URL.revokeObjectURL(row.previewUrl);
+    }
+    setTurnAttachments((current) => current.filter((row) => !ids.has(row.id)));
+  };
+  useEffect(() => () => {
+    for (const row of turnAttachmentsRef.current) {
+      if (row.previewUrl) URL.revokeObjectURL(row.previewUrl);
+    }
+  }, []);
   const stageAttachments = async (files: FileList | File[]) => {
     for (const file of Array.from(files).slice(0, MAX_TURN_ATTACHMENTS)) {
       try {
         const result = await uploadAttachment(file);
         if (!result) continue;
-        setTurnAttachments((current) => (
-          current.some((item) => item.id === result.id) || current.length >= MAX_TURN_ATTACHMENTS
+        const previewUrl = file.type.startsWith("image/") ? URL.createObjectURL(file) : undefined;
+        setTurnAttachments((current) => {
+          const staged = current.some((item) => item.id === result.id) || current.length >= MAX_TURN_ATTACHMENTS;
+          // A skipped file's preview never shows, so its URL dies here.
+          // revokeObjectURL is idempotent, which is what makes this safe
+          // under StrictMode's double-invoked updaters.
+          if (staged && previewUrl) URL.revokeObjectURL(previewUrl);
+          return staged
             ? current
-            : [...current, { id: result.id, name: result.filename || file.name }]
-        ));
+            : [...current, { id: result.id, name: result.filename || file.name, previewUrl }];
+        });
       } catch {
         // Reported through the hook's onError; nothing else to do here.
       }
@@ -785,33 +964,6 @@ export function DesignDocumentPage({ documentId }: { documentId: string }) {
           {viewMode !== "code" && entries.length === 0 && !revisionQuery.isLoading ? <span className="px-2 text-caption text-muted-foreground">暂无可预览的页面</span> : null}
         </div>
         <div className="flex shrink-0 items-center gap-0.5">
-          {viewMode === "annotate" ? (
-            <>
-              {/* What a drag on the canvas means: pick one element, or draw
-                  a box around a group. */}
-              <div role="group" aria-label="标注方式" className="mr-1 flex items-center gap-0.5 rounded-lg border bg-muted/40 p-0.5">
-                {([
-                  { id: "select", label: "选元素", icon: MousePointerClick },
-                  { id: "region", label: "框选", icon: SquareDashedMousePointer },
-                ] as const).map(({ id, label, icon: Icon }) => (
-                  <button
-                    key={id}
-                    type="button"
-                    aria-pressed={markMode === id}
-                    title={label}
-                    onClick={() => setMarkMode(id)}
-                    className={cn(
-                      "flex items-center gap-1 rounded-md px-2 py-0.5 text-caption",
-                      markMode === id ? "bg-background font-medium text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
-                    )}
-                  >
-                    <Icon className="h-3.5 w-3.5" />
-                    {label}
-                  </button>
-                ))}
-              </div>
-            </>
-          ) : null}
           {viewMode !== "code" ? (
             <>
               {VIEWPORTS.map(({ id, label, icon: Icon }) => (
@@ -860,17 +1012,32 @@ export function DesignDocumentPage({ documentId }: { documentId: string }) {
           ) : null}
           {viewMode !== "code" ? (
             <>
-              <Button
-                type="button"
-                size="icon-sm"
-                variant="ghost"
-                title="截图当前页并复制"
-                aria-label="截图"
-                disabled={!revision || screenshot.isPending}
-                onClick={() => screenshot.mutate()}
-              >
-                {screenshot.isPending ? <LoaderCircle className="size-3 animate-spin" /> : <Camera className="h-3.5 w-3.5" />}
-              </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger
+                  render={(
+                    <Button
+                      type="button"
+                      size="icon-sm"
+                      variant="ghost"
+                      aria-label="截图"
+                      title="截图"
+                      disabled={!revision || screenshot.isPending || screenshotToChat.isPending}
+                    >
+                      {screenshot.isPending || screenshotToChat.isPending ? <LoaderCircle className="size-3 animate-spin" /> : <Camera className="h-3.5 w-3.5" />}
+                    </Button>
+                  )}
+                />
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem disabled={screenshotToChat.isPending} onClick={() => screenshotToChat.mutate()}>
+                    截图发送到对话
+                    <span className="ml-auto pl-3 text-caption text-muted-foreground">当前页</span>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem disabled={screenshot.isPending} onClick={() => screenshot.mutate()}>
+                    复制到剪贴板
+                    <span className="ml-auto pl-3 text-caption text-muted-foreground">当前页</span>
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
               <DropdownMenu>
                 <DropdownMenuTrigger
                   render={(
@@ -898,6 +1065,17 @@ export function DesignDocumentPage({ documentId }: { documentId: string }) {
               <span className="mx-1 h-4 w-px bg-border" aria-hidden />
             </>
           ) : null}
+          <Button
+            type="button"
+            size="icon-sm"
+            variant="ghost"
+            title="演示模式"
+            aria-label="演示模式"
+            disabled={entries.length === 0}
+            onClick={startPresenting}
+          >
+            <Play className="h-3.5 w-3.5" />
+          </Button>
           <Button type="button" size="icon-sm" variant="ghost" title={fullscreen ? "退出全屏" : "全屏"} aria-label={fullscreen ? "退出全屏" : "全屏"} onClick={() => setFullscreen((value) => !value)}>
             {fullscreen ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
           </Button>
@@ -912,6 +1090,94 @@ export function DesignDocumentPage({ documentId }: { documentId: string }) {
         <div className="flex shrink-0 items-center justify-between gap-3 border-b bg-muted/40 px-3 py-1.5 text-caption">
           <span className="flex items-center gap-1.5 text-muted-foreground"><History className="h-3.5 w-3.5" />正在查看历史版本 v{revision.revision_number}</span>
           <Button type="button" size="sm" variant="ghost" className="h-6 px-2 text-caption" onClick={() => setPinnedRevisionId("")}>回到当前版本</Button>
+        </div>
+      ) : null}
+      {/* Open Design's annotation toolbar: the tools, the undo pair and the
+          note live in one floating pill over the canvas, so a review is mark →
+          type → send without ever leaving the page. */}
+      {viewMode === "annotate" ? (
+        <div role="group" aria-label="标注工具栏" className="absolute bottom-3 left-1/2 z-10 flex w-[min(560px,calc(100%-1rem))] -translate-x-1/2 items-center gap-1 rounded-full bg-zinc-900/95 py-1.5 pl-2 pr-1.5 shadow-lg">
+          {([
+            { id: "select", label: "选元素", icon: MousePointerClick },
+            { id: "region", label: "框选", icon: SquareDashedMousePointer },
+            { id: "pen", label: "钢笔", icon: Pen },
+            { id: "text", label: "文字", icon: Type },
+          ] as const).map(({ id, label, icon: Icon }) => (
+            <button
+              key={id}
+              type="button"
+              aria-pressed={markMode === id}
+              title={label}
+              aria-label={label}
+              onClick={() => setMarkMode(id)}
+              className={cn(
+                "flex size-8 cursor-pointer items-center justify-center rounded-full text-white/70 transition-colors hover:bg-white/10 hover:text-white",
+                markMode === id && "bg-white/15 text-white",
+              )}
+            >
+              <Icon className="h-4 w-4" />
+            </button>
+          ))}
+          <span className="mx-1 h-4 w-px bg-white/20" aria-hidden />
+          <button
+            type="button"
+            title="撤销标注"
+            aria-label="撤销标注"
+            disabled={annotations.length === 0}
+            onClick={undoAnnotation}
+            className="flex size-8 cursor-pointer items-center justify-center rounded-full text-white/70 transition-colors hover:bg-white/10 hover:text-white disabled:opacity-40"
+          >
+            <Undo2 className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            title="重做标注"
+            aria-label="重做标注"
+            disabled={history.redo.length === 0}
+            onClick={redoAnnotation}
+            className="flex size-8 cursor-pointer items-center justify-center rounded-full text-white/70 transition-colors hover:bg-white/10 hover:text-white disabled:opacity-40"
+          >
+            <Redo2 className="h-4 w-4" />
+          </button>
+          <span className="mx-1 h-4 w-px bg-white/20" aria-hidden />
+          <input
+            value={toolbarNote}
+            onChange={(event) => setToolbarNote(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                sendToolbarAdjustment();
+              }
+            }}
+            placeholder="为这个标记添加说明"
+            aria-label="为标记添加说明"
+            maxLength={INSTRUCTION_MAX_LENGTH}
+            className="h-8 min-w-0 flex-1 rounded-full bg-white/10 px-3 text-caption text-white outline-none placeholder:text-white/50 focus:bg-white/15"
+          />
+          <button
+            type="button"
+            title={running ? "排队调整" : "发送调整"}
+            aria-label={running ? "排队调整" : "发送调整"}
+            disabled={toolbarAdjustBlocker}
+            onClick={sendToolbarAdjustment}
+            className="flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-full bg-primary text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-40"
+          >
+            {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <ArrowUp className="h-4 w-4" />}
+          </button>
+          <button
+            type="button"
+            title="退出标注"
+            aria-label="退出标注"
+            onClick={() => setViewMode("preview")}
+            className="flex size-8 cursor-pointer items-center justify-center rounded-full text-white/70 transition-colors hover:bg-white/10 hover:text-white"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      ) : null}
+      {viewMode === "edit" && !picked ? (
+        <div className="absolute bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-full bg-zinc-900/95 px-3.5 py-1.5 text-caption text-white/90 shadow-lg">
+          在画布上点选一个元素修改属性
         </div>
       ) : null}
       {viewMode === "code" && revision ? (
@@ -929,6 +1195,11 @@ export function DesignDocumentPage({ documentId }: { documentId: string }) {
             zoom={zoom}
             mode={viewMode === "edit" ? "select" : markMode}
             pickedSelector={viewMode === "edit" ? picked?.selector ?? "" : ""}
+            pins={viewMode === "annotate" ? canvasPins : []}
+            onPinClick={focusAnnotation}
+            strokes={canvasStrokes}
+            onInk={(points) => addAnnotation({ ink: { points }, note: "" })}
+            onTextPlace={(point) => addAnnotation({ textMark: point, note: "" })}
             onPick={(descriptor, element) => {
               if (viewMode === "annotate") {
                 addAnnotation({ element: descriptor, note: "" });
@@ -994,6 +1265,216 @@ export function DesignDocumentPage({ documentId }: { documentId: string }) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
+      {/* The edit popover opens beside the picked element (Open Design's edit
+          affordance): the properties live next to what they change, not across
+          the workspace in a sidebar. */}
+      {viewMode === "edit" && picked && pickedAnchor && typeof window !== "undefined" ? (
+        <div
+          className="fixed z-40 flex max-h-[70vh] w-80 flex-col overflow-y-auto rounded-xl border bg-background p-3 shadow-lg"
+          style={{
+            left: Math.min(Math.max(pickedAnchor.left + 8, 8), window.innerWidth - 336),
+            top: Math.min(Math.max(pickedAnchor.top - 8, 8), Math.max(8, window.innerHeight - 160)),
+          }}
+        >
+          <div className="flex items-center gap-2">
+            <span className="min-w-0 flex-1 truncate text-caption font-medium">{picked.label}</span>
+            <button
+              type="button"
+              aria-label="取消选中"
+              className="flex size-5 shrink-0 cursor-pointer items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              onClick={() => {
+                pickedElement.current = null;
+                setPicked(null);
+                setPickedComputed(null);
+              }}
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+          <p className="mt-0.5 truncate text-micro text-muted-foreground" title={picked.selector}>{picked.selector}</p>
+          <div className="mt-2">
+            <ManualEditPanel
+              descriptor={picked}
+              page={shownEntry}
+              edits={manualEdits}
+              computed={pickedComputed}
+              onChange={changeManualEdit}
+              onClear={clearManualEdit}
+              onDeselect={() => {
+                pickedElement.current = null;
+                setPicked(null);
+                setPickedComputed(null);
+              }}
+            />
+          </div>
+          <div className="mt-3 flex items-center justify-between gap-2 border-t pt-3">
+            <span className="min-w-0 truncate text-caption text-muted-foreground">
+              {manualEditBlocker ?? `将应用 ${countDeclarations(manualEdits)} 项修改`}
+            </span>
+            <Button
+              type="button"
+              size="sm"
+              disabled={!!manualEditBlocker || busy}
+              onClick={() => manualEdit.mutate()}
+            >
+              {manualEdit.isPending ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : null}
+              应用修改
+            </Button>
+          </div>
+        </div>
+      ) : null}
+      {/* 演示模式: the whole window becomes the prototype. The live preview is
+          framed — scripts running — because a demo plays, and everything else
+          (pages, counter, arrows, exit) hangs off the bottom edge. */}
+      {presenting && presentEntry ? (
+        <div className="fixed inset-0 z-50 flex flex-col bg-black" role="dialog" aria-modal="true" aria-label="演示模式">
+          <div className="flex min-h-0 flex-1 items-center justify-center p-2">
+            <iframe
+              key={`${selectedRevisionId}:${presentEntry.entry}`}
+              title={`${title} · ${presentEntry.title}`}
+              src={api.getDesignDocumentPreviewFileURL(revision?.resource_base_path ?? "", presentEntry.entry)}
+              sandbox="allow-scripts"
+              referrerPolicy="no-referrer"
+              className="h-full w-full rounded-md bg-background"
+            />
+          </div>
+          <footer className="flex shrink-0 items-center gap-3 px-4 py-2 text-caption text-white/80">
+            <span className="min-w-0 flex-1 truncate">{presentEntry.title}</span>
+            <span className="tabular-nums">{presentIndex + 1} / {entries.length}</span>
+            <div className="flex items-center gap-1">
+              <Button
+                type="button"
+                size="icon-sm"
+                variant="ghost"
+                title="上一页"
+                aria-label="上一页"
+                className="text-white/80 hover:bg-white/10 hover:text-white"
+                disabled={presentIndex === 0}
+                onClick={() => setPresentIndex((index) => Math.max(0, index - 1))}
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </Button>
+              <Button
+                type="button"
+                size="icon-sm"
+                variant="ghost"
+                title="下一页"
+                aria-label="下一页"
+                className="text-white/80 hover:bg-white/10 hover:text-white"
+                disabled={presentIndex >= entries.length - 1}
+                onClick={() => setPresentIndex((index) => Math.min(entries.length - 1, index + 1))}
+              >
+                <ChevronRight className="h-4 w-4" />
+              </Button>
+              <Button
+                type="button"
+                size="icon-sm"
+                variant="ghost"
+                title="退出演示 (Esc)"
+                aria-label="退出演示"
+                className="text-white/80 hover:bg-white/10 hover:text-white"
+                onClick={() => setPresenting(false)}
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+          </footer>
+        </div>
+      ) : null}
+      {/* 历史版本: Open Design's versions dialog — browse what each revision
+          looks like before committing to it. Previewing happens here; only
+          查看此版本 moves the workbench, and 回退 stays the pointer move. */}
+      <Dialog open={versionsOpen} onOpenChange={setVersionsOpen}>
+        <DialogContent className="flex h-[80vh] max-w-4xl flex-col gap-0 p-0">
+          <DialogHeader className="shrink-0 border-b px-4 py-3">
+            <DialogTitle>历史版本</DialogTitle>
+            <DialogDescription>预览每个版本的实际页面；「查看此版本」会在工作台中打开它，「回退」把草稿指针移回该版本。</DialogDescription>
+          </DialogHeader>
+          <div className="grid min-h-0 flex-1 grid-cols-[280px_1fr] overflow-hidden">
+            <ol className="min-h-0 overflow-y-auto border-r" aria-label="版本列表">
+              {revisions.map((row) => (
+                <li key={row.id}>
+                  <button
+                    type="button"
+                    className={cn(
+                      "flex w-full flex-col items-start gap-1 border-b px-3 py-2.5 text-left transition-colors",
+                      versionPreviewId === row.id ? "bg-accent" : "hover:bg-accent/50",
+                    )}
+                    onClick={() => setVersionPreviewId(row.id)}
+                  >
+                    <span className="flex w-full items-center gap-2">
+                      <span className="text-caption font-medium">v{row.revision_number}</span>
+                      {row.is_draft ? <Badge variant="secondary" className="px-1.5 text-micro font-normal">草稿</Badge> : null}
+                      {row.is_saved ? <Badge variant="outline" className="px-1.5 text-micro font-normal">已保存</Badge> : null}
+                      <span className="ml-auto text-micro text-muted-foreground">{timeAgo(row.created_at)}</span>
+                    </span>
+                    {row.instruction ? (
+                      <span className="line-clamp-2 text-caption leading-5 text-muted-foreground">{row.instruction}</span>
+                    ) : null}
+                    <span className="text-micro text-muted-foreground">
+                      {row.page_count > 0 ? `${row.page_count} 页` : null}
+                      {row.page_count > 0 && agents.some((agent) => agent.id === row.agent_id) ? " · " : ""}
+                      {agents.find((agent) => agent.id === row.agent_id)?.name ?? ""}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ol>
+            <div className="flex min-h-0 flex-col">
+              <div className="flex min-h-0 flex-1 items-start justify-center overflow-auto bg-muted/30 p-2">
+                {versionPreviewQuery.isLoading ? (
+                  <div className="flex h-full min-h-40 items-center gap-2 text-caption text-muted-foreground">
+                    <LoaderCircle className="h-4 w-4 animate-spin" /> 正在载入 v{revisions.find((row) => row.id === versionPreviewId)?.revision_number ?? ""} 的预览…
+                  </div>
+                ) : versionPreviewUrl ? (
+                  <iframe
+                    key={versionPreviewUrl}
+                    title="版本预览"
+                    src={versionPreviewUrl}
+                    sandbox="allow-scripts"
+                    referrerPolicy="no-referrer"
+                    className="h-full min-h-40 w-full rounded-md border bg-background"
+                  />
+                ) : (
+                  <div className="flex h-full min-h-40 items-center justify-center text-caption text-muted-foreground">选择左侧版本预览</div>
+                )}
+              </div>
+              <div className="flex shrink-0 items-center justify-between gap-2 border-t px-3 py-2">
+                <span className="text-caption text-muted-foreground">
+                  {versionPreview ? `v${versionPreview.revision_number}${versionPreview.is_draft ? " · 当前草稿" : versionPreview.is_saved ? " · 已保存" : ""}` : ""}
+                </span>
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={!versionPreview}
+                    onClick={() => {
+                      setPinnedRevisionId(versionPreview?.id ?? "");
+                      setVersionsOpen(false);
+                    }}
+                  >
+                    查看此版本
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    disabled={!versionPreview || versionPreview.is_draft || busy || running}
+                    onClick={() => {
+                      if (!versionPreview) return;
+                      restore.mutate(versionPreview.id);
+                      setVersionsOpen(false);
+                    }}
+                  >
+                    回退到此版本
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
       <BreadcrumbHeader
         segments={[
           { href: paths.designs(), label: "设计库" },
@@ -1042,7 +1523,7 @@ export function DesignDocumentPage({ documentId }: { documentId: string }) {
       {(() => {
         const sidebar = (
           <>
-              <div ref={sidebarScrollRef} className="min-h-0 flex-1 overflow-y-auto">
+              <div ref={sidebarScrollRef} className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
                 <div className="border-b px-4 py-3">
                   <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-caption text-muted-foreground">
                     {project ? <span>{project.title}</span> : null}
@@ -1115,7 +1596,24 @@ export function DesignDocumentPage({ documentId }: { documentId: string }) {
                 <section className="px-4 py-3" aria-label="版本">
                   <div className="mb-2 flex items-center justify-between px-0.5">
                     <h2 className="text-caption font-medium text-muted-foreground">版本</h2>
-                    <span className="text-caption text-muted-foreground">{revisions.length}</span>
+                    <div className="flex items-center gap-1">
+                      {revisions.length > 0 ? (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          className="h-6 px-2 text-caption"
+                          onClick={() => {
+                            setVersionPreviewId(selectedRevisionId || currentRevisionId || revisions[0]?.id || "");
+                            setVersionsOpen(true);
+                          }}
+                        >
+                          <History className="h-3 w-3" />
+                          历史版本
+                        </Button>
+                      ) : null}
+                      <span className="text-caption text-muted-foreground">{revisions.length}</span>
+                    </div>
                   </div>
                   {revisions.length === 0 ? (
                     <p className="py-2 text-caption text-muted-foreground">
@@ -1174,37 +1672,6 @@ export function DesignDocumentPage({ documentId }: { documentId: string }) {
                 ) : null}
               </div>
 
-              {viewMode === "edit" ? (
-                <div className="shrink-0 border-t px-4 py-3">
-                  <ManualEditPanel
-                    descriptor={picked}
-                    page={shownEntry}
-                    edits={manualEdits}
-                    computed={pickedComputed}
-                    onChange={changeManualEdit}
-                    onClear={clearManualEdit}
-                    onDeselect={() => {
-                      pickedElement.current = null;
-                      setPicked(null);
-                      setPickedComputed(null);
-                    }}
-                  />
-                  <div className="mt-3 flex items-center justify-between gap-2 border-t pt-3">
-                    <span className="min-w-0 truncate text-caption text-muted-foreground">
-                      {manualEditBlocker ?? `将应用 ${countDeclarations(manualEdits)} 项修改`}
-                    </span>
-                    <Button
-                      type="button"
-                      size="sm"
-                      disabled={!!manualEditBlocker || busy}
-                      onClick={() => manualEdit.mutate()}
-                    >
-                      {manualEdit.isPending ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : null}
-                      应用修改
-                    </Button>
-                  </div>
-                </div>
-              ) : (
               <form
                 className="shrink-0 px-4 py-3"
                 onSubmit={(event) => {
@@ -1265,11 +1732,25 @@ export function DesignDocumentPage({ documentId }: { documentId: string }) {
                   />
                   {annotations.length > 0 ? (
                     // Each mark keeps its own note, so one send can carry several
-                    // separate asks that the agent can locate individually.
+                    // separate asks that the agent can locate individually. The
+                    // numbering matches the pins on the canvas.
                     <ul className="divide-y border-t px-3" aria-label="标注">
-                      {annotations.map((annotation) => (
-                        <li key={annotation.id} className="py-1.5">
+                      {annotations.map((annotation, index) => (
+                        <li
+                          key={annotation.id}
+                          id={`annotation-row-${annotation.id}`}
+                          className={cn(
+                            "py-1.5",
+                            focusedAnnotationId === annotation.id && "-mx-2 rounded-md bg-accent/60 px-2 transition-colors",
+                          )}
+                        >
                           <div className="flex items-center gap-1.5">
+                            <span
+                              className="flex size-4 shrink-0 items-center justify-center rounded-full bg-orange-600 text-[10px] font-semibold leading-4 text-white"
+                              aria-hidden
+                            >
+                              {index + 1}
+                            </span>
                             <span className="min-w-0 flex-1 truncate text-caption font-medium" title={annotation.element?.selector}>
                               {annotationLabel(annotation)}
                             </span>
@@ -1278,7 +1759,7 @@ export function DesignDocumentPage({ documentId }: { documentId: string }) {
                               type="button"
                               aria-label={`删除标注 ${annotationLabel(annotation)}`}
                               className="flex size-5 shrink-0 cursor-pointer items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                              onClick={() => setAnnotations((current) => current.filter((row) => row.id !== annotation.id))}
+                              onClick={() => setHistory((current) => ({ ...current, marks: current.marks.filter((row) => row.id !== annotation.id) }))}
                             >
                               <X className="h-3 w-3" />
                             </button>
@@ -1288,9 +1769,9 @@ export function DesignDocumentPage({ documentId }: { documentId: string }) {
                             aria-label={`${annotationLabel(annotation)} 的修改说明`}
                             placeholder="这里要怎么改？"
                             className="mt-1 w-full bg-transparent text-caption outline-none placeholder:text-muted-foreground"
-                            onChange={(event) => setAnnotations((current) => current.map((row) => (
+                            onChange={(event) => setHistory((current) => ({ ...current, marks: current.marks.map((row) => (
                               row.id === annotation.id ? { ...row, note: event.target.value } : row
-                            )))}
+                            )) }))}
                           />
                         </li>
                       ))}
@@ -1318,13 +1799,17 @@ export function DesignDocumentPage({ documentId }: { documentId: string }) {
                     <ul className="flex flex-wrap items-center gap-1.5 px-1" aria-label="本次参考文件">
                       {turnAttachments.map((item) => (
                         <li key={item.id} className="inline-flex h-6 max-w-56 items-center gap-1 rounded-full border bg-background px-2 text-caption">
-                          <Paperclip className="size-3 shrink-0 text-muted-foreground" />
+                          {item.previewUrl ? (
+                            <img src={item.previewUrl} alt={item.name} className="size-4 shrink-0 rounded-sm object-cover" />
+                          ) : (
+                            <Paperclip className="size-3 shrink-0 text-muted-foreground" />
+                          )}
                           <span className="truncate">{item.name}</span>
                           <button
                             type="button"
                             aria-label={`移除 ${item.name}`}
                             className="ml-0.5 shrink-0 cursor-pointer rounded-full p-0.5 text-muted-foreground hover:text-foreground"
-                            onClick={() => setTurnAttachments((current) => current.filter((row) => row.id !== item.id))}
+                            onClick={() => dropTurnAttachments(new Set([item.id]))}
                           >
                             <X className="size-3" />
                           </button>
@@ -1424,7 +1909,6 @@ export function DesignDocumentPage({ documentId }: { documentId: string }) {
                   </span>
                 </div>
               </form>
-              )}
           </>
         );
         if (compact) {

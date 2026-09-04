@@ -92,3 +92,39 @@ describe("annotationLabel", () => {
     }))).toBe("区域 · 表格 · 订单");
   });
 });
+
+// The pen and text tools mark by position, not by selector: the anchor says
+// where on the page the mark sits so the agent can find the area in source.
+describe("annotationInstruction with positional marks", () => {
+  const page = { id: "mark-1", pagePath: "prototype/index.html", pageTitle: "首页", note: "" };
+
+  it("describes a pen stroke by its bounding box", () => {
+    const instruction = annotationInstruction([
+      { ...page, ink: { points: [{ x: 100.4, y: 50 }, { x: 220.6, y: 130 }] }, note: "这一段流程多余" },
+    ], "");
+    expect(instruction).toContain("1. 画笔标记 x=100 y=50 宽=120 高=80：这一段流程多余");
+  });
+
+  it("describes a placed text marker by its position", () => {
+    const instruction = annotationInstruction([
+      { ...page, textMark: { x: 30.2, y: 480.8 }, note: "" },
+    ], "按标注调整");
+    expect(instruction).toContain("1. 文字标记 位置 x=30 y=481：这里需要调整");
+  });
+
+  it("labels both mark kinds in the list", () => {
+    expect(annotationLabel({ ...page, ink: { points: [{ x: 1, y: 2 }] } })).toBe("画笔标记");
+    expect(annotationLabel({ ...page, textMark: { x: 1, y: 2 } })).toBe("文字标记");
+  });
+});
+
+// An empty stroke carries no position; the instruction must not read
+// Infinity/NaN into what the agent sees.
+describe("annotationInstruction with a degenerate mark", () => {
+  it("names an empty pen stroke without coordinates", () => {
+    const instruction = annotationInstruction([
+      { id: "a-1", pagePath: "p.html", pageTitle: "首页", ink: { points: [] }, note: "" },
+    ], "");
+    expect(instruction).toContain("1. 画笔标记：这里需要调整");
+  });
+});
