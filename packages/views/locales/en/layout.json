@@ -40,7 +40,7 @@
     "feishu_group": "Feishu group",
     "feedback": "Feedback",
     "check_for_updates": "Check for updates",
-    "update_ready": "Update {{version}} is ready to download",
+    "update_ready": "Update {{version}} found — downloading in the background",
     "up_to_date": "You're up to date",
     "server_version": "Server version {{version}}",
     "upstream_base_version": "Community base version {{version}}"

@@ -1144,7 +1144,16 @@
       "up_to_date": "最新バージョンを使用しています。",
       "downloading": "v{{version}} をバックグラウンドでダウンロード中です。インストールの準備が整うとお知らせします。",
       "check_now": "今すぐ確認",
-      "checking": "確認中…"
+      "checking": "確認中…",
+      "download_title": "アップデートをダウンロード中",
+      "download_version": "v{{version}} をバックグラウンドでダウンロードしています。",
+      "download_progress_aria": "アップデートのダウンロードは {{percent}}% 完了しました",
+      "ready_title": "アップデートの準備ができました",
+      "ready_description": "v{{version}} は次回起動時に適用されます。",
+      "see_changelog": "変更履歴を見る",
+      "restart_now": "今すぐ再起動",
+      "dismiss": "アップデート通知を閉じる",
+      "download_failed": "アップデートのダウンロードに失敗しました"
     },
     "daemon": {
       "title": "デーモン",

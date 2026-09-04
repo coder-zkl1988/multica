@@ -15,6 +15,7 @@ const ctx = vi.hoisted(() => ({
   checkForUpdates: vi.fn(async () => ({
     updateInfo: { version: "0.3.18" },
     isUpdateAvailable: false,
+    downloadPromise: undefined as Promise<unknown> | undefined,
   })),
   setFeedURL: vi.fn(),
   downloadUpdate: vi.fn(),
@@ -239,6 +240,55 @@ describe("setupAutoUpdater", () => {
     expect(ctx.checkForUpdates).toHaveBeenCalledTimes(1);
   });
 
+  it("coalesces repeated checks until the auto-download settles", async () => {
+    const { promise: downloadPromise, resolve: finishDownload } =
+      Promise.withResolvers<void>();
+    ctx.checkForUpdates.mockResolvedValueOnce({
+      updateInfo: { version: "0.3.18" },
+      isUpdateAvailable: true,
+      downloadPromise,
+    });
+    setupAutoUpdater(() => null);
+
+    await invokeIpc("updater:check");
+    await invokeIpc("updater:check");
+
+    expect(ctx.checkForUpdates).toHaveBeenCalledTimes(1);
+
+    finishDownload();
+    await downloadPromise;
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    await invokeIpc("updater:check");
+
+    expect(ctx.checkForUpdates).toHaveBeenCalledTimes(2);
+  });
+
+  it("publishes an error when the auto-download promise rejects", async () => {
+    const { promise: downloadPromise, reject: failDownload } =
+      Promise.withResolvers<void>();
+    ctx.checkForUpdates.mockResolvedValueOnce({
+      updateInfo: { version: "0.3.18" },
+      isUpdateAvailable: true,
+      downloadPromise,
+    });
+    setupAutoUpdater(() => null);
+    emitUpdater("update-available", { version: "0.3.18" });
+
+    await invokeIpc("updater:check");
+    failDownload(new Error("network timeout"));
+    await expect(downloadPromise).rejects.toThrow("network timeout");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    await expect(invokeIpc("updater:get-state")).resolves.toEqual({
+      status: "error",
+      version: "0.3.18",
+      message: "network timeout",
+    });
+  });
+
   it("uses the newest desktop-v Release feed in fork builds", async () => {
     vi.stubEnv(
       "VITE_DESKTOP_RELEASE_REPOSITORY",
@@ -295,6 +345,33 @@ describe("setupAutoUpdater", () => {
 
     expect(send).toHaveBeenCalledWith("updater:download-progress", {
       percent: 42,
+    });
+  });
+
+  it("publishes and replays the current download state", async () => {
+    const { win, send } = makeWindow();
+    setupAutoUpdater(() => win);
+
+    emitUpdater("update-available", { version: "0.3.18" });
+    emitUpdater("download-progress", { percent: 42 });
+
+    expect(send).toHaveBeenCalledWith("updater:state", {
+      status: "downloading",
+      version: "0.3.18",
+      percent: 42,
+    });
+    await expect(invokeIpc("updater:get-state")).resolves.toEqual({
+      status: "downloading",
+      version: "0.3.18",
+      percent: 42,
+    });
+
+    emitUpdater("error", new Error("network timeout"));
+
+    await expect(invokeIpc("updater:get-state")).resolves.toEqual({
+      status: "error",
+      version: "0.3.18",
+      message: "network timeout",
     });
   });
 

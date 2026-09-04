@@ -191,7 +191,7 @@ describe("HelpLauncher", () => {
     await waitFor(() => expect(mockCheckForUpdates).toHaveBeenCalledTimes(1));
     await waitFor(() =>
       expect(mockToastSuccess).toHaveBeenCalledWith(
-        "Update 1.1.0 is ready to download",
+        "Update 1.1.0 found — downloading in the background",
       ),
     );
   });

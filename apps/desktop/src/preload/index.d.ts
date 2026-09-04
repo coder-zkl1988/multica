@@ -10,6 +10,7 @@ import type {
 import type {
   ManualUpdateCheckResult,
   UpdaterPreferences,
+  UpdaterState,
 } from "../shared/updater-types";
 import type {
   DaemonStatus,
@@ -156,6 +157,8 @@ interface DaemonAPI {
 }
 
 interface UpdaterAPI {
+  getState: () => Promise<UpdaterState>;
+  onStateChange: (callback: (state: UpdaterState) => void) => () => void;
   onUpdateAvailable: (callback: (info: { version: string; releaseNotes?: string }) => void) => () => void;
   onDownloadProgress: (callback: (progress: { percent: number }) => void) => () => void;
   onUpdateDownloaded: (
