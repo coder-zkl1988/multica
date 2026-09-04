@@ -113,13 +113,32 @@ export function usePrototypeDocument(
   options: { enabled: boolean; stripScripts?: boolean } = { enabled: true },
 ) {
   const stripScripts = options.stripScripts ?? true;
-  return useQuery({
+  const query = useQuery({
     queryKey: ["design-document-inlined", revision?.content_digest ?? "", entryPath, stripScripts],
     queryFn: () => inlinePrototypePage(entryPath, revisionFileSource(revision!), { stripScripts }),
     enabled: options.enabled && !!revision && !!entryPath && !!revision.resource_base_path,
     staleTime: Infinity,
     retry: false,
   });
+
+  // The key is the digest, not the capability the bytes arrive through, and
+  // `retry: false` is right for a page that genuinely cannot be assembled.
+  // Together they strand the canvas: an expired capability 404s every asset
+  // once, and the resulting error survives every later render even after the
+  // revision has handed over a working capability. Retrying on a NEW one
+  // recovers on its own; retrying on the same one would only fail again, so
+  // the capability already attempted is remembered rather than counted.
+  const capability = revision?.resource_base_path ?? "";
+  const attempted = useRef(capability);
+  const refetch = query.refetch;
+  const failed = query.isError;
+  useEffect(() => {
+    if (!failed || !capability || capability === attempted.current) return;
+    attempted.current = capability;
+    void refetch();
+  }, [capability, failed, refetch]);
+
+  return query;
 }
 
 interface PrototypeCanvasProps {

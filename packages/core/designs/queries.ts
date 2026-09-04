@@ -245,16 +245,37 @@ export function designDocumentRevisionListOptions(wsId: string, documentId: stri
 }
 
 /**
- * One revision with its preview capability. Revisions are immutable, but the
- * capability expires after 30 minutes, so the query goes stale well before
- * that and refetches on the next mount instead of framing a dead URL.
+ * How often a mounted revision re-reads its preview capability. The server
+ * issues one with a 30-minute life (`designDocumentPreviewAccessTokenLifetime`
+ * in handler/design_document_revision.go), and every byte the workbench shows
+ * from a revision — the live frame, the static 标注/编辑 canvas, the code view,
+ * the exports — resolves through it.
+ */
+const PREVIEW_CAPABILITY_REFRESH_MS = 10 * 60 * 1000;
+
+/**
+ * One revision with its preview capability.
+ *
+ * The revision itself is immutable; the capability is not, so this query has
+ * to keep renewing it on a timer. `staleTime` alone only refetches on a mount
+ * or a window refocus, and a workbench left open went on handing out a
+ * capability that had expired hours earlier. Nothing looked wrong until
+ * something actually fetched with it — an already-loaded preview frame keeps
+ * rendering — so the failure surfaced on the next click: 标注 inlines the page
+ * asset by asset, every request came back 404, and the canvas reported that
+ * the page could not be rendered at all (observed 2026-09-03, two separate
+ * windows of 404s on `/api/design-document-previews/…` hours after the last
+ * revision read).
  */
 export function designDocumentRevisionOptions(wsId: string, documentId: string, revisionId: string) {
   return queryOptions({
     queryKey: designKeys.documentRevision(wsId, documentId, revisionId),
     queryFn: () => api.getDesignDocumentRevision(documentId, revisionId),
     enabled: !!documentId && !!revisionId,
-    staleTime: 20 * 60 * 1000,
+    staleTime: PREVIEW_CAPABILITY_REFRESH_MS,
+    // Paused while the window is in the background (the default), where a
+    // refocus refetch covers the same ground against the staleTime above.
+    refetchInterval: PREVIEW_CAPABILITY_REFRESH_MS,
   });
 }
 
