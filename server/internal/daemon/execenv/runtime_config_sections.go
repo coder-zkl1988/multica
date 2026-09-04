@@ -129,6 +129,19 @@ func writeAgentIdentity(b *strings.Builder, ctx TaskContextForEnv) {
 	}
 }
 
+// BuildAgentIdentityBlock renders the configured agent identity for prompt
+// paths that intentionally skip the full runtime brief. Keeping the renderer
+// shared preserves the same name, id, and instruction shape in concise runs.
+func BuildAgentIdentityBlock(agentID, agentName, instructions string) string {
+	var b strings.Builder
+	writeAgentIdentity(&b, TaskContextForEnv{
+		AgentID:           agentID,
+		AgentName:         agentName,
+		AgentInstructions: instructions,
+	})
+	return b.String()
+}
+
 // writeRequestingUser emits the Requesting User block when the runtime
 // owner's profile description is non-empty. Sanitisation rules match the
 // legacy implementation; see runtime_config.go for the rationale.

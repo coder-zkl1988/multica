@@ -7255,6 +7255,19 @@ func taskUsesDirectAgentMode(task Task, configuredDefault bool) bool {
 	return configuredDefault || task.ConciseMode
 }
 
+// buildTaskPrompt keeps the daemon-wide direct-mode escape hatch byte-stable.
+// An explicit concise task gets the compact envelope only when that legacy
+// default is off; concise caps still apply independently in both cases.
+func buildTaskPrompt(task Task, provider string, configuredDirect bool, options ...PromptOption) string {
+	if configuredDirect {
+		return BuildDirectPrompt(task)
+	}
+	if task.ConciseMode {
+		return buildConcisePrompt(task, options...)
+	}
+	return BuildPrompt(task, provider, options...)
+}
+
 // conciseMaxTurnsFor reports the turn cap for a run. The budget applies only
 // to runs the user explicitly opted into via task-level concise mode; a
 // daemon-wide DirectAgentMode default deliberately does not inherit it, and a
@@ -8193,12 +8206,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	if env.LocalWorktree != nil && len(env.LocalWorktree.ReplayConflicts) > 0 {
 		promptOptions = append(promptOptions, WithWorktreeReplayConflicts(env.LocalWorktree.ReplayConflicts))
 	}
-	var prompt string
-	if directAgentMode {
-		prompt = BuildDirectPrompt(task)
-	} else {
-		prompt = BuildPrompt(task, provider, promptOptions...)
-	}
+	prompt := buildTaskPrompt(task, provider, d.cfg.DirectAgentMode, promptOptions...)
 
 	// Pass task-scoped auth credentials and context so the spawned agent CLI
 	// can call the Multica API and the local daemon (e.g. `multica repo checkout`).
@@ -8604,12 +8612,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 				return TaskResult{}, fmt.Errorf("cleanup runtime config for direct retry: %w", cerr)
 			}
 		}
-		var freshPrompt string
-		if directAgentMode {
-			freshPrompt = BuildDirectPrompt(task)
-		} else {
-			freshPrompt = BuildPrompt(task, provider, promptOptions...)
-		}
+		freshPrompt := buildTaskPrompt(task, provider, d.cfg.DirectAgentMode, promptOptions...)
 
 		retryResult, retryTools, retryErr := d.executeAndDrain(ctx, backend, freshPrompt, execOpts, taskLog, task.ID, env.CodexHome, &msgSeq)
 		if retryErr != nil {
