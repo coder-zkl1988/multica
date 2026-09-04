@@ -337,6 +337,44 @@ describe("setupAutoUpdater", () => {
     expect(ctx.setFeedURL).not.toHaveBeenCalled();
   });
 
+  it("coalesces repeated manual downloads until the transfer settles", async () => {
+    const transfer = Promise.withResolvers<string[]>();
+    ctx.downloadUpdate.mockReturnValueOnce(transfer.promise);
+    setupAutoUpdater(() => null);
+
+    const first = invokeIpc("updater:download");
+    const second = invokeIpc("updater:download");
+    await Promise.resolve();
+
+    expect(ctx.downloadUpdate).toHaveBeenCalledTimes(1);
+    transfer.resolve(["update.zip"]);
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      ["update.zip"],
+      ["update.zip"],
+    ]);
+
+    ctx.downloadUpdate.mockResolvedValueOnce(["next.zip"]);
+    await expect(invokeIpc("updater:download")).resolves.toEqual(["next.zip"]);
+    expect(ctx.downloadUpdate).toHaveBeenCalledTimes(2);
+  });
+
+  it("reuses the automatic transfer for legacy manual download requests", async () => {
+    const transfer = Promise.withResolvers<void>();
+    ctx.checkForUpdates.mockResolvedValueOnce({
+      updateInfo: { version: "0.3.18" },
+      isUpdateAvailable: true,
+      downloadPromise: transfer.promise,
+    });
+    setupAutoUpdater(() => null);
+
+    await invokeIpc("updater:check");
+    const manual = invokeIpc("updater:download");
+
+    expect(ctx.downloadUpdate).not.toHaveBeenCalled();
+    transfer.resolve();
+    await expect(manual).resolves.toBeUndefined();
+  });
+
   it("forwards update progress to a live renderer", () => {
     const { win, send } = makeWindow();
     setupAutoUpdater(() => win);

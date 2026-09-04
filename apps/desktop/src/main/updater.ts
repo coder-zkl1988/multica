@@ -83,12 +83,35 @@ function sendToLiveRenderer(
   }
 }
 
-// Single-flight guard around the whole check + auto-download lifecycle. The
-// metadata promise resolves quickly, but electron-updater keeps downloading on
-// result.downloadPromise. Retain the resolved check promise until that download
-// settles so repeated clicks (or a periodic tick) reuse the same result instead
-// of starting another check while the package is still in flight.
+// Single-flight guards cover both update discovery and package transfer. The
+// metadata promise resolves quickly, while electron-updater exposes the actual
+// auto-download separately on result.downloadPromise. Retaining both promises
+// prevents manual IPC, startup checks, periodic checks, and repeated clicks
+// from starting overlapping transfers.
 let inFlightCheck: Promise<unknown> | null = null;
+let inFlightDownload: Promise<unknown> | null = null;
+
+function trackDownload(download: Promise<unknown>): Promise<unknown> {
+  if (inFlightDownload) return inFlightDownload;
+  inFlightDownload = download;
+  void download.then(
+    () => {
+      if (inFlightDownload === download) inFlightDownload = null;
+    },
+    () => {
+      if (inFlightDownload === download) inFlightDownload = null;
+    },
+  );
+  return download;
+}
+
+function downloadUpdateOnce(): Promise<unknown> {
+  if (inFlightDownload) return inFlightDownload;
+  return trackDownload(
+    Promise.resolve().then(() => autoUpdater.downloadUpdate()),
+  );
+}
+
 function checkForUpdatesOnce(
   onDownloadError?: (error: unknown) => void,
 ): Promise<unknown> {
@@ -113,12 +136,11 @@ function checkForUpdatesOnce(
   void check
     .then(
       (result) => {
-        // checkForUpdates resolves as soon as metadata is fetched; the actual
-        // auto-download is exposed separately. Handle its rejection and keep
-        // the single-flight guard alive until it settles.
-        return (
+        const download = (
           result as { downloadPromise?: Promise<unknown> } | null
-        )?.downloadPromise?.catch((err) => {
+        )?.downloadPromise;
+        if (!download) return undefined;
+        return trackDownload(download).catch((err) => {
           console.error("Failed to download update:", err);
           onDownloadError?.(err);
         });
@@ -243,10 +265,13 @@ export function setupAutoUpdater(getMainWindow: () => BrowserWindow | null): voi
     if (updaterState.status === "downloading") reportDownloadError(err);
   });
 
-  // Retained for IPC back-compat with older renderer bundles. With
-  // autoDownload=true the renderer no longer triggers this path.
+  // Retained for IPC back-compat with older renderer bundles. It shares the
+  // same transfer guard as autoDownload so repeated legacy requests cannot
+  // start overlapping downloads.
   ipcMain.handle("updater:download", () => {
-    return autoUpdater.downloadUpdate();
+    const download = downloadUpdateOnce();
+    void download.catch(reportDownloadError);
+    return download;
   });
 
   ipcMain.handle("updater:install", () => {
