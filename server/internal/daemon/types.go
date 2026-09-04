@@ -114,7 +114,7 @@ type Task struct {
 	ProjectDescription                string                 `json:"project_description,omitempty"`              // durable project-level context injected into the brief
 	ProjectResources                  []ProjectResourceData  `json:"project_resources,omitempty"`                // project-scoped resources to expose to the agent
 	IsLeaderTask                      bool                   `json:"is_leader_task,omitempty"`                   // true when executing in the squad-leader coordinator role
-	ConciseMode                       bool                   `json:"concise_mode,omitempty"`                     // task-level opt-in to pass only the user's input
+	ConciseMode                       bool                   `json:"concise_mode,omitempty"`                     // task-level opt-in to use a compact flow prompt without the full runtime brief
 	LeaderRoleResolved                bool                   `json:"leader_role_resolved,omitempty"`             // server capability: IsLeaderTask/SquadID authoritatively answer "is this a leader run". Absent on servers predating it — those before #4951 never sent is_leader_task at all, later ones send it without this guarantee — so taskIsSquadLeader falls back to the briefing marker for both (MUL-5811)
 	PriorSessionID                    string                 `json:"prior_session_id,omitempty"`                 // Claude session ID from a previous task on this issue
 	PriorWorkDir                      string                 `json:"prior_work_dir,omitempty"`                   // work_dir from a previous task on this issue
