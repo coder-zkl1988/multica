@@ -3075,6 +3075,8 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 	// be provided together.
 	var originType pgtype.Text
 	var originID pgtype.UUID
+	var quickCreateOriginTask db.AgentTaskQueue
+	var hasValidatedQuickCreateOriginTask bool
 	if req.OriginType != nil || req.OriginID != nil {
 		if req.OriginType == nil || req.OriginID == nil {
 			writeError(w, http.StatusBadRequest, "origin_type and origin_id must be provided together")
@@ -3082,7 +3084,14 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		}
 		switch *req.OriginType {
 		case "quick_create":
-			// Allowed — daemon CLI passes this through from a quick-create task.
+			// A quick-create origin is trusted only when it is the task currently
+			// executing this request. This binds both the provenance stamp and the
+			// creator identity to the server-resolved agent task; an arbitrary task
+			// owned by the same agent is not sufficient.
+			if creatorType != "agent" {
+				writeError(w, http.StatusBadRequest, "quick_create origin requires an agent creator")
+				return
+			}
 		default:
 			writeError(w, http.StatusBadRequest, "unsupported origin_type")
 			return
@@ -3091,8 +3100,16 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			return
 		}
+		currentTask, taskOK := h.taskFromRequestHeader(r)
+		creatorUUID, creatorErr := util.ParseUUID(actualCreatorID)
+		if !taskOK || creatorErr != nil || currentTask.ID != oid || currentTask.AgentID != creatorUUID {
+			writeError(w, http.StatusBadRequest, "quick_create origin must match the creating agent's current task")
+			return
+		}
 		originType = pgtype.Text{String: *req.OriginType, Valid: true}
 		originID = oid
+		quickCreateOriginTask = currentTask
+		hasValidatedQuickCreateOriginTask = true
 	} else if creatorType == "agent" {
 		// MUL-4305: an agent creating an issue via the ordinary create path
 		// carries no explicit origin, which historically left the new issue
@@ -3115,6 +3132,31 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 				if task, terr := h.Queries.GetAgentTask(r.Context(), taskUUID); terr == nil && uuidToString(task.AgentID) == actualCreatorID {
 					originType = pgtype.Text{String: "agent_create", Valid: true}
 					originID = taskUUID
+				}
+			}
+		}
+	}
+
+	// A quick-create task is already the execution responsible for creating this
+	// issue. Its assignee records the handoff target, but must not start a second
+	// assignment-driven run. Derive the effective assignee from the validated
+	// task context rather than suppressing every issue carrying the origin label:
+	// malformed context, an agent/squad mismatch, or an invalid squad cannot prove
+	// that this issue is the handoff target.
+	suppressAssigneeRun := false
+	if hasValidatedQuickCreateOriginTask {
+		var quickCreate service.QuickCreateContext
+		if json.Unmarshal(quickCreateOriginTask.Context, &quickCreate) == nil && quickCreate.Type == service.QuickCreateContextType {
+			contextWorkspaceID, contextErr := util.ParseUUID(quickCreate.WorkspaceID)
+			if contextErr == nil && contextWorkspaceID == wsUUID {
+				if strings.TrimSpace(quickCreate.SquadID) == "" {
+					suppressAssigneeRun = assigneeType.Valid && assigneeType.String == "agent" && assigneeID == quickCreateOriginTask.AgentID
+				} else if contextSquadID, squadErr := util.ParseUUID(quickCreate.SquadID); squadErr == nil {
+					if squad, squadErr := h.Queries.GetSquadInWorkspace(r.Context(), db.GetSquadInWorkspaceParams{
+						ID: contextSquadID, WorkspaceID: wsUUID,
+					}); squadErr == nil && !squad.ArchivedAt.Valid {
+						suppressAssigneeRun = assigneeType.Valid && assigneeType.String == "squad" && assigneeID == contextSquadID
+					}
 				}
 			}
 		}
@@ -3173,10 +3215,11 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		LabelIDs:       labelIDs,
 		AllowDuplicate: req.AllowDuplicate,
 	}, service.IssueCreateOpts{
-		ActorID:          actualCreatorID,
-		AnalyticsAgentID: analyticsAgentID,
-		Platform:         func() string { p, _, _ := middleware.ClientMetadataFromContext(r.Context()); return p }(),
-		ConciseMode:      req.ConciseMode,
+		ActorID:             actualCreatorID,
+		AnalyticsAgentID:    analyticsAgentID,
+		Platform:            func() string { p, _, _ := middleware.ClientMetadataFromContext(r.Context()); return p }(),
+		SuppressAssigneeRun: suppressAssigneeRun,
+		ConciseMode:         req.ConciseMode,
 		BroadcastPayload: func(issue db.Issue, atts []db.Attachment, labels []db.IssueLabel) map[string]any {
 			payload := issueToResponse(issue, prefix)
 			// The event other tabs receive must carry the category too — filling

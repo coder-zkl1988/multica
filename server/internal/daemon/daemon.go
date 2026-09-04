@@ -5454,9 +5454,9 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 		agentName = task.Agent.Name
 	}
 	if task.ChatSessionID != "" {
-		taskLog.Info("picked chat task", "chat_session", task.ChatSessionID, "agent", agentName, "provider", provider)
+		taskLog.Info("picked chat task", "chat_session", task.ChatSessionID, "agent", agentName, "provider", provider, "concise_mode", task.ConciseMode)
 	} else {
-		taskLog.Info("picked task", "issue", task.IssueID, "agent", agentName, "provider", provider)
+		taskLog.Info("picked task", "issue", task.IssueID, "agent", agentName, "provider", provider, "concise_mode", task.ConciseMode)
 	}
 	taskLog.Debug("task context",
 		"workspace_id", task.WorkspaceID,
