@@ -383,7 +383,7 @@ export function ActiveTaskRow({
     task.status !== "queued" && task.status !== "waiting_local_directory";
 
   const handleCancel = async () => {
-    if (cancelling) return;
+    if (cancelling || modeSwitching) return;
     setCancelling(true);
     try {
       await api.cancelTask(issueId, task.id);
@@ -398,7 +398,7 @@ export function ActiveTaskRow({
   };
 
   const requestCancel = () => {
-    if (cancelling) return;
+    if (cancelling || modeSwitching) return;
     setConfirmOpen(true);
   };
 
@@ -473,7 +473,7 @@ export function ActiveTaskRow({
               <button
                 type="button"
                 onClick={requestCancel}
-                disabled={cancelling}
+                disabled={cancelling || modeSwitching}
                 aria-label={t(($) => $.execution_log.cancel_task_aria)}
               />
             }
