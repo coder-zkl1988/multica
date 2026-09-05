@@ -118,6 +118,23 @@
     "crossRepoNeedsRepos": "교차 저장소 케이스에는 저장소가 두 개 이상 필요합니다",
     "crossRepoNeedsRoles": "교차 저장소 케이스에는 서로 다른 역할이 필요합니다"
   },
+  "capabilities": {
+    "title": "필요한 기능",
+    "empty": "이 케이스는 브라우저나 기기가 필요하지 않습니다.",
+    "add": "기능 추가",
+    "remove": "이 기능 제거",
+    "kind": "종류",
+    "match": "일치 조건",
+    "matchPlaceholder": "os_version=>=13, browser=chromium",
+    "optional": "선택 — 없어도 실행을 차단하지 않음",
+    "hint": "여기에 선언한 종류는 디스패치 시 실제 브라우저나 기기에 바인딩됩니다. 런타임이 제공할 수 없으면 실행은 차단됩니다.",
+    "kinds": {
+      "browser": "브라우저",
+      "android_device": "Android 기기",
+      "ios_device": "iOS 기기",
+      "computer_use": "컴퓨터 제어"
+    }
+  },
   "role": {
     "under_test": "테스트 대상",
     "driver": "드라이버",

@@ -117,8 +117,16 @@ func (h *Handler) DispatchTestRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The overlay is mounted on the agent's runtime, so that is the only
+	// daemon whose capabilities can serve this run.
+	agentRuntime, err := h.Queries.GetAgentRuntime(r.Context(), agent.RuntimeID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "the agent's runtime is gone; bind it to a running daemon first")
+		return
+	}
+
 	requirements := runRequiredCapabilities(runCases)
-	binding, missingKind, resolved := h.resolveRunCapabilities(r.Context(), wsUUID, requirements)
+	binding, missingKind, resolved := h.resolveRunCapabilities(r.Context(), wsUUID, requirements, effectiveDaemonIDForRuntime(agentRuntime))
 	if !resolved {
 		// Explicit failure, not a silent downgrade: parking the run tells the
 		// user which capability is missing instead of burning an agent run that

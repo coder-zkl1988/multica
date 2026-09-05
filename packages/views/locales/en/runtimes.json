@@ -189,7 +189,27 @@
     "running_chip_one": "· {{count}} running",
     "running_chip_other": "· {{count}} running",
     "queued_chip_one": "· {{count}} queued",
-    "queued_chip_other": "· {{count}} queued"
+    "queued_chip_other": "· {{count}} queued",
+    "capabilities_title": "Test capabilities",
+    "capabilities_empty": "No browsers or devices reported yet.",
+    "capabilities_hint": "The daemon reports what this machine can drive in a test round. A run that needs a kind not listed here is parked as blocked at dispatch.",
+    "capabilities_scan": "Scan again",
+    "capabilities_scanning": "Scanning…",
+    "capabilities_scan_requested": "Scan requested. Results appear when the daemon reports.",
+    "capabilities_scan_failed": "Could not request a scan.",
+    "capabilities_probed": "probed {{when}}",
+    "capability_kind": {
+      "browser": "Browser",
+      "android_device": "Android device",
+      "ios_device": "iOS device",
+      "computer_use": "Computer use"
+    },
+    "capability_status": {
+      "available": "Available",
+      "busy": "Busy",
+      "offline": "Offline",
+      "unknown": "Unknown"
+    }
   },
   "detail_page": {
     "not_found_title": "Runtime not found",

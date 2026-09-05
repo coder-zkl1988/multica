@@ -118,6 +118,23 @@
     "crossRepoNeedsRepos": "A cross-repo case needs at least two repositories",
     "crossRepoNeedsRoles": "A cross-repo case needs more than one repository role"
   },
+  "capabilities": {
+    "title": "Required capabilities",
+    "empty": "This case needs no browser or device.",
+    "add": "Add capability",
+    "remove": "Remove this capability",
+    "kind": "Kind",
+    "match": "Match",
+    "matchPlaceholder": "os_version=>=13, browser=chromium",
+    "optional": "Optional — a missing kind does not block the run",
+    "hint": "A kind declared here is bound to a real browser or device at dispatch. A round whose runtime cannot provide it is parked as blocked.",
+    "kinds": {
+      "browser": "Browser",
+      "android_device": "Android device",
+      "ios_device": "iOS device",
+      "computer_use": "Computer use"
+    }
+  },
   "role": {
     "under_test": "Under test",
     "driver": "Driver",

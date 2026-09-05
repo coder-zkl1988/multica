@@ -1,6 +1,6 @@
 ---
 name: multica-test-cases
-description: "Use when reading, writing, reviewing, or AI-generating Multica test cases — including finding which repositories, project, and issues a case relates to. Executing a case and recording results is not covered: that surface does not exist yet."
+description: "Use when reading, writing, reviewing, or AI-generating Multica test cases — including finding which repositories, project, and issues a case relates to, and which browser or device a case requires. Executing a case and recording results is the multica-running-tests skill."
 user-invocable: false
 allowed-tools: Bash(multica *)
 ---
@@ -226,8 +226,28 @@ case is queued in a round it was never added to.
 
 Deleting either side sweeps the links in the same transaction as the delete.
 
-## What does not exist yet
+## Required capabilities
 
-There is no `multica test` command group, no run or result recording. A case is
-a durable document you can read, write and review — nothing consumes it
-automatically yet. Do not invent commands for those.
+A case may declare which kind of browser or device a round must be bound to
+before it can run:
+
+    "required_capabilities": [
+      {"kind": "browser", "match": {"browser": "chromium"}},
+      {"kind": "android_device", "match": {"os_version": ">=13"}, "optional": true}
+    ]
+
+`kind` is one of `browser`, `android_device`, `ios_device`, `computer_use`.
+`match` narrows the capability's target (exact value, or `>=`, `>`, `<=`, `<`
+on version-like values); `optional: true` means a missing kind does not block
+the run. The binding to a concrete capability happens once, at dispatch, and
+only among the capabilities the executing agent's own daemon has reported —
+a case that needs a kind no runtime provides parks the round as `blocked`
+with the missing kind named. The runtime page lists what each machine has
+reported and can ask the daemon to scan again.
+
+## Executing cases
+
+Running a case, recording results, uploading evidence and opening defects are
+covered by the `multica-running-tests` skill (`multica test run …`,
+`multica test result set …`, `multica test evidence add …`,
+`multica test defect open …`). This skill stops at the case as a document.

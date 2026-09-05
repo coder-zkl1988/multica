@@ -340,6 +340,24 @@ export interface TestCaseResultTimelineEntry {
   run_created_at: string;
 }
 
+/**
+ * What a case declares it needs. A kind plus optional match constraints on the
+ * capability target (`{"os_version": ">=13"}`), never a specific device: the
+ * binding to a concrete capability happens once, at dispatch.
+ */
+export interface TestCapabilityRequirement {
+  kind: TestCapabilityKind;
+  match?: Record<string, string>;
+  optional?: boolean;
+}
+
+/** 202 body of `POST /api/runtimes/{id}/capabilities`: the queued scan. */
+export interface RuntimeCapabilityScanResponse {
+  request_id: string;
+  runtime_id: string;
+  status: string;
+}
+
 export interface TestCapability {
   id: string;
   workspace_id: string;

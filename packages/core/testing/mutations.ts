@@ -7,6 +7,7 @@ import {
   testPlanKeys,
   testRunKeys,
   issueTestCaseKeys,
+  testCapabilityKeys,
 } from "./keys";
 import type {
   CreateTestCaseRequest,
@@ -600,6 +601,23 @@ export function useLinkTestCaseIssues() {
       for (const issueId of issueIds) {
         qc.invalidateQueries({ queryKey: issueTestCaseKeys.forIssue(wsId, issueId) });
       }
+    },
+  });
+}
+
+/**
+ * Ask a runtime to re-probe its test-execution capabilities. The result is not
+ * in the response: the daemon reports through the server, which pushes
+ * `test_capability:updated`, so the list is invalidated on settle only as a
+ * fallback for a client that missed the event.
+ */
+export function useRequestRuntimeCapabilityScan() {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: (runtimeId: string) => api.requestRuntimeCapabilityScan(runtimeId),
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: testCapabilityKeys.all(wsId) });
     },
   });
 }

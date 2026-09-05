@@ -134,16 +134,18 @@ func TestBuildTaskOverlay_IOSDevice_ReturnsEmpty(t *testing.T) {
 // IsEnabled
 // ---------------------------------------------------------------------------
 
-func TestIsEnabled_NilFlags_ReturnsFalse(t *testing.T) {
-	if testcapability.IsEnabled(context.Background(), nil) {
-		t.Error("IsEnabled(nil flags) must return false")
+// The overlay is on by default: a run bound to a browser capability must
+// actually mount the browser MCP, and nothing else consumes the flag.
+func TestIsEnabled_NilFlags_DefaultsOn(t *testing.T) {
+	if !testcapability.IsEnabled(context.Background(), nil) {
+		t.Error("IsEnabled(nil flags) must default to true")
 	}
 }
 
-func TestIsEnabled_NoProviderSet_ReturnsFalse(t *testing.T) {
+func TestIsEnabled_NoProviderSet_DefaultsOn(t *testing.T) {
 	svc := featureflag.NewService(nil)
-	if testcapability.IsEnabled(context.Background(), svc) {
-		t.Error("IsEnabled with nil provider must return false (default)")
+	if !testcapability.IsEnabled(context.Background(), svc) {
+		t.Error("IsEnabled with nil provider must default to true")
 	}
 }
 

@@ -312,6 +312,7 @@ import type {
   ListTestRunCasesResponse,
   TestCaseResultTimelineResponse,
   ListTestCapabilitiesResponse,
+  RuntimeCapabilityScanResponse,
   ListTestCaseIssuesResponse,
   ListIssueTestCasesResponse,
   DispatchTestRunResponse,
@@ -633,6 +634,8 @@ import {
   EMPTY_LIST_TEST_RUN_CASES_RESPONSE,
   EMPTY_TEST_CASE_RESULT_TIMELINE_RESPONSE,
   EMPTY_LIST_TEST_CAPABILITIES_RESPONSE,
+  EMPTY_RUNTIME_CAPABILITY_SCAN_RESPONSE,
+  RuntimeCapabilityScanResponseSchema,
   EMPTY_LIST_TEST_CASE_ISSUES_RESPONSE,
   EMPTY_LIST_ISSUE_TEST_CASES_RESPONSE,
   SkillSchema,
@@ -6117,6 +6120,20 @@ export class ApiClient {
     const raw = await this.fetch<unknown>(`/api/test-capabilities${query}`);
     return parseWithFallback(raw, ListTestCapabilitiesResponseSchema, EMPTY_LIST_TEST_CAPABILITIES_RESPONSE, {
       endpoint: "GET /api/test-capabilities",
+    });
+  }
+
+  /**
+   * Ask a runtime's daemon to probe its host for browsers and devices and
+   * report them. 202: the inventory arrives later through the
+   * `test_capability:updated` event, not in this response.
+   */
+  async requestRuntimeCapabilityScan(runtimeId: string): Promise<RuntimeCapabilityScanResponse> {
+    const raw = await this.fetch<unknown>(`/api/runtimes/${encodeURIComponent(runtimeId)}/capabilities`, {
+      method: "POST",
+    });
+    return parseWithFallback(raw, RuntimeCapabilityScanResponseSchema, EMPTY_RUNTIME_CAPABILITY_SCAN_RESPONSE, {
+      endpoint: "POST /api/runtimes/{id}/capabilities",
     });
   }
 

@@ -179,7 +179,27 @@
     "toast_deleted": "已删除运行时",
     "toast_delete_failed": "删除运行时失败",
     "running_chip_other": "· {{count}} 个进行中",
-    "queued_chip_other": "· {{count}} 个排队中"
+    "queued_chip_other": "· {{count}} 个排队中",
+    "capabilities_title": "测试能力",
+    "capabilities_empty": "还没有上报任何浏览器或设备。",
+    "capabilities_hint": "守护进程会上报这台机器在测试轮次中能驱动什么。轮次需要的能力不在此列表中时，派发会被停为阻塞。",
+    "capabilities_scan": "重新扫描",
+    "capabilities_scanning": "扫描中…",
+    "capabilities_scan_requested": "已请求扫描，守护进程上报后结果会出现在这里。",
+    "capabilities_scan_failed": "无法发起扫描。",
+    "capabilities_probed": "探测于 {{when}}",
+    "capability_kind": {
+      "browser": "浏览器",
+      "android_device": "Android 设备",
+      "ios_device": "iOS 设备",
+      "computer_use": "电脑控制"
+    },
+    "capability_status": {
+      "available": "可用",
+      "busy": "占用中",
+      "offline": "离线",
+      "unknown": "未知"
+    }
   },
   "detail_page": {
     "not_found_title": "未找到运行时",

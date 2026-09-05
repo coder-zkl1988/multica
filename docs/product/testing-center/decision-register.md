@@ -91,14 +91,14 @@
 
 ### TS-011 先接通守护进程能力上报
 
-- 状态：`proposal`
+- 状态：`implemented`（2026-09-06，分支 `feat/testing-capability-wiring`）
 - 日期：2026-09-02
 - 建议：心跳 ack 增加 `pending_capability_scan`，daemon 执行 `listRuntimeCapabilities` 并上报到 `/api/daemon/runtimes/{id}/capabilities`；注册后自动上报；扫描请求存 Redis；`test_capability_mcp` 默认打开。
 - 依据：`server/internal/daemon/capabilities.go` 无调用方；`ReportRuntimeCapabilities` 无路由；设计 §6.1。
 
 ### TS-012 能力解析只在智能体所在 daemon 与服务器托管设备中求解
 
-- 状态：`proposal`
+- 状态：`implemented`（2026-09-06，daemon 硬约束部分；“服务器托管设备”部分已随 TS-020 作废）
 - 日期：2026-09-02
 - 建议：`resolveRunCapabilities` 增加 daemon 约束；服务器托管的设备（`hosting = server`）对任何 daemon 可用。
 - 依据：`test_run_dispatch.go` 解析后直接挂到 `agent.RuntimeID`，无一致性检查；设计 §4.4。

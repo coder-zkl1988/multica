@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/multica-ai/multica/server/internal/testutil"
 )
 
 // Dispatch is what makes an agent the executor of a round. It used to record
@@ -110,5 +112,102 @@ func TestUpdateTestRunLeavesTheExecutorAloneWhenUnset(t *testing.T) {
 	if started.ExecutorType != "agent" || started.ExecutorID != agentID {
 		t.Errorf("executor after start = (%s, %s), want (agent, %s)",
 			started.ExecutorType, started.ExecutorID, agentID)
+	}
+}
+
+// A run is bound where the agent runs. The resolver used to accept any daemon
+// in the workspace that could cover the requirements, while the task itself
+// was queued on the agent's runtime — so a browser on machine A could be
+// "bound" to an agent on machine B, whose overlay then spawned its own
+// playwright (hiding the mismatch) or, for a device, nothing at all.
+func TestDispatchTestRunBindsOnlyTheAgentRuntimeDaemon(t *testing.T) {
+	projectID := newTestRunProject(t)
+
+	w := httptest.NewRecorder()
+	req := newRequest("POST", "/api/test-cases?workspace_id="+testWorkspaceID, map[string]any{
+		"project_id":            projectID,
+		"title":                 "Browser case " + t.Name(),
+		"status":                "active",
+		"required_capabilities": []map[string]any{{"kind": "browser"}},
+	})
+	testHandler.CreateTestCase(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create case: got %d, want 201: %s", w.Code, w.Body.String())
+	}
+	var tc TestCaseResponse
+	if err := json.NewDecoder(w.Body).Decode(&tc); err != nil {
+		t.Fatal(err)
+	}
+
+	agentRuntimeID := dbfx.Runtime(t, "dispatch-daemon-agent", testutil.Cols{"daemon_id": "daemon-agent"})
+	agentID := dbfx.Agent(t, "dispatch-daemon-agent", agentRuntimeID)
+	otherRuntimeID := dbfx.Runtime(t, "dispatch-daemon-other", testutil.Cols{"daemon_id": "daemon-other"})
+
+	// Only the OTHER daemon has a browser: the run must be parked, not bound.
+	dbfx.Insert(t, "test_capability", testutil.Cols{
+		"workspace_id":   testWorkspaceID,
+		"daemon_id":      "daemon-other",
+		"runtime_id":     otherRuntimeID,
+		"kind":           "browser",
+		"capability_key": "browser:playwright",
+		"target":         testutil.Raw(`'{"provider":"playwright"}'::jsonb`),
+		"status":         "available",
+	})
+
+	run := createTestRunFromCases(t, "Daemon-bound run", []string{tc.ID})
+	w = httptest.NewRecorder()
+	req = withURLParam(
+		newRequest("POST", "/api/test-runs/"+run.ID+"/dispatch?workspace_id="+testWorkspaceID,
+			map[string]any{"agent_id": agentID}),
+		"id", run.ID,
+	)
+	testHandler.DispatchTestRun(w, req)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("dispatch with the browser on another daemon: got %d, want 409: %s", w.Code, w.Body.String())
+	}
+	var blocked struct {
+		MissingKind string `json:"missing_kind"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&blocked); err != nil {
+		t.Fatal(err)
+	}
+	if blocked.MissingKind != "browser" {
+		t.Errorf("missing_kind = %q, want browser", blocked.MissingKind)
+	}
+
+	// Give the agent's own daemon a browser: a fresh run now binds to it.
+	dbfx.Insert(t, "test_capability", testutil.Cols{
+		"workspace_id":   testWorkspaceID,
+		"daemon_id":      "daemon-agent",
+		"runtime_id":     agentRuntimeID,
+		"kind":           "browser",
+		"capability_key": "browser:playwright",
+		"target":         testutil.Raw(`'{"provider":"playwright"}'::jsonb`),
+		"status":         "available",
+	})
+	run = createTestRunFromCases(t, "Daemon-bound run 2", []string{tc.ID})
+	w = httptest.NewRecorder()
+	req = withURLParam(
+		newRequest("POST", "/api/test-runs/"+run.ID+"/dispatch?workspace_id="+testWorkspaceID,
+			map[string]any{"agent_id": agentID}),
+		"id", run.ID,
+	)
+	testHandler.DispatchTestRun(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("dispatch with the browser on the agent's daemon: got %d, want 201: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		TestRun TestRunResponse `json:"test_run"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	binding := resp.TestRun.CapabilityBinding
+	if binding["daemon_id"] != "daemon-agent" {
+		t.Errorf("bound daemon = %v, want daemon-agent (binding %v)", binding["daemon_id"], binding)
+	}
+	resolved, _ := binding["resolved"].(map[string]any)
+	if resolved["browser"] != "browser:playwright" {
+		t.Errorf("resolved browser = %v (binding %v)", resolved["browser"], binding)
 	}
 }

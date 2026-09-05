@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 // Test execution capability surface: which phone, browser or desktop a run can
@@ -41,6 +42,13 @@ type TestRunCapabilityBinding struct {
 // (non-optional) capability. Cross-machine runs are out of scope for v1, so a
 // requirement set spread over two daemons is unsatisfiable by design.
 //
+// daemonID, when non-empty, restricts the search to that daemon. Dispatch
+// passes the daemon of the agent's runtime: the MCP overlay is mounted where
+// the agent runs, so a binding on any other daemon would hand the agent a
+// browser or phone that is not on its machine. The browser probe hid this for
+// a while (npx spawns playwright wherever the overlay lands); a device does
+// not.
+//
 // Returns ok=false with the first missing kind when nothing can serve the run;
 // the caller must then park the run as blocked rather than queue it.
 // Empty requirements resolve trivially (ok=true, empty binding).
@@ -48,6 +56,7 @@ func (h *Handler) resolveRunCapabilities(
 	ctx context.Context,
 	wsUUID pgtype.UUID,
 	requirements []TestCapabilityRequirement,
+	daemonID string,
 ) (binding TestRunCapabilityBinding, missingKind string, ok bool) {
 	// Trivially satisfied when there are no requirements.
 	if len(requirements) == 0 {
@@ -93,6 +102,9 @@ func (h *Handler) resolveRunCapabilities(
 	// daemonKinds[daemonID][kind] = list of matching candidates
 	daemonKinds := map[string]map[string][]candidate{}
 	for _, cap := range caps {
+		if daemonID != "" && cap.DaemonID != daemonID {
+			continue
+		}
 		var tgt map[string]string
 		if len(cap.Target) > 0 {
 			_ = json.Unmarshal(cap.Target, &tgt)
@@ -342,86 +354,164 @@ func (h *Handler) ListTestRunCapabilities(w http.ResponseWriter, r *http.Request
 }
 
 // ---------------------------------------------------------------------------
-// Capability scan: request/report store (package-level, daemon-facing)
+// Capability scan: pending-work store (daemon-facing)
 // ---------------------------------------------------------------------------
 
-// capabilityScanRequest is a pending capability probe delivery record.
-type capabilityScanRequest struct {
+// A scan request follows the runtime local-skill list lifecycle so the
+// heartbeat can probe-then-claim it the same way: a member asks, the next
+// heartbeat hands the id to the daemon, the daemon reports its inventory with
+// that id and the request completes.
+const (
+	CapabilityScanPending   = "pending"
+	CapabilityScanRunning   = "running"
+	CapabilityScanCompleted = "completed"
+	CapabilityScanFailed    = "failed"
+
+	// capabilityScanRetention bounds how long a request is kept after
+	// creation. A scan nobody claimed or reported inside it is forgotten;
+	// the daemon reports unsolicited on registration anyway.
+	capabilityScanRetention = 10 * time.Minute
+)
+
+// RuntimeCapabilityScanRequest is one "probe your capabilities" ask.
+type RuntimeCapabilityScanRequest struct {
 	ID        string    `json:"id"`
 	RuntimeID string    `json:"runtime_id"`
-	Status    string    `json:"status"` // "pending" | "completed" | "failed"
+	Status    string    `json:"status"`
+	Error     string    `json:"error,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
-// inMemoryCapabilityScanStore is a lightweight in-memory store for pending
-// daemon capability-scan requests. It mirrors the InMemoryLocalSkillListStore
-// pattern, acting as the pending-work queue before heartbeat delivery is wired
-// up. A package-level instance is used because the store cannot be added to the
-// Handler struct (handler.go is owned by another agent).
-type inMemoryCapabilityScanStore struct {
-	mu   sync.Mutex
-	reqs map[string]*capabilityScanRequest
+// CapabilityScanStore keeps pending scan requests where every API node can
+// see them. The in-memory implementation is for single-node and tests; the
+// Redis one (test_capability_redis_store.go) is wired whenever Redis is.
+type CapabilityScanStore interface {
+	Create(ctx context.Context, runtimeID string) (*RuntimeCapabilityScanRequest, error)
+	Get(ctx context.Context, id string) (*RuntimeCapabilityScanRequest, error)
+	// HasPending is the cheap read-only probe the heartbeat runs before the
+	// side-effecting PopPending, so an empty queue costs one lookup.
+	HasPending(ctx context.Context, runtimeID string) (bool, error)
+	PopPending(ctx context.Context, runtimeID string) (*RuntimeCapabilityScanRequest, error)
+	Complete(ctx context.Context, id string) error
+	Fail(ctx context.Context, id string, errMsg string) error
 }
 
-func newInMemoryCapabilityScanStore() *inMemoryCapabilityScanStore {
-	return &inMemoryCapabilityScanStore{reqs: map[string]*capabilityScanRequest{}}
+// InMemoryCapabilityScanStore is the process-local store.
+type InMemoryCapabilityScanStore struct {
+	mu       sync.Mutex
+	requests map[string]*RuntimeCapabilityScanRequest
 }
 
-// globalCapabilityScanStore is the process-wide store for pending scan requests.
-// Tests may replace this with a fresh instance for isolation.
-var globalCapabilityScanStore = newInMemoryCapabilityScanStore()
-
-func (s *inMemoryCapabilityScanStore) create(runtimeID string) *capabilityScanRequest {
-	id := randomID()
-	req := &capabilityScanRequest{
-		ID:        id,
-		RuntimeID: runtimeID,
-		Status:    "pending",
-		CreatedAt: time.Now().UTC(),
-	}
-	s.mu.Lock()
-	s.reqs[id] = req
-	s.mu.Unlock()
-	return req
+func NewInMemoryCapabilityScanStore() *InMemoryCapabilityScanStore {
+	return &InMemoryCapabilityScanStore{requests: make(map[string]*RuntimeCapabilityScanRequest)}
 }
 
-func (s *inMemoryCapabilityScanStore) popPending(runtimeID string) *capabilityScanRequest {
+func (s *InMemoryCapabilityScanStore) Create(_ context.Context, runtimeID string) (*RuntimeCapabilityScanRequest, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, req := range s.reqs {
-		if req.RuntimeID == runtimeID && req.Status == "pending" {
-			req.Status = "running"
-			return req
+	for id, req := range s.requests {
+		if time.Since(req.CreatedAt) > capabilityScanRetention {
+			delete(s.requests, id)
 		}
+	}
+	now := time.Now()
+	req := &RuntimeCapabilityScanRequest{
+		ID:        randomID(),
+		RuntimeID: runtimeID,
+		Status:    CapabilityScanPending,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	s.requests[req.ID] = req
+	return req, nil
+}
+
+func (s *InMemoryCapabilityScanStore) Get(_ context.Context, id string) (*RuntimeCapabilityScanRequest, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	req, ok := s.requests[id]
+	if !ok {
+		return nil, nil
+	}
+	copied := *req
+	return &copied, nil
+}
+
+func (s *InMemoryCapabilityScanStore) HasPending(_ context.Context, runtimeID string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, req := range s.requests {
+		if req.RuntimeID == runtimeID && req.Status == CapabilityScanPending {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// PopPending claims the oldest pending request for the runtime, so a burst of
+// "scan" clicks drains in the order they were made.
+func (s *InMemoryCapabilityScanStore) PopPending(_ context.Context, runtimeID string) (*RuntimeCapabilityScanRequest, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var oldest *RuntimeCapabilityScanRequest
+	for _, req := range s.requests {
+		if req.RuntimeID != runtimeID || req.Status != CapabilityScanPending {
+			continue
+		}
+		if oldest == nil || req.CreatedAt.Before(oldest.CreatedAt) {
+			oldest = req
+		}
+	}
+	if oldest == nil {
+		return nil, nil
+	}
+	oldest.Status = CapabilityScanRunning
+	oldest.UpdatedAt = time.Now()
+	copied := *oldest
+	return &copied, nil
+}
+
+func (s *InMemoryCapabilityScanStore) Complete(_ context.Context, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if req, ok := s.requests[id]; ok {
+		req.Status = CapabilityScanCompleted
+		req.Error = ""
+		req.UpdatedAt = time.Now()
 	}
 	return nil
 }
 
-func (s *inMemoryCapabilityScanStore) complete(id string, failed bool) {
+func (s *InMemoryCapabilityScanStore) Fail(_ context.Context, id string, errMsg string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if req, ok := s.reqs[id]; ok {
-		if failed {
-			req.Status = "failed"
-		} else {
-			req.Status = "completed"
-		}
+	if req, ok := s.requests[id]; ok {
+		req.Status = CapabilityScanFailed
+		req.Error = errMsg
+		req.UpdatedAt = time.Now()
 	}
+	return nil
 }
 
 // RequestRuntimeCapabilityScan asks the daemon to probe and report its current
-// test execution capabilities. The scan request is stored in memory and
-// delivered to the daemon on its next heartbeat (once PendingCapabilityScan
-// is added to DaemonHeartbeatAckPayload). A 202 Accepted is returned
-// immediately so the caller can poll for the result.
+// test execution capabilities. The request is queued in the scan store and
+// handed to the daemon on its next heartbeat (which the pending-work nudge
+// makes immediate). 202 Accepted: the inventory itself arrives through
+// ReportRuntimeCapabilities and the test_capability:updated event.
 func (h *Handler) RequestRuntimeCapabilityScan(w http.ResponseWriter, r *http.Request) {
 	runtimeID := chi.URLParam(r, "runtimeId")
-	rt, _, ok := h.requireRuntimeCapabilityReadAccess(w, r, obsmetrics.RuntimeLookupSourceRuntimeAPI, runtimeID)
+	rt, _, ok := h.requireRuntimeCapabilityReadAccess(w, r, obsmetrics.RuntimeLookupSourceTestCapability, runtimeID)
 	if !ok {
 		return
 	}
 
-	req := globalCapabilityScanStore.create(rt.runtimeID)
+	req, err := h.CapabilityScanStore.Create(r.Context(), rt.runtimeID)
+	if err != nil {
+		slog.Warn("RequestRuntimeCapabilityScan: create failed", "runtime_id", rt.runtimeID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to queue the capability scan")
+		return
+	}
 	// Best-effort nudge: wake the daemon so it heartbeats immediately and
 	// picks up the pending scan rather than waiting for the next tick.
 	h.requestDaemonPendingWork(rt.runtimeID, "capability_scan")
@@ -431,6 +521,17 @@ func (h *Handler) RequestRuntimeCapabilityScan(w http.ResponseWriter, r *http.Re
 		"runtime_id": rt.runtimeID,
 		"status":     req.Status,
 	})
+}
+
+// effectiveDaemonIDForRuntime is the daemon_id a runtime's capability rows are
+// filed under: the daemon identity recorded at registration, or the runtime
+// UUID for runtimes that never had one. Report and dispatch must agree on it,
+// or a run can be bound to capabilities the agent's daemon does not have.
+func effectiveDaemonIDForRuntime(rt db.AgentRuntime) string {
+	if rt.DaemonID.Valid && rt.DaemonID.String != "" {
+		return rt.DaemonID.String
+	}
+	return uuidToString(rt.ID)
 }
 
 // ReportRuntimeCapabilities accepts a daemon's capability inventory. The report
@@ -458,16 +559,10 @@ func (h *Handler) ReportRuntimeCapabilities(w http.ResponseWriter, r *http.Reque
 	workspaceID := uuidToString(rt.WorkspaceID)
 	wsUUID := rt.WorkspaceID
 
-	// The daemon_id stored on test_capability rows matches the runtime's
-	// DaemonID field (set during daemon registration). Fall back to the runtime
-	// UUID string when the runtime has no explicit daemon_id association.
-	effectiveDaemonID := uuidToString(rt.ID)
-	if rt.DaemonID.Valid && rt.DaemonID.String != "" {
-		effectiveDaemonID = rt.DaemonID.String
-	}
+	effectiveDaemonID := effectiveDaemonIDForRuntime(rt)
 
 	presentKeys := make([]string, 0, len(body.Capabilities))
-	var upserted []testCapabilityResponse
+	upserted := make([]testCapabilityResponse, 0, len(body.Capabilities))
 
 	for _, cap := range body.Capabilities {
 		if cap.Kind == "" || cap.CapabilityKey == "" {
@@ -522,8 +617,19 @@ func (h *Handler) ReportRuntimeCapabilities(w http.ResponseWriter, r *http.Reque
 
 	// Complete the pending scan request if one was attached.
 	if body.RequestID != "" {
-		globalCapabilityScanStore.complete(body.RequestID, false)
+		if err := h.CapabilityScanStore.Complete(r.Context(), body.RequestID); err != nil {
+			slog.Warn("ReportRuntimeCapabilities: complete scan failed", "request_id", body.RequestID, "error", err)
+		}
 	}
+
+	// The inventory is what the runtime page and the dispatch preview read;
+	// pushing the event is what lets a "scan" click show its result without
+	// a reload.
+	h.publish(protocol.EventTestCapabilityUpdated, workspaceID, "system", "", map[string]any{
+		"daemon_id":    effectiveDaemonID,
+		"runtime_id":   uuidToString(rt.ID),
+		"capabilities": upserted,
+	})
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"daemon_id":    effectiveDaemonID,

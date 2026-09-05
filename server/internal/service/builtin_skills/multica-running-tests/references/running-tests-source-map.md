@@ -10,6 +10,8 @@ a pointer.
 | --- | --- |
 | `GET /api/test-runs/{id}/capabilities` returns `capability_binding` with `daemon_id`, `runtime_id`, and `resolved` map | `server/internal/handler/test_capability.go` (`ListTestRunCapabilities`) |
 | Capability binding is frozen at dispatch time in `test_run.capability_binding` | `server/internal/handler/test_run_dispatch.go:182` (`UpdateTestRun` after `CreateQuickCreateTask`) |
+| The binding is resolved only among capabilities reported by the executing agent's own daemon | `server/internal/handler/test_capability.go` (`resolveRunCapabilities`, `daemonID` parameter) |
+| Daemons report capabilities on `POST /api/daemon/runtimes/{id}/capabilities`, unsolicited after registration and when a heartbeat carries `pending_capability_scan` | `server/internal/daemon/daemon.go` (`reportRuntimeCapabilities`), `server/internal/handler/daemon.go` (`processHeartbeat`) |
 | Resolved map shape: `{kind → capability_key}` | `server/internal/handler/test_capability.go` (`TestRunCapabilityBindingResponse`) |
 | `multica test capability list --run <run-id>` calls `GET /api/test-runs/{id}/capabilities` | `server/cmd/multica/cmd_testrun.go` (`runTestCapList`) |
 | `multica test run get <run-id>` calls `GET /api/test-runs/{id}` | `server/cmd/multica/cmd_testrun.go` (`runTestRunGet`) |

@@ -365,13 +365,17 @@ type DaemonHeartbeatRequestPayload struct {
 // and re-registers; without it the dead UUID would keep heartbeating until the
 // daemon process restarts.
 type DaemonHeartbeatAckPayload struct {
-	RuntimeID               string                                  `json:"runtime_id"`
-	Status                  string                                  `json:"status"`
-	ServerCapabilities      []string                                `json:"server_capabilities,omitempty"`
-	RuntimeGone             bool                                    `json:"runtime_gone,omitempty"`
-	PendingUpdate           *DaemonHeartbeatPendingUpdate           `json:"pending_update,omitempty"`
-	PendingModelList        *DaemonHeartbeatPendingModelList        `json:"pending_model_list,omitempty"`
-	PendingLocalSkills      *DaemonHeartbeatPendingLocalSkills      `json:"pending_local_skills,omitempty"`
+	RuntimeID          string                             `json:"runtime_id"`
+	Status             string                             `json:"status"`
+	ServerCapabilities []string                           `json:"server_capabilities,omitempty"`
+	RuntimeGone        bool                               `json:"runtime_gone,omitempty"`
+	PendingUpdate      *DaemonHeartbeatPendingUpdate      `json:"pending_update,omitempty"`
+	PendingModelList   *DaemonHeartbeatPendingModelList   `json:"pending_model_list,omitempty"`
+	PendingLocalSkills *DaemonHeartbeatPendingLocalSkills `json:"pending_local_skills,omitempty"`
+	// PendingCapabilityScan asks the daemon to probe its host for test
+	// execution capabilities (browsers, devices) and report them. Old daemons
+	// ignore the field; the request then times out server-side.
+	PendingCapabilityScan   *DaemonHeartbeatPendingCapabilityScan   `json:"pending_capability_scan,omitempty"`
 	PendingLocalSkillImport *DaemonHeartbeatPendingLocalSkillImport `json:"pending_local_skill_import,omitempty"`
 	// PendingLocalSkillImports carries multiple import requests in a single
 	// heartbeat so the daemon can process them concurrently. Old daemons
@@ -400,6 +404,12 @@ type DaemonHeartbeatPendingModelList struct {
 // DaemonHeartbeatPendingLocalSkills describes a request for the runtime's
 // local-skill inventory.
 type DaemonHeartbeatPendingLocalSkills struct {
+	ID string `json:"id"`
+}
+
+// DaemonHeartbeatPendingCapabilityScan describes a request for the runtime's
+// test-execution capability inventory.
+type DaemonHeartbeatPendingCapabilityScan struct {
 	ID string `json:"id"`
 }
 

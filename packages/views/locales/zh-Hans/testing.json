@@ -118,6 +118,23 @@
     "crossRepoNeedsRepos": "跨仓库用例至少需要关联两个仓库",
     "crossRepoNeedsRoles": "跨仓库用例的仓库角色不能全部相同"
   },
+  "capabilities": {
+    "title": "所需能力",
+    "empty": "该用例不需要浏览器或设备。",
+    "add": "添加能力",
+    "remove": "移除此能力",
+    "kind": "类型",
+    "match": "匹配条件",
+    "matchPlaceholder": "os_version=>=13, browser=chromium",
+    "optional": "可选——缺少时不阻塞轮次",
+    "hint": "这里声明的类型会在派发时绑定到真实的浏览器或设备；runtime 提供不了时，轮次会被停为阻塞。",
+    "kinds": {
+      "browser": "浏览器",
+      "android_device": "Android 设备",
+      "ios_device": "iOS 设备",
+      "computer_use": "电脑控制"
+    }
+  },
   "role": {
     "under_test": "被测",
     "driver": "驱动",

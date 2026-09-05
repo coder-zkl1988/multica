@@ -179,7 +179,27 @@
     "toast_deleted": "ランタイムを削除しました",
     "toast_delete_failed": "ランタイムを削除できませんでした",
     "running_chip_other": "· 実行中 {{count}} 件",
-    "queued_chip_other": "· キュー待ち {{count}} 件"
+    "queued_chip_other": "· キュー待ち {{count}} 件",
+    "capabilities_title": "テスト機能",
+    "capabilities_empty": "まだブラウザやデバイスは報告されていません。",
+    "capabilities_hint": "デーモンはこのマシンがテスト実行で操作できるものを報告します。ここにない種類を必要とする実行はディスパッチ時にブロックされます。",
+    "capabilities_scan": "再スキャン",
+    "capabilities_scanning": "スキャン中…",
+    "capabilities_scan_requested": "スキャンを要求しました。デーモンの報告後に結果が表示されます。",
+    "capabilities_scan_failed": "スキャンを要求できませんでした。",
+    "capabilities_probed": "{{when}} に検出",
+    "capability_kind": {
+      "browser": "ブラウザ",
+      "android_device": "Android デバイス",
+      "ios_device": "iOS デバイス",
+      "computer_use": "コンピュータ操作"
+    },
+    "capability_status": {
+      "available": "利用可能",
+      "busy": "使用中",
+      "offline": "オフライン",
+      "unknown": "不明"
+    }
   },
   "detail_page": {
     "not_found_title": "ランタイムが見つかりません",

@@ -58,6 +58,7 @@ export {
   useOpenTestRunCaseDefect,
   useLinkTestCaseIssues,
   useUnlinkTestCaseIssue,
+  useRequestRuntimeCapabilityScan,
 } from "./mutations";
 export * from "./config";
 export {

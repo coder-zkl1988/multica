@@ -6,7 +6,9 @@
 //
 // Feature flag: "test_capability_mcp" (see FeatureFlagKey). Intentionally
 // distinct from "composio_mcp_apps" so each provider's rollout can be
-// controlled independently.
+// controlled independently. The flag defaults to ON: without the overlay a
+// run bound to a browser capability launches an agent that has no browser,
+// and the flag has no other consumer that could justify an opt-in.
 //
 // Context protocol: the test_run dispatch handler (handler/test_run.go) calls
 // WithResolvedCapabilities before enqueueing the agent task. BuildTaskOverlay
@@ -88,9 +90,10 @@ func resolvedCapabilitiesFromContext(ctx context.Context) ([]TestRunCapabilityEn
 }
 
 // IsEnabled reports whether the testcapability MCP overlay feature flag is on
-// for the given context. A nil *featureflag.Service returns false safely.
+// for the given context. The default is on; a flag provider can still turn it
+// off, and a nil *featureflag.Service falls back to the default.
 func IsEnabled(ctx context.Context, flags *featureflag.Service) bool {
-	return flags.IsEnabled(ctx, FeatureFlagKey, false)
+	return flags.IsEnabled(ctx, FeatureFlagKey, true)
 }
 
 // BuildTaskOverlay returns the MCP overlay for a task dispatching agent. It

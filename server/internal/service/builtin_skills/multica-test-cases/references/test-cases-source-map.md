@@ -133,3 +133,13 @@ rg -n 'ProposeTestCases|ListTestCaseProposals|AcceptTestCaseProposal|RejectTestC
 | Deleting an issue sweeps its links inside the delete transaction | `server/internal/handler/issue.go` (`deleteIssuesAndCollectAttachmentURLs`) |
 | A generated case inherits the APPROVED plan's `issues` scope, falling back to the job's `input.issue_ids` only when the plan row is missing | `server/internal/handler/test_generation_propose.go` (`testGenerationScopeIssueRefs`) |
 | A scope entry resolves as a UUID or a `MUL-123` identifier; unresolvable entries are skipped | `server/internal/handler/test_case_issue.go` (`resolveGeneratedIssueRef`) |
+
+## Required capabilities
+
+| Fact | Source |
+| --- | --- |
+| `required_capabilities` is JSONB on the case; `TestCapabilityRequirement` = `{kind, match?, optional?}` | `server/migrations/280_test_case.up.sql`, `server/internal/handler/test_capability.go` (`TestCapabilityRequirement`) |
+| Match operators `>=`, `>`, `<=`, `<` and exact equality | `server/internal/handler/test_capability.go` (`satisfiesConstraint`) |
+| Dispatch resolves requirements only against the executing agent's daemon and parks the run as `blocked` naming the missing kind | `server/internal/handler/test_run_dispatch.go` (`DispatchTestRun`), `server/internal/handler/test_capability.go` (`resolveRunCapabilities`) |
+| Daemons report their capabilities after registration and on a pending scan delivered by heartbeat | `server/internal/daemon/daemon.go` (`reportRuntimeCapabilities`, `handleCapabilityScan`), `server/internal/handler/test_capability.go` (`ReportRuntimeCapabilities`, `RequestRuntimeCapabilityScan`) |
+| The case editor edits requirements as kind + `key=value` match line + optional flag | `packages/views/testing/components/test-case-capabilities-field.tsx` |

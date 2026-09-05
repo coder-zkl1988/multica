@@ -1881,6 +1881,7 @@ func (d *Daemon) reregisterWorkspaceAfterRuntimeGone(ctx context.Context, worksp
 	// because its surviving runtime IDs may still be actively executing
 	// tasks for the user (MUL-3332).
 	for _, rid := range newIDs {
+		d.reportRuntimeCapabilitiesAsync(ctx, rid)
 		if err := d.client.RecoverOrphans(ctx, rid); err != nil {
 			d.logger.Warn("recover-orphans after re-register failed",
 				"runtime_id", rid, "error", err)
@@ -4113,6 +4114,7 @@ func (d *Daemon) syncWorkspacesFromAPI(ctx context.Context, reconcileProfiles bo
 		// at in_progress until the slow heartbeat sweeper or the in-flight
 		// task timeout (2.5h) kicks in.
 		for _, rid := range runtimeIDs {
+			d.reportRuntimeCapabilitiesAsync(ctx, rid)
 			if err := d.client.RecoverOrphans(ctx, rid); err != nil {
 				d.logger.Warn("recover-orphans failed", "runtime_id", rid, "error", err)
 			}
@@ -4319,6 +4321,11 @@ func (d *Daemon) handleHeartbeatActions(ctx context.Context, runtimeID string, r
 	if resp.PendingLocalSkills != nil {
 		if rt := d.findRuntime(runtimeID); rt != nil {
 			go d.handleLocalSkillList(ctx, *rt, resp.PendingLocalSkills.ID)
+		}
+	}
+	if resp.PendingCapabilityScan != nil {
+		if rt := d.findRuntime(runtimeID); rt != nil {
+			go d.handleCapabilityScan(ctx, *rt, resp.PendingCapabilityScan.ID)
 		}
 	}
 	// Prefer the batch field (new backend); fall back to singular (old backend).
@@ -4662,6 +4669,47 @@ func (d *Daemon) reportLocalSkillListResult(ctx context.Context, rt Runtime, req
 	d.reportRuntimeResultWithRetry(ctx, "local_skill_list", rt.ID, requestID, func(ctx context.Context) error {
 		return d.client.ReportLocalSkillListResult(ctx, rt.ID, requestID, payload)
 	})
+}
+
+// handleCapabilityScan answers a server-side capability scan: probe the host
+// for test-execution capabilities and report them. The report is what makes a
+// `browser` or device requirement resolvable at dispatch; a runtime that has
+// never reported parks every run that declares one as blocked.
+func (d *Daemon) handleCapabilityScan(ctx context.Context, rt Runtime, requestID string) {
+	d.logger.Info("runtime capability scan requested", "runtime_id", rt.ID, "request_id", requestID)
+	d.reportRuntimeCapabilities(ctx, rt, requestID)
+}
+
+// reportRuntimeCapabilities probes and uploads the runtime's capabilities. An
+// empty requestID is the unsolicited report sent right after registration so a
+// fresh daemon becomes bindable without anyone pressing "scan".
+func (d *Daemon) reportRuntimeCapabilities(ctx context.Context, rt Runtime, requestID string) {
+	caps, err := listRuntimeCapabilities()
+	if err != nil {
+		// Probing never fails today; if it ever does, still report what we
+		// have so the server can retire capabilities that are gone.
+		d.logger.Warn("runtime capability probe failed", "runtime_id", rt.ID, "error", err)
+	}
+	if caps == nil {
+		caps = []runtimeCapabilitySummary{}
+	}
+	payload := map[string]any{"capabilities": caps}
+	if requestID != "" {
+		payload["request_id"] = requestID
+	}
+	d.reportRuntimeResultWithRetry(ctx, "capability_report", rt.ID, requestID, func(ctx context.Context) error {
+		return d.client.ReportRuntimeCapabilities(ctx, rt.ID, payload)
+	})
+}
+
+// reportRuntimeCapabilitiesAsync is the registration-time hook: report once in
+// the background for a runtime that just (re)registered.
+func (d *Daemon) reportRuntimeCapabilitiesAsync(ctx context.Context, runtimeID string) {
+	rt := d.findRuntime(runtimeID)
+	if rt == nil {
+		return
+	}
+	go d.reportRuntimeCapabilities(ctx, *rt, "")
 }
 
 // reportLocalSkillImportResult delivers an import-report to the server with

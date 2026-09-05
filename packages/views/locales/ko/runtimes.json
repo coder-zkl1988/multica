@@ -179,7 +179,27 @@
     "toast_deleted": "런타임을 삭제했습니다",
     "toast_delete_failed": "런타임을 삭제하지 못했습니다",
     "running_chip_other": "· 실행 중 {{count}}개",
-    "queued_chip_other": "· 대기 중 {{count}}개"
+    "queued_chip_other": "· 대기 중 {{count}}개",
+    "capabilities_title": "테스트 기능",
+    "capabilities_empty": "아직 보고된 브라우저나 기기가 없습니다.",
+    "capabilities_hint": "데몬은 이 머신이 테스트 실행에서 제어할 수 있는 항목을 보고합니다. 여기에 없는 종류가 필요한 실행은 디스패치 시 차단됩니다.",
+    "capabilities_scan": "다시 스캔",
+    "capabilities_scanning": "스캔 중…",
+    "capabilities_scan_requested": "스캔을 요청했습니다. 데몬이 보고하면 결과가 표시됩니다.",
+    "capabilities_scan_failed": "스캔을 요청할 수 없습니다.",
+    "capabilities_probed": "{{when}} 탐지",
+    "capability_kind": {
+      "browser": "브라우저",
+      "android_device": "Android 기기",
+      "ios_device": "iOS 기기",
+      "computer_use": "컴퓨터 제어"
+    },
+    "capability_status": {
+      "available": "사용 가능",
+      "busy": "사용 중",
+      "offline": "오프라인",
+      "unknown": "알 수 없음"
+    }
   },
   "detail_page": {
     "not_found_title": "런타임을 찾을 수 없습니다",

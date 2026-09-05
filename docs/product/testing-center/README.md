@@ -128,21 +128,22 @@
 | 用例 ↔ Issue 关联：`test_case_issue(origin ai\|human)`，用例侧与 Issue 侧双向查询，Issue 详情展示覆盖与最近结果，批量关联先全量校验再事务写入 | `implemented` | `server/migrations/907_test_case_issue.up.sql`；`server/internal/handler/test_case_issue.go`；`packages/views/testing/components/case-issue-links.tsx`、`issue-test-coverage.tsx`；PR #62 |
 | 实时事件：`test_case:*`、`test_generation_job:updated`、`test_case_proposal:*`、`test_plan:*`、`test_run:updated`、`test_run_case:updated`、`test_capability:updated` 已定义，Web / 桌面端按事件失效 Query 缓存 | `implemented` | `server/pkg/protocol/events.go:101-119`；`packages/core/realtime/use-realtime-sync.ts:809-840` |
 | 前端骨架：`/{slug}/tests`、`/tests/plans`、`/tests/runs`、`/tests/jobs` 四个 tab 及详情路由；数据层 `packages/core/testing`（keys / queries / mutations / config），全部经 `parseWithFallback` | `implemented` | `packages/core/paths/paths.ts:55-66`；`packages/views/testing/components/tests-tabs.tsx`；`apps/web/app/[workspaceSlug]/(dashboard)/tests/**` |
+| **M0（2026-09-06）能力上报链路**：守护进程注册后自动上报、心跳投递 `pending_capability_scan`、`POST /api/daemon/runtimes/{id}/capabilities` 已注册、扫描请求存内存或 Redis、上报后推送 `test_capability:updated`；能力解析只在智能体 runtime 所在的 daemon 上求解；`test_capability_mcp` 默认打开；runtime 页“测试能力”卡片与“重新扫描”；用例编辑器的“所需能力”字段；技能文档修正 | `implemented`（分支 `feat/testing-capability-wiring`） | `server/internal/daemon/daemon.go` `reportRuntimeCapabilities`；`server/internal/handler/test_capability.go` `CapabilityScanStore`、`resolveRunCapabilities(…, daemonID)`；`server/internal/handler/test_run_dispatch.go`；`packages/views/runtimes/components/capabilities-card.tsx`；`packages/views/testing/components/test-case-capabilities-field.tsx` |
 
 ### 5.2 已定义但尚未接通
 
-这些是原始设计“留桩”的部分，或者实现到一半的链路。它们决定了“浏览器测试”和“手机测试”今天都还不能真正跑起来：
+这些是原始设计“留桩”的部分，或者实现到一半的链路。划掉的行已由 M0 关闭（2026-09-06，分支 `feat/testing-capability-wiring`），保留原文以说明当初为什么阻塞：
 
 | 缺口 | 现状 | 证据 |
 | --- | --- | --- |
-| 守护进程能力上报没有接通 | `listRuntimeCapabilities` 只探测浏览器且没有任何非测试调用方；`ReportRuntimeCapabilities` handler 存在但未在路由注册；心跳 ack 没有“待执行能力扫描”字段。结果是 `test_capability` 表今天不可能有行：任何声明了 `required_capabilities` 的轮次都会在派发时被停为 `blocked`，未声明的轮次则以空 overlay 派发 | `server/internal/daemon/capabilities.go`；`server/internal/handler/test_capability.go` `ReportRuntimeCapabilities`；`server/cmd/server/router.go`（只注册了 `RequestRuntimeCapabilityScan`）；`server/pkg/protocol/messages.go` `DaemonHeartbeatAckPayload` |
+| ~~守护进程能力上报没有接通~~（M0 已接通，2026-09-06） | `listRuntimeCapabilities` 只探测浏览器且没有任何非测试调用方；`ReportRuntimeCapabilities` handler 存在但未在路由注册；心跳 ack 没有“待执行能力扫描”字段。结果是 `test_capability` 表今天不可能有行：任何声明了 `required_capabilities` 的轮次都会在派发时被停为 `blocked`，未声明的轮次则以空 overlay 派发 | `server/internal/daemon/capabilities.go`；`server/internal/handler/test_capability.go` `ReportRuntimeCapabilities`；`server/cmd/server/router.go`（只注册了 `RequestRuntimeCapabilityScan`）；`server/pkg/protocol/messages.go` `DaemonHeartbeatAckPayload` |
 | 设备 kind 是显式桩 | `capabilityMCPServers` 对 `android_device` / `ios_device` / `computer_use` 返回 `nil`，`multica-device` 只是保留名；没有任何 `multica mcp serve device` 之类的适配器 | `server/internal/integrations/testcapability/dispatch.go` |
-| 浏览器测试今天只能靠 agent 自带配置 | 由于上一条，`multica-browser` overlay 从未真正注入过；能跑浏览器测试的前提是 agent 自己的 `mcp_config` 已经写了 playwright | 同上 |
-| 用例侧无法声明所需能力 | `required_capabilities` 只有类型和 schema，用例编辑器没有对应字段，只能经 CLI / API 写入 | `packages/core/types/testing.ts:69`；`packages/core/api/schemas.ts:4164`；`packages/views/testing/` 无引用 |
+| ~~浏览器测试今天只能靠 agent 自带配置~~（随 M0 关闭：开关默认打开，上报后 overlay 真正注入） | 由于上一条，`multica-browser` overlay 从未真正注入过；能跑浏览器测试的前提是 agent 自己的 `mcp_config` 已经写了 playwright | 同上 |
+| ~~用例侧无法声明所需能力~~（M0 已加编辑器） | `required_capabilities` 只有类型和 schema，用例编辑器没有对应字段，只能经 CLI / API 写入 | `packages/core/types/testing.ts:69`；`packages/core/api/schemas.ts:4164`；`packages/views/testing/` 无引用 |
 | 轮次详情看不到证据与步骤结果 | `test_run_case.evidence` 与 `step_results` 有数据模型和写入路径，但 `test-run-detail.tsx` 只渲染结果、备注、开缺陷和派发面板；没有截图画廊、没有逐步结果、没有执行中的实时画面、没有当前绑定的设备 / 浏览器 | `packages/views/testing/test-run-detail.tsx`（`evidence` / `step_results` 无引用） |
 | 需求页没有“为该需求生成用例”入口 | Issue 详情只展示覆盖情况；生成任务必须从测试 tab 发起，再在计划里圈定 Issue | `packages/views/testing/components/issue-test-coverage.tsx`；`packages/views/issues/components/issue-detail.tsx` |
 | 移动端没有任何设备执行能力 | `apps/mobile` 没有原生模块；`android/`、`ios/` 由 prebuild 生成且被 gitignore；WebSocket 客户端只支持订阅与心跳，不接收指令 | `apps/mobile/app.config.ts`；`apps/mobile/.gitignore`；`apps/mobile/data/realtime/ws-client.ts`；`server/internal/realtime/hub.go:950-968` |
-| 智能体契约文本过期 | `multica-test-cases/SKILL.md` 末尾仍写“没有 `multica test` 命令组、没有执行与结果记录”，而 `cmd_testrun.go` 已经提供整组命令 | `server/internal/service/builtin_skills/multica-test-cases/SKILL.md` 末段；`server/cmd/multica/cmd_testrun.go` |
+| ~~智能体契约文本过期~~（M0 已修正） | `multica-test-cases/SKILL.md` 末尾仍写“没有 `multica test` 命令组、没有执行与结果记录”，而 `cmd_testrun.go` 已经提供整组命令 | `server/internal/service/builtin_skills/multica-test-cases/SKILL.md` 末段；`server/cmd/multica/cmd_testrun.go` |
 | 原始设计 §2.1 的标签复用、§10.1 的 `batch-approve` 端点未实现 | 用例没有标签关系表；批量通过在前端逐条调用 `approve` | `server/migrations` 无 `test_case_to_label`；`server/cmd/server/router.go` 无 `batch-approve` |
 
 ## 6. 当前讨论范围（2026-09-06 修订）

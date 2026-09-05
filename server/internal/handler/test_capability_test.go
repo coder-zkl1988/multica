@@ -8,7 +8,9 @@ package handler
 // internal/daemon/capabilities_test.go.
 
 import (
+	"context"
 	"testing"
+	"time"
 )
 
 // ---------------------------------------------------------------------------
@@ -117,5 +119,88 @@ func TestCompareVersionLike_MultiSegment(t *testing.T) {
 func TestCompareVersionLike_UnequalLengths(t *testing.T) {
 	if got := compareVersionLike("1.0", "1"); got != 0 {
 		t.Errorf("compareVersionLike(1.0, 1) = %d, want 0 (trailing zero)", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// InMemoryCapabilityScanStore
+// ---------------------------------------------------------------------------
+
+func TestInMemoryCapabilityScanStore_ClaimsOldestPendingOnce(t *testing.T) {
+	store := NewInMemoryCapabilityScanStore()
+	ctx := context.Background()
+
+	first, err := store.Create(ctx, "rt-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Force a distinct, later creation time so ordering is deterministic.
+	second, err := store.Create(ctx, "rt-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.mu.Lock()
+	store.requests[second.ID].CreatedAt = first.CreatedAt.Add(time.Second)
+	store.mu.Unlock()
+
+	if has, _ := store.HasPending(ctx, "rt-1"); !has {
+		t.Fatal("HasPending must be true after Create")
+	}
+	if has, _ := store.HasPending(ctx, "rt-other"); has {
+		t.Fatal("HasPending must be scoped to the runtime")
+	}
+
+	claimed, err := store.PopPending(ctx, "rt-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claimed == nil || claimed.ID != first.ID {
+		t.Fatalf("PopPending claimed %v, want the oldest request %s", claimed, first.ID)
+	}
+	if claimed.Status != CapabilityScanRunning {
+		t.Errorf("claimed status = %s, want running", claimed.Status)
+	}
+
+	// The claimed request must not be handed out twice.
+	again, _ := store.PopPending(ctx, "rt-1")
+	if again == nil || again.ID != second.ID {
+		t.Fatalf("second PopPending = %v, want %s", again, second.ID)
+	}
+	if third, _ := store.PopPending(ctx, "rt-1"); third != nil {
+		t.Errorf("third PopPending = %v, want nil", third)
+	}
+	if has, _ := store.HasPending(ctx, "rt-1"); has {
+		t.Error("HasPending must be false once every request is claimed")
+	}
+}
+
+func TestInMemoryCapabilityScanStore_CompleteAndFailAreTerminal(t *testing.T) {
+	store := NewInMemoryCapabilityScanStore()
+	ctx := context.Background()
+
+	req, _ := store.Create(ctx, "rt-1")
+	if err := store.Complete(ctx, req.ID); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := store.Get(ctx, req.ID)
+	if got == nil || got.Status != CapabilityScanCompleted {
+		t.Fatalf("after Complete: %v", got)
+	}
+
+	failed, _ := store.Create(ctx, "rt-1")
+	if err := store.Fail(ctx, failed.ID, "daemon offline"); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = store.Get(ctx, failed.ID)
+	if got == nil || got.Status != CapabilityScanFailed || got.Error != "daemon offline" {
+		t.Fatalf("after Fail: %v", got)
+	}
+
+	// Terminal requests are no longer pending work.
+	if has, _ := store.HasPending(ctx, "rt-1"); has {
+		t.Error("terminal requests must not count as pending")
+	}
+	if unknown, _ := store.Get(ctx, "nope"); unknown != nil {
+		t.Errorf("Get(unknown) = %v, want nil", unknown)
 	}
 }

@@ -3395,3 +3395,37 @@ describe("clientErrorMessage", () => {
     expect(clientErrorMessage(undefined)).toBeUndefined();
   });
 });
+
+describe("ApiClient runtime capability scan response schema", () => {
+  it("returns the queued scan when the response is well-formed", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ request_id: "scan-1", runtime_id: "rt-1", status: "pending" }), {
+          status: 202,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+
+    await expect(
+      new ApiClient("https://api.example.test").requestRuntimeCapabilityScan("rt-1"),
+    ).resolves.toEqual({ request_id: "scan-1", runtime_id: "rt-1", status: "pending" });
+  });
+
+  it("falls back to an empty scan when the response is malformed", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ request_id: 42, runtime_id: ["rt-1"] }), {
+          status: 202,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+
+    await expect(
+      new ApiClient("https://api.example.test").requestRuntimeCapabilityScan("rt-1"),
+    ).resolves.toEqual({ request_id: "", runtime_id: "", status: "pending" });
+  });
+});
