@@ -367,7 +367,7 @@ func buildConciseExecutionContract(task Task, kind string) string {
 		if task.IssueID != "" {
 			fmt.Fprintf(&b, "- After `multica issue get %s --output json`, scan comment roots once with `multica issue comment list %s --roots-only --summary --compact --output json`; expand only a relevant thread.\n", task.IssueID, task.IssueID)
 			if len(task.ActiveSiblingRuns) > 0 {
-				b.WriteString("- Reuse this scan for sibling claims. The sibling list is a snapshot: before handing off or waiting, check `multica issue runs <issue-id> --output json`; use `multica issue run-messages <task-id> --since <last-seq>` for follow-ups.\n")
+				b.WriteString("- Reuse this scan for sibling claims. The sibling list is a snapshot: before handing off or waiting, check `multica issue runs <issue-id> --siblings --output json`; use `multica issue run-messages <task-id> --since <last-seq>` for follow-ups.\n")
 			}
 		}
 	case "comment":

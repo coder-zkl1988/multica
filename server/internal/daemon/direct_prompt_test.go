@@ -343,7 +343,7 @@ func TestBuildConcisePromptSiblingSnapshotGuidance(t *testing.T) {
 		"scan comment roots once",
 		"Reuse this scan for sibling claims",
 		"The sibling list is a snapshot",
-		"before handing off or waiting, check `multica issue runs <issue-id> --output json`",
+		"before handing off or waiting, check `multica issue runs <issue-id> --siblings --output json`",
 		"multica issue run-messages <task-id> --since <last-seq>",
 	} {
 		if !strings.Contains(buildTaskPrompt(task, "codex", false), want) {
