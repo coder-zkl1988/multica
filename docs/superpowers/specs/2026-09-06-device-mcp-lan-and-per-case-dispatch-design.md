@@ -140,7 +140,7 @@ device-mcp connect [--hub http://127.0.0.1:18801] (--device <id> | --acquire '<m
 
 ### 5.1 指定测试机
 
-- runtime 设置增加“作为测试机”开关：新列 `agent_runtime.test_host_enabled BOOLEAN NOT NULL DEFAULT false`（fork 迁移 910）；
+- runtime 设置增加“作为测试机”开关：新列 `agent_runtime.test_host_enabled BOOLEAN NOT NULL DEFAULT false`（fork 迁移 911；910 已被 `910_agent_task_concise_mode` 占用）；
 - 守护进程新增 `--device-hub` 行为：开关打开时托管一个 `device-mcp hub` 子进程（或附着到已在 `127.0.0.1:18801` 运行的中枢）；
 - runtime 页面（`packages/views/runtimes/`）显示中枢状态、已连接手机（序列号、型号、轨道、状态）、按需生成的配对二维码（配对码短时有效，由守护进程转发生成，不落库）。
 
@@ -153,7 +153,7 @@ device-mcp connect [--hub http://127.0.0.1:18801] (--device <id> | --acquire '<m
 `DispatchTestRun` 改为：
 
 1. 在智能体 runtime 所在的测试机上核对每个所需 kind 至少有一台可用设备（机器级解析；具体手机由中枢在任务开始时租用）；无解仍然把轮次停为 `blocked` 并写明缺的 kind；
-2. 在一个事务里为每条 `test_run_case` 创建一个 agent task（`context.type = test_run_case`，携带 `run_id`、`run_case_id`、冻结快照、`match`），写入新列 `test_run_case.agent_task_id`（fork 迁移 911）；`test_run.agent_task_id` 不再使用，保留列以兼容旧行；
+2. 在一个事务里为每条 `test_run_case` 创建一个 agent task（`context.type = test_run_case`，携带 `run_id`、`run_case_id`、冻结快照、`match`），写入新列 `test_run_case.agent_task_id`（fork 迁移 912）；`test_run.agent_task_id` 不再使用，保留列以兼容旧行；
 3. overlay 为每个任务挂 `multica-device`（§4.3），`--label` 带 `run_case_id` 便于中枢审计与实时画面对应；
 4. 并行数 = min(可用手机数, 守护进程 `MaxConcurrentTasks`, 轮次设置的“并行数”)。MVP 只靠守护进程的任务槽与中枢的租约等待来限流：多出的会话在 `device_acquire` 里等待；后续再加服务器侧“完成一条放行一条”的调度以避免空转会话。
 
@@ -171,7 +171,7 @@ prompt 与技能：新增 `buildTestRunCasePrompt`——只执行这一条用例
 
 | 层 | 文件 | 改动 |
 | --- | --- | --- |
-| 迁移 | `server/migrations/910_agent_runtime_test_host.up.sql`、`911_test_run_case_agent_task.up.sql`、`912_test_run_case_agent_task_index.up.sql`（CONCURRENTLY） | 测试机开关；用例级任务句柄 |
+| 迁移 | `server/migrations/911_agent_runtime_test_host.up.sql`、`912_test_run_case_agent_task.up.sql`、`913_test_run_case_agent_task_index.up.sql`（CONCURRENTLY） | 测试机开关；用例级任务句柄 |
 | 服务器 | `server/internal/handler/test_run_dispatch.go` | 机器级解析；按用例建任务；并行数 |
 | 服务器 | `server/internal/handler/test_run_daemon.go` | `test_run_case` 任务的运行 / 完成 / 失败钩子与轮次收敛 |
 | 服务器 | `server/internal/handler/test_capability.go` | 解析器带 daemon 硬约束（TS-012），去掉 `hosting` |
