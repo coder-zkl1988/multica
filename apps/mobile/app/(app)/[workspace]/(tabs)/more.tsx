@@ -131,6 +131,11 @@ export default function MorePage() {
             chevronColor={mutedFg}
             title={t("more_page.nav.usage")}
           />
+          <NavRow
+            onPress={() => slug && router.push(`/${slug}/more/device-executor`)}
+            chevronColor={mutedFg}
+            title={t("more_page.nav.device_executor")}
+          />
         </SectionGroup>
       </View>
     </View>

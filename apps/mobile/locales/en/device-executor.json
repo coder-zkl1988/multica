@@ -1,0 +1,111 @@
+{
+  "header_title": "Device executor",
+  "nav_subtitle": "Let a test host drive this phone",
+  "unavailable": {
+    "ios_title": "Not available on iOS",
+    "ios_message": "The device executor drives Android phones through an accessibility service. Pair an Android phone to run mobile test cases.",
+    "os_title": "Android 11 or newer required",
+    "os_message": "Taking screenshots through the accessibility service needs Android 11. This phone can still be driven over USB from the test host with adb."
+  },
+  "connection": {
+    "title": "Connection",
+    "hub_label": "Test host",
+    "hub_placeholder": "ws://192.168.1.10:18800/phone",
+    "hub_hint": "Paste the pairing URL printed by `multica-device-mcp pair`, or the test host's LAN address.",
+    "code_label": "Pairing code",
+    "code_placeholder": "e.g. 7KQ2-M9XA",
+    "auto_connect": "Connect when the app starts",
+    "connect": "Connect",
+    "disconnect": "Disconnect",
+    "status_label": "Status",
+    "phase": {
+      "idle": "Not connected",
+      "connecting": "Connecting…",
+      "connected": "Connected",
+      "reconnecting": "Reconnecting (attempt {{attempt}})…"
+    },
+    "error": {
+      "bad_pairing_code": "The test host rejected the pairing code.",
+      "hello_timeout": "The test host did not accept the handshake in time.",
+      "hello_required": "The test host expected a pairing handshake first.",
+      "invalid_hub_url": "Enter the test host's address first.",
+      "missing_code": "Enter the pairing code first.",
+      "unsupported": "This phone cannot run the device executor.",
+      "unknown": "Connection failed ({{code}})."
+    }
+  },
+  "permissions": {
+    "title": "Permissions",
+    "granted": "Granted",
+    "missing": "Not granted",
+    "accessibility": {
+      "title": "Accessibility service",
+      "subtitle": "Required — taps, swipes, typing and screenshots run through it"
+    },
+    "notifications": {
+      "title": "Notifications",
+      "subtitle": "Shows the ongoing “connected” notice while a test runs"
+    },
+    "battery": {
+      "title": "Battery optimisation",
+      "subtitle": "Keep the executor alive while other apps are in front"
+    }
+  },
+  "session": {
+    "title": "Current session",
+    "none": "No test session is using this phone.",
+    "awaiting": "A test host is asking to use this phone.",
+    "label_fallback": "Unnamed session",
+    "actions_label": "Actions",
+    "expires_label": "Expires",
+    "total_actions_label": "Actions this run",
+    "last_action_label": "Last action",
+    "last_action_ok": "{{action}} · ok",
+    "last_action_failed": "{{action}} · failed",
+    "stop": "Stop and disconnect",
+    "stop_confirm_title": "Stop the test session?",
+    "stop_confirm_message": "The test host loses control of this phone immediately and the running case is marked blocked.",
+    "stop_confirm_action": "Stop"
+  },
+  "lease_prompt": {
+    "title": "Allow a test session?",
+    "message": "A test host wants to drive this phone for “{{label}}”. It can tap, swipe, type and take screenshots until the session ends.",
+    "allow": "Allow",
+    "deny": "Deny"
+  },
+  "policy": {
+    "title": "Policy from the test host",
+    "approval_label": "Approval",
+    "approval": {
+      "ask": "Ask on this phone for every session",
+      "auto": "Automatic"
+    },
+    "passwords_label": "Password fields",
+    "passwords": {
+      "blocked": "Never typed into",
+      "allowed": "Allowed"
+    },
+    "installs_label": "App installs",
+    "installs": {
+      "blocked": "Blocked",
+      "allowed": "Allowed"
+    },
+    "max_actions_label": "Actions per session",
+    "idle_timeout_label": "Idle timeout",
+    "idle_timeout_value": "{{minutes}} min",
+    "allowed_packages_label": "Allowed apps",
+    "allowed_packages_any": "Any app"
+  },
+  "device": {
+    "title": "This phone",
+    "model_label": "Model",
+    "os_label": "Android",
+    "screen_label": "Screen",
+    "id_label": "Device ID",
+    "app_version_label": "App version"
+  },
+  "notification": {
+    "title": "Multica device executor connected",
+    "text": "A test host can drive this phone. Open Multica to stop."
+  }
+}

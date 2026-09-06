@@ -19,6 +19,7 @@ import "@/lib/i18n";
 import { NAV_THEME } from "@/lib/theme";
 import { useColorScheme } from "@/lib/use-color-scheme";
 import { useLocale } from "@/lib/i18n/use-locale";
+import { DeviceExecutorHost } from "@/components/device-executor/device-executor-host";
 
 // Kick off Shiki highlighter init at module load — fires once per process,
 // finishes before the user navigates to any screen with a code block. If
@@ -79,6 +80,7 @@ export default function RootLayout() {
                       <Stack.Screen name="(app)" />
                     </Stack>
                     <PortalHost />
+                    <DeviceExecutorHost />
                   </LightboxProvider>
                 </AuthInitializer>
               </ThemeProvider>

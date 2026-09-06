@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="device_executor_service_label">Multica 设备执行器</string>
+    <string name="device_executor_service_description">允许局域网内的 Multica 测试智能体在测试执行期间操控这台手机：截图、点按、滑动和输入。仅在你保持执行器连接时生效，每次会话都会先征求你的同意。</string>
+    <string name="device_executor_notification_channel">设备执行器</string>
+</resources>

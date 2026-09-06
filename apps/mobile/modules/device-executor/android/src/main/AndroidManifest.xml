@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Merged into the app manifest by AGP (library manifests are merged; this is
+  how expo-secure-store declares USE_BIOMETRIC). Everything the device
+  executor needs lives here so app.config.ts stays free of a config plugin.
+
+  Deliberately absent: QUERY_ALL_PACKAGES (launch-by-name only needs the
+  launcher <queries> below), REQUEST_INSTALL_PACKAGES (installs stay off by
+  hub policy), SYSTEM_ALERT_WINDOW, CAMERA (pairing is pasted, not scanned).
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Package visibility for launch_app by name: only apps with a launcher
+         activity, which is what a tester means by "open Settings". -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="https" />
+        </intent>
+    </queries>
+
+    <application>
+        <service
+            android:name="ai.multica.deviceexecutor.DeviceExecutorAccessibilityService"
+            android:exported="false"
+            android:label="@string/device_executor_service_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/device_executor_accessibility" />
+        </service>
+
+        <!-- Keeps the process (and the JS WebSocket to the hub) alive while
+             the agent drives other apps and ours sits in the background. -->
+        <service
+            android:name="ai.multica.deviceexecutor.DeviceExecutorForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="device_test_executor" />
+        </service>
+    </application>
+</manifest>

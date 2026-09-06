@@ -121,11 +121,12 @@
 
 ### TS-015 移动端执行器以 Expo 本地模块加配置插件实现，仅 Android
 
-- 状态：`proposal`
+- 状态：`confirmed`（2026-09-06 用户“开始M3”）
 - 日期：2026-09-02
 - 建议：`apps/mobile/modules/device-executor` + `apps/mobile/plugins/with-device-executor.ts`；无障碍服务 + `takeScreenshot`（Android 11+）+ 前台服务；JS 拥有配对、通道与页面。iOS 不做手机端执行器，由 Mac daemon 提供 `ios_device`。
 - 依据：`apps/mobile/android` 与 `ios` 被 gitignore；设计 §5。
 - 2026-09-06 修订：执行器改为配对到测试机上的设备中枢（扫码，局域网），角色是无障碍降级通道与可选的 ADB 输入法；adb 轨道由测试机 host adb 提供（TS-022、TS-026）。
+- 2026-09-07 落地：M3a 已实现（见 README §5.1）。两处与建议不同：（1）不需要配置插件——Expo 本地模块自己的 `AndroidManifest.xml` 由 AGP 合并进应用清单，权限、`<queries>` 与两个服务都声明在模块内，`app.config.ts` 未改；（2）配对先做“粘贴中枢打印的 URL / 手填地址 + 配对码”，扫码（expo-camera）留作可选项，未引入相机权限。
 
 ### TS-016 动作后自动回传截图与生效判定，坐标只用截图像素
 
