@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -51,8 +52,8 @@ func TestReportRuntimeCapabilities_PostsInventoryUnderTheScanRequest(t *testing.
 
 	d.reportRuntimeCapabilities(context.Background(), Runtime{ID: "rt-1"}, "scan-1")
 
-	if *calls != 1 {
-		t.Fatalf("report calls = %d, want 1", *calls)
+	if n := atomic.LoadInt32(calls); n != 1 {
+		t.Fatalf("report calls = %d, want 1", n)
 	}
 	path, body := rec.snapshot()
 	if path != "/api/daemon/runtimes/rt-1/capabilities" {
@@ -100,10 +101,10 @@ func TestHandleHeartbeatActions_DispatchesCapabilityScan(t *testing.T) {
 	})
 
 	deadline := time.Now().Add(3 * time.Second)
-	for *calls == 0 && time.Now().Before(deadline) {
+	for atomic.LoadInt32(calls) == 0 && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
-	if *calls == 0 {
+	if atomic.LoadInt32(calls) == 0 {
 		t.Fatal("heartbeat ack with pending_capability_scan did not produce a report")
 	}
 	_, body := rec.snapshot()

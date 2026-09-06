@@ -242,8 +242,9 @@ func TestTestCasesSkillCoversTheDataContract(t *testing.T) {
 		"business_flow",
 		"permission",
 		"data_consistency",
-		// Honesty about what does not exist yet.
-		"There is no `multica test` command group",
+		// Execution is a separate skill; the case document declares what it needs.
+		"multica-running-tests",
+		"required_capabilities",
 		"references/test-cases-source-map.md",
 		// Generation workflow: propose command and three kind values.
 		"testcase propose",

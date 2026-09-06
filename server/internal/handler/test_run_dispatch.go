@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/integrations/testcapability"
 	"github.com/multica-ai/multica/server/internal/logger"
+	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/dbid"
@@ -119,7 +120,7 @@ func (h *Handler) DispatchTestRun(w http.ResponseWriter, r *http.Request) {
 
 	// The overlay is mounted on the agent's runtime, so that is the only
 	// daemon whose capabilities can serve this run.
-	agentRuntime, err := h.Queries.GetAgentRuntime(r.Context(), agent.RuntimeID)
+	agentRuntime, err := h.runtimeLookup(obsmetrics.RuntimeLookupSourceTestCapability).Get(r.Context(), agent.RuntimeID)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "the agent's runtime is gone; bind it to a running daemon first")
 		return
