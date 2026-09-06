@@ -44,6 +44,7 @@ import { availabilityConfig, workloadConfig } from "../../agents/presence";
 import { HealthBadge } from "./shared";
 import { ProviderLogo } from "./provider-logo";
 import { UsageSection } from "./usage-section";
+import { CapabilitiesCard } from "./capabilities-card";
 import { DeleteRuntimeDialog } from "./delete-runtime-dialog";
 import { DeleteRuntimeProfileDialog } from "./delete-runtime-profile-dialog";
 import { runtimeRowLabel } from "./runtime-machines";
@@ -205,6 +206,7 @@ export function RuntimeDetail({
               presenceMap={presenceMap}
               agentHref={(id) => paths.agentDetail(id)}
             />
+            {canReadRuntime && <CapabilitiesCard runtime={runtime} canScan />}
             <DiagnosticsCard
               runtime={runtime}
               canEditVisibility={!!isRuntimeOwner}

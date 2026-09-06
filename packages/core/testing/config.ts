@@ -1,4 +1,6 @@
 import type {
+  TestCapabilityKind,
+  TestCapabilityRequirement,
   TestCaseExecutionMode,
   TestCaseOrigin,
   TestCasePriority,
@@ -50,6 +52,41 @@ export const TEST_CASE_STATUS_TONE: Record<TestCaseStatus, string> = {
 };
 
 export const TEST_PLAN_STATUSES: TestPlanStatus[] = ["draft", "active", "archived"];
+
+/** Capability kinds a case can require; mirrors the test_capability CHECK. */
+export const TEST_CAPABILITY_KINDS: TestCapabilityKind[] = [
+  "browser",
+  "android_device",
+  "ios_device",
+  "computer_use",
+];
+
+/**
+ * Reads `required_capabilities` defensively: the column is free JSONB and an
+ * older or hand-written row may hold shapes the editor cannot represent.
+ * Anything without a known `kind` is dropped rather than rendered as junk.
+ */
+export function parseCapabilityRequirements(raw: unknown): TestCapabilityRequirement[] {
+  if (!Array.isArray(raw)) return [];
+  const out: TestCapabilityRequirement[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") continue;
+    const record = entry as Record<string, unknown>;
+    const kind = record.kind;
+    if (typeof kind !== "string" || !(TEST_CAPABILITY_KINDS as string[]).includes(kind)) continue;
+    const match: Record<string, string> = {};
+    if (record.match && typeof record.match === "object") {
+      for (const [key, value] of Object.entries(record.match as Record<string, unknown>)) {
+        if (typeof value === "string") match[key] = value;
+      }
+    }
+    const requirement: TestCapabilityRequirement = { kind: kind as TestCapabilityKind };
+    if (Object.keys(match).length > 0) requirement.match = match;
+    if (record.optional === true) requirement.optional = true;
+    out.push(requirement);
+  }
+  return out;
+}
 
 export const TEST_RUN_RESULTS: TestRunCaseResult[] = [
   "pending",

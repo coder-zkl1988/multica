@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/integrations/testcapability"
 	"github.com/multica-ai/multica/server/internal/logger"
+	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/dbid"
@@ -117,8 +118,16 @@ func (h *Handler) DispatchTestRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The overlay is mounted on the agent's runtime, so that is the only
+	// daemon whose capabilities can serve this run.
+	agentRuntime, err := h.runtimeLookup(obsmetrics.RuntimeLookupSourceTestCapability).Get(r.Context(), agent.RuntimeID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "the agent's runtime is gone; bind it to a running daemon first")
+		return
+	}
+
 	requirements := runRequiredCapabilities(runCases)
-	binding, missingKind, resolved := h.resolveRunCapabilities(r.Context(), wsUUID, requirements)
+	binding, missingKind, resolved := h.resolveRunCapabilities(r.Context(), wsUUID, requirements, effectiveDaemonIDForRuntime(agentRuntime))
 	if !resolved {
 		// Explicit failure, not a silent downgrade: parking the run tells the
 		// user which capability is missing instead of burning an agent run that
@@ -145,50 +154,76 @@ func (h *Handler) DispatchTestRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	bindingJSON := marshalJSONColumn(binding, "{}")
-	contextPayload := service.TestRunContext{
-		Type:              service.TestRunContextType,
-		Prompt:            strings.TrimSpace(req.Prompt),
-		RequesterID:       userID,
-		WorkspaceID:       workspaceID,
-		ProjectID:         uuidToString(run.ProjectID),
-		AgentID:           uuidToString(agent.ID),
-		RunID:             uuidToString(run.ID),
-		CapabilityBinding: json.RawMessage(bindingJSON),
-	}
-	contextJSON, err := json.Marshal(contextPayload)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to build the agent task context")
-		return
-	}
 
-	// The overlay provider reads the resolved capabilities off the context, and
-	// buildRuntimeMCPOverlay runs before the queue row is inserted — so the
-	// binding has to be attached here, not at claim time.
-	ctx := testcapability.WithResolvedCapabilities(r.Context(), capabilityEntriesForOverlay(binding, requirements))
-	agentTask, err := h.Queries.CreateQuickCreateTask(ctx, db.CreateQuickCreateTaskParams{
-		ID:                dbid.NewV7(),
-		AgentID:           agent.ID,
-		RuntimeID:         agent.RuntimeID,
-		Priority:          0,
-		Context:           contextJSON,
-		OriginatorUserID:  userUUID,
-		AccountableUserID: userUUID,
-		OriginatorSource:  pgtype.Text{String: "direct_human", Valid: true},
-	})
-	if err != nil {
-		slog.Error("dispatch test run failed", append(logger.RequestAttrs(r), "error", err)...)
-		writeError(w, http.StatusInternalServerError, "failed to dispatch the test run")
-		return
+	// One agent task per case (TS-021): cases run independently, in parallel
+	// across phones, and each records its own result. The overlay (browser
+	// MCP, device connector) is computed here, with the resolved binding on
+	// the context, and stamped on every task — the queue insert takes it as
+	// an argument and nothing recomputes it at claim time.
+	var firstTaskID pgtype.UUID
+	created := 0
+	for _, rc := range runCases {
+		label := runCaseLabel(rc)
+		contextPayload := service.TestRunContext{
+			Type:              service.TestRunContextType,
+			Prompt:            strings.TrimSpace(req.Prompt),
+			RequesterID:       userID,
+			WorkspaceID:       workspaceID,
+			ProjectID:         uuidToString(run.ProjectID),
+			AgentID:           uuidToString(agent.ID),
+			RunID:             uuidToString(run.ID),
+			CapabilityBinding: json.RawMessage(bindingJSON),
+			RunCaseID:         uuidToString(rc.ID),
+			CaseKey:           label,
+			CaseSnapshot:      json.RawMessage(rc.CaseSnapshot),
+		}
+		contextJSON, err := json.Marshal(contextPayload)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to build the agent task context")
+			return
+		}
+		ctx := testcapability.WithResolvedCapabilities(r.Context(), capabilityEntriesForOverlay(binding, requirements, label))
+		overlay, connectedApps := h.TaskService.BuildRuntimeMCPOverlayForMerge(ctx, userUUID, agent)
+		agentTask, err := h.Queries.CreateQuickCreateTask(ctx, db.CreateQuickCreateTaskParams{
+			ID:                   dbid.NewV7(),
+			AgentID:              agent.ID,
+			RuntimeID:            agent.RuntimeID,
+			Priority:             0,
+			Context:              contextJSON,
+			OriginatorUserID:     userUUID,
+			AccountableUserID:    userUUID,
+			OriginatorSource:     pgtype.Text{String: "direct_human", Valid: true},
+			RuntimeMcpOverlay:    overlay,
+			RuntimeConnectedApps: connectedApps,
+		})
+		if err != nil {
+			slog.Error("dispatch test run failed", append(logger.RequestAttrs(r), "error", err, "created", created, "of", len(runCases))...)
+			writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to dispatch case %d of %d", created+1, len(runCases)))
+			return
+		}
+		if _, err := h.Queries.UpdateTestRunCaseAgentTask(r.Context(), db.UpdateTestRunCaseAgentTaskParams{
+			ID:          rc.ID,
+			WorkspaceID: wsUUID,
+			AgentTaskID: agentTask.ID,
+		}); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to record the case's agent task")
+			return
+		}
+		if !firstTaskID.Valid {
+			firstTaskID = agentTask.ID
+		}
+		created++
 	}
 
 	// The agent becomes the run's executor here. UpdateTestRunCaseResult reads
 	// run.ExecutorID to attribute an agent-written result, so leaving the
 	// creating member on those columns would file the agent's results under a
-	// human who never ran them.
+	// human who never ran them. agent_task_id keeps the first case task so
+	// older readers still see the round as dispatched.
 	updated, err := h.Queries.UpdateTestRun(r.Context(), db.UpdateTestRunParams{
 		ID:                run.ID,
 		WorkspaceID:       wsUUID,
-		AgentTaskID:       agentTask.ID,
+		AgentTaskID:       firstTaskID,
 		ExecutorType:      pgtype.Text{String: "agent", Valid: true},
 		ExecutorID:        agent.ID,
 		CapabilityBinding: bindingJSON,
@@ -201,8 +236,22 @@ func (h *Handler) DispatchTestRun(w http.ResponseWriter, r *http.Request) {
 	h.publish(protocol.EventTestRunUpdated, workspaceID, "member", userID, map[string]any{"test_run": resp})
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"test_run":      resp,
-		"agent_task_id": uuidToString(agentTask.ID),
+		"agent_task_id": uuidToString(firstTaskID),
+		"case_tasks":    created,
 	})
+}
+
+// runCaseLabel is what a case is called on the phone owner's approval prompt
+// and in the hub's audit log: its TC key from the frozen snapshot, else the
+// run case id.
+func runCaseLabel(rc db.TestRunCase) string {
+	var snapshot struct {
+		Key string `json:"key"`
+	}
+	if err := json.Unmarshal(rc.CaseSnapshot, &snapshot); err == nil && strings.TrimSpace(snapshot.Key) != "" {
+		return strings.TrimSpace(snapshot.Key)
+	}
+	return uuidToString(rc.ID)
 }
 
 // capabilityEntriesForOverlay turns the frozen binding into the shape the MCP
@@ -210,6 +259,7 @@ func (h *Handler) DispatchTestRun(w http.ResponseWriter, r *http.Request) {
 func capabilityEntriesForOverlay(
 	binding TestRunCapabilityBinding,
 	requirements []TestCapabilityRequirement,
+	label string,
 ) []testcapability.TestRunCapabilityEntry {
 	entries := make([]testcapability.TestRunCapabilityEntry, 0, len(binding.Resolved))
 	for _, req := range requirements {
@@ -218,8 +268,11 @@ func capabilityEntriesForOverlay(
 			continue
 		}
 		entries = append(entries, testcapability.TestRunCapabilityEntry{
-			Kind: req.Kind,
-			Key:  key,
+			Kind:   req.Kind,
+			Key:    key,
+			Target: binding.Targets[req.Kind],
+			Match:  req.Match,
+			Label:  label,
 		})
 	}
 	return entries

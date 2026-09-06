@@ -137,6 +137,7 @@ import type {
   ListTestRunCasesResponse,
   TestCaseResultTimelineResponse,
   ListTestCapabilitiesResponse,
+  RuntimeCapabilityScanResponse,
   ListTestCaseIssuesResponse,
   ListIssueTestCasesResponse,
   WorkspaceMcpServer,
@@ -4647,6 +4648,7 @@ export const TestRunCaseSchema = z.object({
   executed_by_id: z.string().nullable().default(null),
   executed_at: z.string().nullable().default(null),
   defect_issue_id: z.string().nullable().default(null),
+  agent_task_id: z.string().nullable().default(null),
   created_at: z.string().default(""),
   updated_at: z.string().default(""),
 }).loose();
@@ -4695,6 +4697,12 @@ export const TestCapabilitySchema = z.object({
 
 export const ListTestCapabilitiesResponseSchema = z.object({
   capabilities: z.array(TestCapabilitySchema).default([]),
+}).loose();
+
+export const RuntimeCapabilityScanResponseSchema = z.object({
+  request_id: z.string().default(""),
+  runtime_id: z.string().default(""),
+  status: z.string().default("pending"),
 }).loose();
 
 export const DispatchTestRunResponseSchema = z.object({
@@ -4811,6 +4819,7 @@ export const EMPTY_TEST_RUN_CASE: TestRunCase = {
   executed_by_id: null,
   executed_at: null,
   defect_issue_id: null,
+  agent_task_id: null,
   created_at: "",
   updated_at: "",
 };
@@ -4827,6 +4836,12 @@ export const EMPTY_TEST_CASE_RESULT_TIMELINE_RESPONSE: TestCaseResultTimelineRes
 
 export const EMPTY_LIST_TEST_CAPABILITIES_RESPONSE: ListTestCapabilitiesResponse = {
   capabilities: [],
+};
+
+export const EMPTY_RUNTIME_CAPABILITY_SCAN_RESPONSE: RuntimeCapabilityScanResponse = {
+  request_id: "",
+  runtime_id: "",
+  status: "pending",
 };
 
 export const EMPTY_LIST_TEST_CASE_ISSUES_RESPONSE: ListTestCaseIssuesResponse = {

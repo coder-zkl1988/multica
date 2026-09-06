@@ -924,6 +924,9 @@ func buildDesignSystemProfileAnalyzePrompt(task Task) string {
 // devices the server already bound to this run: probing the host for an adb or
 // a browser would silently escape the capability contract.
 func buildTestRunPrompt(task Task) string {
+	if runCase := testRunCaseFromContext(task.TestRunContext); runCase.RunCaseID != "" {
+		return buildTestRunCasePrompt(task, runCase)
+	}
 	var b strings.Builder
 	b.WriteString("You are running as a QA engineer executing one test round for a Multica workspace.\n\n")
 
@@ -961,6 +964,68 @@ func buildTestRunPrompt(task Task) string {
 	b.WriteString("End your final response with a machine-readable JSON block prefixed by exactly `TEST_RUN_RESULT_JSON:`:\n")
 	b.WriteString("{\"status\":\"completed|blocked\",\"summary\":\"one paragraph\",\"blockers\":[]}\n")
 	b.WriteString("Per-case results must already be recorded through `multica test result set`; this block only closes the round.\n")
+	return b.String()
+}
+
+// testRunCaseRef is the per-case part of a test_run context (TS-021).
+type testRunCaseRef struct {
+	RunID     string `json:"run_id"`
+	RunCaseID string `json:"run_case_id"`
+	CaseKey   string `json:"case_key"`
+}
+
+func testRunCaseFromContext(raw string) testRunCaseRef {
+	var ref testRunCaseRef
+	if strings.TrimSpace(raw) == "" {
+		return ref
+	}
+	_ = json.Unmarshal([]byte(raw), &ref)
+	return ref
+}
+
+// buildTestRunCasePrompt drives ONE case of a round. The snapshot is inlined
+// in the context JSON, so the agent needs no lookup before its first
+// screenshot; results and evidence still go through the authenticated CLI.
+// The phone rules restate what the hub enforces (frame-pixel coordinates,
+// effect verdicts, budgets) because a model that knows the contract wastes
+// fewer actions discovering it.
+func buildTestRunCasePrompt(task Task, ref testRunCaseRef) string {
+	label := ref.CaseKey
+	if label == "" {
+		label = ref.RunCaseID
+	}
+	var b strings.Builder
+	b.WriteString("You are running as a QA engineer executing exactly ONE test case (" + label + ") of a Multica test round.\n\n")
+
+	b.WriteString("What you have:\n")
+	b.WriteString("- The frozen case is `case_snapshot` in the context JSON below: `steps[]` with `action` and `expected`, `preconditions`, `expected_result`, `test_data`. Execute the SNAPSHOT, not the live case.\n")
+	b.WriteString("- `run_case_id` is the id you record against. `run_id` is the round; other cases of the round run in parallel in their own tasks — do not touch them.\n")
+	b.WriteString("- The MCP servers mounted for this task are the only devices you may drive: `multica-browser` for a browser, `multica-device` for an Android phone. `multica test capability list --run <run_id> --output json` shows what was bound.\n\n")
+
+	b.WriteString("Driving a phone through `multica-device`:\n")
+	b.WriteString("- Call `device_info` first, then `screenshot`. Every coordinate you send is in pixels of the LAST screenshot you received; take a new one after anything that could have moved the UI.\n")
+	b.WriteString("- Every action returns `effect`: `changed` (read the new frame), `unchanged` (the tap did nothing visible — pick a different target once; three unchanged actions on the same screen means you are stuck: stop and report where), `unknown` (take a screenshot).\n")
+	b.WriteString("- Prefer `launch_app` with a package name, `press_key` for back/home, `scroll` with the direction you want to SEE, `type_text` after tapping the field. Budget: about 30 actions for this case.\n")
+	b.WriteString("- Keep evidence with `save_screenshot` into ./evidence/, then `multica test evidence add <run_case_id> --file <path> --kind screenshot`.\n")
+	b.WriteString("- Never type into a password field, complete a payment, install from outside the store, or change system settings the case does not ask for. If the phone is unavailable (`no_device`, `device_offline`, `approval_*`), record `blocked` with the code and stop.\n\n")
+
+	b.WriteString("Recording:\n")
+	b.WriteString("```\n")
+	b.WriteString("multica test result set <run_case_id> --result passed|failed|blocked|skipped [--note \"…\"] [--step-results '<json>']\n")
+	b.WriteString("multica test evidence add <run_case_id> --file ./evidence/step-3.jpg --kind screenshot\n")
+	b.WriteString("multica test defect open <run_case_id> --title \"…\"\n")
+	b.WriteString("```\n")
+	b.WriteString("- `failed` means the product behaved differently from `expected`; open a defect for it. `blocked` means the case could not run (no device, missing precondition, login wall); it is NOT a synonym for failed. `skipped` means it did not apply.\n")
+	b.WriteString("- Do NOT record `passed` unless you observed every step's expected result on a frame. Attach at least one screenshot for `failed` and `blocked`, and the final frame for `passed`.\n")
+	b.WriteString("- Do NOT modify product code or open pull requests; you are observing behaviour. Use the `multica` CLI for every Multica read and write.\n\n")
+
+	b.WriteString("Context JSON:\n")
+	b.WriteString(task.TestRunContext)
+	b.WriteString("\n\n")
+
+	b.WriteString("End your final response with a machine-readable line prefixed by exactly `TEST_RUN_CASE_RESULT_JSON:`:\n")
+	b.WriteString("{\"result\":\"passed|failed|blocked|skipped\",\"summary\":\"one paragraph: what you observed on the final frame and why that is the verdict\"}\n")
+	b.WriteString("The CLI write above is the record; this line only lets the platform settle the case if the write never happened.\n")
 	return b.String()
 }
 

@@ -118,6 +118,23 @@
     "crossRepoNeedsRepos": "複数リポジトリのケースには 2 つ以上のリポジトリが必要です",
     "crossRepoNeedsRoles": "複数リポジトリのケースには異なる役割が必要です"
   },
+  "capabilities": {
+    "title": "必要な機能",
+    "empty": "このケースにブラウザやデバイスは不要です。",
+    "add": "機能を追加",
+    "remove": "この機能を削除",
+    "kind": "種類",
+    "match": "一致条件",
+    "matchPlaceholder": "os_version=>=13, browser=chromium",
+    "optional": "任意 — 不足していても実行をブロックしない",
+    "hint": "ここで宣言した種類はディスパッチ時に実際のブラウザやデバイスに割り当てられます。ランタイムが提供できない場合、実行はブロックされます。",
+    "kinds": {
+      "browser": "ブラウザ",
+      "android_device": "Android デバイス",
+      "ios_device": "iOS デバイス",
+      "computer_use": "コンピュータ操作"
+    }
+  },
   "role": {
     "under_test": "テスト対象",
     "driver": "ドライバー",
@@ -403,7 +420,8 @@
       "defect": "不具合"
     },
     "saveNotes": "メモを保存",
-    "notesNeedResult": "メモは結果と一緒に保存されます。先に結果を選んでください。"
+    "notesNeedResult": "メモは結果と一緒に保存されます。先に結果を選んでください。",
+    "task": "タスク {{id}}"
   },
   "timeline": {
     "title": "実行履歴",

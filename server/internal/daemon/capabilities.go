@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"os/exec"
 )
 
@@ -30,6 +31,9 @@ var capabilitiesLookPath = exec.LookPath
 func listRuntimeCapabilities() ([]runtimeCapabilitySummary, error) {
 	var out []runtimeCapabilitySummary
 	out = append(out, probeBrowserCapabilities()...)
+	// Phones come from the device hub when one runs on this host; an absent
+	// hub simply contributes nothing (device_hub.go).
+	out = append(out, probeDeviceHubCapabilities(context.Background(), deviceHubURL())...)
 	return out, nil
 }
 

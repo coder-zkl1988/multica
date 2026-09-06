@@ -1808,6 +1808,13 @@ type TestRunContext struct {
 	AgentID           string          `json:"agent_id"`
 	RunID             string          `json:"run_id"`
 	CapabilityBinding json.RawMessage `json:"capability_binding,omitempty"`
+	// Per-case dispatch (TS-021): one task executes exactly one run case. The
+	// frozen snapshot rides along so the prompt can inline the steps, and
+	// CaseKey (TC-42) labels the device lease and the audit trail. A task with
+	// an empty RunCaseID is the pre-M2 whole-round shape.
+	RunCaseID    string          `json:"run_case_id,omitempty"`
+	CaseKey      string          `json:"case_key,omitempty"`
+	CaseSnapshot json.RawMessage `json:"case_snapshot,omitempty"`
 }
 
 type DesignTemplateBlueprintAnalyzeContext struct {

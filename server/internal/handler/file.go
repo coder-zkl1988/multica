@@ -630,27 +630,34 @@ func (h *Handler) UploadFile(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return
 			}
-			// Load the test_run by agent_task_id to validate the uploader.
-			run, err := h.Queries.GetTestRunByAgentTask(r.Context(), db.GetTestRunByAgentTaskParams{
-				AgentTaskID: taskUUID,
+			// The run-case names its run; the task token must be the task that
+			// owns the work — the round's task, or (per-case dispatch, TS-021)
+			// the task that executes exactly this case.
+			runCase, err := h.Queries.GetTestRunCaseInWorkspace(r.Context(), db.GetTestRunCaseInWorkspaceParams{
+				ID:          caseUUID,
 				WorkspaceID: parseUUID(workspaceID),
 			})
 			if err != nil {
+				writeError(w, http.StatusForbidden, "invalid test_run_case_id")
+				return
+			}
+			run, err := h.Queries.GetTestRunInWorkspace(r.Context(), db.GetTestRunInWorkspaceParams{
+				ID:          runCase.RunID,
+				WorkspaceID: parseUUID(workspaceID),
+			})
+			if err != nil {
+				writeError(w, http.StatusForbidden, "invalid test_run_case_id for this run")
+				return
+			}
+			ownsRun := run.AgentTaskID.Valid && uuidToString(run.AgentTaskID) == uuidToString(taskUUID)
+			ownsCase := runCase.AgentTaskID.Valid && uuidToString(runCase.AgentTaskID) == uuidToString(taskUUID)
+			if !ownsRun && !ownsCase {
 				writeError(w, http.StatusForbidden, "invalid task token for test_run")
 				return
 			}
 			// Gate 3: the uploader must be the run's executor agent.
 			if uploaderType != "agent" || !run.ExecutorID.Valid || uuidToString(run.ExecutorID) != uploaderID {
 				writeError(w, http.StatusForbidden, "test_run_case_id upload requires the run's own agent")
-				return
-			}
-			// Validate the run-case belongs to this test_run.
-			runCase, err := h.Queries.GetTestRunCaseInWorkspace(r.Context(), db.GetTestRunCaseInWorkspaceParams{
-				ID:          caseUUID,
-				WorkspaceID: parseUUID(workspaceID),
-			})
-			if err != nil || uuidToString(runCase.RunID) != uuidToString(run.ID) {
-				writeError(w, http.StatusForbidden, "invalid test_run_case_id for this run")
 				return
 			}
 			pendingRunCase = &pendingRunCaseState{

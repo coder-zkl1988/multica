@@ -259,6 +259,8 @@ export type {
   LinkTestCaseIssuesRequest,
   DispatchTestRunResponse,
   DispatchTestRunBlockedResponse,
+  TestCapabilityRequirement,
+  RuntimeCapabilityScanResponse,
 } from "./testing";
 export type { PinnedItem, PinnedItemType, CreatePinRequest, ReorderPinsRequest } from "./pin";
 export type * from "./product-map";

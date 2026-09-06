@@ -10,6 +10,8 @@ a pointer.
 | --- | --- |
 | `GET /api/test-runs/{id}/capabilities` returns `capability_binding` with `daemon_id`, `runtime_id`, and `resolved` map | `server/internal/handler/test_capability.go` (`ListTestRunCapabilities`) |
 | Capability binding is frozen at dispatch time in `test_run.capability_binding` | `server/internal/handler/test_run_dispatch.go:182` (`UpdateTestRun` after `CreateQuickCreateTask`) |
+| The binding is resolved only among capabilities reported by the executing agent's own daemon | `server/internal/handler/test_capability.go` (`resolveRunCapabilities`, `daemonID` parameter) |
+| Daemons report capabilities on `POST /api/daemon/runtimes/{id}/capabilities`, unsolicited after registration and when a heartbeat carries `pending_capability_scan` | `server/internal/daemon/daemon.go` (`reportRuntimeCapabilities`), `server/internal/handler/daemon.go` (`processHeartbeat`) |
 | Resolved map shape: `{kind → capability_key}` | `server/internal/handler/test_capability.go` (`TestRunCapabilityBindingResponse`) |
 | `multica test capability list --run <run-id>` calls `GET /api/test-runs/{id}/capabilities` | `server/cmd/multica/cmd_testrun.go` (`runTestCapList`) |
 | `multica test run get <run-id>` calls `GET /api/test-runs/{id}` | `server/cmd/multica/cmd_testrun.go` (`runTestRunGet`) |
@@ -73,3 +75,15 @@ rg -n 'UpdateTestRunCaseResult|OpenTestRunCaseDefect|StartTestRun|ListTestRunCap
   internal/handler/test_run.go internal/handler/test_capability.go internal/handler/file.go
 rg -n 'buildTestRunPrompt' internal/daemon/prompt.go
 ```
+
+## Per-case tasks and the device MCP
+
+| Behavior | Source |
+| --- | --- |
+| Dispatch creates one agent task per `test_run_case`, stores it in `test_run_case.agent_task_id`, and keeps the first task on `test_run.agent_task_id` | `server/internal/handler/test_run_dispatch.go` (`DispatchTestRun`), `server/migrations/911_test_run_case_agent_task.up.sql` |
+| The context carries `run_case_id`, `case_key`, `case_snapshot` | `server/internal/service/task.go` (`TestRunContext`) |
+| The MCP overlay is computed at dispatch and stamped on every task | `server/internal/handler/test_run_dispatch.go` (`BuildRuntimeMCPOverlayForMerge`) |
+| `android_device` mounts the `multica-device` connector reported by the daemon (`connector_command`, `connector_cli`, `hub_url` in the capability target) | `server/internal/integrations/testcapability/dispatch.go` (`deviceConnectorServer`), `server/internal/daemon/device_hub.go` |
+| A per-case task marks its case running on start, settles it from the CLI write, the `TEST_RUN_CASE_RESULT_JSON:` marker, or `blocked`; the round completes when no case is pending or running | `server/internal/handler/test_run_daemon.go` (`markTestRunRunning`, `completeTestRunTask`, `convergeTestRun`, `updateTestRunFromAgentFailure`) |
+| Result writes and evidence uploads accept the case's own task token | `server/internal/handler/test_run.go` (`requireTestRunTaskToken`), `server/internal/handler/file.go` (`UploadTestEvidence`) |
+| Per-case prompt | `server/internal/daemon/prompt.go` (`buildTestRunCasePrompt`) |

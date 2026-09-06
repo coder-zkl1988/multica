@@ -895,6 +895,7 @@ type (
 	PendingModelList        = protocol.DaemonHeartbeatPendingModelList
 	PendingLocalSkills      = protocol.DaemonHeartbeatPendingLocalSkills
 	PendingLocalSkillImport = protocol.DaemonHeartbeatPendingLocalSkillImport
+	PendingCapabilityScan   = protocol.DaemonHeartbeatPendingCapabilityScan
 )
 
 func (c *Client) SendHeartbeat(ctx context.Context, runtimeID string) (*HeartbeatResponse, error) {
@@ -921,6 +922,14 @@ func (c *Client) ReportModelListResult(ctx context.Context, runtimeID, requestID
 // ReportLocalSkillListResult sends the runtime-local-skill inventory back to the server.
 func (c *Client) ReportLocalSkillListResult(ctx context.Context, runtimeID, requestID string, result map[string]any) error {
 	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/local-skills/%s/result", runtimeID, requestID), result, nil)
+}
+
+// ReportRuntimeCapabilities uploads the probed test-execution capabilities
+// (browsers, devices) for a runtime. The payload carries the optional
+// request_id of the scan that asked for it plus the capability summaries;
+// it never carries secrets (see runtimeCapabilitySummary).
+func (c *Client) ReportRuntimeCapabilities(ctx context.Context, runtimeID string, payload map[string]any) error {
+	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/capabilities", runtimeID), payload, nil)
 }
 
 // ReportLocalSkillImportResult sends a runtime-local-skill bundle back to the server.

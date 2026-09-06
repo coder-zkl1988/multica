@@ -1145,6 +1145,9 @@ func (h *Handler) DaemonHeartbeat(w http.ResponseWriter, r *http.Request) {
 	if ack.PendingLocalSkillImport != nil {
 		resp["pending_local_skill_import"] = ack.PendingLocalSkillImport
 	}
+	if ack.PendingCapabilityScan != nil {
+		resp["pending_capability_scan"] = ack.PendingCapabilityScan
+	}
 	if len(ack.PendingLocalSkillImports) > 0 {
 		resp["pending_local_skill_imports"] = ack.PendingLocalSkillImports
 	}
@@ -1340,6 +1343,24 @@ func (h *Handler) processHeartbeat(ctx context.Context, rt db.AgentRuntime, supp
 		} else {
 			slog.Warn("local skill list HasPending failed", "error", probeErr, "runtime_id", runtimeID)
 		}
+	}
+
+	// Capability scans ride the same probe-then-claim shape. They are rare
+	// (a member pressed "scan", or a run was parked for a missing kind), so
+	// the bounded probe is what keeps them off the hot path.
+	probeCapCtx, cancelProbeCap := context.WithTimeout(ctx, heartbeatHasPendingTimeout)
+	hasScan, scanProbeErr := h.CapabilityScanStore.HasPending(probeCapCtx, runtimeID)
+	cancelProbeCap()
+	switch {
+	case scanProbeErr == nil && hasScan:
+		pendingScan, popErr := h.CapabilityScanStore.PopPending(ctx, runtimeID)
+		if popErr != nil {
+			slog.Warn("capability scan PopPending failed", "error", popErr, "runtime_id", runtimeID)
+		} else if pendingScan != nil {
+			ack.PendingCapabilityScan = &protocol.DaemonHeartbeatPendingCapabilityScan{ID: pendingScan.ID}
+		}
+	case scanProbeErr != nil:
+		slog.Warn("capability scan HasPending failed", "error", scanProbeErr, "runtime_id", runtimeID)
 	}
 
 	probeImportStart := time.Now()
@@ -4422,25 +4443,7 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 		})
 	} else if testRunCtx != nil {
 		completeWithMutation(func(qtx *db.Queries, completedTask db.AgentTaskQueue) error {
-			workspaceUUID, parseErr := util.ParseUUID(testRunCtx.WorkspaceID)
-			if parseErr != nil {
-				return parseErr
-			}
-			run, lookupErr := qtx.GetTestRunByAgentTask(r.Context(), db.GetTestRunByAgentTaskParams{AgentTaskID: completedTask.ID, WorkspaceID: workspaceUUID})
-			if lookupErr != nil {
-				return lookupErr
-			}
-			summary, _ := parseTestRunResultSummary(req.Output)
-			status := "completed"
-			if summary.Status == "blocked" {
-				status = "blocked"
-			}
-			params := db.UpdateTestRunParams{ID: run.ID, WorkspaceID: run.WorkspaceID, Status: pgtype.Text{String: status, Valid: true}, CompletedAt: pgtype.Timestamptz{Time: time.Now(), Valid: true}}
-			if len(summary.Blockers) > 0 {
-				params.Error = pgtype.Text{String: strings.Join(summary.Blockers, "; "), Valid: true}
-			}
-			_, updateErr := qtx.UpdateTestRun(r.Context(), params)
-			return updateErr
+			return h.completeTestRunTask(r.Context(), qtx, completedTask, req.Output)
 		})
 	} else if testGenerationCtx != nil {
 		completeWithMutation(func(qtx *db.Queries, completedTask db.AgentTaskQueue) error {

@@ -8,6 +8,7 @@ import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { AppLink } from "../navigation";
 import {
+  parseCapabilityRequirements,
   TEST_CASE_EXECUTION_MODES,
   TEST_CASE_PRIORITIES,
   TEST_CASE_SCOPES,
@@ -24,7 +25,8 @@ import {
   TEST_RUN_RESULTS,
   TEST_RUN_RESULT_TONE,
 } from "@multica/core/testing";
-import type { TestCaseProposal } from "@multica/core/types";
+import type {
+  TestCapabilityRequirement, TestCaseProposal } from "@multica/core/types";
 import type {
   TestCase,
   TestCaseChangeKind,
@@ -45,6 +47,7 @@ import { useT } from "../i18n";
 import { crossRepoWarning, repoAliases, knownEnumKey } from "./case-summary";
 import { TestCaseStepsEditor } from "./components/test-case-steps-editor";
 import { TestCaseReposField } from "./components/test-case-repos-field";
+import { TestCaseCapabilitiesField } from "./components/test-case-capabilities-field";
 import { CaseIssueLinks } from "./components/case-issue-links";
 
 interface TestCaseDetailProps {
@@ -63,6 +66,7 @@ interface DraftState {
   caseType: string;
   scope: string;
   executionMode: string;
+  requiredCapabilities: TestCapabilityRequirement[];
 }
 
 function toDraft(testCase: TestCase): DraftState {
@@ -77,6 +81,7 @@ function toDraft(testCase: TestCase): DraftState {
     caseType: testCase.case_type,
     scope: testCase.scope,
     executionMode: testCase.execution_mode,
+    requiredCapabilities: parseCapabilityRequirements(testCase.required_capabilities),
   };
 }
 
@@ -154,6 +159,7 @@ export function TestCaseDetail({ refId }: TestCaseDetailProps) {
         case_type: current.caseType as TestCaseType,
         scope: current.scope as TestCaseScope,
         execution_mode: current.executionMode as TestCaseExecutionMode,
+        required_capabilities: current.requiredCapabilities.map((requirement) => ({ ...requirement })),
       },
       {
         onSuccess: () => toast.success(t(($) => $.toast.saved)),
@@ -290,6 +296,17 @@ export function TestCaseDetail({ refId }: TestCaseDetailProps) {
             }))}
             onChange={(executionMode) => patch({ executionMode })}
           />
+
+          {/* Which browser or device a round must be bound to. Lives beside
+              execution mode because "agent" without a capability is a case
+              the agent can only read, not run. */}
+          <Field label={t(($) => $.capabilities.title)}>
+            <TestCaseCapabilitiesField
+              value={current.requiredCapabilities}
+              disabled={busy}
+              onChange={(requiredCapabilities) => patch({ requiredCapabilities })}
+            />
+          </Field>
 
           <Field label={t(($) => $.detail.repos)}>
             {warning === "missing_repos" ? (

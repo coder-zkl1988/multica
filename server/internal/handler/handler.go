@@ -206,6 +206,7 @@ type Handler struct {
 	UpdateStore            UpdateStore
 	ModelListStore         ModelListStore
 	LocalSkillListStore    LocalSkillListStore
+	CapabilityScanStore    CapabilityScanStore
 	LocalSkillImportStore  LocalSkillImportStore
 	DesignAssetStorage     storage.Storage
 	FeatureFlags           *featureflag.Service
@@ -479,6 +480,7 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		ModelListStore:               NewInMemoryModelListStore(),
 		ModelCatalogCache:            NewInMemoryModelCatalogCache(),
 		LocalSkillListStore:          NewInMemoryLocalSkillListStore(),
+		CapabilityScanStore:          NewInMemoryCapabilityScanStore(),
 		LocalSkillImportStore:        NewInMemoryLocalSkillImportStore(),
 		LivenessStore:                NewNoopLivenessStore(),
 		HeartbeatScheduler:           NewPassthroughHeartbeatScheduler(queries),
