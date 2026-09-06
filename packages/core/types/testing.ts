@@ -322,6 +322,8 @@ export interface TestRunCase {
   executed_by_id: string | null;
   executed_at: string | null;
   defect_issue_id: string | null;
+  /** The agent task executing this case (per-case dispatch); null before dispatch. */
+  agent_task_id: string | null;
   created_at: string;
   updated_at: string;
 }

@@ -420,7 +420,8 @@
       "defect": "缺陷"
     },
     "saveNotes": "保存备注",
-    "notesNeedResult": "备注会随结果一起保存，请先选择结果。"
+    "notesNeedResult": "备注会随结果一起保存，请先选择结果。",
+    "task": "任务 {{id}}"
   },
   "timeline": {
     "title": "历史执行记录",

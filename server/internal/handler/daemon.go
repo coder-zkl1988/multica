@@ -4443,25 +4443,7 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 		})
 	} else if testRunCtx != nil {
 		completeWithMutation(func(qtx *db.Queries, completedTask db.AgentTaskQueue) error {
-			workspaceUUID, parseErr := util.ParseUUID(testRunCtx.WorkspaceID)
-			if parseErr != nil {
-				return parseErr
-			}
-			run, lookupErr := qtx.GetTestRunByAgentTask(r.Context(), db.GetTestRunByAgentTaskParams{AgentTaskID: completedTask.ID, WorkspaceID: workspaceUUID})
-			if lookupErr != nil {
-				return lookupErr
-			}
-			summary, _ := parseTestRunResultSummary(req.Output)
-			status := "completed"
-			if summary.Status == "blocked" {
-				status = "blocked"
-			}
-			params := db.UpdateTestRunParams{ID: run.ID, WorkspaceID: run.WorkspaceID, Status: pgtype.Text{String: status, Valid: true}, CompletedAt: pgtype.Timestamptz{Time: time.Now(), Valid: true}}
-			if len(summary.Blockers) > 0 {
-				params.Error = pgtype.Text{String: strings.Join(summary.Blockers, "; "), Valid: true}
-			}
-			_, updateErr := qtx.UpdateTestRun(r.Context(), params)
-			return updateErr
+			return h.completeTestRunTask(r.Context(), qtx, completedTask, req.Output)
 		})
 	} else if testGenerationCtx != nil {
 		completeWithMutation(func(qtx *db.Queries, completedTask db.AgentTaskQueue) error {

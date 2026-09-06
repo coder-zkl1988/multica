@@ -205,7 +205,7 @@
 
 ### TS-024 设备中枢 + 接入器的进程模型，独立包
 
-- 状态：`confirmed`
+- 状态：`confirmed` / `implemented`（2026-09-06，仓库 `coder-zkl1988/multica-device-mcp`）
 - 日期：2026-09-06
 - 建议：测试机常驻一个设备中枢进程（手机 WebSocket 服务、host adb 设备池、租约与审批、审计、streamable-HTTP MCP 端点），每个智能体会话一个 stdio 接入器进程；包从 tabby-control 的 `protocol.ts`、`ws-server.ts`、`task-coordinator.ts` 演化而来，TypeScript，独立仓库；Claude Code 插件与 Codex 配置只指向接入器。
 - 依据：2026-09-06 设计 §2、§4。
@@ -213,7 +213,7 @@
 
 ### TS-025 Multica 按用例派发与设备池
 
-- 状态：`confirmed`
+- 状态：`confirmed` / `implemented`（2026-09-06，分支 `feat/testing-capability-wiring`；并行数设置未做，靠守护进程任务槽与中枢租约等待限流）
 - 日期：2026-09-06
 - 建议：`DispatchTestRun` 为每条 `test_run_case` 创建一个 agent task（新列 `test_run_case.agent_task_id`，fork 迁移 910 起）；能力绑定只到测试机，具体手机由中枢在任务开始时租用；轮次状态由用例任务收敛；并行度 = min(守护进程 `MaxConcurrentTasks`，可用手机数，轮次设置)。
 - 依据：`server/internal/daemon/daemon.go` 的任务槽信号量；2026-09-06 设计 §5。
@@ -221,7 +221,7 @@
 
 ### TS-026 双轨的落法
 
-- 状态：`confirmed`
+- 状态：`confirmed` / `implemented`（2026-09-06，中枢侧；App 侧的无障碍轨道与 ADB 输入法随 M3）
 - 日期：2026-09-06
 - 建议：adb 轨道由测试机 host adb 提供，USB 或无线调试（配对一次，`adb mdns services` 自动重连）；中文与非 ASCII 输入靠 App 内置的 ADB 输入法（ADBKeyBoard 方式）；无障碍轨道由 App 的无障碍服务经局域网 WebSocket 提供；降级按动作矩阵：adb 不可达时整机降级，adb 可达但某动作弱（无惯性滑动、密码框、非 ASCII 输入）时单动作降级。
 - 依据：TabbyApp `LadbDeviceController` 与 `AccessibilityDeviceController` 的经验；2026-09-06 设计 §3。

@@ -3,6 +3,7 @@ package testcapability_test
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -103,16 +104,18 @@ func TestBuildTaskOverlay_BrowserChromeDevtools_UsesChromeDevtoolsMCP(t *testing
 }
 
 // Phase 5 gate: android_device must NOT receive an MCP overlay in v1.
-func TestBuildTaskOverlay_AndroidDevice_ReturnsEmpty(t *testing.T) {
-	ctx := testcapability.WithResolvedCapabilities(context.Background(), []testcapability.TestRunCapabilityEntry{
-		{Kind: "android_device", Key: "android:emulator-5554"},
-	})
+func TestBuildTaskOverlay_AndroidDevice_MountsTheConnector(t *testing.T) {
+	// Until the device hub existed this kind was a stub and had to yield no
+	// overlay; it now mounts the multica-device connector (see the tests below).
+	ctx := testcapability.WithResolvedCapabilities(context.Background(), []testcapability.TestRunCapabilityEntry{{
+		Kind: "android_device", Key: "android:x", Target: map[string]json.RawMessage{},
+	}})
 	result, err := testcapability.BuildTaskOverlay(ctx, pgtype.UUID{}, db.Agent{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.MCPOverlay) != 0 {
-		t.Errorf("android_device must not get a v1 MCP overlay, got %q", result.MCPOverlay)
+	if !strings.Contains(string(result.MCPOverlay), `"multica-device"`) {
+		t.Errorf("android_device must mount the multica-device connector, got %q", result.MCPOverlay)
 	}
 }
 
@@ -179,4 +182,62 @@ func keyNames[V any](m map[string]V) []string {
 		keys = append(keys, k)
 	}
 	return keys
+}
+
+// ---------------------------------------------------------------------------
+// android_device → multica-device connector
+// ---------------------------------------------------------------------------
+
+func TestBuildTaskOverlay_AndroidDeviceMountsTheHubConnector(t *testing.T) {
+	ctx := testcapability.WithResolvedCapabilities(context.Background(), []testcapability.TestRunCapabilityEntry{{
+		Kind: "android_device",
+		Key:  "android:android-1",
+		Target: map[string]json.RawMessage{
+			"hub_url":           json.RawMessage(`"http://127.0.0.1:18801"`),
+			"connector_command": json.RawMessage(`"/usr/local/bin/node"`),
+			"connector_cli":     json.RawMessage(`"/opt/device-mcp/dist/cli.js"`),
+		},
+		Match: map[string]string{"os_version": ">=13"},
+		Label: "TC-42",
+	}})
+	result, err := testcapability.BuildTaskOverlay(ctx, pgtype.UUID{}, db.Agent{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var overlay struct {
+		Servers map[string]struct {
+			Command string   `json:"command"`
+			Args    []string `json:"args"`
+		} `json:"mcpServers"`
+	}
+	if err := json.Unmarshal(result.MCPOverlay, &overlay); err != nil {
+		t.Fatalf("decode overlay %s: %v", result.MCPOverlay, err)
+	}
+	srv, ok := overlay.Servers[testcapability.MCPDeviceServerName]
+	if !ok {
+		t.Fatalf("overlay has no %s entry: %s", testcapability.MCPDeviceServerName, result.MCPOverlay)
+	}
+	if srv.Command != "/usr/local/bin/node" {
+		t.Errorf("command = %q, want the daemon-reported node", srv.Command)
+	}
+	want := []string{"/opt/device-mcp/dist/cli.js", "connect", "--hub", "http://127.0.0.1:18801", "--acquire", `{"os_version":">=13"}`, "--label", "TC-42"}
+	if strings.Join(srv.Args, " ") != strings.Join(want, " ") {
+		t.Errorf("args = %q, want %q", srv.Args, want)
+	}
+	if len(result.ConnectedApps) != 1 || result.ConnectedApps[0].ServerName != testcapability.MCPDeviceServerName {
+		t.Errorf("connected apps = %+v", result.ConnectedApps)
+	}
+}
+
+func TestBuildTaskOverlay_AndroidDeviceFallsBackToNpx(t *testing.T) {
+	ctx := testcapability.WithResolvedCapabilities(context.Background(), []testcapability.TestRunCapabilityEntry{{
+		Kind: "android_device", Key: "android:x", Target: map[string]json.RawMessage{},
+	}})
+	result, err := testcapability.BuildTaskOverlay(ctx, pgtype.UUID{}, db.Agent{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(result.MCPOverlay), `"command":"npx"`) || !strings.Contains(string(result.MCPOverlay), `"--acquire","{}"`) {
+		t.Errorf("fallback overlay = %s", result.MCPOverlay)
+	}
 }

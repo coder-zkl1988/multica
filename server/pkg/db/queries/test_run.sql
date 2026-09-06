@@ -115,6 +115,15 @@ UPDATE test_run_case SET
 WHERE id = $1 AND workspace_id = $2
 RETURNING *;
 
+-- name: UpdateTestRunCaseAgentTask :one
+-- Binds a case to the agent task that will execute it (per-case dispatch).
+UPDATE test_run_case SET agent_task_id = $3, updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+RETURNING *;
+
+-- name: GetTestRunCaseByAgentTask :one
+SELECT * FROM test_run_case WHERE agent_task_id = $1 AND workspace_id = $2;
+
 -- name: DeleteTestRunCases :exec
 DELETE FROM test_run_case WHERE run_id = $1 AND workspace_id = $2;
 

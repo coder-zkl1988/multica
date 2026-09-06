@@ -421,7 +421,8 @@
       "defect": "Defect"
     },
     "saveNotes": "Save notes",
-    "notesNeedResult": "Notes are saved with a result — pick one first."
+    "notesNeedResult": "Notes are saved with a result — pick one first.",
+    "task": "task {{id}}"
   },
   "timeline": {
     "title": "Run History",

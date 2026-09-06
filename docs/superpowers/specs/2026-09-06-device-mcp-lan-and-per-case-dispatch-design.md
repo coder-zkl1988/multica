@@ -1,7 +1,7 @@
 # 设备 MCP 修订设计：局域网测试机、adb 优先双轨、按用例派发与平台无关封装
 
 日期：2026-09-06
-状态：`confirmed`（TS-020 至 TS-026 已于 2026-09-06 全部确认，见 [decision-register.md](../../product/testing-center/decision-register.md)；实现进度以 README §5 为准）
+状态：`confirmed`（TS-020 至 TS-026 已于 2026-09-06 全部确认，见 [decision-register.md](../../product/testing-center/decision-register.md)；实现进度以 README §5 为准。落地偏差：§5.1 的 `agent_runtime.test_host_enabled` 开关未做——测试机就是运行中枢的那台机器，守护进程通过 `MULTICA_DEVICE_HUB_URL` 探测；§5.3 的并行数设置未做；迁移实际使用 911/912）
 
 ## 1. 变更背景与替代范围
 

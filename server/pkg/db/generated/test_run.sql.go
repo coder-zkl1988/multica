@@ -210,7 +210,7 @@ const createTestRunCase = `-- name: CreateTestRunCase :one
 INSERT INTO test_run_case (
     workspace_id, run_id, test_case_id, case_snapshot, position, result
 ) VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, workspace_id, run_id, test_case_id, case_snapshot, position, result, notes, evidence, step_results, duration_ms, executed_by_type, executed_by_id, executed_at, defect_issue_id, created_at, updated_at
+RETURNING id, workspace_id, run_id, test_case_id, case_snapshot, position, result, notes, evidence, step_results, duration_ms, executed_by_type, executed_by_id, executed_at, defect_issue_id, created_at, updated_at, agent_task_id
 `
 
 type CreateTestRunCaseParams struct {
@@ -250,6 +250,7 @@ func (q *Queries) CreateTestRunCase(ctx context.Context, arg CreateTestRunCasePa
 		&i.DefectIssueID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.AgentTaskID,
 	)
 	return i, err
 }
@@ -373,8 +374,43 @@ func (q *Queries) GetTestRunByAgentTask(ctx context.Context, arg GetTestRunByAge
 	return i, err
 }
 
+const getTestRunCaseByAgentTask = `-- name: GetTestRunCaseByAgentTask :one
+SELECT id, workspace_id, run_id, test_case_id, case_snapshot, position, result, notes, evidence, step_results, duration_ms, executed_by_type, executed_by_id, executed_at, defect_issue_id, created_at, updated_at, agent_task_id FROM test_run_case WHERE agent_task_id = $1 AND workspace_id = $2
+`
+
+type GetTestRunCaseByAgentTaskParams struct {
+	AgentTaskID pgtype.UUID `json:"agent_task_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) GetTestRunCaseByAgentTask(ctx context.Context, arg GetTestRunCaseByAgentTaskParams) (TestRunCase, error) {
+	row := q.db.QueryRow(ctx, getTestRunCaseByAgentTask, arg.AgentTaskID, arg.WorkspaceID)
+	var i TestRunCase
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.RunID,
+		&i.TestCaseID,
+		&i.CaseSnapshot,
+		&i.Position,
+		&i.Result,
+		&i.Notes,
+		&i.Evidence,
+		&i.StepResults,
+		&i.DurationMs,
+		&i.ExecutedByType,
+		&i.ExecutedByID,
+		&i.ExecutedAt,
+		&i.DefectIssueID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.AgentTaskID,
+	)
+	return i, err
+}
+
 const getTestRunCaseInWorkspace = `-- name: GetTestRunCaseInWorkspace :one
-SELECT id, workspace_id, run_id, test_case_id, case_snapshot, position, result, notes, evidence, step_results, duration_ms, executed_by_type, executed_by_id, executed_at, defect_issue_id, created_at, updated_at FROM test_run_case WHERE id = $1 AND workspace_id = $2
+SELECT id, workspace_id, run_id, test_case_id, case_snapshot, position, result, notes, evidence, step_results, duration_ms, executed_by_type, executed_by_id, executed_at, defect_issue_id, created_at, updated_at, agent_task_id FROM test_run_case WHERE id = $1 AND workspace_id = $2
 `
 
 type GetTestRunCaseInWorkspaceParams struct {
@@ -403,6 +439,7 @@ func (q *Queries) GetTestRunCaseInWorkspace(ctx context.Context, arg GetTestRunC
 		&i.DefectIssueID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.AgentTaskID,
 	)
 	return i, err
 }
@@ -591,7 +628,7 @@ func (q *Queries) ListTestPlans(ctx context.Context, arg ListTestPlansParams) ([
 }
 
 const listTestRunCases = `-- name: ListTestRunCases :many
-SELECT id, workspace_id, run_id, test_case_id, case_snapshot, position, result, notes, evidence, step_results, duration_ms, executed_by_type, executed_by_id, executed_at, defect_issue_id, created_at, updated_at FROM test_run_case
+SELECT id, workspace_id, run_id, test_case_id, case_snapshot, position, result, notes, evidence, step_results, duration_ms, executed_by_type, executed_by_id, executed_at, defect_issue_id, created_at, updated_at, agent_task_id FROM test_run_case
 WHERE run_id = $1 AND workspace_id = $2
 ORDER BY position ASC
 `
@@ -628,6 +665,7 @@ func (q *Queries) ListTestRunCases(ctx context.Context, arg ListTestRunCasesPara
 			&i.DefectIssueID,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.AgentTaskID,
 		); err != nil {
 			return nil, err
 		}
@@ -640,7 +678,7 @@ func (q *Queries) ListTestRunCases(ctx context.Context, arg ListTestRunCasesPara
 }
 
 const listTestRunCasesByResult = `-- name: ListTestRunCasesByResult :many
-SELECT id, workspace_id, run_id, test_case_id, case_snapshot, position, result, notes, evidence, step_results, duration_ms, executed_by_type, executed_by_id, executed_at, defect_issue_id, created_at, updated_at FROM test_run_case
+SELECT id, workspace_id, run_id, test_case_id, case_snapshot, position, result, notes, evidence, step_results, duration_ms, executed_by_type, executed_by_id, executed_at, defect_issue_id, created_at, updated_at, agent_task_id FROM test_run_case
 WHERE run_id = $1 AND workspace_id = $2 AND result = ANY($3::text[])
 ORDER BY position ASC
 `
@@ -679,6 +717,7 @@ func (q *Queries) ListTestRunCasesByResult(ctx context.Context, arg ListTestRunC
 			&i.DefectIssueID,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.AgentTaskID,
 		); err != nil {
 			return nil, err
 		}
@@ -886,6 +925,45 @@ func (q *Queries) UpdateTestRun(ctx context.Context, arg UpdateTestRunParams) (T
 	return i, err
 }
 
+const updateTestRunCaseAgentTask = `-- name: UpdateTestRunCaseAgentTask :one
+UPDATE test_run_case SET agent_task_id = $3, updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+RETURNING id, workspace_id, run_id, test_case_id, case_snapshot, position, result, notes, evidence, step_results, duration_ms, executed_by_type, executed_by_id, executed_at, defect_issue_id, created_at, updated_at, agent_task_id
+`
+
+type UpdateTestRunCaseAgentTaskParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	AgentTaskID pgtype.UUID `json:"agent_task_id"`
+}
+
+// Binds a case to the agent task that will execute it (per-case dispatch).
+func (q *Queries) UpdateTestRunCaseAgentTask(ctx context.Context, arg UpdateTestRunCaseAgentTaskParams) (TestRunCase, error) {
+	row := q.db.QueryRow(ctx, updateTestRunCaseAgentTask, arg.ID, arg.WorkspaceID, arg.AgentTaskID)
+	var i TestRunCase
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.RunID,
+		&i.TestCaseID,
+		&i.CaseSnapshot,
+		&i.Position,
+		&i.Result,
+		&i.Notes,
+		&i.Evidence,
+		&i.StepResults,
+		&i.DurationMs,
+		&i.ExecutedByType,
+		&i.ExecutedByID,
+		&i.ExecutedAt,
+		&i.DefectIssueID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.AgentTaskID,
+	)
+	return i, err
+}
+
 const updateTestRunCaseResult = `-- name: UpdateTestRunCaseResult :one
 UPDATE test_run_case SET
     result           = COALESCE($3, result),
@@ -899,7 +977,7 @@ UPDATE test_run_case SET
     defect_issue_id  = COALESCE($11, defect_issue_id),
     updated_at       = now()
 WHERE id = $1 AND workspace_id = $2
-RETURNING id, workspace_id, run_id, test_case_id, case_snapshot, position, result, notes, evidence, step_results, duration_ms, executed_by_type, executed_by_id, executed_at, defect_issue_id, created_at, updated_at
+RETURNING id, workspace_id, run_id, test_case_id, case_snapshot, position, result, notes, evidence, step_results, duration_ms, executed_by_type, executed_by_id, executed_at, defect_issue_id, created_at, updated_at, agent_task_id
 `
 
 type UpdateTestRunCaseResultParams struct {
@@ -949,6 +1027,7 @@ func (q *Queries) UpdateTestRunCaseResult(ctx context.Context, arg UpdateTestRun
 		&i.DefectIssueID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.AgentTaskID,
 	)
 	return i, err
 }

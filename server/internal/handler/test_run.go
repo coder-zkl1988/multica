@@ -96,6 +96,7 @@ type TestRunCaseResponse struct {
 	ExecutedByID   *string        `json:"executed_by_id"`
 	ExecutedAt     *string        `json:"executed_at"`
 	DefectIssueID  *string        `json:"defect_issue_id"`
+	AgentTaskID    *string        `json:"agent_task_id"`
 	CreatedAt      string         `json:"created_at"`
 	UpdatedAt      string         `json:"updated_at"`
 }
@@ -206,6 +207,7 @@ func testRunCaseToResponse(rc db.TestRunCase) TestRunCaseResponse {
 		ExecutedByID:   uuidToPtr(rc.ExecutedByID),
 		ExecutedAt:     timestampToPtr(rc.ExecutedAt),
 		DefectIssueID:  uuidToPtr(rc.DefectIssueID),
+		AgentTaskID:    uuidToPtr(rc.AgentTaskID),
 		CreatedAt:      timestampToString(rc.CreatedAt),
 		UpdatedAt:      timestampToString(rc.UpdatedAt),
 	}
@@ -309,9 +311,10 @@ func (h *Handler) loadTestRunCaseForUser(w http.ResponseWriter, r *http.Request)
 // requireTestRunTaskToken is the write-gate for agent callers on a run. It
 // enforces the three-way check described in P3-A2:
 //   - X-Actor-Source must equal "task_token"
-//   - X-Task-ID must match run.AgentTaskID (both sides trimmed, case-insensitive)
+//   - X-Task-ID must match the task that owns the work: the run's task, or —
+//     since per-case dispatch (TS-021) — the task of the case being written
 //   - run-case must belong to this run (enforced by the caller via run_id check)
-func (h *Handler) requireTestRunTaskToken(w http.ResponseWriter, r *http.Request, run db.TestRun) bool {
+func (h *Handler) requireTestRunTaskToken(w http.ResponseWriter, r *http.Request, run db.TestRun, rc *db.TestRunCase) bool {
 	if r.Header.Get("X-Actor-Source") != "task_token" {
 		writeError(w, http.StatusForbidden, "updating a test run case is only available from within an agent task")
 		return false
@@ -325,11 +328,14 @@ func (h *Handler) requireTestRunTaskToken(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusConflict, "this test run has not been dispatched to an agent")
 		return false
 	}
-	if !strings.EqualFold(boundTaskID, uuidToString(run.AgentTaskID)) {
-		writeError(w, http.StatusForbidden, "this task token does not own the test run")
-		return false
+	if strings.EqualFold(boundTaskID, uuidToString(run.AgentTaskID)) {
+		return true
 	}
-	return true
+	if rc != nil && rc.AgentTaskID.Valid && strings.EqualFold(boundTaskID, uuidToString(rc.AgentTaskID)) {
+		return true
+	}
+	writeError(w, http.StatusForbidden, "this task token does not own the test run")
+	return false
 }
 
 // buildRunExecutionStatus follows the same pattern as
@@ -1326,7 +1332,7 @@ func (h *Handler) UpdateTestRunCaseResult(w http.ResponseWriter, r *http.Request
 	var executedByID pgtype.UUID
 	isAgentCall := r.Header.Get("X-Actor-Source") == "task_token"
 	if isAgentCall {
-		if !h.requireTestRunTaskToken(w, r, run) {
+		if !h.requireTestRunTaskToken(w, r, run, &rc) {
 			return
 		}
 		// The agent executor is the run's executor (the agent UUID set at dispatch).

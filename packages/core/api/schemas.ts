@@ -4648,6 +4648,7 @@ export const TestRunCaseSchema = z.object({
   executed_by_id: z.string().nullable().default(null),
   executed_at: z.string().nullable().default(null),
   defect_issue_id: z.string().nullable().default(null),
+  agent_task_id: z.string().nullable().default(null),
   created_at: z.string().default(""),
   updated_at: z.string().default(""),
 }).loose();
@@ -4818,6 +4819,7 @@ export const EMPTY_TEST_RUN_CASE: TestRunCase = {
   executed_by_id: null,
   executed_at: null,
   defect_issue_id: null,
+  agent_task_id: null,
   created_at: "",
   updated_at: "",
 };

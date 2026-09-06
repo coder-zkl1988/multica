@@ -2171,6 +2171,7 @@ type TestRunCase struct {
 	DefectIssueID  pgtype.UUID        `json:"defect_issue_id"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+	AgentTaskID    pgtype.UUID        `json:"agent_task_id"`
 }
 
 type User struct {

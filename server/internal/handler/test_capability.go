@@ -36,6 +36,10 @@ type TestRunCapabilityBinding struct {
 	DaemonID  string            `json:"daemon_id"`
 	RuntimeID string            `json:"runtime_id,omitempty"`
 	Resolved  map[string]string `json:"resolved"` // kind -> capability_key
+	// Targets carries each resolved capability's target JSON (kind -> target)
+	// for the overlay builder: the device connector needs hub_url and the
+	// connector paths the daemon reported. Not persisted on the run.
+	Targets map[string]map[string]json.RawMessage `json:"-"`
 }
 
 // resolveRunCapabilities picks one daemon that can satisfy every required
@@ -97,6 +101,7 @@ func (h *Handler) resolveRunCapabilities(
 	type candidate struct {
 		capabilityKey string
 		target        map[string]string
+		rawTarget     map[string]json.RawMessage
 		runtimeID     pgtype.UUID
 	}
 	// daemonKinds[daemonID][kind] = list of matching candidates
@@ -106,8 +111,10 @@ func (h *Handler) resolveRunCapabilities(
 			continue
 		}
 		var tgt map[string]string
+		var raw map[string]json.RawMessage
 		if len(cap.Target) > 0 {
 			_ = json.Unmarshal(cap.Target, &tgt)
+			_ = json.Unmarshal(cap.Target, &raw)
 		}
 		if tgt == nil {
 			tgt = map[string]string{}
@@ -117,7 +124,7 @@ func (h *Handler) resolveRunCapabilities(
 		}
 		daemonKinds[cap.DaemonID][cap.Kind] = append(
 			daemonKinds[cap.DaemonID][cap.Kind],
-			candidate{cap.CapabilityKey, tgt, cap.RuntimeID},
+			candidate{cap.CapabilityKey, tgt, raw, cap.RuntimeID},
 		)
 	}
 
@@ -131,6 +138,7 @@ func (h *Handler) resolveRunCapabilities(
 	for _, daemonID := range daemonIDs {
 		kinds := daemonKinds[daemonID]
 		resolved := make(map[string]string, len(required))
+		targets := make(map[string]map[string]json.RawMessage, len(required))
 		var runtimeID pgtype.UUID
 		allSatisfied := true
 
@@ -140,6 +148,7 @@ func (h *Handler) resolveRunCapabilities(
 			for _, c := range candidates {
 				if matchCapabilityTarget(req.Match, c.target) {
 					resolved[req.Kind] = c.capabilityKey
+					targets[req.Kind] = c.rawTarget
 					if c.runtimeID.Valid {
 						runtimeID = c.runtimeID
 					}
@@ -157,6 +166,7 @@ func (h *Handler) resolveRunCapabilities(
 			b := TestRunCapabilityBinding{
 				DaemonID: daemonID,
 				Resolved: resolved,
+				Targets:  targets,
 			}
 			if runtimeID.Valid {
 				b.RuntimeID = uuidToString(runtimeID)

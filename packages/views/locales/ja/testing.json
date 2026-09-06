@@ -420,7 +420,8 @@
       "defect": "不具合"
     },
     "saveNotes": "メモを保存",
-    "notesNeedResult": "メモは結果と一緒に保存されます。先に結果を選んでください。"
+    "notesNeedResult": "メモは結果と一緒に保存されます。先に結果を選んでください。",
+    "task": "タスク {{id}}"
   },
   "timeline": {
     "title": "実行履歴",

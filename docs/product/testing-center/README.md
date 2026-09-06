@@ -128,6 +128,7 @@
 | 用例 ↔ Issue 关联：`test_case_issue(origin ai\|human)`，用例侧与 Issue 侧双向查询，Issue 详情展示覆盖与最近结果，批量关联先全量校验再事务写入 | `implemented` | `server/migrations/907_test_case_issue.up.sql`；`server/internal/handler/test_case_issue.go`；`packages/views/testing/components/case-issue-links.tsx`、`issue-test-coverage.tsx`；PR #62 |
 | 实时事件：`test_case:*`、`test_generation_job:updated`、`test_case_proposal:*`、`test_plan:*`、`test_run:updated`、`test_run_case:updated`、`test_capability:updated` 已定义，Web / 桌面端按事件失效 Query 缓存 | `implemented` | `server/pkg/protocol/events.go:101-119`；`packages/core/realtime/use-realtime-sync.ts:809-840` |
 | 前端骨架：`/{slug}/tests`、`/tests/plans`、`/tests/runs`、`/tests/jobs` 四个 tab 及详情路由；数据层 `packages/core/testing`（keys / queries / mutations / config），全部经 `parseWithFallback` | `implemented` | `packages/core/paths/paths.ts:55-66`；`packages/views/testing/components/tests-tabs.tsx`；`apps/web/app/[workspaceSlug]/(dashboard)/tests/**` |
+| **M2（2026-09-06）Multica 接入**：守护进程探测本机设备中枢（`MULTICA_DEVICE_HUB_URL`，默认 `http://127.0.0.1:18801`），把在线手机上报为 `android_device` 能力（target 含型号、系统、屏幕、轨道与中枢的接入器路径），设备集变化时自动重报；`android_device` 的 overlay 挂载 `multica-device` 接入器（按用例 `match` 租设备、以 TC 键为 label）；派发改为**一条用例一个 agent task**（`test_run_case.agent_task_id`，迁移 911/912），overlay 在派发时真正写入任务（此前从未写入）；每用例任务的启动 / 完成 / 失败钩子结算用例并收敛轮次；结果写入与证据上传接受用例自己的任务态 token；单用例 prompt 与技能文档；轮次页显示每条用例的任务 | `implemented`（分支 `feat/testing-capability-wiring`；未做：runtime 的“作为测试机”开关、并行数设置、Web 端实时画面） | `server/internal/daemon/device_hub.go`；`server/internal/integrations/testcapability/dispatch.go` `deviceConnectorServer`；`server/internal/handler/test_run_dispatch.go`；`server/internal/handler/test_run_daemon.go`；`server/internal/daemon/prompt.go` `buildTestRunCasePrompt` |
 | **M1（2026-09-06）独立包 `multica-device-mcp`**：新建仓库（工作区同级目录 `multica-device-mcp`），TypeScript。设备中枢（host adb 设备池、手机 WebSocket 配对、租约与审批、策略与审计、loopback 上的 HTTP JSON API 与 streamable-HTTP MCP）+ stdio 接入器；动作级 adb 优先 / 无障碍降级矩阵；坐标只在 MCP 边界用截图像素；每个动作返回 `effect`；Claude Code 插件（含 `phone-testing` 技能）与 Codex 配置说明。测试用假 adb 与脚本化手机跑通 HTTP、streamable HTTP MCP、stdio 接入器与配对 / 审批 / 停止流程 | `implemented`（未发布到 npm；尚未接入 Multica 派发，见 M2） | `multica-device-mcp/src/hub/hub.ts`、`src/controller/device.ts`、`src/mcp/tools.ts`、`src/hub/hub.test.ts`；`plugins/claude-code/` |
 | **M0（2026-09-06）能力上报链路**：守护进程注册后自动上报、心跳投递 `pending_capability_scan`、`POST /api/daemon/runtimes/{id}/capabilities` 已注册、扫描请求存内存或 Redis、上报后推送 `test_capability:updated`；能力解析只在智能体 runtime 所在的 daemon 上求解；`test_capability_mcp` 默认打开；runtime 页“测试能力”卡片与“重新扫描”；用例编辑器的“所需能力”字段；技能文档修正 | `implemented`（分支 `feat/testing-capability-wiring`） | `server/internal/daemon/daemon.go` `reportRuntimeCapabilities`；`server/internal/handler/test_capability.go` `CapabilityScanStore`、`resolveRunCapabilities(…, daemonID)`；`server/internal/handler/test_run_dispatch.go`；`packages/views/runtimes/components/capabilities-card.tsx`；`packages/views/testing/components/test-case-capabilities-field.tsx` |
 
@@ -183,7 +184,7 @@
 | M5 需求闭环 | 需求页入口、已验证徽章、缺陷回链、看板 | 需求页看得到覆盖、结果与缺陷 |
 | M6 扩展 | 无障碍树工具、iOS via Mac、autopilot 回归、按差异推荐回归 | CI 与 iOS |
 
-M0 与 M1 已于 2026-09-06 完成第一版；M2 依赖 M1；M3 可与 M2 并行（adb 轨道不需要 App）。
+M0、M1、M2 已于 2026-09-06 完成第一版（M2 剩余：测试机开关、并行数设置、Web 端实时画面，并入 M4）；M3 可随时开工（adb 轨道不需要 App）。
 
 ## 8. 开放问题
 
@@ -209,4 +210,4 @@ M0 与 M1 已于 2026-09-06 完成第一版；M2 依赖 M1；M3 可与 M2 并行
 
 ## 11. 当前下一议题
 
-M0 与 M1 第一版已完成（2026-09-06）：M0 在分支 `feat/testing-capability-wiring`（待合并），M1 在仓库 `multica-device-mcp`（本地，待推送与发布）。下一步是 M2（Multica 接入：测试机开关、`probeDeviceHub` 上报、按用例派发、轮次收敛）；M3 的移动端工作仍须按 `apps/mobile/CLAUDE.md` 的 pre-flight 拿到明确的“开始”。
+M0、M1、M2 第一版已完成（2026-09-06）：M0 + M2 在分支 `feat/testing-capability-wiring`（PR #81，待合并），M1 在仓库 `coder-zkl1988/multica-device-mcp`（未发布到 npm；守护进程通过中枢 `/health` 上报的接入器路径挂载，不依赖 npm）。端到端验收还差一次真机：在同一台机器上跑中枢 + 守护进程，派发一条 `android_device` 用例，看智能体通过 `multica-device` 完成截图与结果回写。下一步二选一：M3 移动端执行器（须按 `apps/mobile/CLAUDE.md` 的 pre-flight 拿到明确的“开始”），或 M4 治理与实时画面。

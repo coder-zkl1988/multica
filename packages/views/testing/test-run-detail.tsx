@@ -581,6 +581,16 @@ function RunCaseRow({
         <Badge variant={resultVariant(runCase.result)} className="shrink-0 text-caption">
           {t(($) => $.run.result[runCase.result as keyof typeof $.run.result]) ?? runCase.result}
         </Badge>
+        {/* Per-case dispatch: each case has its own agent task. The short id
+            is what the daemon log and the hub audit line are keyed by. */}
+        {runCase.agent_task_id ? (
+          <span
+            className="shrink-0 font-mono text-micro text-muted-foreground"
+            title={runCase.agent_task_id}
+          >
+            {t(($) => $.runCase.task, { id: runCase.agent_task_id.slice(0, 8) })}
+          </span>
+        ) : null}
       </div>
 
       {/* Expanded detail */}

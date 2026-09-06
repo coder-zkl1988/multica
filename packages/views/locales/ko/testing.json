@@ -420,7 +420,8 @@
       "defect": "결함"
     },
     "saveNotes": "메모 저장",
-    "notesNeedResult": "메모는 결과와 함께 저장됩니다. 결과를 먼저 선택하세요."
+    "notesNeedResult": "메모는 결과와 함께 저장됩니다. 결과를 먼저 선택하세요.",
+    "task": "작업 {{id}}"
   },
   "timeline": {
     "title": "실행 기록",
