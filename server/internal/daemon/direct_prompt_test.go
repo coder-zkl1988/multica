@@ -307,3 +307,90 @@ func TestBuildTaskPromptModePrecedence(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildConcisePromptBoundsScaffoldingNotTaskInput(t *testing.T) {
+	large := strings.Repeat("Required detail.\n", 2048)
+	for _, tc := range []struct {
+		kind string
+		task Task
+	}{
+		{"assignment", Task{IssueID: "issue-1", HandoffNote: large}},
+		{"chat", Task{ChatSessionID: "chat-1", ChatMessage: large}},
+		{"comment", Task{IssueID: "issue-1", TriggerCommentID: "comment-1", TriggerCommentContent: large, CoalescedCommentIDs: []string{"comment-2"}}},
+		{"autopilot", Task{AutopilotRunID: "run-1", AutopilotDescription: large}},
+		{"quick_create", Task{QuickCreatePrompt: large}},
+	} {
+		t.Run(tc.kind, func(t *testing.T) {
+			contract := buildConciseExecutionContract(tc.task, tc.kind)
+			if len(contract) > 1800 {
+				t.Errorf("generated %s contract = %d bytes, budget 1800 (excludes task input)", tc.kind, len(contract))
+			}
+			for _, want := range []string{"Bound tool output with fields/line ranges", "fetch only missing ranges, not the same full output"} {
+				if !strings.Contains(contract, want) {
+					t.Errorf("contract missing %q", want)
+				}
+			}
+			if !strings.Contains(buildConcisePrompt(tc.task), large) {
+				t.Fatal("scaffolding budget must not truncate supplied task input")
+			}
+		})
+	}
+}
+
+func TestBuildConcisePromptSiblingSnapshotGuidance(t *testing.T) {
+	task := Task{IssueID: "issue-1", ConciseMode: true, ActiveSiblingRuns: []ActiveSiblingRunData{{TaskID: "task-2", IssueID: "issue-2", Status: "running"}}}
+	for _, want := range []string{
+		"scan comment roots once",
+		"Reuse this scan for sibling claims",
+		"The sibling list is a snapshot",
+		"before handing off or waiting, check `multica issue runs <issue-id> --siblings --output json`",
+		"multica issue run-messages <task-id> --since <last-seq>",
+	} {
+		if !strings.Contains(buildTaskPrompt(task, "codex", false), want) {
+			t.Errorf("concise sibling prompt missing %q", want)
+		}
+	}
+	if n := len(buildConciseExecutionContract(task, "assignment")); n > 2050 {
+		t.Errorf("sibling contract = %d bytes, budget 2050", n)
+	}
+	for _, tc := range []struct {
+		name   string
+		task   Task
+		direct bool
+	}{
+		{"no siblings", Task{IssueID: "issue-1", ConciseMode: true}, false},
+		{"no issue", Task{HandoffNote: "Investigate", ConciseMode: true, ActiveSiblingRuns: task.ActiveSiblingRuns}, false},
+		{"normal", Task{IssueID: task.IssueID, ActiveSiblingRuns: task.ActiveSiblingRuns}, false},
+		{"legacy direct", task, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if strings.Contains(buildTaskPrompt(tc.task, "codex", tc.direct), "The sibling list is a snapshot") {
+				t.Fatal("concise sibling guidance leaked into an unrelated mode/context")
+			}
+		})
+	}
+}
+
+var measuredConcisePrompt string
+
+func BenchmarkConcisePromptEnvelope(b *testing.B) {
+	for _, tc := range []struct {
+		name string
+		task Task
+	}{
+		{"assignment", Task{IssueID: "issue-1"}},
+		{"assignment_sibling", Task{IssueID: "issue-1", ActiveSiblingRuns: []ActiveSiblingRunData{{TaskID: "task-2", IssueID: "issue-2", IssueTitle: "Overlapping fix", Status: "running"}}}},
+		{"chat", Task{ChatSessionID: "chat-1", ChatMessage: "Explain the timeout."}},
+		{"comment", Task{IssueID: "issue-1", TriggerCommentID: "comment-1", TriggerCommentContent: "Inspect the timeout."}},
+		{"autopilot", Task{AutopilotRunID: "run-1", AutopilotDescription: "Check the release."}},
+		{"quick_create", Task{QuickCreatePrompt: "Create a release issue."}},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				measuredConcisePrompt = buildConcisePrompt(tc.task)
+			}
+			b.ReportMetric(float64(len(measuredConcisePrompt)), "prompt-bytes")
+		})
+	}
+}
