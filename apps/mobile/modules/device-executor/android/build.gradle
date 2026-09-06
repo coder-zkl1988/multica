@@ -1,0 +1,20 @@
+// Local Expo module: the Android half of the device executor (accessibility
+// service, screen capture, gestures, foreground service). Autolinked from
+// apps/mobile/modules by expo-modules-autolinking; no npm package involved.
+// Mirrors expo-secure-store's build.gradle so the Expo Gradle plugin owns
+// SDK levels, Kotlin, and the modules-core dependency.
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'ai.multica.deviceexecutor'
+version = '0.1.0'
+
+android {
+  namespace "ai.multica.deviceexecutor"
+  defaultConfig {
+    versionCode 1
+    versionName '0.1.0'
+  }
+}

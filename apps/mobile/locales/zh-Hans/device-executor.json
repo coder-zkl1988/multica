@@ -1,0 +1,111 @@
+{
+  "header_title": "设备执行器",
+  "nav_subtitle": "让测试主机操控这台手机",
+  "unavailable": {
+    "ios_title": "iOS 暂不支持",
+    "ios_message": "设备执行器通过无障碍服务操控 Android 手机。请配对一台 Android 手机来执行移动端测试用例。",
+    "os_title": "需要 Android 11 或更高版本",
+    "os_message": "通过无障碍服务截图需要 Android 11。这台手机仍可通过 USB 由测试主机用 adb 操控。"
+  },
+  "connection": {
+    "title": "连接",
+    "hub_label": "测试主机",
+    "hub_placeholder": "ws://192.168.1.10:18800/phone",
+    "hub_hint": "粘贴 `multica-device-mcp pair` 打印的配对 URL，或测试主机的局域网地址。",
+    "code_label": "配对码",
+    "code_placeholder": "例如 7KQ2-M9XA",
+    "auto_connect": "应用启动时自动连接",
+    "connect": "连接",
+    "disconnect": "断开连接",
+    "status_label": "状态",
+    "phase": {
+      "idle": "未连接",
+      "connecting": "连接中…",
+      "connected": "已连接",
+      "reconnecting": "重连中（第 {{attempt}} 次）…"
+    },
+    "error": {
+      "bad_pairing_code": "测试主机拒绝了这个配对码。",
+      "hello_timeout": "测试主机没有及时接受握手。",
+      "hello_required": "测试主机要求先完成配对握手。",
+      "invalid_hub_url": "请先填写测试主机地址。",
+      "missing_code": "请先填写配对码。",
+      "unsupported": "这台手机无法运行设备执行器。",
+      "unknown": "连接失败（{{code}}）。"
+    }
+  },
+  "permissions": {
+    "title": "权限",
+    "granted": "已授予",
+    "missing": "未授予",
+    "accessibility": {
+      "title": "无障碍服务",
+      "subtitle": "必需 — 点按、滑动、输入和截图都经由它执行"
+    },
+    "notifications": {
+      "title": "通知",
+      "subtitle": "测试进行时显示“已连接”的常驻提示"
+    },
+    "battery": {
+      "title": "电池优化",
+      "subtitle": "其他应用在前台时保持执行器存活"
+    }
+  },
+  "session": {
+    "title": "当前会话",
+    "none": "没有测试会话在使用这台手机。",
+    "awaiting": "有测试主机正在申请使用这台手机。",
+    "label_fallback": "未命名会话",
+    "actions_label": "动作数",
+    "expires_label": "到期",
+    "total_actions_label": "本次运行动作数",
+    "last_action_label": "最近动作",
+    "last_action_ok": "{{action}} · 成功",
+    "last_action_failed": "{{action}} · 失败",
+    "stop": "停止并断开",
+    "stop_confirm_title": "停止测试会话？",
+    "stop_confirm_message": "测试主机会立即失去对这台手机的控制，正在执行的用例将标记为 blocked。",
+    "stop_confirm_action": "停止"
+  },
+  "lease_prompt": {
+    "title": "允许测试会话？",
+    "message": "有测试主机希望为“{{label}}”操控这台手机。会话结束前它可以点按、滑动、输入和截图。",
+    "allow": "允许",
+    "deny": "拒绝"
+  },
+  "policy": {
+    "title": "来自测试主机的策略",
+    "approval_label": "审批",
+    "approval": {
+      "ask": "每次会话都在这台手机上确认",
+      "auto": "自动通过"
+    },
+    "passwords_label": "密码输入框",
+    "passwords": {
+      "blocked": "从不输入",
+      "allowed": "允许"
+    },
+    "installs_label": "安装应用",
+    "installs": {
+      "blocked": "禁止",
+      "allowed": "允许"
+    },
+    "max_actions_label": "每会话动作上限",
+    "idle_timeout_label": "空闲超时",
+    "idle_timeout_value": "{{minutes}} 分钟",
+    "allowed_packages_label": "允许的应用",
+    "allowed_packages_any": "任意应用"
+  },
+  "device": {
+    "title": "这台手机",
+    "model_label": "型号",
+    "os_label": "Android",
+    "screen_label": "屏幕",
+    "id_label": "设备 ID",
+    "app_version_label": "应用版本"
+  },
+  "notification": {
+    "title": "Multica 设备执行器已连接",
+    "text": "测试主机可以操控这台手机。打开 Multica 可停止。"
+  }
+}

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="device_executor_service_label">Multica device executor</string>
+    <string name="device_executor_service_description">Lets a Multica test agent on your LAN drive this phone during a test run: take screenshots, tap, swipe and type. Only active while you keep the executor connected, and every session asks you first.</string>
+    <string name="device_executor_notification_channel">Device executor</string>
+</resources>

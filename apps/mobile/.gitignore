@@ -15,6 +15,11 @@ web-build/
 ios/
 android/
 
+# The `android/` rule above is for prebuild output at the app root, but it
+# matches at any depth. Local Expo modules under modules/<name>/android are
+# hand-written source and must be tracked.
+!modules/*/android/
+
 # Override the root .gitignore "data/" rule (intended for backend runtime
 # dirs). apps/mobile/data/ is source — TanStack Query queries, mutations,
 # stores, ApiClient — and MUST be tracked.

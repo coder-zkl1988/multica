@@ -1,6 +1,7 @@
 import enAuth from "./en/auth.json";
 import enChat from "./en/chat.json";
 import enCommon from "./en/common.json";
+import enDeviceExecutor from "./en/device-executor.json";
 import enInbox from "./en/inbox.json";
 import enIssues from "./en/issues.json";
 import enProjects from "./en/projects.json";
@@ -12,6 +13,7 @@ import enWorkspace from "./en/workspace.json";
 import zhHansAuth from "./zh-Hans/auth.json";
 import zhHansChat from "./zh-Hans/chat.json";
 import zhHansCommon from "./zh-Hans/common.json";
+import zhHansDeviceExecutor from "./zh-Hans/device-executor.json";
 import zhHansInbox from "./zh-Hans/inbox.json";
 import zhHansIssues from "./zh-Hans/issues.json";
 import zhHansProjects from "./zh-Hans/projects.json";
@@ -28,6 +30,7 @@ export const RESOURCES = {
     auth: enAuth,
     chat: enChat,
     common: enCommon,
+    "device-executor": enDeviceExecutor,
     inbox: enInbox,
     issues: enIssues,
     projects: enProjects,
@@ -41,6 +44,7 @@ export const RESOURCES = {
     auth: zhHansAuth,
     chat: zhHansChat,
     common: zhHansCommon,
+    "device-executor": zhHansDeviceExecutor,
     inbox: zhHansInbox,
     issues: zhHansIssues,
     projects: zhHansProjects,
