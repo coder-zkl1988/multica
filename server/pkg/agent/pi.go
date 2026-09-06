@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -313,6 +314,12 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 		var finalError string
 		var lastTurnError string
 		usage := make(map[string]TokenUsage)
+		// Daemon-side tool-call budget (concise mode). Pi's CLI has no
+		// native turn limit, so the stream itself is the only place the
+		// count is observable. Denial kills the process tree; the result
+		// below maps it to a failure that names the budget.
+		toolBudget := newToolCallBudget(opts.MaxToolCalls)
+		budgetExhausted := false
 
 		// Pi message_update events can be large (they embed the full message
 		// partial on each delta); the shared stream bound covers that.
@@ -355,6 +362,16 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 				}
 
 			case "tool_execution_start":
+				if !toolBudget.Allow() {
+					// Budget exhausted: stop admitting new tool calls. Kill
+					// the process tree — Pi has no in-band way to cancel a
+					// running turn — and let the result assembly below file
+					// the budget failure. Events already in flight may still
+					// parse; budgetExhausted makes the terminal state sticky.
+					budgetExhausted = true
+					signalProcessGroup(cmd, syscall.SIGKILL)
+					continue
+				}
 				var params map[string]any
 				if len(evt.Args) > 0 {
 					_ = json.Unmarshal(evt.Args, &params)
@@ -436,7 +453,13 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 		// child exited has returned by now. The writer sends exactly once.
 		writeErr := <-writeErrCh
 
-		if runCtx.Err() == context.DeadlineExceeded {
+		// Budget exhaustion is checked BEFORE the context branches: the kill
+		// above cancels the run context (the ctx-done goroutine fires when
+		// cancel() runs), which would otherwise misfile the run as aborted.
+		if budgetExhausted {
+			finalStatus = "failed"
+			finalError = fmt.Sprintf("%s: %s (cap %d)", label, ErrToolBudgetExceeded.Error(), opts.MaxToolCalls)
+		} else if runCtx.Err() == context.DeadlineExceeded {
 			finalStatus = "timeout"
 			finalError = fmt.Sprintf("%s timed out after %s", label, timeout)
 		} else if runCtx.Err() == context.Canceled {

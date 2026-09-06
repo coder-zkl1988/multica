@@ -34,9 +34,17 @@ type ExecOptions struct {
 	//
 	// A backend must therefore NOT assume this is populated, and adding a new
 	// backend that only reads SystemPrompt will silently receive nothing.
-	SystemPrompt              string
-	ThreadName                string
-	MaxTurns                  int
+	SystemPrompt string
+	ThreadName   string
+	MaxTurns     int
+	// MaxToolCalls is a daemon-side budget for backends whose CLI/protocol
+	// has no native turn limit: the backend counts tool-call events in its
+	// stream and force-stops the run when the count reaches the cap. Unlike
+	// MaxTurns this is enforced in-process by participating backends (pi,
+	// codex, grok, openclaw today); the rest ignore it. Zero disables the
+	// budget. The unit is tool calls, not agent turns — one turn may issue
+	// several calls, so keep this knob separate from MaxTurns.
+	MaxToolCalls              int
 	Timeout                   time.Duration
 	SemanticInactivityTimeout time.Duration
 	// FirstTurnNoProgressTimeout optionally overrides the Codex first-turn

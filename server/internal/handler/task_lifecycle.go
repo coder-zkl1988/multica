@@ -152,6 +152,13 @@ type RerunIssueRequest struct {
 	// assignee — so clicking retry on row that belonged to a now-displaced
 	// agent re-fires that same agent, not the new assignee.
 	TaskID string `json:"task_id,omitempty"`
+
+	// ConciseMode overrides the rerun's concise-mode flag instead of
+	// inheriting the source task's. Tri-state: nil inherits, true/false
+	// forces. A cross-mode rerun deliberately starts a fresh session (the
+	// daemon resume guard matches on mode), so UI affordances driving this
+	// must present the run as a restart, not a continuation.
+	ConciseMode *bool `json:"concise_mode,omitempty"`
 }
 
 // RerunIssue manually re-enqueues an agent run for the issue. By default it
@@ -210,7 +217,7 @@ func (h *Handler) RerunIssue(w http.ResponseWriter, r *http.Request) {
 		return h.canInvokeAgent(r.Context(), agent, actorType, actorID, originatorUserID, workspaceID)
 	}
 
-	task, err := h.TaskService.RerunIssue(r.Context(), issue.ID, sourceTaskID, pgtype.UUID{}, actorUserID, canInvoke)
+	task, err := h.TaskService.RerunIssue(r.Context(), issue.ID, sourceTaskID, pgtype.UUID{}, actorUserID, canInvoke, req.ConciseMode)
 	if errors.Is(err, service.ErrRerunInvokeNotAllowed) {
 		h.writeDispatchBlocked(w, http.StatusForbidden, ReasonInvocationNotAllowed)
 		return

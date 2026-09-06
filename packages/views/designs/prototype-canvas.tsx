@@ -23,16 +23,58 @@ import { inlinePrototypePage, PAGE_LINK_ATTRIBUTE, type PackageFileSource } from
 /** Marks nodes the canvas itself injected, so exports can drop them. */
 export const CANVAS_UI_ATTRIBUTE = "data-multica-canvas-ui";
 
+/**
+ * Realm-safe node checks. The canvas document lives in the iframe's own
+ * global object, so a heading inside it is NOT an instance of this app's
+ * `Element` — `instanceof` compares constructor identities across realms and
+ * every pick died on that comparison before it ever reached a handler (A6
+ * acceptance, 2026-09-03). `nodeType` reads as data across realms, so these
+ * are the checks that actually hold for canvas nodes. Only ever use them on
+ * nodes that came out of a canvas document; the app's own DOM may keep
+ * `instanceof`.
+ */
+export function isElementNode(node: unknown): node is Element {
+  return typeof node === "object" && node !== null && (node as { nodeType?: unknown }).nodeType === 1;
+}
+
+/** An element that carries inline style (HTML and SVG both do). */
+export function isStyleableElement(node: unknown): node is Element & { style: CSSStyleDeclaration } {
+  return isElementNode(node) && typeof (node as { style?: unknown }).style === "object" && (node as { style?: unknown }).style !== null;
+}
+
 const OVERLAY_STYLE = `
 [${CANVAS_UI_ATTRIBUTE}] { position: absolute; pointer-events: none; z-index: 2147483646; }
 [${CANVAS_UI_ATTRIBUTE}="hover"] { outline: 2px solid rgba(59,130,246,.9); outline-offset: -1px; background: rgba(59,130,246,.08); border-radius: 2px; }
 [${CANVAS_UI_ATTRIBUTE}="picked"] { outline: 2px solid rgb(249,115,22); outline-offset: -1px; background: rgba(249,115,22,.10); border-radius: 2px; }
 [${CANVAS_UI_ATTRIBUTE}="region"] { border: 2px dashed rgb(249,115,22); background: rgba(249,115,22,.10); border-radius: 2px; }
+[${CANVAS_UI_ATTRIBUTE}="pins"] { position: absolute; inset: 0; pointer-events: none; z-index: 2147483647; }
+[${CANVAS_UI_ATTRIBUTE}="pins"] > [data-pin] { position: absolute; pointer-events: auto; cursor: pointer; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 9999px; background: #ea580c; color: #fff; font: 600 11px/20px system-ui, sans-serif; text-align: center; box-shadow: 0 0 0 2px rgba(255,255,255,.9); transform: translate(-50%, -50%); }
+[${CANVAS_UI_ATTRIBUTE}="ink"] { position: absolute; left: 0; top: 0; pointer-events: none; }
+[${CANVAS_UI_ATTRIBUTE}="ink"] path { fill: none; stroke: #ea580c; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
 html[data-multica-canvas-mode] * { cursor: crosshair !important; }
+html[data-multica-canvas-mode] [data-pin] { cursor: pointer !important; }
 html[data-multica-canvas-mode] { -webkit-user-select: none; user-select: none; }
 `;
 
-export type CanvasMode = "select" | "region" | null;
+export type CanvasMode = "select" | "region" | "pen" | "text" | null;
+
+/** A committed pen stroke, in the page's own CSS pixels. */
+export interface CanvasStroke {
+  id: string;
+  points: Array<{ x: number; y: number }>;
+}
+
+/**
+ * A numbered marker pinned onto the canvas for one open comment (Open
+ * Design's comment pins): anchored to an element selector when the mark was
+ * an element pick, or to the drawn rectangle when it was a region.
+ */
+export interface CanvasPin {
+  id: string;
+  label: string;
+  selector?: string | null;
+  rect?: { x: number; y: number } | null;
+}
 
 /** A marked rectangle, in the page's own CSS pixels. */
 export interface CanvasRegion {
@@ -71,13 +113,32 @@ export function usePrototypeDocument(
   options: { enabled: boolean; stripScripts?: boolean } = { enabled: true },
 ) {
   const stripScripts = options.stripScripts ?? true;
-  return useQuery({
+  const query = useQuery({
     queryKey: ["design-document-inlined", revision?.content_digest ?? "", entryPath, stripScripts],
     queryFn: () => inlinePrototypePage(entryPath, revisionFileSource(revision!), { stripScripts }),
     enabled: options.enabled && !!revision && !!entryPath && !!revision.resource_base_path,
     staleTime: Infinity,
     retry: false,
   });
+
+  // The key is the digest, not the capability the bytes arrive through, and
+  // `retry: false` is right for a page that genuinely cannot be assembled.
+  // Together they strand the canvas: an expired capability 404s every asset
+  // once, and the resulting error survives every later render even after the
+  // revision has handed over a working capability. Retrying on a NEW one
+  // recovers on its own; retrying on the same one would only fail again, so
+  // the capability already attempted is remembered rather than counted.
+  const capability = revision?.resource_base_path ?? "";
+  const attempted = useRef(capability);
+  const refetch = query.refetch;
+  const failed = query.isError;
+  useEffect(() => {
+    if (!failed || !capability || capability === attempted.current) return;
+    attempted.current = capability;
+    void refetch();
+  }, [capability, failed, refetch]);
+
+  return query;
 }
 
 interface PrototypeCanvasProps {
@@ -94,6 +155,15 @@ interface PrototypeCanvasProps {
   onDocumentReady?: (document: Document) => void;
   /** Selector of the element to keep highlighted, if any. */
   pickedSelector?: string;
+  /** Comment pins shown for the page; clicks report the pin id. */
+  pins?: CanvasPin[];
+  onPinClick?: (id: string) => void;
+  /** Committed pen strokes to render for this page. */
+  strokes?: CanvasStroke[];
+  /** Commits a finished pen stroke. */
+  onInk?: (points: Array<{ x: number; y: number }>) => void;
+  /** Commits a placed text marker. */
+  onTextPlace?: (point: { x: number; y: number }) => void;
 }
 
 export function PrototypeCanvas({
@@ -107,17 +177,99 @@ export function PrototypeCanvas({
   onPageLink,
   onDocumentReady,
   pickedSelector = "",
+  pins = [],
+  onPinClick,
+  strokes = [],
+  onInk,
+  onTextPlace,
 }: PrototypeCanvasProps) {
   const frameRef = useRef<HTMLIFrameElement>(null);
   const [documentEpoch, setDocumentEpoch] = useState(0);
 
   // Callbacks live in a ref so re-rendering the parent never re-attaches the
   // listeners (which would drop an in-flight drag).
-  const handlers = useRef({ onPick, onRegion, onPageLink, onDocumentReady });
-  handlers.current = { onPick, onRegion, onPageLink, onDocumentReady };
+  const handlers = useRef({ onPick, onRegion, onPageLink, onDocumentReady, onInk, onTextPlace });
+  handlers.current = { onPick, onRegion, onPageLink, onDocumentReady, onInk, onTextPlace };
 
   const blobUrl = useMemo(() => URL.createObjectURL(new Blob([html], { type: "text/html" })), [html]);
   useEffect(() => () => URL.revokeObjectURL(blobUrl), [blobUrl]);
+
+  // Comment pins, kept in their own effect: the list changes on every note
+  // keystroke, and re-running the interaction wiring for that would detach
+  // listeners under an in-flight drag.
+  const pinHandlers = useRef({ onPinClick });
+  pinHandlers.current = { onPinClick };
+  useEffect(() => {
+    const frameDocument = frameRef.current?.contentDocument;
+    if (!frameDocument?.body) return;
+    let layer = frameDocument.querySelector<HTMLElement>(`[${CANVAS_UI_ATTRIBUTE}="pins"]`);
+    if (!pins.length) {
+      layer?.remove();
+      return;
+    }
+    if (!layer) {
+      layer = frameDocument.createElement("div");
+      layer.setAttribute(CANVAS_UI_ATTRIBUTE, "pins");
+      frameDocument.body.appendChild(layer);
+    }
+    layer.replaceChildren();
+    for (const pin of pins) {
+      const anchor = pin.selector ? safeQuery(frameDocument, pin.selector) : null;
+      if (!anchor && !pin.rect) continue;
+      const view = frameDocument.defaultView;
+      const box = anchor?.getBoundingClientRect();
+      const node = frameDocument.createElement("div");
+      node.setAttribute("data-pin", pin.id);
+      node.textContent = pin.label;
+      node.style.left = `${(box?.left ?? pin.rect?.x ?? 0) + (view?.scrollX ?? 0)}px`;
+      node.style.top = `${(box?.top ?? pin.rect?.y ?? 0) + (view?.scrollY ?? 0)}px`;
+      node.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        pinHandlers.current.onPinClick?.(pin.id);
+      });
+      layer.appendChild(node);
+    }
+    return () => {
+      // Remounted pins own their nodes; a stale layer from a replaced
+      // document dies with the document itself.
+      layer?.replaceChildren();
+    };
+  }, [documentEpoch, pins]);
+
+  // Committed pen strokes render through the same ink layer the live preview
+  // draws on; rebuilt whenever the page's stroke set changes.
+  useEffect(() => {
+    const frameDocument = frameRef.current?.contentDocument;
+    if (!frameDocument?.body) return;
+    const layer = (() => {
+      const existing = frameDocument.querySelector<SVGSVGElement>(`[${CANVAS_UI_ATTRIBUTE}="ink"]`);
+      if (existing) return existing;
+      const created = frameDocument.createElementNS("http://www.w3.org/2000/svg", "svg");
+      created.setAttribute(CANVAS_UI_ATTRIBUTE, "ink");
+      frameDocument.body.appendChild(created);
+      return created;
+    })();
+    if (!strokes.length) {
+      layer.remove();
+      return;
+    }
+    const width = Math.max(frameDocument.documentElement.scrollWidth, 1);
+    const height = Math.max(frameDocument.documentElement.scrollHeight, 1);
+    layer.setAttribute("width", String(width));
+    layer.setAttribute("height", String(height));
+    layer.setAttribute("viewBox", `0 0 ${width} ${height}`);
+    layer.replaceChildren();
+    for (const stroke of strokes) {
+      const path = frameDocument.createElementNS("http://www.w3.org/2000/svg", "path");
+      path.setAttribute("data-stroke", stroke.id);
+      path.setAttribute("d", stroke.points.map((point, index) => `${index ? "L" : "M"} ${point.x} ${point.y}`).join(" "));
+      layer.appendChild(path);
+    }
+    return () => {
+      layer.replaceChildren();
+    };
+  }, [documentEpoch, strokes]);
 
   // Interaction wiring, re-attached whenever the document or the mode changes.
   useEffect(() => {
@@ -159,7 +311,7 @@ export function PrototypeCanvas({
     };
 
     const isCanvasUi = (node: EventTarget | null): node is Element =>
-      node instanceof Element && node.closest(`[${CANVAS_UI_ATTRIBUTE}]`) !== null;
+      isElementNode(node) && node.closest(`[${CANVAS_UI_ATTRIBUTE}]`) !== null;
 
     const hover = ensureNode("hover");
     const picked = ensureNode("picked");
@@ -182,7 +334,7 @@ export function PrototypeCanvas({
     // turns them back into navigation the workbench performs.
     listen("click", (event) => {
       const target = event.target;
-      if (!(target instanceof Element)) return;
+      if (!isElementNode(target)) return;
       const link = target.closest(`[${PAGE_LINK_ATTRIBUTE}]`);
       if (!link) return;
       event.preventDefault();
@@ -193,12 +345,12 @@ export function PrototypeCanvas({
     if (mode === "select") {
       listen("mousemove", (event) => {
         const target = event.target;
-        place(hover, target instanceof Element && !isCanvasUi(target) ? pageRect(target) : null);
+        place(hover, isElementNode(target) && !isCanvasUi(target) ? pageRect(target) : null);
       });
       listen("mouseleave", () => place(hover, null));
       listen("click", (event) => {
         const target = event.target;
-        if (!(target instanceof Element) || isCanvasUi(target)) return;
+        if (!isElementNode(target) || isCanvasUi(target)) return;
         event.preventDefault();
         event.stopPropagation();
         place(picked, pageRect(target));
@@ -239,6 +391,92 @@ export function PrototypeCanvas({
           return;
         }
         handlers.current.onRegion?.({ ...rect, elements: elementsInRegion(frameDocument, rect) });
+      });
+    }
+
+    // The pen draws straight onto the page: a live preview path while the
+    // button is down, one committed stroke per drag. The preview rides the
+    // same ink layer the committed strokes render through, so what the user
+    // drew and what they see afterwards are the same kind of mark.
+    if (mode === "pen") {
+      const view = frameDocument.defaultView;
+      const pointOf = (event: MouseEvent) => ({
+        x: event.clientX + (view?.scrollX ?? 0),
+        y: event.clientY + (view?.scrollY ?? 0),
+      });
+      const ensureLayer = () => {
+        let layer = frameDocument.querySelector<SVGSVGElement>(`[${CANVAS_UI_ATTRIBUTE}="ink"]`);
+        if (!layer) {
+          layer = frameDocument.createElementNS("http://www.w3.org/2000/svg", "svg");
+          layer.setAttribute(CANVAS_UI_ATTRIBUTE, "ink");
+          frameDocument.body.appendChild(layer);
+        }
+        const width = Math.max(frameDocument.documentElement.scrollWidth, 1);
+        const height = Math.max(frameDocument.documentElement.scrollHeight, 1);
+        layer.setAttribute("width", String(width));
+        layer.setAttribute("height", String(height));
+        layer.setAttribute("viewBox", `0 0 ${width} ${height}`);
+        return layer;
+      };
+      const layer = ensureLayer();
+      let points: Array<{ x: number; y: number }> = [];
+      let preview: SVGPathElement | null = null;
+
+      const finishStroke = (commit: boolean) => {
+        if (!preview) return;
+        preview.remove();
+        preview = null;
+        if (commit && points.length >= 2) handlers.current.onInk?.(points);
+        points = [];
+      };
+      listen("mousedown", (event) => {
+        if (!isElementNode(event.target) || isCanvasUi(event.target)) return;
+        event.preventDefault();
+        // A stranded preview from a release the frame never saw dies here
+        // rather than staying on the page as a phantom stroke.
+        preview?.remove();
+        points = [pointOf(event)];
+        preview = frameDocument.createElementNS("http://www.w3.org/2000/svg", "path");
+        preview.setAttribute("d", `M ${points[0]!.x} ${points[0]!.y}`);
+        layer.appendChild(preview);
+      });
+      listen("mousemove", (event) => {
+        if (!preview || points.length === 0) return;
+        // The mouseup can land outside the frame — over the toolbar, the
+        // composer, another window — and never reach this document. A move
+        // with the button up is that release arriving late: finish the stroke
+        // instead of drawing with a free hand.
+        if (event.buttons === 0) {
+          finishStroke(true);
+          return;
+        }
+        const last = points[points.length - 1]!;
+        const point = pointOf(event);
+        // Skip micro-moves so a stationary hand does not thicken the stroke.
+        if (Math.abs(point.x - last.x) < 2 && Math.abs(point.y - last.y) < 2) return;
+        points.push(point);
+        preview.setAttribute("d", `${preview.getAttribute("d")} L ${point.x} ${point.y}`);
+      });
+      listen("mouseup", () => finishStroke(true));
+      // Leaving the document mid-stroke is a release, not a pause. mouseleave
+      // fires on every element boundary with a capture listener, so only the
+      // one with a null relatedTarget — the pointer left this document — acts.
+      listen("mouseleave", (event) => {
+        if (event.relatedTarget) return;
+        finishStroke(true);
+      });
+    }
+
+    if (mode === "text") {
+      listen("click", (event) => {
+        const target = event.target;
+        if (!isElementNode(target) || isCanvasUi(target)) return;
+        event.preventDefault();
+        const view = frameDocument.defaultView;
+        handlers.current.onTextPlace?.({
+          x: event.clientX + (view?.scrollX ?? 0),
+          y: event.clientY + (view?.scrollY ?? 0),
+        });
       });
     }
 

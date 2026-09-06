@@ -44,6 +44,7 @@ const RESET_STATE = {
       assigneeId: undefined,
       labelIds: [],
       propertyValues: {},
+      conciseMode: false,
     },
     agent: {
       prompt: "",

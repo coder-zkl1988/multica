@@ -3,6 +3,7 @@ import { app, type BrowserWindow, ipcMain } from "electron";
 import type {
   ManualUpdateCheckResult,
   UpdaterPreferences,
+  UpdaterState,
 } from "../shared/updater-types";
 import {
   DEFAULT_UPDATER_PREFERENCES,
@@ -58,7 +59,8 @@ const PERIODIC_CHECK_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
 type RendererChannel =
   | "updater:update-available"
   | "updater:download-progress"
-  | "updater:update-downloaded";
+  | "updater:update-downloaded"
+  | "updater:state";
 
 function isDestroyedObjectError(err: unknown): boolean {
   return err instanceof Error && err.message.includes("Object has been destroyed");
@@ -81,47 +83,79 @@ function sendToLiveRenderer(
   }
 }
 
-// Single-flight guard around checkForUpdates(). With autoDownload=true the
-// startup, periodic, and manual triggers can all kick off downloads, and
-// overlapping calls have caused duplicate download warnings in the past
-// (see electronjs.org/docs/latest/api/auto-updater). Coalesce concurrent
-// callers onto the same in-flight promise.
+// Single-flight guards cover both update discovery and package transfer. The
+// metadata promise resolves quickly, while electron-updater exposes the actual
+// auto-download separately on result.downloadPromise. Retaining both promises
+// prevents manual IPC, startup checks, periodic checks, and repeated clicks
+// from starting overlapping transfers.
 let inFlightCheck: Promise<unknown> | null = null;
-function checkForUpdatesOnce(): Promise<unknown> {
+let inFlightDownload: Promise<unknown> | null = null;
+
+function trackDownload(download: Promise<unknown>): Promise<unknown> {
+  if (inFlightDownload) return inFlightDownload;
+  inFlightDownload = download;
+  void download.then(
+    () => {
+      if (inFlightDownload === download) inFlightDownload = null;
+    },
+    () => {
+      if (inFlightDownload === download) inFlightDownload = null;
+    },
+  );
+  return download;
+}
+
+function downloadUpdateOnce(): Promise<unknown> {
+  if (inFlightDownload) return inFlightDownload;
+  return trackDownload(
+    Promise.resolve().then(() => autoUpdater.downloadUpdate()),
+  );
+}
+
+function checkForUpdatesOnce(
+  onDownloadError?: (error: unknown) => void,
+): Promise<unknown> {
   if (inFlightCheck) return inFlightCheck;
+  // A legacy renderer may start a manual transfer directly. Do not perform a
+  // metadata check while that package is in flight: electron-updater could
+  // emit update-available again, reset visible progress, and expose a second
+  // downloadPromise that cannot safely replace the active transfer.
+  if (inFlightDownload) return Promise.resolve(null);
   const forkReleaseRepository = (
     import.meta.env as ImportMetaEnv & {
       readonly VITE_DESKTOP_RELEASE_REPOSITORY?: string;
     }
   ).VITE_DESKTOP_RELEASE_REPOSITORY?.trim();
-  const p = Promise.resolve()
-    .then(async () => {
-      // Fork releases intentionally use desktop-v* tags so they do not
-      // collide with the upstream v* release train. electron-updater ignores
-      // those tags during semver discovery, so fork builds resolve the newest
-      // desktop Release and point its generic provider at that asset folder.
-      if (forkReleaseRepository) {
-        await configureForkUpdateFeed(autoUpdater, forkReleaseRepository);
-      }
-      return autoUpdater.checkForUpdates();
-    })
-    .then((result) => {
-      // checkForUpdates resolves as soon as metadata is fetched; the actual
-      // download (when autoDownload=true) is exposed on result.downloadPromise.
-      // Without a handler a download failure becomes an unhandled rejection
-      // in the main process — Node may terminate it on future versions.
-      void (result as { downloadPromise?: Promise<unknown> } | null)?.downloadPromise?.catch(
-        (err) => {
+  const check = Promise.resolve().then(async () => {
+    // Fork releases intentionally use desktop-v* tags so they do not
+    // collide with the upstream v* release train. electron-updater ignores
+    // those tags during semver discovery, so fork builds resolve the newest
+    // desktop Release and point its generic provider at that asset folder.
+    if (forkReleaseRepository) {
+      await configureForkUpdateFeed(autoUpdater, forkReleaseRepository);
+    }
+    return autoUpdater.checkForUpdates();
+  });
+  inFlightCheck = check;
+
+  void check
+    .then(
+      (result) => {
+        const download = (
+          result as { downloadPromise?: Promise<unknown> } | null
+        )?.downloadPromise;
+        if (!download) return undefined;
+        return trackDownload(download).catch((err) => {
           console.error("Failed to download update:", err);
-        },
-      );
-      return result;
-    })
+          onDownloadError?.(err);
+        });
+      },
+      () => undefined,
+    )
     .finally(() => {
-      if (inFlightCheck === p) inFlightCheck = null;
+      if (inFlightCheck === check) inFlightCheck = null;
     });
-  inFlightCheck = p;
-  return p;
+  return check;
 }
 
 export function setupAutoUpdater(getMainWindow: () => BrowserWindow | null): void {
@@ -131,6 +165,20 @@ export function setupAutoUpdater(getMainWindow: () => BrowserWindow | null): voi
   let startupCheckElapsed = false;
   let startupTimer: ReturnType<typeof setTimeout> | null = null;
   let periodicTimer: ReturnType<typeof setInterval> | null = null;
+  let updaterState: UpdaterState = { status: "idle" };
+  const publishUpdaterState = (next: UpdaterState): void => {
+    updaterState = next;
+    sendToLiveRenderer(getMainWindow(), "updater:state", next);
+  };
+  const reportDownloadError = (error: unknown): void => {
+    const version =
+      updaterState.status === "downloading" ? updaterState.version : undefined;
+    publishUpdaterState({
+      status: "error",
+      ...(version ? { version } : {}),
+      message: error instanceof Error ? error.message : String(error),
+    });
+  };
   const preferencesReady = loadUpdaterPreferences(preferencesFilePath).then(
     (preferences) => {
       automaticUpdatesEnabled = preferences.automaticUpdates;
@@ -142,7 +190,7 @@ export function setupAutoUpdater(getMainWindow: () => BrowserWindow | null): voi
     void preferencesReady
       .then(() => {
         if (!automaticUpdatesEnabled) return;
-        return checkForUpdatesOnce();
+        return checkForUpdatesOnce(reportDownloadError);
       })
       .catch((err) => {
         console.error(errorMessage, err);
@@ -185,8 +233,12 @@ export function setupAutoUpdater(getMainWindow: () => BrowserWindow | null): voi
   };
 
   autoUpdater.on("update-available", (info) => {
-    // Forwarded for renderer-side state tracking only; the notification UI
-    // does not render an "available" affordance with autoDownload=true.
+    publishUpdaterState({
+      status: "downloading",
+      version: info.version,
+      percent: 0,
+    });
+    // Retain granular channels for older renderer bundles.
     sendToLiveRenderer(getMainWindow(), "updater:update-available", {
       version: info.version,
       releaseNotes: info.releaseNotes,
@@ -194,12 +246,19 @@ export function setupAutoUpdater(getMainWindow: () => BrowserWindow | null): voi
   });
 
   autoUpdater.on("download-progress", (progress) => {
+    if (updaterState.status === "downloading") {
+      publishUpdaterState({
+        ...updaterState,
+        percent: progress.percent,
+      });
+    }
     sendToLiveRenderer(getMainWindow(), "updater:download-progress", {
       percent: progress.percent,
     });
   });
 
   autoUpdater.on("update-downloaded", (info: UpdateDownloadedEvent) => {
+    publishUpdaterState({ status: "ready", version: info.version });
     sendToLiveRenderer(getMainWindow(), "updater:update-downloaded", {
       version: info.version,
       releaseNotes: info.releaseNotes,
@@ -208,17 +267,23 @@ export function setupAutoUpdater(getMainWindow: () => BrowserWindow | null): voi
 
   autoUpdater.on("error", (err) => {
     console.error("Auto-updater error:", err);
+    if (updaterState.status === "downloading") reportDownloadError(err);
   });
 
-  // Retained for IPC back-compat with older renderer bundles. With
-  // autoDownload=true the renderer no longer triggers this path.
+  // Retained for IPC back-compat with older renderer bundles. It shares the
+  // same transfer guard as autoDownload so repeated legacy requests cannot
+  // start overlapping downloads.
   ipcMain.handle("updater:download", () => {
-    return autoUpdater.downloadUpdate();
+    const download = downloadUpdateOnce();
+    void download.catch(reportDownloadError);
+    return download;
   });
 
   ipcMain.handle("updater:install", () => {
     autoUpdater.quitAndInstall(false, true);
   });
+
+  ipcMain.handle("updater:get-state", (): UpdaterState => updaterState);
 
   ipcMain.handle(
     "updater:get-preferences",
@@ -258,10 +323,18 @@ export function setupAutoUpdater(getMainWindow: () => BrowserWindow | null): voi
 
   ipcMain.handle("updater:check", async (): Promise<ManualUpdateCheckResult> => {
     try {
-      const result = (await checkForUpdatesOnce()) as
+      const currentVersion = app.getVersion();
+      if (inFlightDownload && updaterState.status === "downloading") {
+        return {
+          ok: true,
+          currentVersion,
+          latestVersion: updaterState.version,
+          available: true,
+        };
+      }
+      const result = (await checkForUpdatesOnce(reportDownloadError)) as
         | { updateInfo: { version: string }; isUpdateAvailable?: boolean }
         | null;
-      const currentVersion = app.getVersion();
       // Trust electron-updater's own decision rather than re-deriving it from
       // a version-string compare. The two diverge for pre-release channels,
       // staged rollouts, downgrades, and minimum-system-version gates — in

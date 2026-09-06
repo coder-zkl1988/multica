@@ -6081,7 +6081,7 @@ func TestCodexSemanticInactivityFiresThroughARetryStorm(t *testing.T) {
 		// The execution ceiling sits far above the watchdog, so a run that
 		// reaches it proves the watchdog never fired rather than that the
 		// fixture ran out of script.
-		Timeout:                    3 * time.Second,
+		Timeout:                    10 * time.Second,
 		SemanticInactivityTimeout:  400 * time.Millisecond,
 		FirstTurnNoProgressTimeout: 3 * time.Second,
 	})

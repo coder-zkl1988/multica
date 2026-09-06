@@ -1,7 +1,9 @@
 package agent
 
 import (
+	"bytes"
 	"io"
+	"strings"
 	"sync"
 	"time"
 )
@@ -59,12 +61,12 @@ const openclawStdoutPoll = 100 * time.Millisecond
 // On the cutShort path the internal read goroutine is still blocked in
 // r.Read. It exits when the caller's cancellation closes r, which openclaw's
 // Execute already arranges. Callers that do not close r on cancellation must
-// not use this function.
-func readOpenclawStdout(r io.Reader, idleGrace time.Duration) (buf []byte, cutShort bool, err error) {
+// not use this function. onLine, when supplied, receives each complete
+// newline-delimited line as soon as it is read, before the final buffer parse.
+func readOpenclawStdout(r io.Reader, idleGrace time.Duration, onLine ...func(string)) (buf []byte, cutShort bool, err error) {
 	if idleGrace <= 0 {
 		idleGrace = openclawResultIdleGrace
 	}
-
 	var (
 		mu       sync.Mutex
 		acc      []byte
@@ -72,6 +74,11 @@ func readOpenclawStdout(r io.Reader, idleGrace time.Duration) (buf []byte, cutSh
 		readErr  error
 		atEOF    bool
 	)
+	var lineBuf []byte
+	var notifyLine func(string)
+	if len(onLine) > 0 {
+		notifyLine = onLine[0]
+	}
 
 	finished := make(chan struct{})
 	go func() {
@@ -107,6 +114,20 @@ func readOpenclawStdout(r io.Reader, idleGrace time.Duration) (buf []byte, cutSh
 					atEOF = true
 				}
 				mu.Unlock()
+			}
+			if notifyLine != nil && n > 0 {
+				lineBuf = append(lineBuf, chunk[:n]...)
+				for {
+					i := bytes.IndexByte(lineBuf, '\n')
+					if i < 0 {
+						break
+					}
+					line := strings.TrimSpace(string(lineBuf[:i]))
+					lineBuf = lineBuf[i+1:]
+					if line != "" {
+						notifyLine(line)
+					}
+				}
 			}
 			if rerr != nil {
 				return

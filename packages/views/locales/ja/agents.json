@@ -794,6 +794,7 @@
       "issue_window_restricted": "実行中に課題を利用できなくなりました",
       "environment_prepare_failed": "実行環境を準備できませんでした",
       "invalid_task_identity": "作業のエージェント情報が一致しません",
+      "tool_budget_exceeded": "ツール呼び出しの予算を使い切りました — 再試行で続行できます",
       "agent_error_provider_auth_or_access": "プロバイダーの認証に失敗しました",
       "agent_error_provider_quota_limit": "プロバイダーのクォータを使い切りました",
       "agent_error_provider_capacity_or_rate_limit": "プロバイダーによるレート制限",

@@ -185,6 +185,19 @@ const (
 	// workspace policy changes.
 	ReasonIssueWindowRestricted Reason = "issue_window_restricted"
 
+	// ReasonToolBudgetExceeded: the daemon's concise-mode tool-call budget
+	// ran out and force-stopped the run mid-flight (server/pkg/agent.
+	// ErrToolBudgetExceeded surfaced as "<label>: agent tool-call budget
+	// exceeded (cap N)"). Platform-side by construction: Multica stopped the
+	// run, the agent process did not fail — the session is intact and a
+	// manual rerun resumes it with a fresh budget, which is why this value
+	// stays off retryableReasons (auto-retry would burn budget unattended)
+	// and off the resume-unsafe blacklist. Deliberately NOT emitted by
+	// Classify (agent-error-only contract); daemons report it via the text
+	// witness in NormalizeDaemonReason so un-upgraded daemons are upgraded
+	// at the server boundary.
+	ReasonToolBudgetExceeded Reason = "tool_budget_exceeded"
+
 	// Agent process side: failure surfaced by the agent CLI / SDK as
 	// an error string. Classify(rawError) is responsible for picking
 	// the right sub-reason from the string. IsAgentError returns true
@@ -260,7 +273,7 @@ const (
 	ReasonAgentUnknown Reason = "agent_error.unknown"
 )
 
-// allReasons is the canonical ordered list of the 28 reasons. Order is
+// allReasons is the canonical ordered list of the 29 reasons. Order is
 // stable so callers (e.g. Prometheus collectors that pre-warm series via
 // AllReasons) can build deterministic label sets across restarts.
 //
@@ -279,6 +292,7 @@ var allReasons = []Reason{
 	ReasonIterationLimit,
 	ReasonAgentBlocked,
 	ReasonAPIInvalidRequest,
+	ReasonToolBudgetExceeded,
 	ReasonSkillBundleUnavailable,
 	ReasonAuthenticationExpired,
 	ReasonRuntimeCLITimeout,

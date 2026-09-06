@@ -191,6 +191,26 @@ export function countDeclarations(edits: ReadonlyArray<ManualEdit>): number {
 }
 
 /**
+ * Why 应用修改 is unavailable, or null when it may run. Applying lands as a
+ * revision, so it carries an adjustment's preconditions plus one thing of its
+ * own: something must actually have changed. The matrix lives here because
+ * the popover renders only when an element is picked — unreachable in a DOM
+ * test — and this decision is the regression guard the sidebar panel's test
+ * used to hold (A6 acceptance round, 2026-09-03).
+ */
+export function editApplyBlocker(input: {
+  canAdjust: boolean;
+  running: boolean;
+  declarationCount: number;
+  hasAgent: boolean;
+}): string | null {
+  if (!input.canAdjust) return input.running ? "任务执行中，完成后可以继续编辑" : "还没有可以编辑的版本";
+  if (input.declarationCount === 0) return "在画布上选中元素后修改属性";
+  if (!input.hasAgent) return "选择一个智能体来运行校验";
+  return null;
+}
+
+/**
  * Normalises a computed colour into the `#rrggbb` an `<input type="color">`
  * needs. Anything with transparency, or any format the browser reported that
  * this cannot read, comes back empty — the swatch then shows no value rather

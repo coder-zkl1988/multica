@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // react-resizable-panels measures real layout, which jsdom does not have, so
 // its panels render empty and every assertion below loses the sidebar. Same
@@ -93,6 +93,11 @@ vi.mock("../navigation", () => ({
 vi.mock("sonner", () => ({
   toast: { error: toastError, success: toastSuccess },
 }));
+
+// Rasterising mounts a real canvas, which jsdom does not have; the screenshot
+// tests below stub the raster and assert the wiring around it.
+const { rasterizePage } = vi.hoisted(() => ({ rasterizePage: vi.fn() }));
+vi.mock("./export-raster", () => ({ rasterizePage }));
 
 vi.mock("../common/actor-avatar", () => ({
   ActorAvatar: () => <span data-testid="actor-avatar" />,
@@ -189,8 +194,20 @@ function renderPage() {
   return queryClient;
 }
 
+let objectUrlSeq = 0;
+// Saved and put back by hand: these are direct property assignments, and
+// vi.restoreAllMocks() only restores spies. Leaving a stubbed
+// URL.createObjectURL behind breaks every later suite that makes a blob URL.
+const realCreateObjectURL = URL.createObjectURL;
+const realRevokeObjectURL = URL.revokeObjectURL;
+
 beforeEach(() => {
   vi.clearAllMocks();
+  // jsdom has no object-URL support. Each call returns a distinct URL, as the
+  // real one does — a stub returning a constant would hide the revoke.
+  objectUrlSeq = 0;
+  URL.createObjectURL = vi.fn(() => `blob:test-document-${(objectUrlSeq += 1)}`);
+  URL.revokeObjectURL = vi.fn();
   getDesignDocument.mockResolvedValue(document());
   listDesignDocumentRevisions.mockResolvedValue({ revisions: [summary(), FIRST] });
   getDesignDocumentRevision.mockImplementation(async (_documentId: string, revisionId: string) =>
@@ -207,6 +224,12 @@ beforeEach(() => {
   saveDesignDocument.mockResolvedValue(document({ status: "saved", saved_revision_id: "revision-2" }));
   discardDesignDocumentDraft.mockResolvedValue(document({ status: "empty", draft_revision_id: "" }));
   restoreDesignDocumentRevision.mockResolvedValue(document({ draft_revision_id: "revision-1" }));
+});
+
+afterEach(() => {
+  URL.createObjectURL = realCreateObjectURL;
+  URL.revokeObjectURL = realRevokeObjectURL;
+  vi.restoreAllMocks();
 });
 
 // The pure helpers behind the page have their matrix here; the DOM tests below
@@ -447,20 +470,75 @@ describe("DesignDocumentPage", () => {
   });
 
   // 编辑 is the second way to change a design: the designer edits it directly
-  // instead of asking an agent. It still produces a revision, so it carries
-  // the same preconditions an adjustment does.
-  it("opens the properties panel in 编辑 mode and blocks an empty apply", async () => {
+  // instead of asking an agent, with the properties opening beside the picked
+  // element. It still produces a revision, so it carries the same
+  // preconditions an adjustment does.
+  it("offers the edit popover hint in 编辑 mode and keeps the composer readable", async () => {
     renderPage();
     await screen.findByTitle("订单总览 · 首页");
 
     await userEvent.click(screen.getByRole("button", { name: "编辑" }));
+    // With nothing picked the canvas hints instead of showing a popover: the
+    // properties live next to the element, so they exist only with one.
     expect(await screen.findByText(/在画布上点选一个元素/)).toBeInTheDocument();
-    // Nothing picked, nothing changed: applying would create a revision
-    // identical to its base.
-    expect(screen.getByRole("button", { name: "应用修改" })).toBeDisabled();
-    expect(screen.getByText("在画布上选中元素后修改属性")).toBeInTheDocument();
-    // The adjust composer steps aside: one way to change the design at a time.
-    expect(screen.queryByPlaceholderText(/描述你想怎么改/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "应用修改" })).not.toBeInTheDocument();
+    // The message surface stays where it always was.
+    expect(screen.getByPlaceholderText(/描述你想怎么改/)).toBeInTheDocument();
+  });
+
+  // Open Design's annotation toolbar: four tools, the undo pair, and a note
+  // that sends without touching the composer. The send stays blocked until
+  // there is something to send.
+  it("arms the annotation toolbar and blocks an empty send", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByTitle("订单总览 · 首页");
+
+    await user.click(screen.getByRole("button", { name: "标注" }));
+    const toolbar = screen.getByRole("group", { name: "标注工具栏" });
+    for (const tool of ["选元素", "框选", "钢笔", "文字"]) {
+      expect(within(toolbar).getByRole("button", { name: tool })).toBeInTheDocument();
+    }
+    expect(within(toolbar).getByPlaceholderText("为这个标记添加说明")).toBeInTheDocument();
+    expect(within(toolbar).getByRole("button", { name: /发送调整/ })).toBeDisabled();
+    expect(within(toolbar).getByRole("button", { name: "撤销标注" })).toBeDisabled();
+
+    // Typing alone is a sendable message.
+    await user.type(within(toolbar).getByPlaceholderText("为这个标记添加说明"), "把这排卡片对齐");
+    expect(within(toolbar).getByRole("button", { name: /发送调整/ })).toBeEnabled();
+
+    // Sending posts the toolbar note as the adjustment's message; the input
+    // clears and the bar stays armed for the next mark.
+    await user.click(within(toolbar).getByRole("button", { name: /发送调整/ }));
+    await waitFor(() => expect(adjustDesignDocument).toHaveBeenCalledWith("document-1", expect.objectContaining({
+      instruction: "把这排卡片对齐",
+      base_revision_id: "revision-2",
+    })));
+    expect(within(toolbar).getByRole("button", { name: /发送调整/ })).toBeDisabled();
+    expect(screen.getByPlaceholderText("为这个标记添加说明")).toHaveValue("");
+
+    // Exiting clears the bar and restores the live preview.
+    await user.click(within(toolbar).getByRole("button", { name: "退出标注" }));
+    expect(screen.queryByRole("group", { name: "标注工具栏" })).not.toBeInTheDocument();
+  });
+
+  // The toolbar's queue branch mirrors the composer's: a send during a run is
+  // held, not dispatched, and the run's landing fires it.
+  it("queues a toolbar send while a run is live", async () => {
+    getDesignDocument.mockResolvedValue(document({
+      status: "running",
+      active_task: { id: "task-r", agent_id: "agent-1", status: "running", operation: "generate", error: null, created_at: "2026-08-19T00:30:00Z", started_at: "2026-08-19T00:30:01Z", completed_at: null },
+    }));
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(await screen.findByRole("button", { name: "标注" }));
+    const toolbar = screen.getByRole("group", { name: "标注工具栏" });
+    await user.type(within(toolbar).getByPlaceholderText("为这个标记添加说明"), "配色换成品牌蓝");
+    await user.click(within(toolbar).getByRole("button", { name: /排队调整/ }));
+
+    expect(adjustDesignDocument).not.toHaveBeenCalled();
+    await screen.findByText(/配色换成品牌蓝/);
+    expect(screen.getByPlaceholderText(/任务执行中，现在提交会排队/)).toBeInTheDocument();
   });
 
   // taskMessagesOptions is gated on a UUID task id, so a plan fixture has to
@@ -516,6 +594,9 @@ describe("DesignDocumentPage", () => {
     const picker = screen.getByLabelText("上传参考文件") as HTMLInputElement;
     await user.upload(picker, new File(["x"], "参考.png", { type: "image/png" }));
     expect(await screen.findByText("参考.png")).toBeInTheDocument();
+    // An image reference shows what it is: the chip carries the object URL of
+    // the staged file, not a name only.
+    expect(screen.getByRole("img", { name: "参考.png" })).toHaveAttribute("src", "blob:test-document-1");
 
     await user.type(screen.getByPlaceholderText(/描述你想怎么改/), "照这张图改配色");
     await user.click(screen.getByRole("button", { name: "发起调整" }));
@@ -526,6 +607,8 @@ describe("DesignDocumentPage", () => {
     });
     // Sent references belong to the turn that sent them.
     await waitFor(() => expect(screen.queryByText("参考.png")).not.toBeInTheDocument());
+    // ...and their preview URLs do not outlive the row.
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:test-document-1");
   });
 
   // The end of the designer's flow (DC-062). A draft must not be deliverable:
@@ -623,5 +706,98 @@ describe("DesignDocumentPage", () => {
     await waitFor(() => expect(toastError).toHaveBeenCalledWith("这次运行没有产出可调整的版本，排队的调整未发送"));
     expect(adjustDesignDocument).not.toHaveBeenCalled();
     expect((screen.getByPlaceholderText(/生成完成后可以在这里继续调整|描述你想怎么改/) as HTMLTextAreaElement).value).toBe("配色换成品牌蓝");
+  });
+
+  // 演示模式 (Open Design's present): the page takes the window, the pages
+  // walk with the keyboard, and Esc leaves. The prototype stays framed live —
+  // a demo plays.
+  it("presents the prototype fullscreen and walks pages with the keyboard", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    expect(await screen.findByTitle("订单总览 · 首页")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "演示模式" }));
+    const dialog = screen.getByRole("dialog", { name: "演示模式" });
+    expect(within(dialog).getByTitle("订单总览 · 首页")).toHaveAttribute(
+      "src",
+      "https://api.test/api/design-document-previews/ws-1/revision-2/bb/token/files/prototype/index.html",
+    );
+    expect(within(dialog).getByText("1 / 2")).toBeInTheDocument();
+
+    await user.keyboard("{ArrowRight}");
+    expect(await within(dialog).findByTitle("订单总览 · 订单列表")).toHaveAttribute(
+      "src",
+      "https://api.test/api/design-document-previews/ws-1/revision-2/bb/token/files/prototype/orders.html",
+    );
+    expect(within(dialog).getByText("2 / 2")).toBeInTheDocument();
+
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "演示模式" })).not.toBeInTheDocument();
+  });
+
+  // 历史版本: browse what each revision looks like before committing; only
+  // 查看此版本 moves the workbench, and 回退 keeps its pointer semantics.
+  it("previews a historical version in the dialog and can open or restore it", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    expect(await screen.findByText("订单总览")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "历史版本" }));
+    const dialog = await screen.findByRole("dialog", { name: "历史版本" });
+
+    // The newest revision previews first; walking to v1 swaps the framed page.
+    await waitFor(() => expect(within(dialog).getByTitle("版本预览")).toHaveAttribute(
+      "src",
+      "https://api.test/api/design-document-previews/ws-1/revision-2/bb/token/files/prototype/index.html",
+    ));
+    await user.click(within(dialog).getByText("v1"));
+    expect(await within(dialog).findByTitle("版本预览")).toHaveAttribute(
+      "src",
+      "https://api.test/api/design-document-previews/ws-1/revision-1/aa/token/files/prototype/index.html",
+    );
+
+    // 回退 moves the draft pointer, as the sidebar row does.
+    await user.click(within(dialog).getByRole("button", { name: "回退到此版本" }));
+    expect(restoreDesignDocumentRevision).toHaveBeenCalledWith("document-1", "revision-1");
+    expect(screen.queryByRole("dialog", { name: "历史版本" })).not.toBeInTheDocument();
+
+    // Reopening and choosing 查看此版本 pins the version without restoring.
+    await user.click(screen.getByRole("button", { name: "历史版本" }));
+    await user.click(await within(await screen.findByRole("dialog", { name: "历史版本" })).getByText("v1"));
+    await user.click(within(screen.getByRole("dialog", { name: "历史版本" })).getByRole("button", { name: "查看此版本" }));
+    expect(await screen.findByText(/正在查看历史版本/)).toBeInTheDocument();
+  });
+
+  // Open Design's screenshot-to-chat: the capture rides the ordinary
+  // attachment route, so the agent reads it like any staged reference file.
+  it("stages a chat screenshot as this turn's reference file", async () => {
+    rasterizePage.mockResolvedValue({ blob: new Blob(["png-bytes"], { type: "image/png" }), width: 1280, height: 720 });
+    uploadFile.mockResolvedValue({ id: "file-9", filename: "截图.png" });
+    // The capture rasterises the inlined page, which is not in the query cache
+    // here, so the inliner reads the package over the capability route.
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      headers: new Headers({ "content-type": "text/html" }),
+      arrayBuffer: async () => new TextEncoder().encode("<!doctype html><html><body>orders</body></html>").buffer,
+    }));
+    const user = userEvent.setup();
+    try {
+      renderPage();
+      await screen.findByTitle("订单总览 · 首页");
+
+      await user.click(screen.getByRole("button", { name: "截图" }));
+      const menu = await screen.findByRole("menu");
+      await user.click(within(menu).getByText("截图发送到对话"));
+
+      await waitFor(() => expect(uploadFile).toHaveBeenCalled());
+      expect(uploadFile.mock.calls[0]![0]).toBeInstanceOf(File);
+      expect(await screen.findByText("截图.png")).toBeInTheDocument();
+      // The staged capture previews as an image in the composer, so the user
+      // can see what the agent is about to read.
+      expect(screen.getByRole("img", { name: "截图.png" })).toHaveAttribute("src", "blob:test-document-1");
+      expect(toastSuccess).toHaveBeenCalledWith("截图已加入本轮对话的参考文件");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

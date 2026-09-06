@@ -86,21 +86,44 @@ func TestHandleTask_LogsFullTaskIDSoConcurrentRunsStayDistinct(t *testing.T) {
 		return TaskResult{Status: "completed"}, nil
 	})
 
-	for _, id := range []string{collidingTaskIDA, collidingTaskIDB} {
+	taskCases := []struct {
+		id      string
+		concise bool
+	}{
+		{id: collidingTaskIDA, concise: false},
+		{id: collidingTaskIDB, concise: true},
+	}
+	for _, tc := range taskCases {
 		d.handleTask(context.Background(), Task{
-			ID:        id,
-			RuntimeID: "rt-1",
-			IssueID:   "issue-log-correlation",
-			Agent:     &AgentData{Name: "test-agent"},
+			ID:          tc.id,
+			RuntimeID:   "rt-1",
+			IssueID:     "issue-log-correlation",
+			Agent:       &AgentData{Name: "test-agent"},
+			ConciseMode: tc.concise,
 		}, 0)
 	}
 
 	out := logs.String()
-	for _, id := range []string{collidingTaskIDA, collidingTaskIDB} {
-		if !strings.Contains(out, "task="+id) {
-			t.Errorf("no log line carried task=%s; logs:\n%s", id, out)
+	for _, tc := range taskCases {
+		if !strings.Contains(out, "task="+tc.id) {
+			t.Errorf("no log line carried task=%s; logs:\n%s", tc.id, out)
+		}
+		mode := "false"
+		if tc.concise {
+			mode = "true"
+		}
+		foundMode := false
+		for _, line := range strings.Split(out, "\n") {
+			if strings.Contains(line, "task="+tc.id) && strings.Contains(line, "concise_mode="+mode) {
+				foundMode = true
+				break
+			}
+		}
+		if !foundMode {
+			t.Errorf("no log line carried task=%s concise_mode=%s; logs:\n%s", tc.id, mode, out)
 		}
 	}
+
 	for _, got := range fieldValues(out, "task") {
 		if got != collidingTaskIDA && got != collidingTaskIDB {
 			t.Errorf("task=%q is neither full task id — a truncated id cannot be joined to the task JSON, the env-root ownership manifest, or the other run's lines", got)

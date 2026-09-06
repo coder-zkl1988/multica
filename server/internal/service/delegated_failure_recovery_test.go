@@ -454,6 +454,7 @@ func TestManualRerunKeepsDelegatedFailureRecoveryReplayable(t *testing.T) {
 		pgtype.UUID{},
 		util.MustParseUUID(f.userID),
 		nil,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("RerunIssue: %v", err)

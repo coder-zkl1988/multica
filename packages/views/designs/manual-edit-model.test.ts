@@ -7,6 +7,7 @@ import {
   computedColorToHex,
   countDeclarations,
   declarationOf,
+  editApplyBlocker,
   EDITABLE_PROPERTIES,
   submittableEdits,
   withDeclaration,
@@ -111,5 +112,23 @@ describe("computedColorToHex", () => {
     // A negative channel is not something a computed style produces; it does
     // not parse, and an unparseable colour shows no swatch.
     expect(computedColorToHex("rgb(300, -20, 1)")).toBe("");
+  });
+});
+
+// The apply gate moved into a pure helper when the properties panel became a
+// popover: the popover renders only with an element picked, which a DOM test
+// cannot reach, so this matrix is the guard the old sidebar test held.
+describe("editApplyBlocker", () => {
+  const applicable = { canAdjust: true, running: false, declarationCount: 2, hasAgent: true };
+
+  it("applies when everything holds", () => {
+    expect(editApplyBlocker(applicable)).toBeNull();
+  });
+
+  it("names the precondition that fails, in order", () => {
+    expect(editApplyBlocker({ ...applicable, canAdjust: false, running: true })).toBe("任务执行中，完成后可以继续编辑");
+    expect(editApplyBlocker({ ...applicable, canAdjust: false, running: false })).toBe("还没有可以编辑的版本");
+    expect(editApplyBlocker({ ...applicable, declarationCount: 0 })).toBe("在画布上选中元素后修改属性");
+    expect(editApplyBlocker({ ...applicable, hasAgent: false })).toBe("选择一个智能体来运行校验");
   });
 });

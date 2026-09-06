@@ -539,4 +539,38 @@ describe("electron-builder.yml packaging config", () => {
     expect(entries.length).toBeGreaterThan(0);
     expect(entries).toContain("!dist/**");
   });
+
+  it("keeps macOS Electron locales scoped to supported desktop languages", () => {
+    expect(configPath, "electron-builder.yml not found").toBeTruthy();
+    const raw = readFileSync(configPath, "utf-8");
+    expect(raw).not.toMatch(/^electronLanguages:/m);
+    expect(raw).toMatch(
+      /mac:\n(?: {2}.*\n)*? {2}electronLanguages:\n {4}- en\n {4}- zh_CN\n/,
+    );
+  });
+});
+
+describe("packaged runtime dependencies", () => {
+  it("copies only modules required by the fresh main-process bundle", () => {
+    const packagePath = [
+      resolve(process.cwd(), "apps/desktop/package.json"),
+      resolve(process.cwd(), "package.json"),
+    ].find((candidate) => existsSync(candidate));
+    expect(packagePath, "desktop package.json not found").toBeTruthy();
+    const manifest = JSON.parse(readFileSync(packagePath, "utf-8"));
+
+    expect(Object.keys(manifest.dependencies).sort()).toEqual([
+      "@electron-toolkit/utils",
+      "builder-util-runtime",
+      "electron-updater",
+      "fix-path",
+    ]);
+    expect(manifest.devDependencies).toMatchObject({
+      "@multica/core": "workspace:*",
+      "@multica/ui": "workspace:*",
+      "@multica/views": "workspace:*",
+      react: expect.any(String),
+      "react-dom": expect.any(String),
+    });
+  });
 });

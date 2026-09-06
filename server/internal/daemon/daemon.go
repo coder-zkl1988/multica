@@ -5503,9 +5503,9 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 		agentName = task.Agent.Name
 	}
 	if task.ChatSessionID != "" {
-		taskLog.Info("picked chat task", "chat_session", task.ChatSessionID, "agent", agentName, "provider", provider)
+		taskLog.Info("picked chat task", "chat_session", task.ChatSessionID, "agent", agentName, "provider", provider, "concise_mode", task.ConciseMode)
 	} else {
-		taskLog.Info("picked task", "issue", task.IssueID, "agent", agentName, "provider", provider)
+		taskLog.Info("picked task", "issue", task.IssueID, "agent", agentName, "provider", provider, "concise_mode", task.ConciseMode)
 	}
 	taskLog.Debug("task context",
 		"workspace_id", task.WorkspaceID,
@@ -7304,6 +7304,39 @@ func taskUsesDirectAgentMode(task Task, configuredDefault bool) bool {
 	return configuredDefault || task.ConciseMode
 }
 
+// buildTaskPrompt keeps the daemon-wide direct-mode escape hatch byte-stable.
+// An explicit concise task gets the compact envelope only when that legacy
+// default is off; concise caps still apply independently in both cases.
+func buildTaskPrompt(task Task, provider string, configuredDirect bool, options ...PromptOption) string {
+	if configuredDirect {
+		return BuildDirectPrompt(task)
+	}
+	if task.ConciseMode {
+		return buildConcisePrompt(task, options...)
+	}
+	return BuildPrompt(task, provider, options...)
+}
+
+// conciseMaxTurnsFor reports the turn cap for a run. The budget applies only
+// to runs the user explicitly opted into via task-level concise mode; a
+// daemon-wide DirectAgentMode default deliberately does not inherit it, and a
+// non-positive configured cap disables the limit entirely. Backends that do
+// not consume ExecOptions.MaxTurns ignore the value (claude and codebuddy
+// enforce it today).
+func conciseMaxTurnsFor(task Task, configured int) int {
+	if task.ConciseMode && configured > 0 {
+		return configured
+	}
+	return 0
+}
+
+func conciseMaxToolCallsFor(task Task, configured int) int {
+	if task.ConciseMode && configured > 0 {
+		return configured
+	}
+	return 0
+}
+
 func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot int, taskLog *slog.Logger) (taskResult TaskResult, returnErr error) {
 	// A claim carries the task-row agent id both at the top level and inside
 	// the expanded agent configuration. The top-level id is authoritative
@@ -8222,12 +8255,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	if env.LocalWorktree != nil && len(env.LocalWorktree.ReplayConflicts) > 0 {
 		promptOptions = append(promptOptions, WithWorktreeReplayConflicts(env.LocalWorktree.ReplayConflicts))
 	}
-	var prompt string
-	if directAgentMode {
-		prompt = BuildDirectPrompt(task)
-	} else {
-		prompt = BuildPrompt(task, provider, promptOptions...)
-	}
+	prompt := buildTaskPrompt(task, provider, d.cfg.DirectAgentMode, promptOptions...)
 
 	// Pass task-scoped auth credentials and context so the spawned agent CLI
 	// can call the Multica API and the local daemon (e.g. `multica repo checkout`).
@@ -8486,6 +8514,21 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		ClaudeSettingsPath:     env.ClaudeSettingsPath,
 		QwenpawWorkspace:       env.QwenpawWorkspace,
 	}
+	// Concise-mode turn cap: gated on the task flag alone. A daemon-wide
+	// DirectAgentMode deployment keeps its uncapped behaviour — only runs the
+	// user explicitly opted into concise mode get the budget. Backends that do
+	// not consume MaxTurns (see ExecOptions docs) ignore it, mirroring
+	// ThinkingLevel's incremental adoption contract.
+	if turns := conciseMaxTurnsFor(task, d.cfg.ConciseMaxTurns); turns > 0 {
+		execOpts.MaxTurns = turns
+	}
+	// Daemon-side tool-call cap for concise mode, distinct from MaxTurns:
+	// one turn issues several tool calls, and the four ACP/event-stream
+	// backends without a native turn limit (pi, codex, grok, openclaw)
+	// enforce it by counting tool-call events and force-stopping the run.
+	if calls := conciseMaxToolCallsFor(task, d.cfg.ConciseMaxToolCalls); calls > 0 {
+		execOpts.MaxToolCalls = calls
+	}
 	// Some providers do not reliably load the per-task runtime config files we
 	// write into the task workdir:
 	//   - openclaw is pinned to the task workdir via the per-task config we
@@ -8618,12 +8661,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 				return TaskResult{}, fmt.Errorf("cleanup runtime config for direct retry: %w", cerr)
 			}
 		}
-		var freshPrompt string
-		if directAgentMode {
-			freshPrompt = BuildDirectPrompt(task)
-		} else {
-			freshPrompt = BuildPrompt(task, provider, promptOptions...)
-		}
+		freshPrompt := buildTaskPrompt(task, provider, d.cfg.DirectAgentMode, promptOptions...)
 
 		retryResult, retryTools, retryErr := d.executeAndDrain(ctx, backend, freshPrompt, execOpts, taskLog, task.ID, env.CodexHome, &msgSeq)
 		if retryErr != nil {

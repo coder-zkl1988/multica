@@ -37,6 +37,13 @@ asarUnpack:
   - resources/**
 mac:
   entitlementsInherit: build/entitlements.mac.plist
+  # The app ships its own UI translations. Keep Electron's native-dialog
+  # locales only for English and Simplified Chinese to reduce the macOS bundle;
+  # scope this to macOS because Windows/Linux use different locale asset
+  # basenames. Renderer translations remain independently available.
+  electronLanguages:
+    - en
+    - zh_CN
   target:
     - dmg
     - zip

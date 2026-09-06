@@ -1106,6 +1106,11 @@ func (b *codexBackend) executeOnce(ctx context.Context, prompt string, opts Exec
 	var semanticObserved atomic.Bool
 	turnNotificationGate := &codexTurnNotificationGate{}
 	firstItemWait := &codexFirstItemWaitObservation{}
+	// Daemon-side tool-call budget (concise mode). See the onMessage gate
+	// for the denial path; atomics because onMessage runs on the reader
+	// goroutine while the run goroutine assembles the result.
+	toolBudget := newToolCallBudget(opts.MaxToolCalls)
+	var budgetExhausted atomic.Bool
 
 	// turnDone is set before starting the reader goroutine so there is no
 	// race between the lifecycle goroutine writing and the reader reading.
@@ -1135,6 +1140,23 @@ func (b *codexBackend) executeOnce(ctx context.Context, prompt string, opts Exec
 				outputMu.Lock()
 				lastAgentMessage = msg.Content
 				outputMu.Unlock()
+			}
+			if msg.Type == MessageToolUse && msg.Tool != "todo_write" {
+				// Daemon-side tool-call budget (concise mode): codex's
+				// app-server protocol has no native turn cap, so count tool
+				// uses here. todo_write is excluded: it is not a tool call
+				// but this backend's normalisation of the turn/plan/updated
+				// NOTIFICATION into the shared todo renderer's shape (see
+				// handleRawNotification) — charging it would spend the
+				// budget on planning rather than tool invocation. A denied
+				// call kills the process tree and the budget flag below
+				// files the failure before any aborted/crashed classifier
+				// can claim it.
+				if !toolBudget.Allow() {
+					budgetExhausted.Store(true)
+					signalProcessGroup(cmd, syscall.SIGKILL)
+					return
+				}
 			}
 			activity := describeCodexSemanticActivity(msg)
 			if activity == "status:running" {
@@ -1735,6 +1757,15 @@ func (b *codexBackend) executeOnce(ctx context.Context, prompt string, opts Exec
 			default:
 				b.cfg.Logger.Warn("codex lifecycle", fields...)
 			}
+		}
+
+		// Budget exhaustion is authoritative: the kill cancels the run
+		// context and would otherwise surface as aborted or a signal-crash
+		// failure. Check it after the turn loop settles so it wins over any
+		// classifier that ran first.
+		if budgetExhausted.Load() {
+			finalStatus = "failed"
+			finalError = fmt.Sprintf("codex: %s (cap %d)", ErrToolBudgetExceeded.Error(), opts.MaxToolCalls)
 		}
 
 		outputMu.Lock()

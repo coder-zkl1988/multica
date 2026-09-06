@@ -1,5 +1,29 @@
 import * as React from 'react'
-import { codeToHtml, bundledLanguages, type BundledLanguage } from 'shiki'
+import { createHighlighterCore, type HighlighterCore } from 'shiki/core'
+import { createJavaScriptRegexEngine } from 'shiki/engine/javascript'
+import githubDark from 'shiki/themes/github-dark.mjs'
+import githubLight from 'shiki/themes/github-light.mjs'
+import bash from 'shiki/langs/bash.mjs'
+import c from 'shiki/langs/c.mjs'
+import cpp from 'shiki/langs/cpp.mjs'
+import csharp from 'shiki/langs/csharp.mjs'
+import css from 'shiki/langs/css.mjs'
+import go from 'shiki/langs/go.mjs'
+import html from 'shiki/langs/html.mjs'
+import java from 'shiki/langs/java.mjs'
+import javascript from 'shiki/langs/javascript.mjs'
+import json from 'shiki/langs/json.mjs'
+import jsx from 'shiki/langs/jsx.mjs'
+import kotlin from 'shiki/langs/kotlin.mjs'
+import markdown from 'shiki/langs/markdown.mjs'
+import objectiveC from 'shiki/langs/objective-c.mjs'
+import python from 'shiki/langs/python.mjs'
+import ruby from 'shiki/langs/ruby.mjs'
+import rust from 'shiki/langs/rust.mjs'
+import sql from 'shiki/langs/sql.mjs'
+import tsx from 'shiki/langs/tsx.mjs'
+import typescript from 'shiki/langs/typescript.mjs'
+import yaml from 'shiki/langs/yaml.mjs'
 import { Copy, Check } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { Button } from "@multica/ui/components/ui/button"
@@ -24,19 +48,93 @@ export interface CodeBlockProps {
   mode?: 'terminal' | 'minimal' | 'full'
 }
 
-// Map common aliases to Shiki language names
-const LANGUAGE_ALIASES: Record<string, BundledLanguage> = {
+const SUPPORTED_LANGUAGES = {
+  shellscript: true,
+  c: true,
+  cpp: true,
+  csharp: true,
+  css: true,
+  go: true,
+  html: true,
+  java: true,
+  javascript: true,
+  json: true,
+  jsx: true,
+  kotlin: true,
+  markdown: true,
+  'objective-c': true,
+  python: true,
+  ruby: true,
+  rust: true,
+  sql: true,
+  tsx: true,
+  typescript: true,
+  yaml: true
+} as const
+type SupportedLanguage = keyof typeof SUPPORTED_LANGUAGES
+
+// Map common aliases to the canonical names of the focused grammar bundle.
+const LANGUAGE_ALIASES: Record<string, SupportedLanguage> = {
+  bash: 'shellscript',
+  sh: 'shellscript',
+  shell: 'shellscript',
+  zsh: 'shellscript',
+  'c#': 'csharp',
+  'c++': 'cpp',
+  cs: 'csharp',
   js: 'javascript',
+  mjs: 'javascript',
+  cjs: 'javascript',
   ts: 'typescript',
+  cts: 'typescript',
+  mts: 'typescript',
   py: 'python',
-  sh: 'bash',
-  zsh: 'bash',
   yml: 'yaml',
+  md: 'markdown',
   rb: 'ruby',
   rs: 'rust',
   kt: 'kotlin',
-  'objective-c': 'objc',
-  objc: 'objc'
+  kts: 'kotlin',
+  objc: 'objective-c'
+}
+
+let highlighterPromise: Promise<HighlighterCore> | undefined
+function getHighlighter(): Promise<HighlighterCore> {
+  highlighterPromise ??= createHighlighterCore({
+    engine: createJavaScriptRegexEngine(),
+    themes: [githubLight, githubDark],
+    langs: [
+      bash,
+      c,
+      cpp,
+      csharp,
+      css,
+      go,
+      html,
+      java,
+      javascript,
+      json,
+      jsx,
+      kotlin,
+      markdown,
+      objectiveC,
+      python,
+      ruby,
+      rust,
+      sql,
+      tsx,
+      typescript,
+      yaml
+    ]
+  })
+  return highlighterPromise
+}
+
+function resolveLanguage(lang: string): SupportedLanguage | null {
+  const normalized = LANGUAGE_ALIASES[lang] ?? lang
+  return Object.prototype.hasOwnProperty.call(SUPPORTED_LANGUAGES, normalized)
+    ? (normalized as SupportedLanguage)
+    : null
 }
 
 // Simple LRU cache for highlighted code
@@ -45,11 +143,6 @@ const CACHE_MAX_SIZE = 200
 
 function getCacheKey(code: string, lang: string): string {
   return `${lang}:${code}`
-}
-
-function isValidLanguage(lang: string): lang is BundledLanguage {
-  const normalized = LANGUAGE_ALIASES[lang] || lang
-  return normalized in bundledLanguages
 }
 
 /**
@@ -72,14 +165,21 @@ export function CodeBlock({
   const [isLoading, setIsLoading] = React.useState(true)
   const [copied, setCopied] = React.useState(false)
 
-  // Resolve language alias - keep as string to allow 'text' fallback
   const langLower = language.toLowerCase()
-  const resolvedLang: string = LANGUAGE_ALIASES[langLower] || langLower
+  const resolvedLang = resolveLanguage(langLower)
+  const displayLanguage = String(LANGUAGE_ALIASES[langLower] ?? langLower)
 
   React.useEffect(() => {
     let cancelled = false
 
     async function highlight(): Promise<void> {
+      if (!resolvedLang) {
+        setHighlighted(null)
+        setIsLoading(false)
+        return
+      }
+
+      setIsLoading(true)
       const cacheKey = getCacheKey(code, resolvedLang)
 
       const cached = highlightCache.get(cacheKey)
@@ -92,18 +192,15 @@ export function CodeBlock({
       }
 
       try {
-        // Use valid language or fallback to plaintext
-        const lang = isValidLanguage(resolvedLang) ? resolvedLang : 'text'
-
         // Dual themes: Shiki outputs CSS variables for both themes in one pass.
         // CSS handles switching via .dark selector (see globals.css).
-        const html = await codeToHtml(code, {
-          lang,
+        const html = (await getHighlighter()).codeToHtml(code, {
+          lang: resolvedLang,
           themes: {
             light: 'github-light',
-            dark: 'github-dark',
+            dark: 'github-dark'
           },
-          defaultColor: false,
+          defaultColor: false
         })
 
         // Cache the result
@@ -184,7 +281,7 @@ export function CodeBlock({
       {/* Language label + copy button */}
       <div className="flex items-center justify-between px-3 py-1.5 bg-muted/50 border-b text-caption">
         <span className="text-muted-foreground font-medium uppercase tracking-wide">
-          {resolvedLang !== 'text' ? resolvedLang : t(($) => $.plain_text)}
+          {displayLanguage !== 'text' ? displayLanguage : t(($) => $.plain_text)}
         </span>
         <Tooltip>
           <TooltipTrigger

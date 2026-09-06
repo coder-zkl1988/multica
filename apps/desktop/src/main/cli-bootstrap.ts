@@ -9,7 +9,7 @@ import { tmpdir } from "os";
 import { Readable } from "stream";
 
 import { selectPlatformReleaseAssetName } from "./cli-release-asset";
-import { fetchLatestCliReleaseTag } from "@multica/core/runtimes";
+import { fetchLatestCliReleaseTag } from "@multica/core/runtimes/cli-version";
 
 // Desktop prefers the bundled `multica` CLI shipped inside the app for
 // same-repo builds, but it can also repair or bootstrap a managed copy in

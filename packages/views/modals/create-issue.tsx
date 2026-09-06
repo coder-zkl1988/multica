@@ -246,6 +246,7 @@ export function ManualCreatePanel({
   const keepOpen = useQuickCreateStore((s) => s.keepOpen);
   const setKeepOpen = useQuickCreateStore((s) => s.setKeepOpen);
   const manualFields = useIssueCreateSettingsStore((s) => s.manualCreateFields);
+  const conciseMode = draft.manual.conciseMode;
 
   const sendShortcut = useShortcut("send");
   const [title, setTitle] = useState(draft.manual.title);
@@ -502,9 +503,14 @@ export function ManualCreatePanel({
               start_date: startDate || undefined,
               due_date: dueDate || undefined,
               attachment_ids: activeAttachmentIds.length > 0 ? activeAttachmentIds : undefined,
-              label_ids: labelIds.length > 0 ? labelIds : undefined,
               stage: parentIssueId && stage != null ? stage : undefined,
-              project_id: projectId,
+              // Same atomic-label contract as the plain create below: the
+              // server attaches them in the create transaction and echoes
+              // `issue.labels` back. Dropped once in PR #67 — labels on
+              // anchor sub-issues were silently lost because the legacy
+              // fallback never triggers when the response carries `labels`.
+              label_ids: labelIds.length > 0 ? labelIds : undefined,
+              concise_mode: conciseMode || undefined,
             },
           },
         });
@@ -529,6 +535,7 @@ export function ManualCreatePanel({
           // Stage is only meaningful for a sub-issue (relative to its siblings).
           stage: parentIssueId && stage != null ? stage : undefined,
           project_id: projectId,
+          concise_mode: conciseMode || undefined,
         });
       }
 
@@ -1007,6 +1014,8 @@ export function ManualCreatePanel({
                 <AssigneePicker
                   assigneeType={assigneeType ?? null}
                   assigneeId={assigneeId ?? null}
+                  conciseMode={conciseMode}
+                  onConciseModeChange={(checked) => setManual({ conciseMode: checked })}
                   onUpdate={(u) => updateAssignee(
                     u.assignee_type ?? undefined,
                     u.assignee_id ?? undefined,
@@ -1291,7 +1300,6 @@ export function ManualCreatePanel({
                       </DropdownMenuSubContent>
                     </DropdownMenuSub>
                   )}
-                  <DropdownMenuSeparator />
                   {/* Field visibility lives in Settings → Issue; the modal
                       closes first so the dialog doesn't linger over the
                       settings page. The draft store already holds everything

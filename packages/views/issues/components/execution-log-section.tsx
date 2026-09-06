@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronRight, Loader2, RotateCcw, Square } from "lucide-react";
+import { ChevronRight, Loader2, RotateCcw, Square, Zap } from "lucide-react";
 import { toast } from "sonner";
 import { api, dispatchReasonCode } from "@multica/core/api";
 import { issueKeys } from "@multica/core/issues/queries";
@@ -14,10 +14,24 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@multica/ui/components/ui/tooltip";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@multica/ui/components/ui/alert-dialog";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { formatDuration } from "../../agents/components/agent-activity-hover-content";
 import { TranscriptButton } from "../../common/task-transcript";
-import { cancelReasonLabel, failureReasonLabel } from "../../agents/components/tabs/task-failure";
+import {
+  cancelReasonLabel,
+  failureReasonLabel,
+  isToolBudgetExhausted,
+} from "../../agents/components/tabs/task-failure";
 import { useT } from "../../i18n";
 import {
   formatTokens,
@@ -69,7 +83,10 @@ const PAST_STATUS_RANK: Record<string, number> = {
   completed: 2,
 };
 
-export function ExecutionLogSection({ issueId, identifier }: ExecutionLogSectionProps) {
+export function ExecutionLogSection({
+  issueId,
+  identifier,
+}: ExecutionLogSectionProps) {
   const { t } = useT("issues");
   const [open, setOpen] = useState(true);
   const [showPast, setShowPast] = useState(false);
@@ -115,8 +132,7 @@ export function ExecutionLogSection({ issueId, identifier }: ExecutionLogSection
       const timeDiff = new Date(bt).getTime() - new Date(at).getTime();
       if (timeDiff !== 0) return timeDiff;
       return (
-        (PAST_STATUS_RANK[a.status] ?? 99) -
-        (PAST_STATUS_RANK[b.status] ?? 99)
+        (PAST_STATUS_RANK[a.status] ?? 99) - (PAST_STATUS_RANK[b.status] ?? 99)
       );
     });
   }, [tasks]);
@@ -158,7 +174,9 @@ export function ExecutionLogSection({ issueId, identifier }: ExecutionLogSection
         {activeTasks.length > 0 && (
           <span className="ml-auto inline-flex shrink-0 items-center gap-1 text-info">
             <span className="h-1.5 w-1.5 rounded-full bg-info animate-pulse" />
-            <span className="font-mono text-caption tabular-nums">{activeTasks.length}</span>
+            <span className="font-mono text-caption tabular-nums">
+              {activeTasks.length}
+            </span>
           </span>
         )}
         <IssueUsageTotal
@@ -189,8 +207,12 @@ export function ExecutionLogSection({ issueId, identifier }: ExecutionLogSection
                   }`}
                 />
                 {showPast
-                  ? t(($) => $.execution_log.hide_past, { count: pastTasks.length })
-                  : t(($) => $.execution_log.show_past, { count: pastTasks.length })}
+                  ? t(($) => $.execution_log.hide_past, {
+                      count: pastTasks.length,
+                    })
+                  : t(($) => $.execution_log.show_past, {
+                      count: pastTasks.length,
+                    })}
               </button>
               {showPast && (
                 <div className="mt-0.5 space-y-0.5">
@@ -276,7 +298,9 @@ export function IssueUsageTotal({
         <span className={`text-faint-foreground ${narrowTier}`}>·</span>
         <span className="text-muted-foreground">{formatUsd(total.cost)}</span>
       </TooltipTrigger>
-      <TooltipContent>{t(($) => $.execution_log.usage_total_tooltip)}</TooltipContent>
+      <TooltipContent>
+        {t(($) => $.execution_log.usage_total_tooltip)}
+      </TooltipContent>
     </Tooltip>
   );
 }
@@ -285,6 +309,11 @@ export function IssueUsageTotal({
 // usage dialog lists a run exactly the way this section does.
 
 // ─── Row visual config ─────────────────────────────────────────────────────
+
+// Milliseconds to wait between cancelling the active run and enqueueing the
+// cross-mode rerun. The cancel needs a beat to release the per-(issue, agent)
+// claim server-side; see handleModeSwitch.
+const MODE_SWITCH_RERUN_DELAY_MS = 200;
 
 const STATUS_TONE: Record<AgentTask["status"], string> = {
   queued: "text-warning",
@@ -316,6 +345,18 @@ export function ActiveTaskRow({
   const { t } = useT("issues");
   const [cancelling, setCancelling] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [modeSwitchOpen, setModeSwitchOpen] = useState(false);
+  const [modeSwitching, setModeSwitching] = useState(false);
+  // Set when the component unmounts (or the row's task changes) while a mode
+  // switch is between cancel and rerun; the pending rerun aborts instead of
+  // firing against a row that no longer exists.
+  const modeSwitchAborted = useRef(false);
+  useEffect(
+    () => () => {
+      modeSwitchAborted.current = true;
+    },
+    [task.id],
+  );
   const tone = STATUS_TONE[task.status];
   const label = useStatusLabel(task.status);
   const trigger = useTriggerText(task);
@@ -342,19 +383,57 @@ export function ActiveTaskRow({
     task.status !== "queued" && task.status !== "waiting_local_directory";
 
   const handleCancel = async () => {
-    if (cancelling) return;
+    if (cancelling || modeSwitching) return;
     setCancelling(true);
     try {
       await api.cancelTask(issueId, task.id);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : t(($) => $.execution_log.cancel_failed));
+      toast.error(
+        e instanceof Error
+          ? e.message
+          : t(($) => $.execution_log.cancel_failed),
+      );
       setCancelling(false);
     }
   };
 
   const requestCancel = () => {
-    if (cancelling) return;
+    if (cancelling || modeSwitching) return;
     setConfirmOpen(true);
+  };
+
+  // Mode switch = restart in the other mode, NOT a hot switch: the running
+  // process cannot change its prompt mid-flight, and a cross-mode rerun never
+  // resumes the session (the daemon's resume guard matches on mode). So the
+  // affordance cancels the active run and enqueues a fresh start in the other
+  const targetConcise = !task.concise_mode;
+  const handleModeSwitch = async () => {
+    if (modeSwitching) return;
+    setModeSwitching(true);
+    modeSwitchAborted.current = false;
+    try {
+      await api.cancelTask(issueId, task.id);
+      // Give the cancellation a beat to settle server-side (release the
+      // per-(issue, agent) claim, terminal-write the old row) before the
+      // rerun lands. Without this the rerun can race the cancel's commit and
+      // land as a queued-behind row instead of the fresh start the user
+      // confirmed. Unmount / task change while waiting aborts the rerun.
+      const { promise: settleDelay, resolve: settleDelayDone } =
+        Promise.withResolvers<void>();
+      setTimeout(settleDelayDone, MODE_SWITCH_RERUN_DELAY_MS);
+      await settleDelay;
+      if (modeSwitchAborted.current) return;
+      await api.rerunIssue(issueId, task.id, { conciseMode: targetConcise });
+    } catch (e) {
+      toast.error(
+        dispatchReasonCode(e) === "invocation_not_allowed"
+          ? t(($) => $.execution_log.retry_blocked)
+          : e instanceof Error
+            ? e.message
+            : t(($) => $.execution_log.mode_switch_failed),
+      );
+      setModeSwitching(false);
+    }
   };
 
   // Deliberately no token figure on an active row: the daemon reports usage
@@ -394,7 +473,7 @@ export function ActiveTaskRow({
               <button
                 type="button"
                 onClick={requestCancel}
-                disabled={cancelling}
+                disabled={cancelling || modeSwitching}
                 aria-label={t(($) => $.execution_log.cancel_task_aria)}
               />
             }
@@ -406,7 +485,45 @@ export function ActiveTaskRow({
               <Square className="h-3.5 w-3.5" />
             )}
           </TooltipTrigger>
-          <TooltipContent>{t(($) => $.execution_log.cancel_task_tooltip)}</TooltipContent>
+          <TooltipContent>
+            {t(($) => $.execution_log.cancel_task_tooltip)}
+          </TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                onClick={() => {
+                  if (!modeSwitching) setModeSwitchOpen(true);
+                }}
+                disabled={modeSwitching || cancelling}
+                aria-label={t(($) => $.execution_log.mode_switch_aria, {
+                  mode: t(
+                    targetConcise
+                      ? ($) => $.execution_log.mode_concise
+                      : ($) => $.execution_log.mode_standard,
+                  ),
+                })}
+              />
+            }
+            className="flex items-center justify-center rounded p-1 text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {modeSwitching ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Zap className="h-3.5 w-3.5" />
+            )}
+          </TooltipTrigger>
+          <TooltipContent>
+            {t(($) => $.execution_log.mode_switch_tooltip, {
+              mode: t(
+                targetConcise
+                  ? ($) => $.execution_log.mode_concise
+                  : ($) => $.execution_log.mode_standard,
+              ),
+            })}
+          </TooltipContent>
         </Tooltip>
       </RowActions>
       <TerminateTaskConfirmDialog
@@ -419,6 +536,17 @@ export function ActiveTaskRow({
           task.status === "waiting_local_directory"
         }
       />
+      {modeSwitchOpen && (
+        <ModeSwitchConfirmDialog
+          targetConcise={targetConcise}
+          busy={modeSwitching}
+          onCancel={() => setModeSwitchOpen(false)}
+          onConfirm={() => {
+            setModeSwitchOpen(false);
+            void handleModeSwitch();
+          }}
+        />
+      )}
     </RowShell>
   );
 }
@@ -479,6 +607,13 @@ function PastRow({ task, issueId }: { task: AgentTask; issueId: string }) {
   // (e.g. reassignment, squad worker, or a one-off @-mention agent).
   const canRetry = task.status === "failed" || task.status === "cancelled";
 
+  // A budget stop resumes the same session with a fresh budget on rerun, so
+  // the affordance says "continue", not "retry" — the run never went wrong.
+  const budgetExhausted = isToolBudgetExhausted(
+    task.failure_reason,
+    task.error,
+  );
+
   const handleRetry = async () => {
     if (retrying) return;
     setRetrying(true);
@@ -519,7 +654,11 @@ function PastRow({ task, issueId }: { task: AgentTask; issueId: string }) {
         )}
       </RowStatus>
       <RowActions>
-        <TranscriptButton task={task} agentName="" title={t(($) => $.execution_log.transcript_tooltip)} />
+        <TranscriptButton
+          task={task}
+          agentName=""
+          title={t(($) => $.execution_log.transcript_tooltip)}
+        />
         {canRetry && (
           <Tooltip>
             <TooltipTrigger
@@ -528,7 +667,14 @@ function PastRow({ task, issueId }: { task: AgentTask; issueId: string }) {
                   type="button"
                   onClick={handleRetry}
                   disabled={retrying}
-                  aria-label={t(($) => $.execution_log.retry_task_aria)}
+                  aria-label={t(
+                    ($) =>
+                      $.execution_log[
+                        budgetExhausted
+                          ? "continue_task_aria"
+                          : "retry_task_aria"
+                      ],
+                  )}
                 />
               }
               className="flex items-center justify-center rounded p-1 text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
@@ -539,7 +685,16 @@ function PastRow({ task, issueId }: { task: AgentTask; issueId: string }) {
                 <RotateCcw className="h-3.5 w-3.5" />
               )}
             </TooltipTrigger>
-            <TooltipContent>{t(($) => $.execution_log.retry_task_tooltip)}</TooltipContent>
+            <TooltipContent>
+              {t(
+                ($) =>
+                  $.execution_log[
+                    budgetExhausted
+                      ? "continue_task_tooltip"
+                      : "retry_task_tooltip"
+                  ],
+              )}
+            </TooltipContent>
           </Tooltip>
         )}
       </RowActions>
@@ -583,7 +738,11 @@ function RowShell({
 }
 
 function TriggerText({ text }: { text: string }) {
-  return <span className="min-w-0 flex-1 truncate text-caption text-muted-foreground">{text}</span>;
+  return (
+    <span className="min-w-0 flex-1 truncate text-caption text-muted-foreground">
+      {text}
+    </span>
+  );
 }
 
 function supportsCommentCoverage(status: AgentTask["status"]): boolean {
@@ -653,5 +812,59 @@ function RowActions({ children }: { children: React.ReactNode }) {
     <div className="flex h-7 items-center gap-0.5 [@media(hover:hover)]:hidden [@media(hover:hover)]:group-hover/execution-log-row:flex">
       {children}
     </div>
+  );
+}
+
+// Confirm step for the active-row mode switch. The copy must carry both
+// facts the backend guarantees: the current run is CANCELLED (a queued
+// rerun behind a live one would not switch anything), and the new run
+// starts FRESH in the target mode — a cross-mode rerun never resumes the
+// previous session or workdir.
+function ModeSwitchConfirmDialog({
+  targetConcise,
+  busy,
+  onCancel,
+  onConfirm,
+}: {
+  targetConcise: boolean;
+  busy: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const { t } = useT("issues");
+  return (
+    <AlertDialog open onOpenChange={(open) => !open && !busy && onCancel()}>
+      <AlertDialogContent onClick={(e) => e.stopPropagation()}>
+        <AlertDialogHeader>
+          <AlertDialogTitle>
+            {t(($) => $.execution_log.mode_switch_title, {
+              mode: t(
+                targetConcise
+                  ? ($) => $.execution_log.mode_concise
+                  : ($) => $.execution_log.mode_standard,
+              ),
+            })}
+          </AlertDialogTitle>
+          <AlertDialogDescription>
+            {t(($) => $.execution_log.mode_switch_body, {
+              mode: t(
+                targetConcise
+                  ? ($) => $.execution_log.mode_concise
+                  : ($) => $.execution_log.mode_standard,
+              ),
+            })}
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={busy}>
+            {t(($) => $.execution_log.mode_switch_keep)}
+          </AlertDialogCancel>
+          <AlertDialogAction onClick={onConfirm} disabled={busy}>
+            {busy && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
+            {t(($) => $.execution_log.mode_switch_confirm)}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }

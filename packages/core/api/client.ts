@@ -2654,10 +2654,15 @@ export class ApiClient {
     });
   }
 
-  async rerunIssue(issueId: string, taskId?: string): Promise<AgentTask> {
+  async rerunIssue(issueId: string, taskId?: string, options?: { conciseMode?: boolean }): Promise<AgentTask> {
+    const body: { task_id?: string; concise_mode?: boolean } = {};
+    if (taskId) body.task_id = taskId;
+    // Tri-state on the wire: omitted key inherits the source task's mode,
+    // explicit boolean forces it (a cross-mode rerun restarts the session).
+    if (options?.conciseMode !== undefined) body.concise_mode = options.conciseMode;
     return this.fetch(`/api/issues/${issueId}/rerun`, {
       method: "POST",
-      body: JSON.stringify(taskId ? { task_id: taskId } : {}),
+      body: JSON.stringify(body),
     });
   }
 

@@ -1,15 +1,24 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Lock, UserMinus } from "lucide-react";
-import type { Agent, IssueAssigneeType, UpdateIssueRequest } from "@multica/core/types";
+import { Lock, UserMinus, Zap } from "lucide-react";
+import type {
+  Agent,
+  IssueAssigneeType,
+  UpdateIssueRequest,
+} from "@multica/core/types";
 import { useQuery } from "@tanstack/react-query";
 import { useAuthStore } from "@multica/core/auth";
 import { isAgentRuntimeBound } from "@multica/core/agents";
 import { canAssignAgentToIssue } from "@multica/core/permissions";
 import { useActorName } from "@multica/core/workspace/hooks";
 import { useWorkspaceId } from "@multica/core/hooks";
-import { memberListOptions, agentListOptions, squadListOptions, assigneeFrequencyOptions } from "@multica/core/workspace/queries";
+import {
+  memberListOptions,
+  agentListOptions,
+  squadListOptions,
+  assigneeFrequencyOptions,
+} from "@multica/core/workspace/queries";
 import { ActorAvatar } from "../../../common/actor-avatar";
 import { DeferredPopup } from "../../../common/deferred-popup";
 import {
@@ -34,9 +43,12 @@ export function canAssignAgent(
 ): boolean {
   return canAssignAgentToIssue(agent, {
     userId: userId ?? null,
-    role: memberRole === "owner" || memberRole === "admin" || memberRole === "member"
-      ? memberRole
-      : null,
+    role:
+      memberRole === "owner" ||
+      memberRole === "admin" ||
+      memberRole === "member"
+        ? memberRole
+        : null,
   }).allowed;
 }
 
@@ -50,6 +62,14 @@ interface AssigneePickerProps {
    * genuinely unassigned and the unassigned row should be checked.
    */
   mixed?: boolean;
+  /**
+   * Opt-in concise-agent-mode toggle rendered as the picker footer. Only the
+   * creation dialogs pass it — the inline property picker on issue rows must
+   * stay mode-agnostic (mode belongs to a run, not an existing issue's
+   * assignee). Both the value and the handler must be provided together.
+   */
+  conciseMode?: boolean;
+  onConciseModeChange?: (checked: boolean) => void;
   onUpdate: (updates: Partial<UpdateIssueRequest>) => void;
   trigger?: React.ReactNode;
   triggerRender?: React.ReactElement<Record<string, unknown>>;
@@ -83,7 +103,11 @@ export function AssigneePicker(props: AssigneePickerProps) {
       triggerClassName={PICKER_TRIGGER_CLASS}
     >
       {(open, onOpenChange) => (
-        <AssigneePickerImpl {...props} open={open} onOpenChange={onOpenChange} />
+        <AssigneePickerImpl
+          {...props}
+          open={open}
+          onOpenChange={onOpenChange}
+        />
       )}
     </DeferredPopup>
   );
@@ -93,6 +117,8 @@ function AssigneePickerImpl({
   assigneeType,
   assigneeId,
   mixed = false,
+  conciseMode,
+  onConciseModeChange,
   onUpdate,
   trigger: customTrigger,
   triggerRender,
@@ -125,17 +151,31 @@ function AssigneePickerImpl({
     return map;
   }, [frequency]);
 
-  const getFreq = (type: string, id: string) => freqMap.get(`${type}:${id}`) ?? 0;
+  const getFreq = (type: string, id: string) =>
+    freqMap.get(`${type}:${id}`) ?? 0;
 
   const query = filter.trim().toLowerCase();
   const filteredMembers = members
-    .filter((m) => m.name.toLowerCase().includes(query) || matchesPinyin(m.name, query))
-    .sort((a, b) => getFreq("member", b.user_id) - getFreq("member", a.user_id));
+    .filter(
+      (m) =>
+        m.name.toLowerCase().includes(query) || matchesPinyin(m.name, query),
+    )
+    .sort(
+      (a, b) => getFreq("member", b.user_id) - getFreq("member", a.user_id),
+    );
   const filteredAgents = agents
-    .filter((a) => !a.archived_at && (a.name.toLowerCase().includes(query) || matchesPinyin(a.name, query)))
+    .filter(
+      (a) =>
+        !a.archived_at &&
+        (a.name.toLowerCase().includes(query) || matchesPinyin(a.name, query)),
+    )
     .sort((a, b) => getFreq("agent", b.id) - getFreq("agent", a.id));
   const filteredSquads = squads
-    .filter((s) => !s.archived_at && (s.name.toLowerCase().includes(query) || matchesPinyin(s.name, query)))
+    .filter(
+      (s) =>
+        !s.archived_at &&
+        (s.name.toLowerCase().includes(query) || matchesPinyin(s.name, query)),
+    )
     .sort((a, b) => getFreq("squad", b.id) - getFreq("squad", a.id));
   const runnableAgentIds = new Set(
     agents
@@ -165,14 +205,44 @@ function AssigneePickerImpl({
       onSearchChange={setFilter}
       triggerRender={triggerRender}
       trigger={
-        customTrigger ? customTrigger : assigneeType && assigneeId ? (
+        customTrigger ? (
+          customTrigger
+        ) : assigneeType && assigneeId ? (
           <>
-            <ActorAvatar actorType={assigneeType} actorId={assigneeId} size="sm" enableHoverCard showStatusDot />
+            <ActorAvatar
+              actorType={assigneeType}
+              actorId={assigneeId}
+              size="sm"
+              enableHoverCard
+              showStatusDot
+            />
             <span className="truncate">{triggerLabel}</span>
           </>
         ) : (
-          <span className="text-muted-foreground">{t(($) => $.pickers.assignee.trigger_unassigned)}</span>
+          <span className="text-muted-foreground">
+            {t(($) => $.pickers.assignee.trigger_unassigned)}
+          </span>
         )
+      }
+      footer={
+        // Outside the arrow-key listbox on purpose: mode is a creation-time
+        // option, not another assignee candidate to keyboard through.
+        conciseMode !== undefined && onConciseModeChange ? (
+          <label
+            className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-body text-muted-foreground hover:bg-accent transition-colors"
+            title={t(($) => $.pickers.assignee.concise_mode_description)}
+          >
+            <input
+              type="checkbox"
+              checked={conciseMode}
+              aria-label={t(($) => $.pickers.assignee.concise_mode_aria)}
+              onChange={(e) => onConciseModeChange(e.target.checked)}
+              className="h-3.5 w-3.5 accent-foreground"
+            />
+            <Zap className="h-3.5 w-3.5" />
+            <span>{t(($) => $.pickers.assignee.concise_mode)}</span>
+          </label>
+        ) : undefined
       }
     >
       {/* Unassigned — always the first row, search active or not. Every
@@ -187,7 +257,9 @@ function AssigneePickerImpl({
         }}
       >
         <UserMinus className="h-3.5 w-3.5 text-muted-foreground" />
-        <span className="text-muted-foreground">{t(($) => $.pickers.assignee.trigger_unassigned)}</span>
+        <span className="text-muted-foreground">
+          {t(($) => $.pickers.assignee.trigger_unassigned)}
+        </span>
       </PickerItem>
 
       {/* Members */}
@@ -248,8 +320,17 @@ function AssigneePickerImpl({
                   setOpen(false);
                 }}
               >
-                <ActorAvatar actorType="agent" actorId={a.id} size="sm" showStatusDot />
-                <span className={`truncate ${allowed ? "" : "text-muted-foreground"}`}>{a.name}</span>
+                <ActorAvatar
+                  actorType="agent"
+                  actorId={a.id}
+                  size="sm"
+                  showStatusDot
+                />
+                <span
+                  className={`truncate ${allowed ? "" : "text-muted-foreground"}`}
+                >
+                  {a.name}
+                </span>
                 {a.visibility === "private" && (
                   <Lock className="ml-auto h-3 w-3 text-muted-foreground" />
                 )}
