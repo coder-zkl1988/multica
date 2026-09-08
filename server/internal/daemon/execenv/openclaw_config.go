@@ -1689,7 +1689,7 @@ func openclawAgentExtraSkillDirs(bin string, timeout time.Duration, agents []any
 	out, err := openclawExec(ctx, bin, "config", "get", "skills.load.extraDirs", "--json")
 	var dirs []string
 	if err != nil {
-		if !isOpenclawKeyMissing(err) {
+		if !isOpenclawKeyMissingResult(out, err, "skills.load.extraDirs") {
 			return nil, err
 		}
 	} else if trimmed := strings.TrimSpace(out); trimmed != "" && trimmed != "null" {

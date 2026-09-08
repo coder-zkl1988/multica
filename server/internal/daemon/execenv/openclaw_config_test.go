@@ -2624,3 +2624,47 @@ func TestPrepareOpenclawConfigLoadsSelectedAgentWorkspaceSkills(t *testing.T) {
 		}
 	}
 }
+
+func TestPrepareOpenclawConfigLoadsSelectedAgentWorkspaceSkillsWhenExtraDirsUnset(t *testing.T) {
+	envRoot := t.TempDir()
+	workDir := filepath.Join(envRoot, "workdir")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatalf("mkdir workdir: %v", err)
+	}
+	userConfigPath := filepath.Join(t.TempDir(), "openclaw.json")
+	if err := os.WriteFile(userConfigPath, []byte(`{}`), 0o600); err != nil {
+		t.Fatalf("write user cfg: %v", err)
+	}
+
+	agentWorkspace := filepath.Join(t.TempDir(), "main-workspace")
+	registryBytes, err := json.Marshal([]map[string]any{{
+		"id": "main", "workspace": agentWorkspace, "isDefault": true,
+	}})
+	if err != nil {
+		t.Fatalf("marshal registry: %v", err)
+	}
+	stub := installOpenclawStub(t, map[string]openclawResponse{
+		"config file":                   {stdout: userConfigPath},
+		"config get agents.list --json": {err: errors.New("Config path not found: agents.list")},
+		"agents list --json":            {stdout: string(registryBytes)},
+		"config get skills.load.extraDirs --json": {
+			stdout: `{"ok":false,"error":{"type":"cli_error","message":"Config path is valid but unset: skills.load.extraDirs. The runtime default applies."}}`,
+			err:    errors.New("openclaw config get skills.load.extraDirs --json: exit status 1"),
+		},
+	})
+
+	result, err := prepareOpenclawConfig(envRoot, workDir, OpenclawConfigPrep{
+		OpenclawBin: stub.bin,
+		AgentID:     "main",
+	})
+	if err != nil {
+		t.Fatalf("prepareOpenclawConfig: %v", err)
+	}
+	got := mustReadJSON(t, result.ConfigPath)
+	load := got["skills"].(map[string]any)["load"].(map[string]any)
+	extraDirs := load["extraDirs"].([]any)
+	want := filepath.Join(agentWorkspace, "skills")
+	if len(extraDirs) != 1 || extraDirs[0] != want {
+		t.Fatalf("skills.load.extraDirs = %v, want [%q]", extraDirs, want)
+	}
+}
