@@ -360,8 +360,7 @@ func (c *httpAPIClient) prdSnapshot(ctx context.Context, creds InstallationCrede
 				query.Set("page_token", page)
 			}
 			if err := c.prdJSON(ctx, creds, http.MethodGet, path+"/blocks?"+query.Encode(), nil, &data); err != nil {
-				var apiErr *APIError
-				if attempt == 0 && errors.As(err, &apiErr) && apiErr.Code == 1770032 {
+				if attempt == 0 && larkErrorCode(err) == 1770032 {
 					pinnedPermissionFailure = true
 					break
 				}
