@@ -36,6 +36,7 @@ type prdDocumentFake struct {
 	ignoreInsert               bool
 	ignoreTransfer             bool
 	loopPage                   bool
+	rejectPinnedBlocks         bool
 	tokens                     map[string]bool
 }
 
@@ -57,6 +58,22 @@ func newPRDDocumentFake(t *testing.T) (*prdDocumentFake, PRDDocumentClient) {
 	f.server = httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(f.server.Close)
 	return f, NewHTTPAPIClient(HTTPClientConfig{BaseURL: f.server.URL}).(PRDDocumentClient)
+}
+
+func TestPRDSnapshotFallsBackToLatestBlocksWhenPinnedRevisionForbidden(t *testing.T) {
+	f, client := newPRDDocumentFake(t)
+	f.rejectPinnedBlocks = true
+	c := client.(*httpAPIClient)
+	snapshot, err := c.prdSnapshot(context.Background(), InstallationCredentials{AppID: "test-app", AppSecret: "test-secret"}, "copy1")
+	if err != nil {
+		t.Fatalf("prdSnapshot: %v", err)
+	}
+	if snapshot.Revision != f.revision {
+		t.Fatalf("revision = %d, want %d", snapshot.Revision, f.revision)
+	}
+	if len(snapshot.Blocks) != len(f.blocks) {
+		t.Fatalf("blocks = %d, want %d", len(snapshot.Blocks), len(f.blocks))
+	}
 }
 
 func (f *prdDocumentFake) serve(w http.ResponseWriter, r *http.Request) {
@@ -131,7 +148,11 @@ func (f *prdDocumentFake) serve(w http.ResponseWriter, r *http.Request) {
 	case "GET /open-apis/docx/v1/documents/copy1":
 		respond(map[string]any{"document": map[string]any{"document_id": "copy1", "revision_id": f.revision}})
 	case "GET /open-apis/docx/v1/documents/copy1/blocks":
-		if r.URL.Query().Get("document_revision_id") != strconv.FormatInt(f.revision, 10) {
+		if f.rejectPinnedBlocks && r.URL.Query().Get("document_revision_id") != "-1" {
+			writeJSON(w, map[string]any{"code": 1770032, "msg": "forbidden"})
+			return
+		}
+		if !f.rejectPinnedBlocks && r.URL.Query().Get("document_revision_id") != strconv.FormatInt(f.revision, 10) {
 			f.t.Error("block reads must pin revision")
 		}
 		if f.loopPage {

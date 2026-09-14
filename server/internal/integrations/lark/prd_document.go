@@ -336,46 +336,79 @@ func (c *httpAPIClient) prdSnapshot(ctx context.Context, creds InstallationCrede
 		return snapshot, errors.New("invalid PRD document revision")
 	}
 	snapshot.Revision = info.Document.Revision
-	seen := map[string]bool{}
-	page := ""
-	for {
-		var data struct {
-			Items     []prdBlock `json:"items"`
-			HasMore   bool       `json:"has_more"`
-			PageToken string     `json:"page_token"`
+	for attempt := range 2 {
+		blockRevision := strconv.FormatInt(snapshot.Revision, 10)
+		if attempt == 1 {
+			// Some Feishu tenants allow the latest blocks but reject an explicit
+			// revision for an otherwise readable document. Retry latest only for
+			// that documented permission response, then verify the revision did
+			// not change while reading so the snapshot remains immutable.
+			blockRevision = "-1"
 		}
-		query := url.Values{"page_size": {"500"}, "document_revision_id": {strconv.FormatInt(snapshot.Revision, 10)}, "user_id_type": {"open_id"}}
-		if page != "" {
-			query.Set("page_token", page)
+		snapshot.Blocks = make(map[string]prdBlock)
+		seen := map[string]bool{}
+		page := ""
+		pinnedPermissionFailure := false
+		for {
+			var data struct {
+				Items     []prdBlock `json:"items"`
+				HasMore   bool       `json:"has_more"`
+				PageToken string     `json:"page_token"`
+			}
+			query := url.Values{"page_size": {"500"}, "document_revision_id": {blockRevision}, "user_id_type": {"open_id"}}
+			if page != "" {
+				query.Set("page_token", page)
+			}
+			if err := c.prdJSON(ctx, creds, http.MethodGet, path+"/blocks?"+query.Encode(), nil, &data); err != nil {
+				var apiErr *APIError
+				if attempt == 0 && errors.As(err, &apiErr) && apiErr.Code == 1770032 {
+					pinnedPermissionFailure = true
+					break
+				}
+				return snapshot, err
+			}
+			for _, b := range data.Items {
+				if !prdToken(b.ID) {
+					return snapshot, errors.New("invalid PRD block ID")
+				}
+				if _, exists := snapshot.Blocks[b.ID]; exists {
+					return snapshot, errors.New("duplicate PRD block in pagination")
+				}
+				snapshot.Blocks[b.ID] = b
+			}
+			if len(snapshot.Blocks) > prdMaxBlocks {
+				return snapshot, errors.New("PRD template exceeds block limit")
+			}
+			if !data.HasMore {
+				break
+			}
+			if data.PageToken == "" || seen[data.PageToken] || len(data.Items) == 0 {
+				return snapshot, errors.New("invalid PRD block pagination")
+			}
+			seen[data.PageToken] = true
+			page = data.PageToken
 		}
-		if err := c.prdJSON(ctx, creds, http.MethodGet, path+"/blocks?"+query.Encode(), nil, &data); err != nil {
+		if pinnedPermissionFailure {
+			continue
+		}
+		if blockRevision != "-1" {
+			return snapshot, nil
+		}
+		var latest struct {
+			Document struct {
+				ID       string `json:"document_id"`
+				Revision int64  `json:"revision_id"`
+			} `json:"document"`
+		}
+		if err := c.prdJSON(ctx, creds, http.MethodGet, path, nil, &latest); err != nil {
 			return snapshot, err
 		}
-		for _, b := range data.Items {
-			if !prdToken(b.ID) {
-				return snapshot, errors.New("invalid PRD block ID")
-			}
-			if _, exists := snapshot.Blocks[b.ID]; exists {
-				return snapshot, errors.New("duplicate PRD block in pagination")
-			}
-			snapshot.Blocks[b.ID] = b
+		if latest.Document.ID != docID || latest.Document.Revision != snapshot.Revision {
+			return snapshot, errors.New("PRD document changed while reading blocks")
 		}
-		if len(snapshot.Blocks) > prdMaxBlocks {
-			return snapshot, errors.New("PRD template exceeds block limit")
-		}
-		if !data.HasMore {
-			break
-		}
-		if data.PageToken == "" || seen[data.PageToken] || len(data.Items) == 0 {
-			return snapshot, errors.New("invalid PRD block pagination")
-		}
-		seen[data.PageToken] = true
-		page = data.PageToken
+		return snapshot, nil
 	}
-	if root, ok := snapshot.Blocks[docID]; !ok || root.Type != 1 {
-		return snapshot, errors.New("PRD document root unavailable")
-	}
-	return snapshot, nil
+	return snapshot, errors.New("PRD blocks permission fallback exhausted")
 }
 
 // Matching is exact except surrounding whitespace. In particular, numbering
