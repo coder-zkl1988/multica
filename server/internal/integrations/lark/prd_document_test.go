@@ -149,6 +149,7 @@ func (f *prdDocumentFake) serve(w http.ResponseWriter, r *http.Request) {
 		respond(map[string]any{"document": map[string]any{"document_id": "copy1", "revision_id": f.revision}})
 	case "GET /open-apis/docx/v1/documents/copy1/blocks":
 		if f.rejectPinnedBlocks && r.URL.Query().Get("document_revision_id") != "-1" {
+			w.WriteHeader(http.StatusForbidden)
 			writeJSON(w, map[string]any{"code": 1770032, "msg": "forbidden"})
 			return
 		}
