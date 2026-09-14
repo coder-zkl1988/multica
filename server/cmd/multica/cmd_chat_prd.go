@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -24,7 +25,7 @@ var chatPRDGetCmd = &cobra.Command{
 	Short: "Read the current topic's PRD draft and publication state",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		return fetchAndPrintChatSessionJSON(cmd, "/api/chat/prd")
+		return fetchAndPrintChatSessionJSONWithError(cmd, "/api/chat/prd", chatPRDRequestError)
 	},
 }
 
@@ -47,7 +48,7 @@ var chatPRDTemplateCmd = &cobra.Command{
 	Short: "Read the configured PRD template's exact section headings",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		return fetchAndPrintChatSessionJSON(cmd, "/api/chat/prd/template")
+		return fetchAndPrintChatSessionJSONWithError(cmd, "/api/chat/prd/template", chatPRDRequestError)
 	},
 }
 
@@ -90,6 +91,28 @@ func runChatPRDPublish(cmd *cobra.Command, _ []string) error {
 	})
 }
 
+// chatPRDRequestError surfaces the server's structured PRD refusal as the
+// command's user message. A source-authorization rejection carries a
+// ready-to-relay guidance sentence; the agent overlays display names it
+// resolved from `multica chat thread` (the server deliberately never
+// guesses names from mention metadata). Anything else keeps the generic
+// retry hint.
+func chatPRDRequestError(err error) error {
+	switch cli.ServerErrorCode(err) {
+	case "prd_source_not_topic_root", "prd_source_missing_mention", "prd_source_not_prd_request":
+		var httpErr *cli.HTTPError
+		if errors.As(err, &httpErr) {
+			var body struct {
+				Guidance string `json:"guidance"`
+			}
+			if json.Unmarshal([]byte(httpErr.Body), &body) == nil && body.Guidance != "" {
+				return cli.WithUserMessage(body.Guidance, err)
+			}
+		}
+	}
+	return fmt.Errorf("PRD request failed (use multica chat prd get to inspect durable state): %w", err)
+}
+
 func postChatPRD(cmd *cobra.Command, path string, body any) error {
 	client, err := newAPIClient(cmd)
 	if err != nil {
@@ -99,7 +122,7 @@ func postChatPRD(cmd *cobra.Command, path string, body any) error {
 	defer cancel()
 	var response any
 	if err := client.PostJSON(ctx, path, body, &response); err != nil {
-		return fmt.Errorf("PRD request failed (use multica chat prd get to inspect durable state): %w", err)
+		return chatPRDRequestError(err)
 	}
 	return cli.PrintJSON(os.Stdout, response)
 }

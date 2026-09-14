@@ -526,6 +526,29 @@ type ChatPrdDraft struct {
 	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
 }
 
+type ChatPrdDraftHistory struct {
+	ID                     pgtype.UUID        `json:"id"`
+	WorkspaceID            pgtype.UUID        `json:"workspace_id"`
+	InstallationID         pgtype.UUID        `json:"installation_id"`
+	ChannelChatID          string             `json:"channel_chat_id"`
+	ChannelThreadID        string             `json:"channel_thread_id"`
+	SourceMessageID        string             `json:"source_message_id"`
+	InitiatorOpenID        string             `json:"initiator_open_id"`
+	InitiatorMulticaUserID pgtype.UUID        `json:"initiator_multica_user_id"`
+	Version                int32              `json:"version"`
+	Content                []byte             `json:"content"`
+	ConfirmedContent       []byte             `json:"confirmed_content"`
+	ConfirmationMessageID  string             `json:"confirmation_message_id"`
+	Status                 string             `json:"status"`
+	Phase                  string             `json:"phase"`
+	DocumentID             string             `json:"document_id"`
+	DocumentUrl            string             `json:"document_url"`
+	Failure                string             `json:"failure"`
+	VersionCreatedAt       pgtype.Timestamptz `json:"version_created_at"`
+	CreatedAt              pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt              pgtype.Timestamptz `json:"updated_at"`
+}
+
 type ChatSession struct {
 	ID                  pgtype.UUID        `json:"id"`
 	WorkspaceID         pgtype.UUID        `json:"workspace_id"`

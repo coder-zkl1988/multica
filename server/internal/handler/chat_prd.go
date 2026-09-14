@@ -170,6 +170,13 @@ func (h *Handler) GetChatPRD(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// Same advisory early refusal as the template read: an unauthorized
+	// topic gets the actionable rejection immediately (before any drafting
+	// work), while the authoritative verdict stays in draft/publish.
+	if rejection := h.chatPRDTopicRejection(r, scope); rejection != nil {
+		writeChatPRDRejection(w, http.StatusForbidden, *rejection)
+		return
+	}
 	draft, err := readChatPRD(r.Context(), h.DB, scope)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "no PRD draft exists in this topic")
@@ -200,6 +207,16 @@ func (h *Handler) chatPRDTemplateHeadings(w http.ResponseWriter, r *http.Request
 func (h *Handler) GetChatPRDTemplate(w http.ResponseWriter, r *http.Request) {
 	scope, ok := h.chatPRDScope(w, r)
 	if !ok {
+		return
+	}
+	// Fast, actionable refusal: when this topic's ROOT message cannot
+	// authorize a PRD, say so here with the structured rejection instead of
+	// letting the agent spend a full drafting run discovering it at save
+	// time. Advisory only — the save path re-validates authoritatively, and
+	// the root (trigger.RootID, else the trigger) is what it validates, so
+	// ordinary reply triggers under a valid root still read the template.
+	if rejection := h.chatPRDTopicRejection(r, scope); rejection != nil {
+		writeChatPRDRejection(w, http.StatusForbidden, *rejection)
 		return
 	}
 	headings, ok := h.chatPRDTemplateHeadings(w, r, scope)
@@ -366,11 +383,15 @@ func (h *Handler) SaveChatPRDDraft(w http.ResponseWriter, r *http.Request) {
 	}
 	source, err := h.chatPRDMessage(r.Context(), scope, request.SourceMessageID)
 	if err != nil {
-		writeError(w, http.StatusForbidden, err.Error())
+		writeChatPRDRejection(w, http.StatusForbidden, chatPRDRejection{
+			Error:    err.Error(),
+			Code:     prdRejectNotTopicRoot,
+			Guidance: chatPRDRejectionGuidance(),
+		})
 		return
 	}
 	if err := validateChatPRDSource(source, scope); err != nil {
-		writeError(w, http.StatusForbidden, err.Error())
+		writeChatPRDRejection(w, http.StatusForbidden, h.chatPRDRejectionForSource(r, scope, source))
 		return
 	}
 	trigger, err := h.chatPRDMessage(r.Context(), scope, scope.triggerID)

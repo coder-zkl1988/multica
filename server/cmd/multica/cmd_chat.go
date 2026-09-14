@@ -223,6 +223,28 @@ func fetchAndPrintChatSessionJSON(cmd *cobra.Command, path string) error {
 	return cli.PrintJSON(os.Stdout, resp)
 }
 
+// fetchAndPrintChatSessionJSONWithError is fetchAndPrintChatSessionJSON
+// with a caller-supplied error wrapper, so command-specific refusal
+// guidance (e.g. the PRD source rejection) can surface as the user
+// message instead of the generic "read chat session" hint.
+func fetchAndPrintChatSessionJSONWithError(cmd *cobra.Command, path string, wrap func(error) error) error {
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := cli.APIContext(context.Background())
+	defer cancel()
+
+	var resp any
+	if err := client.GetJSON(ctx, path, &resp); err != nil {
+		if wrap != nil {
+			return wrap(err)
+		}
+		return fmt.Errorf("read chat session: %w", err)
+	}
+	return cli.PrintJSON(os.Stdout, resp)
+}
+
 func chatSessionPath(sessionID string) string {
 	return "/api/chat/sessions/" + url.PathEscape(sessionID)
 }
