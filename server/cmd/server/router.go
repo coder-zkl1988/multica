@@ -2596,6 +2596,11 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			r.Post("/api/chat/prd/draft", h.SaveChatPRDDraft)
 			r.Post("/api/chat/prd/publish", h.PublishChatPRD)
 
+			// Workspace-wide PRD ledger (back-office review/statistics).
+			// Member-readable projection of chat_prd_draft via the
+			// chat_prd_draft_history view; writes stay task-scoped above.
+			r.Get("/api/chat/prd/history", h.ListChatPRDDraftHistory)
+
 			// Inbox
 			r.Route("/api/inbox", func(r chi.Router) {
 				r.Get("/", h.ListInbox)

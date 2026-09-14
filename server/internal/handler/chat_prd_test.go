@@ -258,10 +258,25 @@ func TestChatPRDRejectsUntrustedSource(t *testing.T) {
 			message := f.root
 			tc.change(&message)
 			f.client.messages[message.MessageID] = message
-			testutil.Call(t, f.h.SaveChatPRDDraft, f.request(http.MethodPost, "/api/chat/prd/draft", map[string]any{
+			response := testutil.Call(t, f.h.SaveChatPRDDraft, f.request(http.MethodPost, "/api/chat/prd/draft", map[string]any{
 				"source_message_id": message.MessageID, "content": prdFixtureContent(),
 			})).Want(http.StatusForbidden)
-			testutil.Call(t, f.h.GetChatPRD, f.request(http.MethodGet, "/api/chat/prd", nil)).Want(http.StatusNotFound)
+			var rejection chatPRDRejection
+			response.JSON(&rejection)
+			if rejection.Code == "" || rejection.Guidance == "" {
+				t.Fatalf("rejection missing code/guidance: %+v", rejection)
+			}
+			// The read path surfaces an advisory refusal when the topic's
+			// root stays readable-but-invalid (before any drafting work).
+			// When the mutation makes the root itself unreadable, the
+			// advisory check cannot classify and the durable read falls
+			// back to not-found.
+			rootUnreadable := message.ThreadID != f.root.ThreadID || message.RootID != ""
+			wantRead := http.StatusForbidden
+			if rootUnreadable {
+				wantRead = http.StatusNotFound
+			}
+			testutil.Call(t, f.h.GetChatPRD, f.request(http.MethodGet, "/api/chat/prd", nil)).Want(wantRead)
 			if len(f.client.documents) != 0 {
 				t.Fatal("untrusted source created a document")
 			}
