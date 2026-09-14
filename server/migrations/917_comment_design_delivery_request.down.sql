@@ -1,0 +1,1 @@
+DROP INDEX CONCURRENTLY idx_comment_design_delivery_request;

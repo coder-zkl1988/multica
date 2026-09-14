@@ -47,6 +47,27 @@ function makeAttachment(id: string): Attachment {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+describe("comment delivery draft retries", () => {
+  beforeEach(() => useCommentDraftStore.setState({ drafts: {} }));
+  it("preserves a request across an unchanged retry and rotates its key only when intent changes", () => {
+    const store = useCommentDraftStore.getState();
+    store.setDesignRequest("new:issue-1", { request_id: "request-1", operation: "design", agent_id: "chosen-agent", project_resource_id: "repository-1" });
+    store.setDraft("new:issue-1", "Checkout requirements");
+    const first = useCommentDraftStore.getState().drafts["new:issue-1"]!.designRequest!;
+    store.setDraft("new:issue-1", "Checkout requirements");
+    expect(useCommentDraftStore.getState().drafts["new:issue-1"]!.designRequest).toEqual(first);
+    store.setDraft("new:issue-1", "Revised checkout requirements");
+    const revised = useCommentDraftStore.getState().drafts["new:issue-1"]!.designRequest!;
+    expect(revised.request_id).not.toBe(first.request_id);
+    expect(revised).toMatchObject({ operation: "design", agent_id: "chosen-agent", project_resource_id: "repository-1" });
+    expect(revised.design_system_id).toBeUndefined();
+    store.setDesignRequest("new:issue-1", undefined);
+    expect(store.getDraft("new:issue-1")).toBe("Revised checkout requirements");
+    expect(useCommentDraftStore.getState().drafts["new:issue-1"]!.designRequest).toBeUndefined();
+  });
+});
+
+
 describe("comment draft store — attachments in the draft", () => {
   beforeEach(() => {
     useCommentDraftStore.setState({ drafts: {} });

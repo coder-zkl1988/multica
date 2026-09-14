@@ -117,6 +117,12 @@ deleted_open_design_runs AS (
       AND open_design_run.project_id = $1
     RETURNING open_design_run.id
 ),
+deleted_design_document_live_previews AS (
+    DELETE FROM design_document_live_preview
+    WHERE workspace_id = $2 AND document_id IN (
+        SELECT id FROM design_document WHERE workspace_id = $2 AND project_id = $1
+    )
+),
 deleted_design_document_revisions AS (
     DELETE FROM design_document_revision
     WHERE design_document_revision.workspace_id = $2

@@ -245,6 +245,7 @@ func TestListWorkspaceDesignSystemCatalogueCarriesSummaryAndDraftFlag(t *testing
 		Name:          "看板视觉",
 		Platform:      "web",
 		InputSnapshot: []byte(`{"brief":"统一看板的产品视觉语言。\n第二行不进入摘要。","platform":"web"}`),
+		CreatedBy:     parseUUID(testUserID),
 	})
 	if err != nil {
 		t.Fatalf("create system: %v", err)
@@ -292,6 +293,9 @@ func TestListWorkspaceDesignSystemCatalogueCarriesSummaryAndDraftFlag(t *testing
 	}
 	if entry.HasDraftPackage {
 		t.Fatal("saved-only system reports a draft package")
+	}
+	if entry.OwnershipScope != "mine" {
+		t.Fatalf("ownership scope = %q, want mine for the current requester", entry.OwnershipScope)
 	}
 
 	// A draft beside the saved package is OD's draft state: the flag flips.

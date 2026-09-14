@@ -48,6 +48,47 @@ describe("designKeys", () => {
     expect(designKeys.documents("ws-1", "project-1")).toEqual(["designs", "ws-1", "documents", "project-1"]);
   });
 
+  it("separates project and repository Design File caches", () => {
+    const project = designKeys.files("ws-1", { kind: "project", projectId: "project-1" });
+    const repository = designKeys.files("ws-1", {
+      kind: "repository",
+      projectId: "project-1",
+      projectResourceId: "repository-1",
+    });
+
+    expect(project).not.toEqual(repository);
+    expect(repository).not.toEqual(
+      designKeys.files("ws-1", {
+        kind: "repository",
+        projectId: "project-1",
+        projectResourceId: "repository-2",
+      }),
+    );
+    expect(project.slice(0, 3)).toEqual(designKeys.files("ws-1"));
+    expect(repository.slice(0, 3)).toEqual(designKeys.files("ws-1"));
+  });
+
+  it("separates repository Design Document caches from project and other repositories", () => {
+    const repository = designKeys.documentsByRepository(
+      "ws-1",
+      "project-1",
+      "repository-1",
+    );
+
+    expect(repository).not.toEqual(designKeys.documents("ws-1", "project-1"));
+    expect(repository).not.toEqual(
+      designKeys.documentsByRepository("ws-1", "project-1", "repository-2"),
+    );
+  });
+
+  it("keeps the combined repository asset cache workspace and scope aware", () => {
+    const repository = designKeys.assetsByRepository("ws-1", "project-1", "repository-1");
+
+    expect(repository).not.toEqual(designKeys.assetsByRepository("ws-2", "project-1", "repository-1"));
+    expect(repository).not.toEqual(designKeys.assetsByRepository("ws-1", "project-2", "repository-1"));
+    expect(repository).not.toEqual(designKeys.assetsByRepository("ws-1", "project-1", "repository-2"));
+  });
+
   it("scopes design document lists by workspace and project", () => {
     expect(designKeys.documents("ws-1", "project-1")).toEqual([
       "designs",

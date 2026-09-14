@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/multica-ai/multica/server/internal/designimplementation"
 	"github.com/multica-ai/multica/server/internal/runtimeapps"
 	"github.com/multica-ai/multica/server/pkg/agent"
 )
@@ -135,6 +136,7 @@ type PrepareParams struct {
 
 // TaskContextForEnv is the subset of task context used for writing context files.
 type TaskContextForEnv struct {
+	TaskID                         string
 	IssueID                        string
 	IssueCompletionContractVersion int
 	TriggerCommentID               string // comment that triggered this task (empty for on_assign)
@@ -248,10 +250,11 @@ type TaskContextForEnv struct {
 	// only for member initiators. Empty for on-assign / autopilot /
 	// quick-create tasks, which have no attributable human initiator. See
 	// MUL-2645.
-	InitiatorType  string
-	InitiatorID    string
-	InitiatorName  string
-	InitiatorEmail string
+	InitiatorType        string
+	InitiatorID          string
+	InitiatorName        string
+	InitiatorEmail       string
+	DesignImplementation *designimplementation.TaskIdentity
 }
 
 // SkillContextForEnv represents a skill to be written into the execution environment.

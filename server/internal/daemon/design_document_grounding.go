@@ -23,6 +23,13 @@ import (
 
 const designDocumentCheckoutSchema = "multica.design-document-checkout/v1"
 
+// This guidance travels with the checkout the page-design Agent is required to
+// inspect, without changing the shared design-system generation prompt.
+const designDocumentRepositoryVisualFidelity = `When task.json design_context.source is "none", the selected repository's effective visual rules govern this design. Do not silently load a saved design system or create a new visual language. If a design system was explicitly supplied instead, preserve its existing priority.
+Before designing, trace the applicable global style entrypoints and imports, theme/token declarations and their consumers, application shell/navigation, and shared components used by the target pages. Directory listings and component imports are not evidence of reading their implementation. Resolve competing declarations through scope, cascade, selectors, theme and responsive conditions; never choose a width or colour merely because it appears in a variables file. Record actual source files and supported facts in repository-grounding.json. If effective rules cannot be established, report the missing evidence or conflict and request a decision rather than inventing a repository rule.
+With no supplied design system, faithfully reuse the effective colours and semantic roles, font stack, typography, spacing, dimensions, navigation structure and interaction states for the requested page and viewport. Contrast, accessibility or aesthetic concerns are suggestions only: explain them, but do not change colours, dimensions or navigation without explicit user approval in the task requirements. An explanation of a deviation is not approval. Preserve repository styling while implementing the requested content, not unrelated existing business copy or pages.
+Before finishing, compare the rendered prototype with the applicable source rules at matching viewports. In the existing grounding facts, document source rule to prototype usage; in conflicts/missing, record unresolved evidence. Document any approved deviations and the user instruction authorizing them in the existing brief/coverage notes. File hashes and a passing Audit do not prove visual fidelity. Do not claim fidelity for rules you have not verified.`
+
 const (
 	maxDesignDocumentGroundingSourceBytes = 16 << 20
 	maxDesignDocumentInputBytes           = 100 << 20
@@ -47,8 +54,9 @@ type designDocumentSourceBaseline struct {
 }
 
 type designDocumentCheckout struct {
-	SchemaVersion string                             `json:"schema_version"`
-	Repositories  []designDocumentCheckoutRepository `json:"repositories"`
+	SchemaVersion              string                             `json:"schema_version"`
+	Repositories               []designDocumentCheckoutRepository `json:"repositories"`
+	VisualFidelityInstructions string                             `json:"visual_fidelity_instructions,omitempty"`
 }
 
 type designDocumentCheckoutRepository struct {
@@ -389,7 +397,11 @@ func writeDesignDocumentCheckout(workDir string, repositories []designDocumentCh
 		repositories = []designDocumentCheckoutRepository{}
 	}
 	sort.Slice(repositories, func(i, j int) bool { return repositories[i].ID < repositories[j].ID })
-	raw, err := json.Marshal(designDocumentCheckout{SchemaVersion: designDocumentCheckoutSchema, Repositories: repositories})
+	checkout := designDocumentCheckout{SchemaVersion: designDocumentCheckoutSchema, Repositories: repositories}
+	if len(repositories) > 0 {
+		checkout.VisualFidelityInstructions = designDocumentRepositoryVisualFidelity
+	}
+	raw, err := json.Marshal(checkout)
 	if err != nil {
 		return err
 	}

@@ -110,7 +110,7 @@ func (h *Handler) RegenerateDesignDocument(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	h.TaskService.NotifyTaskEnqueued(r.Context(), task)
-	writeJSON(w, http.StatusAccepted, designDocumentResponse(updated, &task))
+	writeJSON(w, http.StatusAccepted, designDocumentResponse(updated, &task, h.designDocumentRepositoryGrounded(r.Context(), updated)))
 }
 
 // regenerateDesignDocumentTask enqueues the rerun and attaches it to the

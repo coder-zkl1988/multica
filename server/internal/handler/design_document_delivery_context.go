@@ -59,7 +59,7 @@ func (h *Handler) designDeliveryContextForIssue(
 			ContentDigest:      row.SavedContentDigest,
 			Title:              row.Title,
 			Platform:           row.Platform,
-			RepositoryGrounded: row.ProjectResourceID.Valid,
+			RepositoryGrounded: false,
 			Pages:              []service.DesignDeliveryPage{},
 		}
 		// Page titles come from the revision's manifest, which is already
@@ -68,6 +68,7 @@ func (h *Handler) designDeliveryContextForIssue(
 		if revision, err := h.Queries.GetDesignDocumentRevisionInWorkspace(ctx, db.GetDesignDocumentRevisionInWorkspaceParams{
 			ID: row.SavedRevisionUuid, WorkspaceID: workspaceID,
 		}); err == nil {
+			delivery.RepositoryGrounded = repositoryGroundingAvailable(revision.RepositoryGrounding)
 			var manifest designdocument.Manifest
 			if json.Unmarshal(revision.Manifest, &manifest) == nil {
 				delivery.PrototypeEntry = manifest.PrototypeEntry

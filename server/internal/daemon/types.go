@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 
 	"github.com/multica-ai/multica/server/internal/designdocument"
+	"github.com/multica-ai/multica/server/internal/designimplementation"
 	"github.com/multica-ai/multica/server/internal/designpreview"
 	"github.com/multica-ai/multica/server/internal/projectdesignsystem"
 	"github.com/multica-ai/multica/server/internal/runtimeapps"
@@ -351,6 +352,7 @@ type TaskResult struct {
 	ProjectDesignSystemArtifacts   *ProjectDesignSystemArtifacts       `json:"-"`               // legacy three-file inline payload; collected for non-V2 tasks only
 	ProjectDesignSystemPackage     *ProjectDesignSystemPackageReceipt  `json:"-"`               // V2-native package receipt (archive + audit + preview); populated only on the V2 path
 	DesignDocumentGrounding        *designdocument.RepositoryGrounding `json:"-"`               // validated A3 grounding receipt; no local paths or source contents
+	DesignImplementation           *designimplementation.Receipt       `json:"-"`               // daemon-validated implementation result and evidence binding
 	DesignDocumentPackage          *DesignDocumentPackageReceipt       `json:"-"`               // page-design package receipt (archive + audit + preview); populated only by the design document finalize gate
 }
 

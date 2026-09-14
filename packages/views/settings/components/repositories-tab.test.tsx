@@ -241,7 +241,10 @@ describe("RepositoriesTab — automatic updates", () => {
       expect(mockUpdateWorkspace).toHaveBeenCalledWith("workspace-1", {
         repos: [
           { url: "https://github.com/multica-ai/multica" },
-          { url: "git@github.com:multica-ai/second.git" },
+          expect.objectContaining({
+            id: expect.any(String),
+            url: "git@github.com:multica-ai/second.git",
+          }),
         ],
       });
     });
@@ -410,10 +413,12 @@ describe("RepositoriesTab — automatic updates", () => {
       expect(mockUpdateWorkspace).toHaveBeenCalledWith("workspace-1", {
         repos: [
           { url: "git@github.com:multica-ai/multica.git" },
-          {
+          expect.objectContaining({
+            id: expect.any(String),
             url: "https://github.com/multica-ai/console.git",
             description: "Console app",
-          },
+            default_branch_hint: "main",
+          }),
         ],
       });
     });

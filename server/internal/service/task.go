@@ -1743,6 +1743,10 @@ const DesignTemplateBlueprintAnalyzeContextType = "design_template_blueprint_ana
 
 const ProjectDesignSystemTaskContextType = "project_design_system_task"
 
+// ProjectDesignSystemExecutionModeProgrammaticFirst is a legacy API input alias.
+// It no longer selects a model-free runtime path.
+const ProjectDesignSystemExecutionModeProgrammaticFirst = "programmatic_first"
+
 type ProjectDesignSystemOperation string
 
 const (
@@ -1888,30 +1892,35 @@ type DesignTemplateBlueprintAnalyzeContext struct {
 }
 
 type ProjectDesignSystemTaskContext struct {
-	Type        string                       `json:"type"`
-	Operation   ProjectDesignSystemOperation `json:"operation"`
-	RequesterID string                       `json:"requester_id"`
-	WorkspaceID string                       `json:"workspace_id"`
-	ProjectID   string                       `json:"project_id"`
+	Type          string                       `json:"type"`
+	Operation     ProjectDesignSystemOperation `json:"operation"`
+	ExecutionMode string                       `json:"execution_mode,omitempty"`
+	RequesterID   string                       `json:"requester_id"`
+	WorkspaceID   string                       `json:"workspace_id"`
+	ProjectID     string                       `json:"project_id"`
 	// Empty means the project-level system. When set, the agent is designing
 	// for one repository and should read the system as specific to that
 	// surface rather than the project's shared language (DC-052).
-	ProjectResourceID     string          `json:"project_resource_id,omitempty"`
-	ProjectDesignSystemID string          `json:"project_design_system_id"`
-	AgentID               string          `json:"agent_id"`
-	Project               json.RawMessage `json:"project"`
-	Platform              string          `json:"platform"`
-	Brief                 string          `json:"brief"`
-	References            json.RawMessage `json:"references"`
-	BasePackage           json.RawMessage `json:"base_package,omitempty"`
-	Instruction           string          `json:"instruction,omitempty"`
-	Scope                 json.RawMessage `json:"scope,omitempty"`
-	RepositoryAnalysis    json.RawMessage `json:"repository_analysis,omitempty"`
-	OpenDesignRun         json.RawMessage `json:"open_design_run,omitempty"`
-	OutputPolicy          json.RawMessage `json:"output_policy"`
-	PackageSchema         string          `json:"package_schema,omitempty"`
-	InputSnapshotSHA256   string          `json:"input_snapshot_sha256,omitempty"`
-	BasePackageSHA256     string          `json:"base_package_sha256,omitempty"`
+	ProjectResourceID        string          `json:"project_resource_id,omitempty"`
+	WorkspaceRepositoryID    string          `json:"workspace_repository_id,omitempty"`
+	WorkspaceRepositoryURL   string          `json:"workspace_repository_url,omitempty"`
+	WorkspaceRepositoryLabel string          `json:"workspace_repository_label,omitempty"`
+	WorkspaceRepositoryRef   string          `json:"workspace_repository_ref,omitempty"`
+	ProjectDesignSystemID    string          `json:"project_design_system_id"`
+	AgentID                  string          `json:"agent_id"`
+	Project                  json.RawMessage `json:"project"`
+	Platform                 string          `json:"platform"`
+	Brief                    string          `json:"brief"`
+	References               json.RawMessage `json:"references"`
+	BasePackage              json.RawMessage `json:"base_package,omitempty"`
+	Instruction              string          `json:"instruction,omitempty"`
+	Scope                    json.RawMessage `json:"scope,omitempty"`
+	RepositoryAnalysis       json.RawMessage `json:"repository_analysis,omitempty"`
+	OpenDesignRun            json.RawMessage `json:"open_design_run,omitempty"`
+	OutputPolicy             json.RawMessage `json:"output_policy"`
+	PackageSchema            string          `json:"package_schema,omitempty"`
+	InputSnapshotSHA256      string          `json:"input_snapshot_sha256,omitempty"`
+	BasePackageSHA256        string          `json:"base_package_sha256,omitempty"`
 }
 
 // EnqueueQuickCreateTask creates a queued task that has no issue / chat /
@@ -5793,9 +5802,12 @@ func (s *TaskService) markProjectDesignSystemTaskFailed(
 	if err != nil {
 		return fmt.Errorf("parse project design system workspace id: %w", err)
 	}
-	projectID, err := util.ParseUUID(taskContext.ProjectID)
-	if err != nil {
-		return fmt.Errorf("parse project design system project id: %w", err)
+	var projectID pgtype.UUID
+	if projectIDValue := strings.TrimSpace(taskContext.ProjectID); projectIDValue != "" {
+		projectID, err = util.ParseUUID(projectIDValue)
+		if err != nil {
+			return fmt.Errorf("parse project design system project id: %w", err)
+		}
 	}
 	systemID, err := util.ParseUUID(taskContext.ProjectDesignSystemID)
 	if err != nil {
@@ -5819,7 +5831,17 @@ func (s *TaskService) markProjectDesignSystemTaskFailed(
 	if err != nil {
 		return err
 	}
-	if util.UUIDToString(system.ProjectID) != util.UUIDToString(projectID) ||
+	workspaceRepositoryMatches := util.UUIDToString(system.WorkspaceRepositoryID) == strings.TrimSpace(taskContext.WorkspaceRepositoryID)
+	if !workspaceRepositoryMatches && system.WorkspaceRepositoryID.Valid && strings.TrimSpace(taskContext.WorkspaceRepositoryID) == "" {
+		// Compatibility for systems migrated from project_resource to Settings:
+		// an already-enqueued task may still carry only the preserved legacy
+		// project resource. It is safe only when that exact resource still matches.
+		workspaceRepositoryMatches = system.ProjectResourceID.Valid &&
+			util.UUIDToString(system.ProjectResourceID) == strings.TrimSpace(taskContext.ProjectResourceID)
+	}
+	if system.ProjectID.Valid != projectID.Valid ||
+		(projectID.Valid && util.UUIDToString(system.ProjectID) != util.UUIDToString(projectID)) ||
+		!workspaceRepositoryMatches ||
 		!system.CurrentAgentID.Valid || util.UUIDToString(system.CurrentAgentID) != util.UUIDToString(agentID) {
 		return errors.New("project design system task identity mismatch")
 	}
@@ -8804,6 +8826,14 @@ type DesignDocumentTaskInput struct {
 	// agent's reference/attachments directory before the session starts,
 	// each pinned by size and digest so a swapped object cannot be served.
 	Attachments []DesignDocumentTaskAttachment `json:"attachments,omitempty"`
+	// DesignSystem is the server-derived saved package reference for an
+	// initial generation. Only the daemon-facing digest is needed; ownership and
+	// storage location remain in the authenticated task context.
+	DesignSystem *DesignDocumentDesignSystemReference `json:"design_system,omitempty"`
+}
+
+type DesignDocumentDesignSystemReference struct {
+	ContentDigest string `json:"content_digest"`
 }
 
 // DesignDocumentTaskAttachment pins one reference attachment for the daemon.
@@ -8841,6 +8871,7 @@ type DesignDocumentTaskContext struct {
 	// Optional traceable link. Saving never changes issue state (DC-045).
 	IssueID          string          `json:"issue_id,omitempty"`
 	DesignDocumentID string          `json:"design_document_id"`
+	RevisionID       string          `json:"revision_id,omitempty"`
 	AgentID          string          `json:"agent_id"`
 	Project          json.RawMessage `json:"project"`
 	Platform         string          `json:"platform"`

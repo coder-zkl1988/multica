@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"reflect"
@@ -44,7 +46,7 @@ func TestProjectDesignContextResolverUsesOnlyValidatedSavedPackage(t *testing.T)
 	if resolved.ProjectID != util.UUIDToString(projectID) || !reflect.DeepEqual(resolved.Priority, wantPriority) {
 		t.Fatalf("resolved project/priority = project:%q priority:%v", resolved.ProjectID, resolved.Priority)
 	}
-	if resolved.Digest != saved.IntegritySha256 || resolved.Package == nil {
+	if resolved.Digest != "sha256:"+saved.IntegritySha256 || resolved.Package == nil {
 		t.Fatalf("resolved digest/package = digest:%q package:%#v", resolved.Digest, resolved.Package)
 	}
 	if resolved.Package.DesignSystemID != util.UUIDToString(systemID) || resolved.Package.SourceTaskID != util.UUIDToString(sourceTaskID) {
@@ -53,11 +55,7 @@ func TestProjectDesignContextResolverUsesOnlyValidatedSavedPackage(t *testing.T)
 	if resolved.Package.Name != system.Name || resolved.Package.Platform != system.Platform {
 		t.Fatalf("resolved package identity = %#v", resolved.Package)
 	}
-	wantArtifacts := projectdesignsystem.ArtifactInput{
-		DesignMD:       saved.DesignMd,
-		TokensCSS:      saved.TokensCss,
-		ComponentsHTML: saved.ComponentsHtml,
-	}
+	wantArtifacts := projectdesignsystem.ArtifactInput{DesignMD: saved.DesignMd, TokensCSS: saved.TokensCss}
 	if resolved.Package.Artifacts != wantArtifacts {
 		t.Fatalf("resolved artifacts = %#v", resolved.Package.Artifacts)
 	}
@@ -73,7 +71,7 @@ func TestProjectDesignContextResolverUsesOnlyValidatedSavedPackage(t *testing.T)
 	if err := json.Unmarshal(encoded, &payload); err != nil {
 		t.Fatalf("decode resolved context: %v", err)
 	}
-	if payload["source"] != string(DesignContextSourceCloudSaved) || payload["digest"] != saved.IntegritySha256 {
+	if payload["source"] != string(DesignContextSourceCloudSaved) || payload["digest"] != "sha256:"+saved.IntegritySha256 {
 		t.Fatalf("traceable JSON contract = %#v", payload)
 	}
 	pack, ok := payload["package"].(map[string]any)
@@ -207,8 +205,8 @@ func TestProjectDesignContextResolverPinsAnExplicitWorkspaceSystem(t *testing.T)
 	if resolved.Package.Scope != DesignContextScopeWorkspace || resolved.Package.DesignSystemID != util.UUIDToString(systemID) {
 		t.Fatalf("resolved package = %#v", resolved.Package)
 	}
-	if resolved.Digest != saved.IntegritySha256 {
-		t.Fatalf("resolved digest = %q, want the saved package digest", resolved.Digest)
+	if resolved.Digest != "sha256:"+saved.IntegritySha256 {
+		t.Fatalf("resolved digest = %q, want the V2 content digest", resolved.Digest)
 	}
 	// The fallback scopes must not have been consulted at all.
 	if len(store.packageSlots) != 1 {
@@ -347,34 +345,52 @@ func validSavedDesignContextFixture(
 	if err != nil {
 		t.Fatalf("validate fixture: %v", err)
 	}
-	manifest, err := json.Marshal(validated.Manifest)
-	if err != nil {
-		t.Fatalf("marshal fixture manifest: %v", err)
+	audit := projectdesignsystem.AuditReport{
+		SchemaVersion: projectdesignsystem.AuditSchemaV1, Passed: true,
+		ContentDigest: "sha256:" + validated.Manifest.Digest,
 	}
-	validation, err := json.Marshal(validated.Validation)
+	validationJSON, err := json.Marshal(audit)
 	if err != nil {
 		t.Fatalf("marshal fixture validation: %v", err)
 	}
+	files := []projectdesignsystem.ArtifactIndexEntry{{
+		Path: "DESIGN.md", Role: "design", MediaType: "text/markdown; charset=utf-8",
+		SizeBytes: int64(len(artifacts.DesignMD)), SHA256: "sha256:" + sha256HexForTest(artifacts.DesignMD),
+	}}
+	v2Manifest := projectdesignsystem.ManifestV2{
+		SchemaVersion: projectdesignsystem.PackageSchemaV2,
+		Binding: projectdesignsystem.PackageBinding{
+			WorkspaceID: util.UUIDToString(workspaceID), ProjectID: util.UUIDToString(projectID),
+			DesignSystemID: util.UUIDToString(systemID), TaskID: util.UUIDToString(sourceTaskID),
+			AgentID: "agent-1", Operation: "generate", InputSnapshotSHA256: "sha256:" + strings.Repeat("a", 64),
+		},
+		ContentDigest: "sha256:" + validated.Manifest.Digest,
+		Files:         files,
+	}
+	manifestJSON, err := json.Marshal(v2Manifest)
+	if err != nil {
+		t.Fatalf("marshal fixture V2 manifest: %v", err)
+	}
+	indexJSON, err := json.Marshal(files)
+	if err != nil {
+		t.Fatalf("marshal fixture artifact index: %v", err)
+	}
 	savedAt := time.Date(2026, time.July, 30, 3, 58, 25, 0, time.UTC)
 	return db.ProjectDesignSystem{
-		ID:          systemID,
-		WorkspaceID: workspaceID,
-		ProjectID:   projectID,
-		Name:        "Atlas",
-		Platform:    "web",
-		SavedAt:     pgtype.Timestamptz{Time: savedAt, Valid: true},
-	}, db.ProjectDesignSystemPackage{
-		DesignSystemID:  systemID,
-		Slot:            "saved",
-		DesignMd:        artifacts.DesignMD,
-		TokensCss:       artifacts.TokensCSS,
-		ComponentsHtml:  artifacts.ComponentsHTML,
-		Manifest:        manifest,
-		Validation:      validation,
-		IntegritySha256: validated.Manifest.Digest,
-		SourceTaskID:    sourceTaskID,
-		RenderStatus:    "passed",
-	}
+			ID: systemID, WorkspaceID: workspaceID, ProjectID: projectID,
+			Name: "Atlas", Platform: "web",
+			SavedAt: pgtype.Timestamptz{Time: savedAt, Valid: true},
+		}, db.ProjectDesignSystemPackage{
+			DesignSystemID: systemID, Slot: "saved",
+			DesignMd: artifacts.DesignMD, TokensCss: artifacts.TokensCSS, ComponentsHtml: artifacts.ComponentsHTML,
+			Manifest: manifestJSON, Validation: validationJSON, IntegritySha256: validated.Manifest.Digest,
+			SourceTaskID: sourceTaskID, RenderStatus: "passed",
+			PackageSchema: projectdesignsystem.PackageSchemaV2,
+			ArchiveObjectKey: pgtype.Text{
+				String: "project-design-systems/" + util.UUIDToString(systemID) + "/archive.zip", Valid: true,
+			},
+			ArtifactIndex: indexJSON,
+		}
 }
 
 func mustDesignContextUUID(t *testing.T, value string) pgtype.UUID {
@@ -426,6 +442,12 @@ func TestProjectDesignContextResolverPrefersRepositoryScopedSystem(t *testing.T)
 	if resolved.Package.DesignSystemID != util.UUIDToString(repoSystemID) {
 		t.Fatalf("resolved the wrong system: %q", resolved.Package.DesignSystemID)
 	}
+	if resolved.Package.ProjectID != util.UUIDToString(projectID) ||
+		resolved.Package.SavedPackageID != repoSaved.ID.String() ||
+		resolved.Package.ArchiveObjectKey != repoSaved.ArchiveObjectKey.String {
+		t.Fatalf("package provenance = %#v; want project=%s package=%s archive=%s",
+			resolved.Package, projectID, repoSaved.ID, repoSaved.ArchiveObjectKey.String)
+	}
 	if resolved.Package.ProjectResourceID != util.UUIDToString(resourceID) {
 		t.Fatalf("package does not carry its repository: %#v", resolved.Package)
 	}
@@ -435,20 +457,19 @@ func TestProjectDesignContextResolverPrefersRepositoryScopedSystem(t *testing.T)
 	}
 }
 
-// A repository without its own system falls back to the project-level one
-// rather than leaving the agent with no design constraint at all.
-func TestProjectDesignContextResolverFallsBackToProjectScope(t *testing.T) {
+// DC-052 exact-scope semantics: naming a repository makes the repository's
+// own saved system the only implicit cloud scope. It cannot borrow the
+// project-level system, and a repository draft is likewise not a saved system.
+func TestProjectDesignContextResolverDoesNotFallBackToProjectScope(t *testing.T) {
 	workspaceID := mustDesignContextUUID(t, "e2f576ee-5a61-4844-8dee-719996169571")
 	projectID := mustDesignContextUUID(t, "79560402-5bd7-420a-9e16-79e06557507a")
 	projectSystemID := mustDesignContextUUID(t, "317ac5d7-00b8-4abd-b4ce-df2ed9f695de")
+	repoSystemID := mustDesignContextUUID(t, "b1d0a4c2-3f77-4f1e-9f6a-5c2f0a7e11aa")
 	resourceID := mustDesignContextUUID(t, "cc2f9a10-64f1-4a1d-9b4e-0f4a4a2f9c31")
 	sourceTaskID := mustDesignContextUUID(t, "57ec9b56-6fac-4799-a438-e4926443c94e")
 	projectSystem, projectSaved := validSavedDesignContextFixture(t, workspaceID, projectID, projectSystemID, sourceTaskID)
 
-	// The repository has a system but no saved package yet — an in-progress
-	// draft must not become the constraint (DC-034), so this also falls back.
-	repoOnlyDraft, _ := validSavedDesignContextFixture(t, workspaceID, projectID,
-		mustDesignContextUUID(t, "b1d0a4c2-3f77-4f1e-9f6a-5c2f0a7e11aa"), sourceTaskID)
+	repoOnlyDraft, _ := validSavedDesignContextFixture(t, workspaceID, projectID, repoSystemID, sourceTaskID)
 	repoOnlyDraft.ProjectResourceID = resourceID
 
 	tests := []struct {
@@ -477,14 +498,14 @@ func TestProjectDesignContextResolverFallsBackToProjectScope(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Resolve() error = %v", err)
 			}
-			if resolved.Source != DesignContextSourceCloudSaved {
-				t.Fatalf("source = %q, want project scope", resolved.Source)
+			if resolved.Source != DesignContextSourceNone || resolved.Digest != "" || resolved.Package != nil {
+				t.Fatalf("resolved = %#v, want none with no package", resolved)
 			}
-			if resolved.Package == nil || resolved.Package.Scope != DesignContextScopeProject {
-				t.Fatalf("package scope = %#v", resolved.Package)
-			}
-			if resolved.Package.ProjectResourceID != "" {
-				t.Fatalf("project-level package must not claim a repository: %#v", resolved.Package)
+			// The project-level system must not even be consulted.
+			for _, queriedSystemID := range test.store.packageSystemIDs {
+				if queriedSystemID != repoSystemID {
+					t.Fatalf("package lookup for %v; only the repository system is allowed", queriedSystemID)
+				}
 			}
 		})
 	}
@@ -548,4 +569,9 @@ func TestProjectDesignContextResolverDoesNotFallBackOnInvalidRepositoryPackage(t
 	if !errors.Is(err, ErrSavedDesignContextInvalid) {
 		t.Fatalf("Resolve() error = %v, want ErrSavedDesignContextInvalid", err)
 	}
+}
+
+func sha256HexForTest(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])
 }

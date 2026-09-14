@@ -177,8 +177,6 @@ const (
 	issueDesignRoleMetadataKey = "design_role"
 	issueDesignRoleUI          = "ui_design"
 	issueDesignRoleFrontend    = "frontend_dev"
-
-	uiDesignDeliveryRequiredBeforeDoneMessage = "UI design issue requires completed UI restore or raw design fallback handoff before completion"
 )
 
 func isUIDesignIssue(issue db.Issue) bool {

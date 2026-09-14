@@ -38,9 +38,9 @@ vi.mock("./pageview-tracker", () => ({ PageviewTracker: () => null }));
 
 import { WebProviders } from "./web-providers";
 
-const renderProviders = () =>
+const renderProviders = (apiBaseUrl?: string) =>
   render(
-    <WebProviders locale="en" resources={{}}>
+    <WebProviders locale="en" resources={{}} apiBaseUrl={apiBaseUrl}>
       <div>content</div>
     </WebProviders>,
   );
@@ -61,6 +61,12 @@ describe("WebProviders auth mode", () => {
 
     localStorage.setItem("multica_token", "legacy-token");
     renderProviders();
+    expect(state.providerProps?.cookieAuth).toBe(false);
+  });
+
+  it("uses token auth when the API is on a different origin", () => {
+    renderProviders("http://localhost:18829");
+
     expect(state.providerProps?.cookieAuth).toBe(false);
   });
 

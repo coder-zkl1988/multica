@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Agent, Project, ProjectDesignSystem } from "@multica/core/types";
@@ -149,6 +149,14 @@ function renderCanvas(system = makeDraftSystem(), extraScopes: Array<[readonly u
   };
 }
 
+function dispatchArchiveSelection(frame: HTMLIFrameElement, id: string, capability: string) {
+  const event = new MessageEvent("message", {
+    data: { type: "multica:project-design-system-select", id, capability },
+  });
+  Object.defineProperty(event, "source", { value: frame.contentWindow });
+  window.dispatchEvent(event);
+}
+
 function dispatchPreviewReceipt(frame: HTMLIFrameElement) {
   const receipt = {
     status: "ready",
@@ -252,6 +260,7 @@ describe("ProjectDesignSystemCanvas", () => {
     const user = userEvent.setup();
     renderCanvas();
 
+    await user.click(screen.getByRole("tab", { name: "设计文件" }));
     await user.click(screen.getByRole("button", { name: "调整 品牌原则" }));
 
     expect(screen.getByRole("dialog", { name: "调整设计体系" })).toBeInTheDocument();
@@ -262,6 +271,7 @@ describe("ProjectDesignSystemCanvas", () => {
     const user = userEvent.setup();
     renderCanvas();
 
+    await user.click(screen.getByRole("tab", { name: "设计文件" }));
     await user.click(screen.getByRole("button", { name: "调整 品牌原则" }));
     await user.keyboard("{Escape}");
     await user.click(screen.getByRole("button", { name: "调整设计体系" }));
@@ -269,18 +279,78 @@ describe("ProjectDesignSystemCanvas", () => {
     expect(screen.getByText("整个设计体系", { selector: "[data-adjustment-scope]" })).toBeInTheDocument();
   });
 
-  it("keeps rules, tokens, and the UI Kit in one primary content surface", () => {
+  it("opens a locator-scoped adjustment directly from the online UI Kit", async () => {
+    const system = makeDraftSystem();
+    system.content.package_schema = "multica.project-design-system/v2";
+    system.content.selection_enabled = true;
+    apiMocks.getProjectDesignSystemPackagePreviewFileURL.mockReturnValue(
+      "/api/project-design-system-previews/ws-1/system-1/digest/capability-1/files/ui-kit/index.html",
+    );
+    apiMocks.getProjectDesignSystemPackagePreview.mockResolvedValue({
+      schema: "multica.project-design-system-package-preview/v1",
+      slot: "draft",
+      content_digest: "sha256:archive",
+      resource_access_token: "capability-1",
+      resource_access_expires_at: "2026-09-07T12:00:00Z",
+      targets: [{ kind: "ui_kit", id: "ui-kit", path: "ui-kit/index.html" }],
+    });
+    renderCanvas(system);
+
+    await waitFor(() => {
+      expect(
+        (screen.getByTitle("项目设计体系 UI Kit") as HTMLIFrameElement).getAttribute("src"),
+      ).toContain("capability-1");
+    });
+    const frame = screen.getByTitle("项目设计体系 UI Kit") as HTMLIFrameElement;
+    expect(screen.queryByRole("dialog", { name: "调整设计体系" })).not.toBeInTheDocument();
+    act(() => dispatchArchiveSelection(frame, "button-primary", "capability-1"));
+    expect(screen.queryByRole("dialog", { name: "调整设计体系" })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "选择调整" }));
+    act(() => dispatchArchiveSelection(frame, "button-primary", "capability-1"));
+
+    expect(await screen.findByRole("dialog", { name: "调整设计体系" })).toBeInTheDocument();
+    expect(screen.getByText("Primary button", { selector: "[data-adjustment-scope]" })).toBeInTheDocument();
+  });
+
+  it("offers a latest-branch Agent rebuild for a repository design system", async () => {
+    const user = userEvent.setup();
+    const system = makeDraftSystem();
+    system.workspace_repository_id = "repository-1";
+    apiMocks.regenerateProjectDesignSystem.mockResolvedValue({ ...system, status: "generating", active_task: null });
+    renderCanvas(system);
+
+    await user.click(screen.getByRole("button", { name: "重新生成" }));
+
+    expect(screen.getByRole("dialog", { name: "调整设计体系" })).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("将重新生成一套设计体系");
+    expect(screen.getByRole("alert")).toHaveTextContent("已保存内容继续保留");
+    await user.click(screen.getByRole("button", { name: "确认重新生成" }));
+    await waitFor(() => expect(apiMocks.regenerateProjectDesignSystem).toHaveBeenCalledWith("system-1", {
+      agent_id: "agent-1",
+    }));
+  });
+
+  it("does not show the latest-branch rebuild on a project-only system", () => {
+    renderCanvas();
+    expect(screen.queryByRole("button", { name: "重新生成" })).not.toBeInTheDocument();
+  });
+
+  it("uses the packaged UI Kit as the default primary surface", async () => {
+    const user = userEvent.setup();
     renderCanvas();
 
-    expect(screen.getByTestId("project-design-system-canvas")).toHaveClass("h-full");
+    expect(screen.getByTestId("project-design-system-canvas")).toHaveClass("h-full", "ds-workspace", "ds-workspace--single");
     expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
-    expect(screen.queryByText("CRM", { exact: true })).not.toBeInTheDocument();
-    expect(screen.queryByRole("tab")).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "在线 UI Kit" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("region", { name: "在线 UI Kit 主画布" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "品牌原则" })).not.toBeInTheDocument();
 
+    await user.click(screen.getByRole("tab", { name: "设计文件" }));
     const canvas = screen.getByRole("main");
+    expect(within(canvas).getByRole("heading", { name: "设计体系文件" })).toBeInTheDocument();
     expect(within(canvas).getByRole("heading", { name: "品牌原则" })).toBeInTheDocument();
     expect(within(canvas).getByRole("heading", { name: "色彩" })).toBeInTheDocument();
-    expect(within(canvas).getByRole("heading", { name: "在线 UI Kit" })).toBeInTheDocument();
   });
 
   it("uses the project design system platform for the UI Kit viewport", () => {
@@ -301,7 +371,7 @@ describe("ProjectDesignSystemCanvas", () => {
     expect(screen.queryByRole("heading", { name: "CRM" })).not.toBeInTheDocument();
   });
 
-  it("uses user-facing names for the Open Design token layers", () => {
+  it("uses user-facing names for the Open Design token layers", async () => {
     const system = makeDraftSystem();
     system.content.token_groups = [
       { id: "ref", label: "Ref", tokens: [] },
@@ -310,6 +380,7 @@ describe("ProjectDesignSystemCanvas", () => {
     ];
 
     renderCanvas(system);
+    await userEvent.click(screen.getByRole("tab", { name: "设计文件" }));
 
     const canvas = screen.getByRole("main");
     expect(within(canvas).getByRole("heading", { name: "基础 Token" })).toBeInTheDocument();
@@ -320,7 +391,7 @@ describe("ProjectDesignSystemCanvas", () => {
     expect(within(canvas).queryByRole("heading", { name: "Cmp" })).not.toBeInTheDocument();
   });
 
-  it("resolves chained token references before rendering their values and color previews", () => {
+  it("resolves chained token references before rendering their values and color previews", async () => {
     const system = makeDraftSystem();
     system.content.token_groups = [
       {
@@ -341,6 +412,7 @@ describe("ProjectDesignSystemCanvas", () => {
     ];
 
     const { container } = renderCanvas(system);
+    await userEvent.click(screen.getByRole("tab", { name: "设计文件" }));
 
     const semanticToken = container.querySelector('[data-token-name="--sys-color-brand"]');
     const componentToken = container.querySelector('[data-token-name="--cmp-order-pending-accent-color"]');
@@ -362,7 +434,7 @@ describe("ProjectDesignSystemCanvas", () => {
     });
   });
 
-  it("uses actual radius, shadow, font size, and dimension values in token previews", () => {
+  it("uses actual radius, shadow, font size, and dimension values in token previews", async () => {
     const system = makeDraftSystem();
     system.content.token_groups = [
       {
@@ -383,6 +455,7 @@ describe("ProjectDesignSystemCanvas", () => {
     ];
 
     const { container } = renderCanvas(system);
+    await userEvent.click(screen.getByRole("tab", { name: "设计文件" }));
     const previewFor = (name: string, kind: string) => container.querySelector(
       `[data-token-name="${name}"] [data-token-preview="${kind}"]`,
     );
@@ -397,7 +470,7 @@ describe("ProjectDesignSystemCanvas", () => {
     expect(dimensionPreview?.parentElement).toHaveClass("w-16");
   });
 
-  it("keeps cyclic token references unchanged", () => {
+  it("keeps cyclic token references unchanged", async () => {
     const system = makeDraftSystem();
     system.content.token_groups = [
       {
@@ -411,10 +484,52 @@ describe("ProjectDesignSystemCanvas", () => {
     ];
 
     const { container } = renderCanvas(system);
+    await userEvent.click(screen.getByRole("tab", { name: "设计文件" }));
     const token = container.querySelector('[data-token-name="--sys-cycle-a"]');
 
     expect(token).not.toBeNull();
     expect(within(token as HTMLElement).getByText("var(--sys-cycle-b)")).not.toHaveAttribute("title");
+  });
+
+  it("uses repository save copy and localized programmatic token groups", async () => {
+    const system = makeDraftSystem();
+    system.project_resource_id = "repository-1";
+    system.input_snapshot = { generation_mode: "programmatic_first" };
+    system.content.token_groups = [
+      { id: "color", label: "Color", tokens: [{ name: "--color-primary", value: "#2463EB" }] },
+      { id: "font", label: "Typography", tokens: [{ name: "--font-family-body", value: "Inter" }] },
+      { id: "space", label: "Spacing", tokens: [{ name: "--space-2", value: "8px" }] },
+    ];
+    renderCanvas(system);
+    await userEvent.click(screen.getByRole("tab", { name: "设计文件" }));
+
+    expect(screen.getByRole("button", { name: "保存为仓库设计体系" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "保存为项目设计体系" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "选择范围：色彩 Token" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "选择范围：字体 Token" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "选择范围：间距 Token" })).toBeInTheDocument();
+  });
+
+  it("invalidates the homepage catalogue after saving a repository design system", async () => {
+    const user = userEvent.setup();
+    const system = makeDraftSystem();
+    system.project_resource_id = "repository-1";
+    const updated = {
+      ...system,
+      status: "saved" as const,
+      has_unsaved_changes: false,
+      saved_at: "2026-09-07T06:20:00Z",
+    };
+    apiMocks.saveProjectDesignSystem.mockResolvedValue(updated);
+    const { queryClient } = renderCanvas(system);
+    const catalogueKey = ["designs", "ws-1", "project-design-systems", "catalogue"];
+    queryClient.setQueryData(catalogueKey, { design_systems: [] });
+
+    await user.click(screen.getByRole("button", { name: "保存为仓库设计体系" }));
+
+    await waitFor(() => expect(apiMocks.saveProjectDesignSystem).toHaveBeenCalledWith("system-1"));
+    await waitFor(() => expect(queryClient.getQueryState(catalogueKey)?.isInvalidated).toBe(true));
+    expect(queryClient.getQueryData(PROJECT_SCOPE_KEY)).toEqual(updated);
   });
 
   it("hides the save action when the saved design system has no changes", () => {
@@ -446,7 +561,7 @@ describe("ProjectDesignSystemCanvas", () => {
 
     expect(screen.getByRole("button", { name: "保存为项目设计体系" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "更多操作" }));
-    expect(await screen.findByText("重新生成设计体系")).toBeInTheDocument();
+    expect(await screen.findByText("重新生成")).toBeInTheDocument();
     await user.click(await screen.findByText("放弃草稿"));
 
     expect(apiMocks.discardProjectDesignSystemDraft).not.toHaveBeenCalled();
@@ -554,6 +669,7 @@ describe("ProjectDesignSystemCanvas", () => {
       agent_id: "agent-1",
       status: "running",
       operation: "adjust",
+      execution_mode: "programmatic_first",
       error: null,
       failure_reason: null,
       wait_reason: null,
@@ -569,7 +685,10 @@ describe("ProjectDesignSystemCanvas", () => {
     const drawer = screen.getByRole("dialog", { name: "调整设计体系" });
     expect(within(drawer).getByText("智能体执行中")).toBeInTheDocument();
     expect(within(drawer).getByRole("button", { name: "停止任务" })).toBeInTheDocument();
-    expect(within(drawer).queryByText(/\d+%/)).not.toBeInTheDocument();
+    expect(within(drawer).getByRole("progressbar", { name: /设计体系生成进度/ })).toHaveAttribute("aria-valuetext", "正在准备执行计划");
+    expect(within(drawer).getByText("准备中")).toBeInTheDocument();
+    expect(within(drawer).getAllByText("UI Designer").length).toBeGreaterThan(0);
+    expect(within(drawer).queryByText("无模型程序化引擎")).not.toBeInTheDocument();
   });
 
   it.each([

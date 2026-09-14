@@ -10,7 +10,7 @@ import {
   normalizeStoredUploads,
   uploadedAttachments,
 } from "../../drafts/draft-upload";
-import type { Attachment } from "../../types";
+import type { Attachment, CommentDesignRequest } from "../../types";
 
 /**
  * Per-comment draft persistence — survives:
@@ -40,6 +40,7 @@ export type CommentDraftKey =
 
 interface CommentDraft {
   content: string;
+  designRequest?: CommentDesignRequest;
   /** Uploads (placeholders + completed) for this composer session. */
   attachments: DraftUpload[];
   updatedAt: number;
@@ -53,6 +54,7 @@ interface CommentDraftStore {
   /** Every upload for this draft (placeholders included) — for status chips. */
   getUploads: (key: CommentDraftKey) => DraftUpload[];
   setDraft: (key: CommentDraftKey, content: string) => void;
+  setDesignRequest: (key: CommentDraftKey, request: CommentDesignRequest | undefined) => void;
   /**
    * Append a markdown fragment to the draft body (upload write-back,
    * MUL-5181): an upload that finished after its composer unmounted has no
@@ -121,7 +123,7 @@ function writeDraft(
   content: string,
   uploads: DraftUpload[],
 ): Record<string, CommentDraft> {
-  if (!isMeaningful(content, uploads)) {
+  if (!isMeaningful(content, uploads) && !drafts[key]?.designRequest) {
     if (!(key in drafts)) return drafts;
     const next = { ...drafts };
     delete next[key];
@@ -135,7 +137,16 @@ function writeDraft(
   if (existing && existing.content === content && existing.attachments === uploads) {
     return drafts;
   }
-  return { ...drafts, [key]: { content, attachments: uploads, updatedAt: Date.now() } };
+  const designRequest = existing?.designRequest;
+  return { ...drafts, [key]: {
+    ...existing,
+    content,
+    attachments: uploads,
+    designRequest: designRequest && existing.content !== content
+      ? { ...designRequest, request_id: crypto.randomUUID() }
+      : designRequest,
+    updatedAt: Date.now(),
+  } };
 }
 
 function uploadsOf(drafts: Record<string, CommentDraft>, key: string): DraftUpload[] {
@@ -150,7 +161,7 @@ function pruneStaleDrafts(drafts: Record<string, CommentDraft>): Record<string, 
     // placeholders, and any placeholder still `uploading` is dropped (the bytes
     // were never persisted, so the upload cannot resume).
     const uploads = normalizeStoredUploads(v.attachments);
-    if (v.updatedAt >= cutoff && isMeaningful(v.content, uploads)) {
+    if (v.updatedAt >= cutoff && (isMeaningful(v.content, uploads) || v.designRequest)) {
       out[k] = { ...v, attachments: uploads };
     }
   }
@@ -169,6 +180,18 @@ export const useCommentDraftStore = create<CommentDraftStore>()(
         set((s) => ({
           drafts: writeDraft(s.drafts, key, content, uploadsOf(s.drafts, key)),
         })),
+      setDesignRequest: (key, designRequest) =>
+        set((s) => {
+          const existing = s.drafts[key];
+          if (existing?.designRequest === designRequest) return s;
+          const drafts = { ...s.drafts, [key]: {
+            content: existing?.content ?? "",
+            attachments: existing?.attachments ?? EMPTY_UPLOADS,
+            designRequest,
+            updatedAt: Date.now(),
+          } };
+          return { drafts: writeDraft(drafts, key, drafts[key]!.content, drafts[key]!.attachments) };
+        }),
       appendToDraftContent: (key, markdown) =>
         set((s) => {
           const existing = s.drafts[key]?.content ?? "";

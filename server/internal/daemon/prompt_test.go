@@ -1822,9 +1822,15 @@ func TestBuildPromptProjectDesignSystemGenerate(t *testing.T) {
 		"design system designer",
 		".agent_context/project_design_system/context/task.json",
 		"reference/index.json",
+		"repository/index.json",
+		"tree.txt",
 		"one Agent session",
+		"complete HEAD tree",
+		"同步主分支并固定快照",
 		"single coherent",
-		"static token-backed UI Kit",
+		"static, offline, token-backed UI Kit",
+		"Do not generate one generic dashboard with swapped colours",
+		"<question-form",
 		"data-design-node-id",
 		"write these files under `$MULTICA_OUTPUT_DIR`",
 		"Do not paste file contents into the final response",
@@ -1834,8 +1840,10 @@ func TestBuildPromptProjectDesignSystemGenerate(t *testing.T) {
 			t.Fatalf("project design system generate prompt missing %q\n--- prompt ---\n%s", want, prompt)
 		}
 	}
-	if strings.Contains(prompt, "Calm CRM") {
-		t.Fatal("project design system prompt must read task.json instead of embedding the full context")
+	for _, forbidden := range []string{"Calm CRM", "apps/crm/", "programmatic quick draft"} {
+		if strings.Contains(prompt, forbidden) {
+			t.Fatalf("project design system prompt contains repository-specific or retired content %q", forbidden)
+		}
 	}
 }
 
@@ -1849,6 +1857,7 @@ func TestBuildPromptDesignDocumentFirstGeneration(t *testing.T) {
 		"coverage.json",
 		"prototype/index.html",
 		"$MULTICA_OUTPUT_DIR",
+		"multica design-document validate",
 		"Do NOT write `manifest.json`",
 	} {
 		if !strings.Contains(prompt, want) {
@@ -1876,6 +1885,7 @@ func TestBuildPromptProjectDesignSystemRepositoryAnalysisUsesMarkerContract(t *t
 	prompt := BuildPrompt(projectDesignSystemPromptTask(t, "repository_analysis"), "opencode")
 	for _, want := range []string{
 		"provided project repository and resources",
+		"multica repo checkout <repository-url>",
 		"read-only",
 		"Do not modify the repository",
 		"Do not create generated package files",

@@ -351,8 +351,10 @@ func persistProjectDesignSystemCompletion(
 	completedTask db.AgentTaskQueue,
 	prepared preparedProjectDesignSystemCompletion,
 ) (db.ProjectDesignSystem, error) {
-	if err := lockDesignSystemProject(ctx, queries, prepared.WorkspaceID, prepared.ProjectID); err != nil {
-		return db.ProjectDesignSystem{}, err
+	if prepared.ProjectID.Valid {
+		if err := lockDesignSystemProject(ctx, queries, prepared.WorkspaceID, prepared.ProjectID); err != nil {
+			return db.ProjectDesignSystem{}, err
+		}
 	}
 	system, err := queries.GetProjectDesignSystemInWorkspace(ctx, db.GetProjectDesignSystemInWorkspaceParams{
 		ID:          prepared.SystemID,

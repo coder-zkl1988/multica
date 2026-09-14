@@ -32,6 +32,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 	"github.com/multica-ai/multica/server/internal/daemon/repocache"
 	"github.com/multica-ai/multica/server/internal/designdocument"
+	"github.com/multica-ai/multica/server/internal/designimplementation"
 	"github.com/multica-ai/multica/server/internal/selfexec"
 	"github.com/multica-ai/multica/server/pkg/agent"
 	"github.com/multica-ai/multica/server/pkg/redact"
@@ -235,6 +236,7 @@ type terminalTaskReport struct {
 	projectDesignSystemArtifacts *ProjectDesignSystemArtifacts
 	projectDesignSystemPackage   *ProjectDesignSystemPackageReceipt
 	designDocumentGrounding      *designdocument.RepositoryGrounding
+	designImplementation         *designimplementation.Receipt
 	designDocumentPackage        *DesignDocumentPackageReceipt
 	durableWorkDir               string
 	claimGeneration              int64
@@ -3182,9 +3184,9 @@ func (d *Daemon) registerTaskRepos(workspaceID, taskID string, repos []RepoData)
 
 	if d.repoCache != nil && len(toSync) > 0 {
 		// Sync in the background — same shape used at workspace registration.
-		// `ensureRepoReady` reports a meaningful error if the cache isn't ready
-		// yet, so the agent's first checkout will surface a sync failure
-		// without silently treating it as a config bug.
+		// A first checkout also synchronously joins this repo's cache lock through
+		// ensureRepoReady, so prewarming never forces the user to retry a cold
+		// project-only repository.
 		d.bgSyncs.Add(1)
 		go func() {
 			defer d.bgSyncs.Done()
@@ -3777,7 +3779,23 @@ func (d *Daemon) ensureRepoReady(ctx context.Context, workspaceID, repoURL strin
 		return nil
 	}
 
-	d.syncWorkspaceReposContext(ctx, workspaceID, resp.Repos)
+	syncRepos := resp.Repos
+	requestedRepoIncluded := false
+	for _, repo := range resp.Repos {
+		if strings.TrimSpace(repo.URL) == repoURL {
+			requestedRepoIncluded = true
+			break
+		}
+	}
+	if !requestedRepoIncluded {
+		// Project-scoped repositories are registered on the task allowlist and
+		// cloned in the background, but they are intentionally absent from the
+		// workspace repository response. Synchronize the requested repository
+		// here as well so a first checkout waits for that cold clone instead of
+		// failing once with "configured but not synced".
+		syncRepos = []RepoData{{URL: repoURL}}
+	}
+	d.syncWorkspaceReposContext(ctx, workspaceID, syncRepos)
 	if err := ctx.Err(); err != nil {
 		return context.Cause(ctx)
 	}
@@ -6198,6 +6216,7 @@ func (d *Daemon) reportTaskResult(ctx context.Context, taskID string, result Tas
 			projectDesignSystemArtifacts: result.ProjectDesignSystemArtifacts,
 			projectDesignSystemPackage:   result.ProjectDesignSystemPackage,
 			designDocumentGrounding:      result.DesignDocumentGrounding,
+			designImplementation:         result.DesignImplementation,
 			designDocumentPackage:        result.DesignDocumentPackage,
 			sessionRolloutMissing:        result.SessionRolloutMissing,
 			retiredSessionID:             result.RetiredSessionID,
@@ -6310,7 +6329,7 @@ func (d *Daemon) reportTerminalTask(parentCtx context.Context, report terminalTa
 
 	switch report.kind {
 	case terminalTaskReportComplete:
-		return d.client.CompleteTask(ctx, report.taskID, report.output, report.branchName, report.sessionID, report.workDir, report.sessionRolloutMissing, report.retiredSessionID, report.durableWorkDir, report.projectDesignSystemArtifacts, report.projectDesignSystemPackage, report.designDocumentGrounding, report.designDocumentPackage, IssueCompletionReport{ClaimGeneration: report.claimGeneration, Intent: report.issueCompletion})
+		return d.client.CompleteTask(ctx, report.taskID, report.output, report.branchName, report.sessionID, report.workDir, report.sessionRolloutMissing, report.retiredSessionID, report.durableWorkDir, report.projectDesignSystemArtifacts, report.projectDesignSystemPackage, report.designDocumentGrounding, report.designDocumentPackage, report.designImplementation, IssueCompletionReport{ClaimGeneration: report.claimGeneration, Intent: report.issueCompletion})
 	case terminalTaskReportFail:
 		return d.client.FailTask(ctx, report.taskID, report.errorMessage, report.sessionID, report.workDir, report.branchName, report.failureReason, report.sessionRolloutMissing, report.retiredSessionID, report.durableWorkDir)
 	default:
@@ -7726,10 +7745,16 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		instructions = agentguard.PrivacyInstruction()
 	}
 
+	var designImplementationIdentity *designimplementation.TaskIdentity
+	if identity, ok := designimplementation.ParseTaskIdentity(task.TriggerCommentContent); ok {
+		designImplementationIdentity = &identity
+	}
+
 	// Prepare isolated execution environment.
 	// Repos are passed as metadata only — the agent checks them out on demand
 	// via `multica repo checkout <url>`.
 	taskCtx := execenv.TaskContextForEnv{
+		TaskID:                         task.ID,
 		IssueID:                        task.IssueID,
 		IssueCompletionContractVersion: task.IssueCompletionContractVersion,
 		TriggerCommentID:               task.TriggerCommentID,
@@ -7782,6 +7807,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		ConnectedApps:                     task.ConnectedApps,
 		IssueStatuses:                     convertIssueStatusesForEnv(task.IssueStatuses),
 		IssueStatusesOmitted:              task.IssueStatusesOmitted,
+		DesignImplementation:              designImplementationIdentity,
 	}
 
 	// Mark candidate env roots as active before any env work so the GC loop
@@ -8420,6 +8446,25 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			}
 		}()
 	}
+	// A project-design-system adjustment uses the same complete immutable-base
+	// contract as Open Design and Design Document. Restore it before the Agent
+	// starts; an unavailable or invalid base fails closed instead of silently
+	// degrading to three compatibility files.
+	if err := d.restoreProjectDesignSystemBaseArchive(prepareCtx, task, env.RootDir, env.WorkDir); err != nil {
+		return TaskResult{}, fmt.Errorf("prepare project design system base archive: %w", err)
+	}
+
+	// Open Design v0.19.2's repository intake is a deterministic evidence
+	// preflight, not a replacement author. Prepare the exact default-branch
+	// checkout and immutable bounded snapshots before the selected Agent starts.
+	var projectDesignSystemRepository *projectDesignSystemRepositoryState
+	var projectDesignSystemRepositoryErr error
+	if isRepositoryScopedProjectDesignSystemTask(task) {
+		projectDesignSystemRepository, projectDesignSystemRepositoryErr = d.prepareProjectDesignSystemRepositoryEvidence(
+			prepareCtx, task, env.RootDir, env.WorkDir, taskLog,
+		)
+	}
+
 	// A page-design adjustment runs against a base revision whose package is an
 	// archive, so execenv only reserved the directory — the bytes have to come
 	// over the wire. Done here, while the run is still in its prepare phase, so
@@ -8504,6 +8549,26 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	stopPrepareLease()
 	prepareComplete = true
 	cancelPrepare()
+	if projectDesignSystemRepositoryErr != nil {
+		return TaskResult{
+			Status: "blocked", Comment: "Project design system repository unavailable: " + projectDesignSystemRepositoryErr.Error(),
+			WorkDir: env.WorkDir, EnvRoot: env.RootDir, FailureReason: "project_design_system_repository_unavailable",
+		}, nil
+	}
+	if projectDesignSystemRepository != nil {
+		defer func() {
+			if returnErr != nil || taskResult.Status != "completed" {
+				return
+			}
+			verifyCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := projectDesignSystemRepository.verify(verifyCtx); err != nil {
+				taskResult.Status = "blocked"
+				taskResult.Comment = err.Error()
+				taskResult.FailureReason = "project_design_system_repository_modified"
+			}
+		}()
+	}
 	if designDocumentGroundingErr != nil {
 		failureReason := "design_document_repository_unavailable"
 		if strings.HasPrefix(designDocumentGroundingErr.Error(), "Design Document input unavailable:") {
@@ -8538,6 +8603,21 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			taskResult = finalized
 		}()
 	}
+	if _, ok := designimplementation.ParseTaskIdentity(task.TriggerCommentContent); ok {
+		defer func() {
+			if returnErr != nil || taskResult.Status != "completed" {
+				return
+			}
+			receipt, err := collectDesignImplementationReceipt(task, env.WorkDir, time.Now())
+			if err != nil {
+				taskResult.Status = "blocked"
+				taskResult.Comment = "Design implementation result invalid: " + err.Error()
+				taskResult.FailureReason = "design_implementation_result_invalid"
+				return
+			}
+			taskResult.DesignImplementation = receipt
+		}()
+	}
 	// A manual edit is the one design-document operation with no agent in it:
 	// the designer already saw the result, so the daemon applies the overrides
 	// itself and returns. The deferred finalize above still collects, audits,
@@ -8557,6 +8637,8 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			WorkDir: env.WorkDir, EnvRoot: env.RootDir,
 		}, nil
 	}
+	stopLivePreview := d.startDesignDocumentLivePreview(ctx, task, env.RootDir)
+	defer stopLivePreview()
 
 	_ = d.client.ReportProgress(ctx, task.ID, fmt.Sprintf("Launching %s", provider), 1, 2)
 

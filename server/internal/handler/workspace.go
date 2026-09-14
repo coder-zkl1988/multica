@@ -330,8 +330,10 @@ type UpdateWorkspaceRequest struct {
 }
 
 type workspaceRepoRef struct {
-	URL         string `json:"url"`
-	Description string `json:"description,omitempty"`
+	ID                string `json:"id"`
+	URL               string `json:"url"`
+	Description       string `json:"description,omitempty"`
+	DefaultBranchHint string `json:"default_branch_hint,omitempty"`
 }
 
 func validateAndNormalizeWorkspaceRepos(value any) ([]byte, error) {
@@ -347,9 +349,21 @@ func validateAndNormalizeWorkspaceRepos(value any) ([]byte, error) {
 
 	normalized := make([]workspaceRepoRef, 0, len(repos))
 	seen := make(map[string]struct{}, len(repos))
+	seenIDs := make(map[string]struct{}, len(repos))
 	for i, repo := range repos {
+		repo.ID = strings.TrimSpace(repo.ID)
 		repo.URL = strings.TrimSpace(repo.URL)
 		repo.Description = strings.TrimSpace(repo.Description)
+		repo.DefaultBranchHint = strings.TrimSpace(repo.DefaultBranchHint)
+		if repo.ID == "" {
+			repo.ID = uuid.NewString()
+		} else if _, err := uuid.Parse(repo.ID); err != nil {
+			return nil, fmt.Errorf("repos[%d]: id must be a UUID", i)
+		}
+		if _, exists := seenIDs[repo.ID]; exists {
+			return nil, fmt.Errorf("repos[%d]: duplicate repository id", i)
+		}
+		seenIDs[repo.ID] = struct{}{}
 		if repo.URL == "" {
 			return nil, fmt.Errorf("repos[%d]: url is required", i)
 		}
@@ -408,6 +422,19 @@ func (h *Handler) UpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 		reposJSON, err := validateAndNormalizeWorkspaceRepos(req.Repos)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		current, err := h.Queries.GetWorkspace(r.Context(), idUUID)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "workspace not found")
+			return
+		}
+		if err := ensureWorkspaceRepositoryRemovalsSafe(r.Context(), h.Queries, idUUID, current.Repos, reposJSON); err != nil {
+			if errors.Is(err, errWorkspaceRepositoryInUse) {
+				writeError(w, http.StatusConflict, "repository is used by Design Center and cannot be removed")
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "failed to validate repository removal")
 			return
 		}
 		params.Repos = reposJSON

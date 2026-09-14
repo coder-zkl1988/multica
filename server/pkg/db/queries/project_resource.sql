@@ -59,3 +59,12 @@ SELECT project_id, count(*)::bigint AS resource_count
 FROM project_resource
 WHERE project_id = ANY(sqlc.arg('project_ids')::uuid[])
 GROUP BY project_id;
+
+-- name: ListDesignRepositoriesInWorkspace :many
+SELECT resource.id, resource.project_id, project.title AS project_title,
+       resource.label, resource.resource_ref
+FROM project_resource AS resource
+JOIN project ON project.id = resource.project_id
+WHERE resource.workspace_id = $1
+  AND resource.resource_type = 'github_repo'
+ORDER BY project.title ASC, resource.label ASC, resource.id ASC;

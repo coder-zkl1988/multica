@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type CSSProperties } from "react";
+import { useState } from "react";
 import { Download, LoaderCircle, MoreHorizontal, Trash2 } from "lucide-react";
 import type { DesignDocument } from "@multica/core/types";
 import {
@@ -11,6 +11,7 @@ import {
 } from "@multica/ui/components/ui/dropdown-menu";
 import { cn } from "@multica/ui/lib/utils";
 import { useTimeAgo } from "../i18n/use-time-ago";
+import { DesignDocumentCover } from "./design-document-thumbnail";
 
 /**
  * The recipes the composer has built in (DC-049). Anything else on a document
@@ -85,39 +86,6 @@ export function designDocumentKindLabel(recipe: string): string {
 }
 
 /**
- * The cover a document shows, ported from Open Design's `projectCover`
- * fallback branch (RecentProjectsStrip.tsx). A design document carries no
- * thumbnail — the saved package's preview needs a per-revision capability
- * token, far too much for a grid — so every card takes the fallback: a hue
- * derived from the document's own id, plus its first character.
- *
- * Deriving the hue from the id rather than picking one colour keeps a grid of
- * coverless cards distinguishable at a glance and stable across reloads,
- * which a shared neutral placeholder never is: Open Design's cards read as
- * documents, ours read as three identical loading skeletons.
- */
-export function designDocumentCover(document: DesignDocument): {
-  style: CSSProperties;
-  initial: string;
-} {
-  let hash = 0;
-  for (let index = 0; index < document.id.length; index += 1) {
-    hash = (hash * 31 + document.id.charCodeAt(index)) >>> 0;
-  }
-  const hue = hash % 360;
-  const secondHue = (hue + 38) % 360;
-  const trimmed = document.title.trim();
-  return {
-    style: {
-      background:
-        `radial-gradient(circle at 30% 28%, hsl(${hue} 70% 78% / 0.55), transparent 42%),`
-        + ` linear-gradient(135deg, hsl(${hue} 65% 88%), hsl(${secondHue} 70% 90%))`,
-    },
-    initial: (trimmed ? Array.from(trimmed)[0]! : "?").toUpperCase(),
-  };
-}
-
-/**
  * One design document as a card, in Open Design's recent-projects shape: a
  * 16/9 cover with the caption below it on the page itself. The card carries no
  * surface, border or padding of its own (their `.recent-projects__card` is
@@ -135,8 +103,10 @@ export function DesignDocumentCard({
   onDownload,
   onDelete,
   busy = false,
+  variant = "draft",
 }: {
   document: DesignDocument;
+  variant?: "saved" | "draft";
   /** Empty renders nothing rather than a placeholder project name. */
   projectTitle: string;
   /** Absent renders the card as plain content instead of a control. */
@@ -159,7 +129,6 @@ export function DesignDocumentCard({
   const status = designDocumentStatusLabel(document.status);
   const title = document.title.trim() || "未命名设计稿";
   const updatedAt = document.updated_at || document.created_at;
-  const cover = designDocumentCover(document);
   const where = [projectTitle.trim(), updatedAt ? timeAgo(updatedAt) : ""]
     .filter((part) => part.length > 0)
     .join(" · ");
@@ -172,20 +141,9 @@ export function DesignDocumentCard({
   const body = (
     <>
       <div
-        style={cover.style}
-        aria-hidden
         className="relative flex aspect-[16/9] items-center justify-center overflow-hidden rounded-lg"
       >
-        <span className="text-display font-medium text-faint-foreground">{cover.initial}</span>
-        {/* Hairline ring drawn over the cover, not as a border: a light cover
-            would otherwise melt into the page. Open Design raises it to 22%
-            for exactly this gradient fallback, where their usual 8% ring
-            disappears into the colour variation. */}
-        <span
-          aria-hidden
-          className="pointer-events-none absolute inset-0 rounded-[inherit] border"
-          style={{ borderColor: "color-mix(in srgb, var(--foreground) 22%, transparent)" }}
-        />
+        <DesignDocumentCover document={document} variant={variant} />
         {status ? (
           <span
             className={cn(
@@ -265,6 +223,7 @@ export function DesignDocumentCard({
       <button
         type="button"
         onClick={onOpen}
+        aria-label={title}
         title={projectTitle ? `打开「${projectTitle}」的这份设计稿` : "打开这份设计稿"}
         className={cn(shell, "cursor-pointer")}
       >

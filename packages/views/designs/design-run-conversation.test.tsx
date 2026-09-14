@@ -45,6 +45,23 @@ describe("DesignRunConversation", () => {
     expect(screen.queryByText("todo_write")).not.toBeInTheDocument();
   });
 
+  it("also leaves Codex update_plan output to the pinned bar", () => {
+    render(
+      <DesignRunConversation
+        live
+        messages={[message({
+          seq: 1,
+          type: "tool_use",
+          tool: "update_plan",
+          input: { plan: [{ step: "生成在线 UI Kit", status: "in_progress" }] },
+        })]}
+      />,
+    );
+
+    expect(screen.queryByText("生成在线 UI Kit")).not.toBeInTheDocument();
+    expect(screen.queryByText("update_plan")).not.toBeInTheDocument();
+  });
+
   // An unreadable payload degrades to the ordinary tool line instead of
   // rendering an empty checklist that reads as "the agent planned nothing".
   it("falls back to the tool line when a plan payload is unreadable", () => {

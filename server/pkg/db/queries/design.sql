@@ -122,6 +122,61 @@ UPDATE design_file SET
 WHERE id = $1 AND workspace_id = $2
 RETURNING *;
 
+-- name: SetDesignFileRepository :one
+UPDATE design_file SET
+    project_resource_id = sqlc.narg('project_resource_id'),
+    updated_at = now()
+WHERE id = sqlc.arg('id')
+  AND workspace_id = sqlc.arg('workspace_id')
+RETURNING *;
+
+-- name: DetachDesignFilesFromProjectResource :exec
+UPDATE design_file SET project_resource_id = NULL
+WHERE workspace_id = $1 AND project_resource_id = $2;
+
+-- name: ListDesignFilesByRepository :many
+SELECT df.* FROM design_file df
+WHERE df.workspace_id = $1
+  AND df.project_id = $2
+  AND df.project_resource_id = $3
+  AND COALESCE(df.source_ref->>'asset_type', '') NOT IN ('template', 'design_system')
+  AND NOT EXISTS (
+    SELECT 1 FROM design_system_profile dsp
+    WHERE dsp.source_file_id = df.id AND dsp.status <> 'archived'
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM design_template_revision dtr
+    WHERE EXISTS (
+      SELECT 1 FROM design_revision dr
+      WHERE dr.id = dtr.design_revision_id AND dr.file_id = df.id
+    )
+  )
+ORDER BY df.updated_at DESC, df.created_at DESC;
+
+-- Settings-repository scope is independent of projects and project_resource.
+-- name: ListDesignFilesByWorkspaceRepository :many
+SELECT df.* FROM design_file df
+WHERE df.workspace_id = sqlc.arg('workspace_id')
+  AND df.workspace_repository_id = sqlc.arg('workspace_repository_id')
+  AND COALESCE(df.source_ref->>'asset_type', '') NOT IN ('template', 'design_system')
+  AND NOT EXISTS (
+    SELECT 1 FROM design_system_profile dsp
+    WHERE dsp.source_file_id = df.id AND dsp.status <> 'archived'
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM design_template_revision dtr
+    WHERE EXISTS (
+      SELECT 1 FROM design_revision dr
+      WHERE dr.id = dtr.design_revision_id AND dr.file_id = df.id
+    )
+  )
+ORDER BY df.updated_at DESC, df.created_at DESC;
+
+-- name: CountDesignFilesByWorkspaceRepository :one
+SELECT count(*) FROM design_file
+WHERE workspace_id = sqlc.arg('workspace_id')
+  AND workspace_repository_id = sqlc.arg('workspace_repository_id');
+
 -- name: DeleteDesignFile :exec
 DELETE FROM design_file WHERE id = $1 AND workspace_id = $2;
 
@@ -1088,6 +1143,17 @@ WHERE workspace_id = sqlc.arg('workspace_id')
   AND project_id = sqlc.arg('project_id')
   AND project_resource_id = sqlc.arg('project_resource_id');
 
+-- The system owned by one Settings repository, independent of projects.
+-- name: GetProjectDesignSystemByWorkspaceRepository :one
+SELECT * FROM project_design_system
+WHERE workspace_id = sqlc.arg('workspace_id')
+  AND workspace_repository_id = sqlc.arg('workspace_repository_id');
+
+-- name: CountProjectDesignSystemsByWorkspaceRepository :one
+SELECT count(*) FROM project_design_system
+WHERE workspace_id = sqlc.arg('workspace_id')
+  AND workspace_repository_id = sqlc.arg('workspace_repository_id');
+
 -- Every system under a project, project-level row first so the scope
 -- switcher can render it as the default entry.
 -- name: ListProjectDesignSystemsByProject :many
@@ -1153,6 +1219,7 @@ INSERT INTO project_design_system (
     workspace_id,
     project_id,
     project_resource_id,
+    workspace_repository_id,
     name,
     platform,
     current_agent_id,
@@ -1166,6 +1233,7 @@ SELECT
     sqlc.arg('workspace_id'),
     sqlc.arg('project_id'),
     sqlc.narg('project_resource_id'),
+    NULL,
     sqlc.arg('name'),
     sqlc.arg('platform'),
     sqlc.narg('current_agent_id'),
@@ -1187,6 +1255,7 @@ INSERT INTO project_design_system (
     workspace_id,
     project_id,
     project_resource_id,
+    workspace_repository_id,
     name,
     platform,
     current_agent_id,
@@ -1200,6 +1269,7 @@ SELECT
     sqlc.arg('workspace_id'),
     NULL,
     NULL,
+    sqlc.narg('workspace_repository_id'),
     sqlc.arg('name'),
     sqlc.arg('platform'),
     sqlc.narg('current_agent_id'),

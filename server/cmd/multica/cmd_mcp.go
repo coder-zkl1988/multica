@@ -125,7 +125,7 @@ func runMCPServeDesign(cmd *cobra.Command, _ []string) error {
 	if err := validateDesignMCPWorkspace(ctx, client); err != nil {
 		return err
 	}
-	adapter := &designMCPAdapter{client: client}
+	adapter := &designMCPAdapter{client: client, rootDir: "."}
 	return newDesignMCPServer(adapter).serve(cmd.InOrStdin(), cmd.OutOrStdout())
 }
 

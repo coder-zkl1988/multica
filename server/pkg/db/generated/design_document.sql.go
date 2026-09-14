@@ -18,7 +18,7 @@ UPDATE design_document SET
     updated_at = now()
 WHERE id = $1
   AND workspace_id = $2
-RETURNING id, workspace_id, project_id, project_resource_id, issue_id, title, platform, recipe, draft_revision_id, saved_revision_id, current_agent_id, active_task_id, active_operation, input_snapshot, last_error, created_by, created_at, updated_at, saved_at
+RETURNING id, workspace_id, project_id, project_resource_id, issue_id, title, platform, recipe, draft_revision_id, saved_revision_id, current_agent_id, active_task_id, active_operation, input_snapshot, last_error, created_by, created_at, updated_at, saved_at, workspace_repository_id
 `
 
 type ClearDesignDocumentActiveTaskParams struct {
@@ -49,8 +49,27 @@ func (q *Queries) ClearDesignDocumentActiveTask(ctx context.Context, arg ClearDe
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.SavedAt,
+		&i.WorkspaceRepositoryID,
 	)
 	return i, err
+}
+
+const countDesignDocumentsByWorkspaceRepository = `-- name: CountDesignDocumentsByWorkspaceRepository :one
+SELECT count(*) FROM design_document
+WHERE workspace_id = $1
+  AND workspace_repository_id = $2
+`
+
+type CountDesignDocumentsByWorkspaceRepositoryParams struct {
+	WorkspaceID           pgtype.UUID `json:"workspace_id"`
+	WorkspaceRepositoryID pgtype.UUID `json:"workspace_repository_id"`
+}
+
+func (q *Queries) CountDesignDocumentsByWorkspaceRepository(ctx context.Context, arg CountDesignDocumentsByWorkspaceRepositoryParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countDesignDocumentsByWorkspaceRepository, arg.WorkspaceID, arg.WorkspaceRepositoryID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
 }
 
 const createDesignDocument = `-- name: CreateDesignDocument :one
@@ -59,6 +78,7 @@ INSERT INTO design_document (
     workspace_id,
     project_id,
     project_resource_id,
+    workspace_repository_id,
     issue_id,
     title,
     platform,
@@ -81,26 +101,28 @@ SELECT
     $9,
     $10,
     $11,
-    $12
+    $12,
+    $13
 FROM project
 WHERE project.id = $2
   AND project.workspace_id = $1
-RETURNING id, workspace_id, project_id, project_resource_id, issue_id, title, platform, recipe, draft_revision_id, saved_revision_id, current_agent_id, active_task_id, active_operation, input_snapshot, last_error, created_by, created_at, updated_at, saved_at
+RETURNING id, workspace_id, project_id, project_resource_id, issue_id, title, platform, recipe, draft_revision_id, saved_revision_id, current_agent_id, active_task_id, active_operation, input_snapshot, last_error, created_by, created_at, updated_at, saved_at, workspace_repository_id
 `
 
 type CreateDesignDocumentParams struct {
-	WorkspaceID       pgtype.UUID `json:"workspace_id"`
-	ProjectID         pgtype.UUID `json:"project_id"`
-	ProjectResourceID pgtype.UUID `json:"project_resource_id"`
-	IssueID           pgtype.UUID `json:"issue_id"`
-	Title             string      `json:"title"`
-	Platform          string      `json:"platform"`
-	Recipe            string      `json:"recipe"`
-	CurrentAgentID    pgtype.UUID `json:"current_agent_id"`
-	ActiveTaskID      pgtype.UUID `json:"active_task_id"`
-	ActiveOperation   pgtype.Text `json:"active_operation"`
-	InputSnapshot     []byte      `json:"input_snapshot"`
-	CreatedBy         pgtype.UUID `json:"created_by"`
+	WorkspaceID           pgtype.UUID `json:"workspace_id"`
+	ProjectID             pgtype.UUID `json:"project_id"`
+	ProjectResourceID     pgtype.UUID `json:"project_resource_id"`
+	WorkspaceRepositoryID pgtype.UUID `json:"workspace_repository_id"`
+	IssueID               pgtype.UUID `json:"issue_id"`
+	Title                 string      `json:"title"`
+	Platform              string      `json:"platform"`
+	Recipe                string      `json:"recipe"`
+	CurrentAgentID        pgtype.UUID `json:"current_agent_id"`
+	ActiveTaskID          pgtype.UUID `json:"active_task_id"`
+	ActiveOperation       pgtype.Text `json:"active_operation"`
+	InputSnapshot         []byte      `json:"input_snapshot"`
+	CreatedBy             pgtype.UUID `json:"created_by"`
 }
 
 // Design Document persistence (P-011 / DC-042).
@@ -116,6 +138,7 @@ func (q *Queries) CreateDesignDocument(ctx context.Context, arg CreateDesignDocu
 		arg.WorkspaceID,
 		arg.ProjectID,
 		arg.ProjectResourceID,
+		arg.WorkspaceRepositoryID,
 		arg.IssueID,
 		arg.Title,
 		arg.Platform,
@@ -147,6 +170,7 @@ func (q *Queries) CreateDesignDocument(ctx context.Context, arg CreateDesignDocu
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.SavedAt,
+		&i.WorkspaceRepositoryID,
 	)
 	return i, err
 }
@@ -171,7 +195,8 @@ INSERT INTO design_document_revision (
     source_task_id,
     agent_id,
     instruction,
-    scope
+    scope,
+    repository_grounding
 ) VALUES (
     $1,
     $2,
@@ -191,9 +216,10 @@ INSERT INTO design_document_revision (
     $16,
     $17,
     $18,
-    $19
+    $19,
+    $20
 )
-RETURNING id, workspace_id, design_document_id, revision_number, package_schema, content_digest, archive_object_key, artifact_index, manifest, brief, coverage, audit, preview, input_snapshot_sha256, base_revision_id, design_system_digest, source_task_id, agent_id, instruction, scope, created_at
+RETURNING id, workspace_id, design_document_id, revision_number, package_schema, content_digest, archive_object_key, artifact_index, manifest, brief, coverage, audit, preview, input_snapshot_sha256, base_revision_id, design_system_digest, source_task_id, agent_id, instruction, scope, created_at, repository_grounding
 `
 
 type CreateDesignDocumentRevisionParams struct {
@@ -216,6 +242,7 @@ type CreateDesignDocumentRevisionParams struct {
 	AgentID             pgtype.UUID `json:"agent_id"`
 	Instruction         pgtype.Text `json:"instruction"`
 	Scope               []byte      `json:"scope"`
+	RepositoryGrounding []byte      `json:"repository_grounding"`
 }
 
 func (q *Queries) CreateDesignDocumentRevision(ctx context.Context, arg CreateDesignDocumentRevisionParams) (DesignDocumentRevision, error) {
@@ -239,6 +266,7 @@ func (q *Queries) CreateDesignDocumentRevision(ctx context.Context, arg CreateDe
 		arg.AgentID,
 		arg.Instruction,
 		arg.Scope,
+		arg.RepositoryGrounding,
 	)
 	var i DesignDocumentRevision
 	err := row.Scan(
@@ -263,6 +291,7 @@ func (q *Queries) CreateDesignDocumentRevision(ctx context.Context, arg CreateDe
 		&i.Instruction,
 		&i.Scope,
 		&i.CreatedAt,
+		&i.RepositoryGrounding,
 	)
 	return i, err
 }
@@ -313,6 +342,10 @@ WITH deleted_shares AS (
     WHERE design_document_share.workspace_id = $1
       AND design_document_share.design_document_id = $2
     RETURNING design_document_share.id
+),
+deleted_live_previews AS (
+    DELETE FROM design_document_live_preview
+    WHERE workspace_id = $1 AND document_id = $2
 ),
 deleted_revisions AS (
     DELETE FROM design_document_revision
@@ -374,6 +407,21 @@ func (q *Queries) DeleteDesignDocument(ctx context.Context, arg DeleteDesignDocu
 	return items, nil
 }
 
+const detachDesignDocumentsFromProjectResource = `-- name: DetachDesignDocumentsFromProjectResource :exec
+UPDATE design_document SET project_resource_id = NULL
+WHERE workspace_id = $1 AND project_resource_id = $2
+`
+
+type DetachDesignDocumentsFromProjectResourceParams struct {
+	WorkspaceID       pgtype.UUID `json:"workspace_id"`
+	ProjectResourceID pgtype.UUID `json:"project_resource_id"`
+}
+
+func (q *Queries) DetachDesignDocumentsFromProjectResource(ctx context.Context, arg DetachDesignDocumentsFromProjectResourceParams) error {
+	_, err := q.db.Exec(ctx, detachDesignDocumentsFromProjectResource, arg.WorkspaceID, arg.ProjectResourceID)
+	return err
+}
+
 const discardDesignDocumentDraft = `-- name: DiscardDesignDocumentDraft :one
 UPDATE design_document SET
     draft_revision_id = NULL,
@@ -381,7 +429,7 @@ UPDATE design_document SET
     updated_at = now()
 WHERE id = $1
   AND workspace_id = $2
-RETURNING id, workspace_id, project_id, project_resource_id, issue_id, title, platform, recipe, draft_revision_id, saved_revision_id, current_agent_id, active_task_id, active_operation, input_snapshot, last_error, created_by, created_at, updated_at, saved_at
+RETURNING id, workspace_id, project_id, project_resource_id, issue_id, title, platform, recipe, draft_revision_id, saved_revision_id, current_agent_id, active_task_id, active_operation, input_snapshot, last_error, created_by, created_at, updated_at, saved_at, workspace_repository_id
 `
 
 type DiscardDesignDocumentDraftParams struct {
@@ -414,12 +462,13 @@ func (q *Queries) DiscardDesignDocumentDraft(ctx context.Context, arg DiscardDes
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.SavedAt,
+		&i.WorkspaceRepositoryID,
 	)
 	return i, err
 }
 
 const getDesignDocumentByActiveTask = `-- name: GetDesignDocumentByActiveTask :one
-SELECT id, workspace_id, project_id, project_resource_id, issue_id, title, platform, recipe, draft_revision_id, saved_revision_id, current_agent_id, active_task_id, active_operation, input_snapshot, last_error, created_by, created_at, updated_at, saved_at FROM design_document
+SELECT id, workspace_id, project_id, project_resource_id, issue_id, title, platform, recipe, draft_revision_id, saved_revision_id, current_agent_id, active_task_id, active_operation, input_snapshot, last_error, created_by, created_at, updated_at, saved_at, workspace_repository_id FROM design_document
 WHERE workspace_id = $1
   AND active_task_id = $2
 `
@@ -452,12 +501,13 @@ func (q *Queries) GetDesignDocumentByActiveTask(ctx context.Context, arg GetDesi
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.SavedAt,
+		&i.WorkspaceRepositoryID,
 	)
 	return i, err
 }
 
 const getDesignDocumentInWorkspace = `-- name: GetDesignDocumentInWorkspace :one
-SELECT id, workspace_id, project_id, project_resource_id, issue_id, title, platform, recipe, draft_revision_id, saved_revision_id, current_agent_id, active_task_id, active_operation, input_snapshot, last_error, created_by, created_at, updated_at, saved_at FROM design_document
+SELECT id, workspace_id, project_id, project_resource_id, issue_id, title, platform, recipe, draft_revision_id, saved_revision_id, current_agent_id, active_task_id, active_operation, input_snapshot, last_error, created_by, created_at, updated_at, saved_at, workspace_repository_id FROM design_document
 WHERE id = $1
   AND workspace_id = $2
 `
@@ -490,12 +540,13 @@ func (q *Queries) GetDesignDocumentInWorkspace(ctx context.Context, arg GetDesig
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.SavedAt,
+		&i.WorkspaceRepositoryID,
 	)
 	return i, err
 }
 
 const getDesignDocumentInWorkspaceForUpdate = `-- name: GetDesignDocumentInWorkspaceForUpdate :one
-SELECT id, workspace_id, project_id, project_resource_id, issue_id, title, platform, recipe, draft_revision_id, saved_revision_id, current_agent_id, active_task_id, active_operation, input_snapshot, last_error, created_by, created_at, updated_at, saved_at FROM design_document
+SELECT id, workspace_id, project_id, project_resource_id, issue_id, title, platform, recipe, draft_revision_id, saved_revision_id, current_agent_id, active_task_id, active_operation, input_snapshot, last_error, created_by, created_at, updated_at, saved_at, workspace_repository_id FROM design_document
 WHERE id = $1
   AND workspace_id = $2
 FOR UPDATE
@@ -529,12 +580,13 @@ func (q *Queries) GetDesignDocumentInWorkspaceForUpdate(ctx context.Context, arg
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.SavedAt,
+		&i.WorkspaceRepositoryID,
 	)
 	return i, err
 }
 
 const getDesignDocumentRevisionInWorkspace = `-- name: GetDesignDocumentRevisionInWorkspace :one
-SELECT id, workspace_id, design_document_id, revision_number, package_schema, content_digest, archive_object_key, artifact_index, manifest, brief, coverage, audit, preview, input_snapshot_sha256, base_revision_id, design_system_digest, source_task_id, agent_id, instruction, scope, created_at FROM design_document_revision
+SELECT id, workspace_id, design_document_id, revision_number, package_schema, content_digest, archive_object_key, artifact_index, manifest, brief, coverage, audit, preview, input_snapshot_sha256, base_revision_id, design_system_digest, source_task_id, agent_id, instruction, scope, created_at, repository_grounding FROM design_document_revision
 WHERE id = $1
   AND workspace_id = $2
 `
@@ -569,6 +621,7 @@ func (q *Queries) GetDesignDocumentRevisionInWorkspace(ctx context.Context, arg 
 		&i.Instruction,
 		&i.Scope,
 		&i.CreatedAt,
+		&i.RepositoryGrounding,
 	)
 	return i, err
 }
@@ -651,7 +704,7 @@ func (q *Queries) GetNextDesignDocumentRevisionNumber(ctx context.Context, desig
 
 const listDeliveredDesignDocumentsByIssue = `-- name: ListDeliveredDesignDocumentsByIssue :many
 SELECT
-    d.id, d.workspace_id, d.project_id, d.project_resource_id, d.issue_id, d.title, d.platform, d.recipe, d.draft_revision_id, d.saved_revision_id, d.current_agent_id, d.active_task_id, d.active_operation, d.input_snapshot, d.last_error, d.created_by, d.created_at, d.updated_at, d.saved_at,
+    d.id, d.workspace_id, d.project_id, d.project_resource_id, d.issue_id, d.title, d.platform, d.recipe, d.draft_revision_id, d.saved_revision_id, d.current_agent_id, d.active_task_id, d.active_operation, d.input_snapshot, d.last_error, d.created_by, d.created_at, d.updated_at, d.saved_at, d.workspace_repository_id,
     r.id AS saved_revision_uuid,
     r.revision_number AS saved_revision_number,
     r.content_digest AS saved_content_digest,
@@ -670,29 +723,30 @@ type ListDeliveredDesignDocumentsByIssueParams struct {
 }
 
 type ListDeliveredDesignDocumentsByIssueRow struct {
-	ID                  pgtype.UUID        `json:"id"`
-	WorkspaceID         pgtype.UUID        `json:"workspace_id"`
-	ProjectID           pgtype.UUID        `json:"project_id"`
-	ProjectResourceID   pgtype.UUID        `json:"project_resource_id"`
-	IssueID             pgtype.UUID        `json:"issue_id"`
-	Title               string             `json:"title"`
-	Platform            string             `json:"platform"`
-	Recipe              string             `json:"recipe"`
-	DraftRevisionID     pgtype.UUID        `json:"draft_revision_id"`
-	SavedRevisionID     pgtype.UUID        `json:"saved_revision_id"`
-	CurrentAgentID      pgtype.UUID        `json:"current_agent_id"`
-	ActiveTaskID        pgtype.UUID        `json:"active_task_id"`
-	ActiveOperation     pgtype.Text        `json:"active_operation"`
-	InputSnapshot       []byte             `json:"input_snapshot"`
-	LastError           []byte             `json:"last_error"`
-	CreatedBy           pgtype.UUID        `json:"created_by"`
-	CreatedAt           pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
-	SavedAt             pgtype.Timestamptz `json:"saved_at"`
-	SavedRevisionUuid   pgtype.UUID        `json:"saved_revision_uuid"`
-	SavedRevisionNumber int32              `json:"saved_revision_number"`
-	SavedContentDigest  string             `json:"saved_content_digest"`
-	SavedPackageSchema  string             `json:"saved_package_schema"`
+	ID                    pgtype.UUID        `json:"id"`
+	WorkspaceID           pgtype.UUID        `json:"workspace_id"`
+	ProjectID             pgtype.UUID        `json:"project_id"`
+	ProjectResourceID     pgtype.UUID        `json:"project_resource_id"`
+	IssueID               pgtype.UUID        `json:"issue_id"`
+	Title                 string             `json:"title"`
+	Platform              string             `json:"platform"`
+	Recipe                string             `json:"recipe"`
+	DraftRevisionID       pgtype.UUID        `json:"draft_revision_id"`
+	SavedRevisionID       pgtype.UUID        `json:"saved_revision_id"`
+	CurrentAgentID        pgtype.UUID        `json:"current_agent_id"`
+	ActiveTaskID          pgtype.UUID        `json:"active_task_id"`
+	ActiveOperation       pgtype.Text        `json:"active_operation"`
+	InputSnapshot         []byte             `json:"input_snapshot"`
+	LastError             []byte             `json:"last_error"`
+	CreatedBy             pgtype.UUID        `json:"created_by"`
+	CreatedAt             pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
+	SavedAt               pgtype.Timestamptz `json:"saved_at"`
+	WorkspaceRepositoryID pgtype.UUID        `json:"workspace_repository_id"`
+	SavedRevisionUuid     pgtype.UUID        `json:"saved_revision_uuid"`
+	SavedRevisionNumber   int32              `json:"saved_revision_number"`
+	SavedContentDigest    string             `json:"saved_content_digest"`
+	SavedPackageSchema    string             `json:"saved_package_schema"`
 }
 
 // The designs an implementing agent working this issue is entitled to read:
@@ -728,6 +782,7 @@ func (q *Queries) ListDeliveredDesignDocumentsByIssue(ctx context.Context, arg L
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.SavedAt,
+			&i.WorkspaceRepositoryID,
 			&i.SavedRevisionUuid,
 			&i.SavedRevisionNumber,
 			&i.SavedContentDigest,
@@ -744,7 +799,7 @@ func (q *Queries) ListDeliveredDesignDocumentsByIssue(ctx context.Context, arg L
 }
 
 const listDesignDocumentRevisions = `-- name: ListDesignDocumentRevisions :many
-SELECT id, workspace_id, design_document_id, revision_number, package_schema, content_digest, archive_object_key, artifact_index, manifest, brief, coverage, audit, preview, input_snapshot_sha256, base_revision_id, design_system_digest, source_task_id, agent_id, instruction, scope, created_at FROM design_document_revision
+SELECT id, workspace_id, design_document_id, revision_number, package_schema, content_digest, archive_object_key, artifact_index, manifest, brief, coverage, audit, preview, input_snapshot_sha256, base_revision_id, design_system_digest, source_task_id, agent_id, instruction, scope, created_at, repository_grounding FROM design_document_revision
 WHERE workspace_id = $1
   AND design_document_id = $2
 ORDER BY revision_number DESC
@@ -786,6 +841,7 @@ func (q *Queries) ListDesignDocumentRevisions(ctx context.Context, arg ListDesig
 			&i.Instruction,
 			&i.Scope,
 			&i.CreatedAt,
+			&i.RepositoryGrounding,
 		); err != nil {
 			return nil, err
 		}
@@ -840,7 +896,7 @@ func (q *Queries) ListDesignDocumentShares(ctx context.Context, arg ListDesignDo
 }
 
 const listDesignDocumentsByIssue = `-- name: ListDesignDocumentsByIssue :many
-SELECT id, workspace_id, project_id, project_resource_id, issue_id, title, platform, recipe, draft_revision_id, saved_revision_id, current_agent_id, active_task_id, active_operation, input_snapshot, last_error, created_by, created_at, updated_at, saved_at FROM design_document
+SELECT id, workspace_id, project_id, project_resource_id, issue_id, title, platform, recipe, draft_revision_id, saved_revision_id, current_agent_id, active_task_id, active_operation, input_snapshot, last_error, created_by, created_at, updated_at, saved_at, workspace_repository_id FROM design_document
 WHERE workspace_id = $1
   AND issue_id = $2
 ORDER BY updated_at DESC
@@ -884,6 +940,7 @@ func (q *Queries) ListDesignDocumentsByIssue(ctx context.Context, arg ListDesign
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.SavedAt,
+			&i.WorkspaceRepositoryID,
 		); err != nil {
 			return nil, err
 		}
@@ -896,7 +953,7 @@ func (q *Queries) ListDesignDocumentsByIssue(ctx context.Context, arg ListDesign
 }
 
 const listDesignDocumentsByProject = `-- name: ListDesignDocumentsByProject :many
-SELECT id, workspace_id, project_id, project_resource_id, issue_id, title, platform, recipe, draft_revision_id, saved_revision_id, current_agent_id, active_task_id, active_operation, input_snapshot, last_error, created_by, created_at, updated_at, saved_at FROM design_document
+SELECT id, workspace_id, project_id, project_resource_id, issue_id, title, platform, recipe, draft_revision_id, saved_revision_id, current_agent_id, active_task_id, active_operation, input_snapshot, last_error, created_by, created_at, updated_at, saved_at, workspace_repository_id FROM design_document
 WHERE workspace_id = $1
   AND project_id = $2
 ORDER BY updated_at DESC
@@ -938,6 +995,119 @@ func (q *Queries) ListDesignDocumentsByProject(ctx context.Context, arg ListDesi
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.SavedAt,
+			&i.WorkspaceRepositoryID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDesignDocumentsByRepository = `-- name: ListDesignDocumentsByRepository :many
+SELECT id, workspace_id, project_id, project_resource_id, issue_id, title, platform, recipe, draft_revision_id, saved_revision_id, current_agent_id, active_task_id, active_operation, input_snapshot, last_error, created_by, created_at, updated_at, saved_at, workspace_repository_id FROM design_document
+WHERE workspace_id = $1
+  AND project_id = $2
+  AND project_resource_id = $3
+ORDER BY updated_at DESC
+`
+
+type ListDesignDocumentsByRepositoryParams struct {
+	WorkspaceID       pgtype.UUID `json:"workspace_id"`
+	ProjectID         pgtype.UUID `json:"project_id"`
+	ProjectResourceID pgtype.UUID `json:"project_resource_id"`
+}
+
+// A repository owns only the documents explicitly linked to it (DC-053).
+// Most recently touched first; unlinked project documents stay in the
+// project-scope list and are deliberately absent here.
+func (q *Queries) ListDesignDocumentsByRepository(ctx context.Context, arg ListDesignDocumentsByRepositoryParams) ([]DesignDocument, error) {
+	rows, err := q.db.Query(ctx, listDesignDocumentsByRepository, arg.WorkspaceID, arg.ProjectID, arg.ProjectResourceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []DesignDocument{}
+	for rows.Next() {
+		var i DesignDocument
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.ProjectID,
+			&i.ProjectResourceID,
+			&i.IssueID,
+			&i.Title,
+			&i.Platform,
+			&i.Recipe,
+			&i.DraftRevisionID,
+			&i.SavedRevisionID,
+			&i.CurrentAgentID,
+			&i.ActiveTaskID,
+			&i.ActiveOperation,
+			&i.InputSnapshot,
+			&i.LastError,
+			&i.CreatedBy,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.SavedAt,
+			&i.WorkspaceRepositoryID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDesignDocumentsByWorkspaceRepository = `-- name: ListDesignDocumentsByWorkspaceRepository :many
+SELECT id, workspace_id, project_id, project_resource_id, issue_id, title, platform, recipe, draft_revision_id, saved_revision_id, current_agent_id, active_task_id, active_operation, input_snapshot, last_error, created_by, created_at, updated_at, saved_at, workspace_repository_id FROM design_document
+WHERE workspace_id = $1
+  AND workspace_repository_id = $2
+ORDER BY updated_at DESC
+`
+
+type ListDesignDocumentsByWorkspaceRepositoryParams struct {
+	WorkspaceID           pgtype.UUID `json:"workspace_id"`
+	WorkspaceRepositoryID pgtype.UUID `json:"workspace_repository_id"`
+}
+
+// Settings-repository documents are independent of projects and project_resource.
+func (q *Queries) ListDesignDocumentsByWorkspaceRepository(ctx context.Context, arg ListDesignDocumentsByWorkspaceRepositoryParams) ([]DesignDocument, error) {
+	rows, err := q.db.Query(ctx, listDesignDocumentsByWorkspaceRepository, arg.WorkspaceID, arg.WorkspaceRepositoryID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []DesignDocument{}
+	for rows.Next() {
+		var i DesignDocument
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.ProjectID,
+			&i.ProjectResourceID,
+			&i.IssueID,
+			&i.Title,
+			&i.Platform,
+			&i.Recipe,
+			&i.DraftRevisionID,
+			&i.SavedRevisionID,
+			&i.CurrentAgentID,
+			&i.ActiveTaskID,
+			&i.ActiveOperation,
+			&i.InputSnapshot,
+			&i.LastError,
+			&i.CreatedBy,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.SavedAt,
+			&i.WorkspaceRepositoryID,
 		); err != nil {
 			return nil, err
 		}
@@ -950,7 +1120,7 @@ func (q *Queries) ListDesignDocumentsByProject(ctx context.Context, arg ListDesi
 }
 
 const listDesignDocumentsInWorkspace = `-- name: ListDesignDocumentsInWorkspace :many
-SELECT id, workspace_id, project_id, project_resource_id, issue_id, title, platform, recipe, draft_revision_id, saved_revision_id, current_agent_id, active_task_id, active_operation, input_snapshot, last_error, created_by, created_at, updated_at, saved_at FROM design_document
+SELECT id, workspace_id, project_id, project_resource_id, issue_id, title, platform, recipe, draft_revision_id, saved_revision_id, current_agent_id, active_task_id, active_operation, input_snapshot, last_error, created_by, created_at, updated_at, saved_at, workspace_repository_id FROM design_document
 WHERE workspace_id = $1
 ORDER BY updated_at DESC
 `
@@ -988,6 +1158,7 @@ func (q *Queries) ListDesignDocumentsInWorkspace(ctx context.Context, workspaceI
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.SavedAt,
+			&i.WorkspaceRepositoryID,
 		); err != nil {
 			return nil, err
 		}
@@ -1042,7 +1213,7 @@ WHERE id = $1
   AND workspace_id = $2
   AND draft_revision_id IS NOT NULL
   AND draft_revision_id = $3
-RETURNING id, workspace_id, project_id, project_resource_id, issue_id, title, platform, recipe, draft_revision_id, saved_revision_id, current_agent_id, active_task_id, active_operation, input_snapshot, last_error, created_by, created_at, updated_at, saved_at
+RETURNING id, workspace_id, project_id, project_resource_id, issue_id, title, platform, recipe, draft_revision_id, saved_revision_id, current_agent_id, active_task_id, active_operation, input_snapshot, last_error, created_by, created_at, updated_at, saved_at, workspace_repository_id
 `
 
 type SaveDesignDocumentDraftParams struct {
@@ -1078,6 +1249,7 @@ func (q *Queries) SaveDesignDocumentDraft(ctx context.Context, arg SaveDesignDoc
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.SavedAt,
+		&i.WorkspaceRepositoryID,
 	)
 	return i, err
 }
@@ -1097,7 +1269,7 @@ WHERE design_document.id = $2
         AND design_document_revision.design_document_id = $2
         AND design_document_revision.workspace_id = $3
   )
-RETURNING id, workspace_id, project_id, project_resource_id, issue_id, title, platform, recipe, draft_revision_id, saved_revision_id, current_agent_id, active_task_id, active_operation, input_snapshot, last_error, created_by, created_at, updated_at, saved_at
+RETURNING id, workspace_id, project_id, project_resource_id, issue_id, title, platform, recipe, draft_revision_id, saved_revision_id, current_agent_id, active_task_id, active_operation, input_snapshot, last_error, created_by, created_at, updated_at, saved_at, workspace_repository_id
 `
 
 type SetDesignDocumentDraftRevisionParams struct {
@@ -1132,6 +1304,7 @@ func (q *Queries) SetDesignDocumentDraftRevision(ctx context.Context, arg SetDes
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.SavedAt,
+		&i.WorkspaceRepositoryID,
 	)
 	return i, err
 }
@@ -1144,7 +1317,7 @@ UPDATE design_document SET
     updated_at = now()
 WHERE id = $2
   AND workspace_id = $3
-RETURNING id, workspace_id, project_id, project_resource_id, issue_id, title, platform, recipe, draft_revision_id, saved_revision_id, current_agent_id, active_task_id, active_operation, input_snapshot, last_error, created_by, created_at, updated_at, saved_at
+RETURNING id, workspace_id, project_id, project_resource_id, issue_id, title, platform, recipe, draft_revision_id, saved_revision_id, current_agent_id, active_task_id, active_operation, input_snapshot, last_error, created_by, created_at, updated_at, saved_at, workspace_repository_id
 `
 
 type SetDesignDocumentFailureParams struct {
@@ -1178,6 +1351,7 @@ func (q *Queries) SetDesignDocumentFailure(ctx context.Context, arg SetDesignDoc
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.SavedAt,
+		&i.WorkspaceRepositoryID,
 	)
 	return i, err
 }
@@ -1188,7 +1362,7 @@ UPDATE design_document SET
     updated_at = now()
 WHERE id = $2
   AND workspace_id = $3
-RETURNING id, workspace_id, project_id, project_resource_id, issue_id, title, platform, recipe, draft_revision_id, saved_revision_id, current_agent_id, active_task_id, active_operation, input_snapshot, last_error, created_by, created_at, updated_at, saved_at
+RETURNING id, workspace_id, project_id, project_resource_id, issue_id, title, platform, recipe, draft_revision_id, saved_revision_id, current_agent_id, active_task_id, active_operation, input_snapshot, last_error, created_by, created_at, updated_at, saved_at, workspace_repository_id
 `
 
 type SetDesignDocumentIssueParams struct {
@@ -1224,6 +1398,54 @@ func (q *Queries) SetDesignDocumentIssue(ctx context.Context, arg SetDesignDocum
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.SavedAt,
+		&i.WorkspaceRepositoryID,
+	)
+	return i, err
+}
+
+const setDesignDocumentRepository = `-- name: SetDesignDocumentRepository :one
+UPDATE design_document SET
+    project_resource_id = $1,
+    updated_at = now()
+WHERE id = $2
+  AND workspace_id = $3
+  AND active_task_id IS NULL
+RETURNING id, workspace_id, project_id, project_resource_id, issue_id, title, platform, recipe, draft_revision_id, saved_revision_id, current_agent_id, active_task_id, active_operation, input_snapshot, last_error, created_by, created_at, updated_at, saved_at, workspace_repository_id
+`
+
+type SetDesignDocumentRepositoryParams struct {
+	ProjectResourceID pgtype.UUID `json:"project_resource_id"`
+	ID                pgtype.UUID `json:"id"`
+	WorkspaceID       pgtype.UUID `json:"workspace_id"`
+}
+
+// Repository scope is an intentional, human-managed link (DC-052). It may
+// change only while no generation/adjust/regenerate task is running: a live
+// run has already pinned its own repository input.
+func (q *Queries) SetDesignDocumentRepository(ctx context.Context, arg SetDesignDocumentRepositoryParams) (DesignDocument, error) {
+	row := q.db.QueryRow(ctx, setDesignDocumentRepository, arg.ProjectResourceID, arg.ID, arg.WorkspaceID)
+	var i DesignDocument
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.ProjectID,
+		&i.ProjectResourceID,
+		&i.IssueID,
+		&i.Title,
+		&i.Platform,
+		&i.Recipe,
+		&i.DraftRevisionID,
+		&i.SavedRevisionID,
+		&i.CurrentAgentID,
+		&i.ActiveTaskID,
+		&i.ActiveOperation,
+		&i.InputSnapshot,
+		&i.LastError,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.SavedAt,
+		&i.WorkspaceRepositoryID,
 	)
 	return i, err
 }
@@ -1238,7 +1460,7 @@ UPDATE design_document SET
     updated_at = now()
 WHERE id = $5
   AND workspace_id = $6
-RETURNING id, workspace_id, project_id, project_resource_id, issue_id, title, platform, recipe, draft_revision_id, saved_revision_id, current_agent_id, active_task_id, active_operation, input_snapshot, last_error, created_by, created_at, updated_at, saved_at
+RETURNING id, workspace_id, project_id, project_resource_id, issue_id, title, platform, recipe, draft_revision_id, saved_revision_id, current_agent_id, active_task_id, active_operation, input_snapshot, last_error, created_by, created_at, updated_at, saved_at, workspace_repository_id
 `
 
 type UpdateDesignDocumentActiveTaskParams struct {
@@ -1280,6 +1502,7 @@ func (q *Queries) UpdateDesignDocumentActiveTask(ctx context.Context, arg Update
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.SavedAt,
+		&i.WorkspaceRepositoryID,
 	)
 	return i, err
 }

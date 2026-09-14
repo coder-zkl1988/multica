@@ -45,7 +45,7 @@ import { RadioGroup, RadioGroupItem } from "@multica/ui/components/ui/radio-grou
 import { Textarea } from "@multica/ui/components/ui/textarea";
 import { ToggleGroup, ToggleGroupItem } from "@multica/ui/components/ui/toggle-group";
 import { cn } from "@multica/ui/lib/utils";
-import { repositoryLabel } from "./project-repository";
+import { repositoryLabel, repositoryUrl } from "./project-repository";
 
 type UploadedReference = {
   attachmentId: string;
@@ -219,7 +219,11 @@ function copyErrorMessage(error: unknown): string {
   return "无法从现有设计体系复制，请稍后重试。";
 }
 
-function initialForm(project: Project, system: ProjectDesignSystem | undefined): ProjectDesignSystemForm {
+function initialForm(
+  project: Project,
+  system: ProjectDesignSystem | undefined,
+  repository?: ProjectResource,
+): ProjectDesignSystemForm {
   const snapshot = objectValue(system?.input_snapshot);
   const references = Array.isArray(snapshot?.references)
     ? snapshot.references.map(objectValue).filter((item): item is Record<string, unknown> => item !== null)
@@ -233,7 +237,9 @@ function initialForm(project: Project, system: ProjectDesignSystem | undefined):
     copyInstruction: "",
     agentId: stringValue(snapshot?.agent_id),
     platform: platformValue(snapshot?.platform),
-    brief: stringValue(snapshot?.brief) || project.description?.trim() || "",
+    brief: stringValue(snapshot?.brief) || (repository
+      ? `为 ${project.title} 建立清晰、克制的设计体系，重点覆盖 ${repositoryLabel(repository)} 仓库。`
+      : project.description?.trim() || ""),
     attachments: references
       .filter((reference) => reference.kind === "attachment" && stringValue(reference.attachment_id))
       .map((reference) => ({
@@ -384,6 +390,8 @@ export function ProjectDesignSystemCreate({
   /** Repository this system is created for; empty is the project-level one (DC-052). */
   projectResourceId?: string;
 }) {
+  const repository = repositories.find((item) => item.id === projectResourceId);
+  const scopedFormKey = `${project.id}:${projectResourceId}`;
   const wsId = useWorkspaceId();
   const queryClient = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -396,14 +404,14 @@ export function ProjectDesignSystemCreate({
   const { data: builtinSystems = [] } = useQuery(builtinDesignSystemListOptions(wsId));
   const [builtinSearch, setBuiltinSearch] = useState("");
 
-  const form = forms[project.id] ?? initialForm(project, system);
+  const form = forms[scopedFormKey] ?? initialForm(project, system, repository);
   const currentAgent = agents.find((agent) => agent.id === form.agentId);
   const agentAvailable = isAgentAvailable(currentAgent);
   const validLink = isHttpsLink(form.link);
   const validColor = !form.brandColor.trim() || isHexColor(form.brandColor);
   const repositoryAnalysis = system?.input_snapshot.repository_analysis;
   const repositorySources = repositoryAnalysis ? repositorySourcePaths(repositoryAnalysis) : [];
-  const referencesNeedAnalysis = Boolean(repositoryAnalysis && referenceEditing[project.id]);
+  const referencesNeedAnalysis = Boolean(repositoryAnalysis && referenceEditing[scopedFormKey]);
 
   // The scope being created for is never a copy source: the server rejects it
   // as `copy_source_is_target`, so it should not be there to click.
@@ -428,6 +436,7 @@ export function ProjectDesignSystemCreate({
     form.agentId
       && agentAvailable
       && form.platform
+      && form.brief.trim()
       && validLink
       && validColor
       && !uploading,
@@ -444,7 +453,7 @@ export function ProjectDesignSystemCreate({
         && !uploading
         && !referencesNeedAnalysis,
     );
-  const lastError = submitErrors[project.id] ?? errorMessage(system?.last_error);
+  const lastError = submitErrors[scopedFormKey] ?? errorMessage(system?.last_error);
 
   const agentOptions = useMemo(() => {
     const active = agents
@@ -467,17 +476,16 @@ export function ProjectDesignSystemCreate({
   }, [agents, form.agentId]);
 
   const updateForm = (updater: (current: ProjectDesignSystemForm) => ProjectDesignSystemForm) => {
-    const projectId = project.id;
     setForms((current) => ({
       ...current,
-      [projectId]: updater(current[projectId] ?? initialForm(project, system)),
+      [scopedFormKey]: updater(current[scopedFormKey] ?? initialForm(project, system, repository)),
     }));
   };
 
   const createSystem = useMutation({
     mutationFn: (request: CreateProjectDesignSystemRequest) => api.createProjectDesignSystem(request),
-    onMutate: (request) => {
-      setSubmitErrors((current) => ({ ...current, [request.project_id]: null }));
+    onMutate: () => {
+      setSubmitErrors((current) => ({ ...current, [scopedFormKey]: null }));
     },
     onSuccess: (created) => {
       queryClient.setQueryData(
@@ -490,9 +498,9 @@ export function ProjectDesignSystemCreate({
         queryClient.setQueryData(designKeys.projectDesignSystem(wsId, created.id), created);
       }
     },
-    onError: (error, request) => {
+    onError: (error) => {
       const message = error instanceof Error ? error.message : "无法生成设计体系，请检查智能体状态后重试。";
-      setSubmitErrors((current) => ({ ...current, [request.project_id]: message }));
+      setSubmitErrors((current) => ({ ...current, [scopedFormKey]: message }));
       toast.error(message);
     },
   });
@@ -504,8 +512,8 @@ export function ProjectDesignSystemCreate({
   // generating view.
   const copySystem = useMutation({
     mutationFn: (request: CopyProjectDesignSystemRequest) => api.copyProjectDesignSystem(request),
-    onMutate: (request) => {
-      setSubmitErrors((current) => ({ ...current, [request.project_id]: null }));
+    onMutate: () => {
+      setSubmitErrors((current) => ({ ...current, [scopedFormKey]: null }));
     },
     onSuccess: (created) => {
       queryClient.setQueryData(
@@ -516,9 +524,9 @@ export function ProjectDesignSystemCreate({
         queryClient.setQueryData(designKeys.projectDesignSystem(wsId, created.id), created);
       }
     },
-    onError: (error, request) => {
+    onError: (error) => {
       const message = copyErrorMessage(error);
-      setSubmitErrors((current) => ({ ...current, [request.project_id]: message }));
+      setSubmitErrors((current) => ({ ...current, [scopedFormKey]: message }));
       toast.error(message);
     },
   });
@@ -529,11 +537,11 @@ export function ProjectDesignSystemCreate({
     mutationFn: (request: AnalyzeProjectDesignSystemRepositoryRequest) => (
       api.analyzeProjectDesignSystemRepository(request)
     ),
-    onMutate: (request) => {
-      setSubmitErrors((current) => ({ ...current, [request.project_id]: null }));
+    onMutate: () => {
+      setSubmitErrors((current) => ({ ...current, [scopedFormKey]: null }));
     },
     onSuccess: (analyzed) => {
-      setReferenceEditing((current) => ({ ...current, [analyzed.project_id]: false }));
+      setReferenceEditing((current) => ({ ...current, [scopedFormKey]: false }));
       queryClient.setQueryData(
         designKeys.projectDesignSystemByProject(wsId, analyzed.project_id, analyzed.project_resource_id),
         analyzed,
@@ -542,9 +550,9 @@ export function ProjectDesignSystemCreate({
         queryClient.setQueryData(designKeys.projectDesignSystem(wsId, analyzed.id), analyzed);
       }
     },
-    onError: (error, request) => {
+    onError: (error) => {
       const message = error instanceof Error ? error.message : "无法分析项目仓库，请检查智能体与项目资源后重试。";
-      setSubmitErrors((current) => ({ ...current, [request.project_id]: message }));
+      setSubmitErrors((current) => ({ ...current, [scopedFormKey]: message }));
       toast.error(message);
     },
   });
@@ -552,17 +560,16 @@ export function ProjectDesignSystemCreate({
     && analyzeRepository.variables?.project_id === project.id;
 
   const handleUpload = async (file: File) => {
-    const projectId = project.id;
-    const seed = initialForm(project, system);
+    const seed = initialForm(project, system, repository);
     try {
       const result = await upload(file);
       if (!result) return;
       setForms((current) => {
-        const currentForm = current[projectId] ?? seed;
+        const currentForm = current[scopedFormKey] ?? seed;
         if (currentForm.attachments.some((item) => item.attachmentId === result.id)) return current;
         return {
           ...current,
-          [projectId]: {
+          [scopedFormKey]: {
             ...currentForm,
             attachments: [...currentForm.attachments, { attachmentId: result.id, label: result.filename || file.name }],
           },
@@ -612,6 +619,24 @@ export function ProjectDesignSystemCreate({
         <div className="min-w-0">
           <h2 className="text-title-sm font-semibold">创建设计体系</h2>
           <p className="mt-1 text-body text-muted-foreground">{project.title}</p>
+          {repository ? (
+            <div className="mt-3 space-y-2" aria-label="设计体系范围">
+              <div className="grid gap-2 sm:grid-cols-2">
+                <label className="space-y-1">
+                  <span className="text-caption font-medium">所属项目</span>
+                  <input aria-label="所属项目" value={project.title} readOnly disabled className="h-8 w-full rounded-md border bg-muted px-2 text-body text-muted-foreground" />
+                </label>
+                <label className="space-y-1">
+                  <span className="text-caption font-medium">所属仓库</span>
+                  <input aria-label="所属仓库" value={repositoryLabel(repository)} readOnly disabled className="h-8 w-full rounded-md border bg-muted px-2 text-body text-muted-foreground" />
+                </label>
+              </div>
+              <p title={repositoryUrl(repository) || undefined} className="truncate text-caption text-muted-foreground">
+                {repositoryUrl(repository) || "未提供仓库远端地址"}
+              </p>
+              <p className="text-caption text-muted-foreground">尚未建立仓库专属设计体系；不会回落到项目通用体系。</p>
+            </div>
+          ) : null}
         </div>
       </div>
 
@@ -932,7 +957,7 @@ export function ProjectDesignSystemCreate({
               size="sm"
               variant="outline"
               aria-label={RESELECT_REFERENCES_LABEL}
-              onClick={() => setReferenceEditing((current) => ({ ...current, [project.id]: true }))}
+              onClick={() => setReferenceEditing((current) => ({ ...current, [scopedFormKey]: true }))}
             >
               <PencilLine className="h-3.5 w-3.5" />
               {RESELECT_REFERENCES_LABEL}
@@ -1133,7 +1158,7 @@ export function ProjectDesignSystemCreate({
             }}
           >
             {isSubmittingCurrentProject ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-            {isSubmittingCurrentProject ? "提交中…" : "生成设计体系"}
+            {isSubmittingCurrentProject ? "正在生成…" : "立即生成"}
           </Button>
         )}
       </div>

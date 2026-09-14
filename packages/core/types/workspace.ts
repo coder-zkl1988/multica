@@ -1,8 +1,11 @@
 export type MemberRole = "owner" | "admin" | "member";
 
 export interface WorkspaceRepo {
+  /** Stable workspace-owned identity used by Design Center repository scope. */
+  id?: string;
   url: string;
   description?: string;
+  default_branch_hint?: string;
 }
 
 export interface Workspace {

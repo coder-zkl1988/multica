@@ -585,6 +585,7 @@ type Comment struct {
 	ViaPluginID       pgtype.UUID        `json:"via_plugin_id"`
 	Revision          int64              `json:"revision"`
 	RecoverySettledAt pgtype.Timestamptz `json:"recovery_settled_at"`
+	DesignDelivery    []byte             `json:"design_delivery"`
 }
 
 type CommentReaction struct {
@@ -699,25 +700,35 @@ type DesignDelivery struct {
 }
 
 type DesignDocument struct {
-	ID                pgtype.UUID        `json:"id"`
-	WorkspaceID       pgtype.UUID        `json:"workspace_id"`
-	ProjectID         pgtype.UUID        `json:"project_id"`
-	ProjectResourceID pgtype.UUID        `json:"project_resource_id"`
-	IssueID           pgtype.UUID        `json:"issue_id"`
-	Title             string             `json:"title"`
-	Platform          string             `json:"platform"`
-	Recipe            string             `json:"recipe"`
-	DraftRevisionID   pgtype.UUID        `json:"draft_revision_id"`
-	SavedRevisionID   pgtype.UUID        `json:"saved_revision_id"`
-	CurrentAgentID    pgtype.UUID        `json:"current_agent_id"`
-	ActiveTaskID      pgtype.UUID        `json:"active_task_id"`
-	ActiveOperation   pgtype.Text        `json:"active_operation"`
-	InputSnapshot     []byte             `json:"input_snapshot"`
-	LastError         []byte             `json:"last_error"`
-	CreatedBy         pgtype.UUID        `json:"created_by"`
-	CreatedAt         pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
-	SavedAt           pgtype.Timestamptz `json:"saved_at"`
+	ID                    pgtype.UUID        `json:"id"`
+	WorkspaceID           pgtype.UUID        `json:"workspace_id"`
+	ProjectID             pgtype.UUID        `json:"project_id"`
+	ProjectResourceID     pgtype.UUID        `json:"project_resource_id"`
+	IssueID               pgtype.UUID        `json:"issue_id"`
+	Title                 string             `json:"title"`
+	Platform              string             `json:"platform"`
+	Recipe                string             `json:"recipe"`
+	DraftRevisionID       pgtype.UUID        `json:"draft_revision_id"`
+	SavedRevisionID       pgtype.UUID        `json:"saved_revision_id"`
+	CurrentAgentID        pgtype.UUID        `json:"current_agent_id"`
+	ActiveTaskID          pgtype.UUID        `json:"active_task_id"`
+	ActiveOperation       pgtype.Text        `json:"active_operation"`
+	InputSnapshot         []byte             `json:"input_snapshot"`
+	LastError             []byte             `json:"last_error"`
+	CreatedBy             pgtype.UUID        `json:"created_by"`
+	CreatedAt             pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
+	SavedAt               pgtype.Timestamptz `json:"saved_at"`
+	WorkspaceRepositoryID pgtype.UUID        `json:"workspace_repository_id"`
+}
+
+type DesignDocumentLivePreview struct {
+	TaskID        pgtype.UUID        `json:"task_id"`
+	WorkspaceID   pgtype.UUID        `json:"workspace_id"`
+	DocumentID    pgtype.UUID        `json:"document_id"`
+	ContentDigest string             `json:"content_digest"`
+	Snapshot      []byte             `json:"snapshot"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
 }
 
 type DesignDocumentRevision struct {
@@ -742,6 +753,7 @@ type DesignDocumentRevision struct {
 	Instruction         pgtype.Text        `json:"instruction"`
 	Scope               []byte             `json:"scope"`
 	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	RepositoryGrounding []byte             `json:"repository_grounding"`
 }
 
 type DesignDocumentShare struct {
@@ -787,18 +799,20 @@ type DesignDraft struct {
 }
 
 type DesignFile struct {
-	ID                pgtype.UUID        `json:"id"`
-	WorkspaceID       pgtype.UUID        `json:"workspace_id"`
-	ProjectID         pgtype.UUID        `json:"project_id"`
-	FolderID          pgtype.UUID        `json:"folder_id"`
-	Title             string             `json:"title"`
-	Description       pgtype.Text        `json:"description"`
-	SourceType        string             `json:"source_type"`
-	SourceRef         []byte             `json:"source_ref"`
-	CurrentRevisionID pgtype.UUID        `json:"current_revision_id"`
-	CreatedBy         pgtype.UUID        `json:"created_by"`
-	CreatedAt         pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+	ID                    pgtype.UUID        `json:"id"`
+	WorkspaceID           pgtype.UUID        `json:"workspace_id"`
+	ProjectID             pgtype.UUID        `json:"project_id"`
+	FolderID              pgtype.UUID        `json:"folder_id"`
+	Title                 string             `json:"title"`
+	Description           pgtype.Text        `json:"description"`
+	SourceType            string             `json:"source_type"`
+	SourceRef             []byte             `json:"source_ref"`
+	CurrentRevisionID     pgtype.UUID        `json:"current_revision_id"`
+	CreatedBy             pgtype.UUID        `json:"created_by"`
+	CreatedAt             pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
+	ProjectResourceID     pgtype.UUID        `json:"project_resource_id"`
+	WorkspaceRepositoryID pgtype.UUID        `json:"workspace_repository_id"`
 }
 
 type DesignFolder struct {
@@ -1727,21 +1741,22 @@ type Project struct {
 }
 
 type ProjectDesignSystem struct {
-	ID                pgtype.UUID        `json:"id"`
-	WorkspaceID       pgtype.UUID        `json:"workspace_id"`
-	ProjectID         pgtype.UUID        `json:"project_id"`
-	Name              string             `json:"name"`
-	Platform          string             `json:"platform"`
-	CurrentAgentID    pgtype.UUID        `json:"current_agent_id"`
-	ActiveTaskID      pgtype.UUID        `json:"active_task_id"`
-	ActiveOperation   pgtype.Text        `json:"active_operation"`
-	InputSnapshot     []byte             `json:"input_snapshot"`
-	LastError         []byte             `json:"last_error"`
-	CreatedBy         pgtype.UUID        `json:"created_by"`
-	CreatedAt         pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
-	SavedAt           pgtype.Timestamptz `json:"saved_at"`
-	ProjectResourceID pgtype.UUID        `json:"project_resource_id"`
+	ID                    pgtype.UUID        `json:"id"`
+	WorkspaceID           pgtype.UUID        `json:"workspace_id"`
+	ProjectID             pgtype.UUID        `json:"project_id"`
+	Name                  string             `json:"name"`
+	Platform              string             `json:"platform"`
+	CurrentAgentID        pgtype.UUID        `json:"current_agent_id"`
+	ActiveTaskID          pgtype.UUID        `json:"active_task_id"`
+	ActiveOperation       pgtype.Text        `json:"active_operation"`
+	InputSnapshot         []byte             `json:"input_snapshot"`
+	LastError             []byte             `json:"last_error"`
+	CreatedBy             pgtype.UUID        `json:"created_by"`
+	CreatedAt             pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
+	SavedAt               pgtype.Timestamptz `json:"saved_at"`
+	ProjectResourceID     pgtype.UUID        `json:"project_resource_id"`
+	WorkspaceRepositoryID pgtype.UUID        `json:"workspace_repository_id"`
 }
 
 type ProjectDesignSystemPackage struct {

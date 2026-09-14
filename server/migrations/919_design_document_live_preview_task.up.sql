@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX CONCURRENTLY idx_design_document_live_preview_task ON design_document_live_preview(task_id);

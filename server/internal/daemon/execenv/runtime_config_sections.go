@@ -627,6 +627,14 @@ func writeWorkflowDesignRestore(b *strings.Builder) {
 	b.WriteString("- Finish with the required `RESTORE_RESULT_JSON:` block.\n\n")
 }
 
+func writeWorkflowDesignImplementation(b *strings.Builder) {
+	b.WriteString("**This is a server-managed design implementation task.** The issue, frozen design identity, and target repository are already bound to this run; do not fall back to the ordinary issue workflow.\n\n")
+	b.WriteString("- Implement the selected frame in the target repository and follow the generated design implementation prompt.\n")
+	b.WriteString("- Do NOT call `multica issue get`, `multica issue comment add`, or `multica issue status`; the daemon validates `.agent_context/design_implementation/result/implementation-result.json` and stores the structured result.\n")
+	b.WriteString("- Do not create a local commit, push, PR, or merge; repository publication remains user-controlled.\n")
+	b.WriteString("- Keep rendered preview evidence as a bounded text or JSON artifact in the task workdir; do not create or upload screenshots, recordings, or traces.\n\n")
+}
+
 // writeWorkflowDesignSystemProfileAnalyze emits the server-managed analysis
 // workflow for a Figma UI specification upload.
 func writeWorkflowDesignSystemProfileAnalyze(b *strings.Builder) {
@@ -999,7 +1007,7 @@ func writeOutput(b *strings.Builder, kind taskKind, ctx TaskContextForEnv) {
 		} else {
 			b.WriteString("**Delivering files here:** run `multica attachment upload <local-path>` — it binds the file to your reply and it renders as an attachment card. That command is the ONLY way a file reaches the user; a path written into your reply text is not.\n")
 		}
-	case kindUIDraftCreate, kindDesignRestore, kindDesignSystemProfileAnalyze, kindPMOSync:
+	case kindUIDraftCreate, kindDesignRestore, kindDesignImplementation, kindDesignSystemProfileAnalyze, kindPMOSync:
 		b.WriteString("This is a server-managed design task. Your final assistant output is captured automatically and processed by the server; do not post an issue comment. Follow the exact output schema in the user message.\n\n")
 		b.WriteString("**Delivering files here:** the captured result is text-only. Keep generated artifacts in the target repository when the task requires them, and reference repository paths as inline code rather than local links.\n")
 	default:
@@ -1095,6 +1103,8 @@ func buildMetaSkillContentSlim(provider string, ctx TaskContextForEnv) string {
 		writeWorkflowUIDraftCreate(&b)
 	case kindDesignRestore:
 		writeWorkflowDesignRestore(&b)
+	case kindDesignImplementation:
+		writeWorkflowDesignImplementation(&b)
 	case kindDesignSystemProfileAnalyze:
 		writeWorkflowDesignSystemProfileAnalyze(&b)
 	case kindPMOSync:

@@ -18,7 +18,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -323,7 +322,7 @@ func decodeV2TaskBinding(task Task) (projectdesignsystem.PackageBinding, error) 
 	var envelope struct {
 		WorkspaceID         string `json:"workspace_id"`
 		ProjectID           string `json:"project_id"`
-		DesignSystemID      string `json:"design_system_id"`
+		DesignSystemID      string `json:"project_design_system_id"`
 		TaskID              string `json:"task_id"`
 		AgentID             string `json:"agent_id"`
 		Operation           string `json:"operation"`
@@ -463,7 +462,7 @@ func startLoopbackPreviewServer(archive []byte, manifest []byte, previewTargets 
 // for the pre-V2 collector — re-derived here because that helper expects
 // the legacy `ValidatedPackage` schema and cannot be invoked on V2
 // archives.
-const selectionBridgeScript = "(()=>{document.addEventListener(\"click\",event=>{const target=event.target;const node=target instanceof Element?target.closest(\"[data-design-node-id]\"):null;if(!node)return;event.preventDefault();parent.postMessage({type:\"multica:project-design-system-select\",id:node.dataset.designNodeId},\"*\")})})();"
+var selectionBridgeScript = projectdesignsystem.RuntimePreviewBridgeScript("")
 
 // sha256BridgeScriptHash returns the SHA-256 of the trusted bridge source,
 // base64-encoded so it slots directly into a CSP `script-src 'sha256-…'`
@@ -491,8 +490,7 @@ func sha256BridgeScriptHash() string {
 // into the package, even when those bytes happen to live inside a
 // validated HTML target.
 func buildPreviewCSP(bridgeScriptHash string) string {
-	return "default-src 'self' data:; script-src 'sha256-" + bridgeScriptHash +
-		"'; connect-src 'none'; object-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'"
+	return projectdesignsystem.RuntimePreviewCSPFromHash(bridgeScriptHash)
 }
 
 // injectBridgeAndTokens inserts the tokens.css stylesheet link and the
@@ -510,28 +508,12 @@ func buildPreviewCSP(bridgeScriptHash string) string {
 // the agent left in the fragment will not execute — the verifier
 // receives a CSP-locked page that only runs the trusted bridge.
 //
-// The stylesheet href is absolute (/<prefix>/tokens.css), NOT relative.
-// Every preview target lives one directory down — classifyV2Artifact only
-// admits `ui-kit/index.html` and `preview/*.html` — so a bare `tokens.css`
-// href resolves to `<dir>/tokens.css` and 404s, and the verifier renders
-// and screenshots a page with no design tokens applied while both the
-// audit (a static token-reference check) and the preview (a visibility
-// check) still pass.
+// Every preview target lives exactly one directory below the package root.
+// The shared runtime helper injects ../tokens.css so both this loopback route
+// and the authenticated user-facing preview resolve the same Token file.
 func injectBridgeAndTokens(html []byte, prefix string) []byte {
-	linkTag := `<link rel="stylesheet" href="/` + prefix + `/tokens.css">`
-	scriptTag := "<script>" + selectionBridgeScript + "</script>"
-	body := string(html)
-	if idx := strings.Index(body, "</head>"); idx >= 0 {
-		body = body[:idx] + linkTag + body[idx:]
-	} else {
-		body = linkTag + body
-	}
-	if idx := strings.Index(body, "</body>"); idx >= 0 {
-		body = body[:idx] + scriptTag + body[idx:]
-	} else {
-		body = body + scriptTag
-	}
-	return []byte(body)
+	_ = prefix // retained for compatibility with focused tests and older callers
+	return projectdesignsystem.InjectRuntimePreviewHTML(html, selectionBridgeScript)
 }
 
 func contentTypeForPath(path string) string {
@@ -618,13 +600,11 @@ func buildPreviewTargetURLs(targets []projectdesignsystem.PreviewTarget, baseURL
 	if len(targets) == 0 {
 		return nil, errors.New("V2 package has no preview targets")
 	}
-	sorted := make([]projectdesignsystem.PreviewTarget, len(targets))
-	copy(sorted, targets)
-	sort.SliceStable(sorted, func(i, j int) bool {
-		return sorted[i].ID < sorted[j].ID
-	})
-	out := make([]designpreview.TargetURL, 0, len(sorted))
-	for _, target := range sorted {
+	// Manifest order is the signed package contract and is also what the server
+	// revalidates on completion. Preserve it through browser verification; sorting
+	// here made otherwise-valid multi-target receipts disagree with the manifest.
+	out := make([]designpreview.TargetURL, 0, len(targets))
+	for _, target := range targets {
 		if target.Kind != "ui_kit" && target.Kind != "preview" {
 			return nil, fmt.Errorf("V2 preview target %q has unsupported kind %q", target.ID, target.Kind)
 		}

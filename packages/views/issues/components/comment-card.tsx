@@ -36,7 +36,7 @@ import { api, dispatchReasonCode, errorCode } from "@multica/core/api";
 import { ReplyInput } from "./reply-input";
 import { CommentTriggerChips } from "./comment-trigger-chips";
 import { useCommentTriggerPreview } from "../hooks/use-comment-trigger-preview";
-import type { TimelineEntry, Attachment, PendingInput, PendingInputAnswer } from "@multica/core/types";
+import type { Agent, CommentDesignRequest, Issue, TimelineEntry, Attachment, PendingInput, PendingInputAnswer } from "@multica/core/types";
 import { contentReferencesAttachment } from "@multica/core/types";
 import { selectStandaloneAttachments } from "@multica/core/attachments/image-sequence";
 import { useCommentCollapseStore, useCommentDraftStore } from "@multica/core/issues/stores";
@@ -44,6 +44,7 @@ import { useT } from "../../i18n";
 import { CommentsFoldBar } from "./resolved-thread-bar";
 import { deriveThreadResolution } from "./thread-utils";
 import { RevisionConflictCompare } from "./revision-conflict-compare";
+import { CommentDesignDeliveryCard } from "./comment-design-delivery-card";
 import { PendingInputForm } from "./pending-input-form";
 
 const highlightedCommentBackgroundClass =
@@ -90,6 +91,8 @@ function StickyHeaderShell({
 
 interface CommentCardProps {
   issueId: string;
+  issue?: Issue;
+  agents?: Agent[];
   entry: TimelineEntry;
   /**
    * Flat list of every nested reply under this thread root, in render order.
@@ -108,7 +111,7 @@ interface CommentCardProps {
    * `CommentRow` has to rerun the rule per row.
    */
   canModerate?: boolean;
-  onReply: (parentId: string, content: string, attachmentIds?: string[], suppressAgentIds?: string[], conciseMode?: boolean) => Promise<string | boolean>;
+  onReply: (parentId: string, content: string, attachmentIds?: string[], suppressAgentIds?: string[], designRequest?: CommentDesignRequest | boolean, conciseMode?: boolean) => Promise<string | boolean>;
   onReplyAccepted?: (commentId: string) => void;
   onEdit: (commentId: string, content: string, attachmentIds: string[], suppressAgentIds?: string[], contentBase?: string) => Promise<void>;
   onDelete: (commentId: string) => void;
@@ -832,6 +835,7 @@ function CommentRow({
             <ReadonlyContent content={entry.content ?? ""} attachments={entry.attachments} />
           </div>
           <AttachmentList attachments={entry.attachments} content={entry.content} className="mt-1.5 pl-12 pr-4 max-md:pl-3 max-md:pr-3" />
+          {entry.design_delivery ? <div className="pl-12 pr-4 max-md:px-3"><CommentDesignDeliveryCard issueId={issueId} delivery={entry.design_delivery} /></div> : null}
           {retryableAgentFailureComment(entry) && (
             <TaskCommentRetryButton
               issueId={issueId}
@@ -865,6 +869,8 @@ function CommentRow({
 
 function CommentCardImpl({
   issueId,
+  issue,
+  agents,
   entry,
   replies,
   currentUserId,
@@ -1182,6 +1188,7 @@ function CommentCardImpl({
                   <ReadonlyContent content={entry.content ?? ""} attachments={entry.attachments} />
                 </div>
                 <AttachmentList attachments={entry.attachments} content={entry.content} className="mt-1.5 pl-10 max-md:pl-0" />
+                {entry.design_delivery ? <div className="pl-10 max-md:pl-0"><CommentDesignDeliveryCard issueId={issueId} delivery={entry.design_delivery} /></div> : null}
                 {pendingInput && onAnswerPendingInput && (
                   <PendingInputForm
                     key={pendingInput.id}
@@ -1293,13 +1300,15 @@ function CommentCardImpl({
               <div className="border-t border-border/50 px-4 max-md:px-3 py-2.5">
                 <ReplyInput
                   issueId={issueId}
+                  issue={issue}
+                  agents={agents}
                   parentId={entry.id}
                   placeholder={t(($) => $.reply.placeholder)}
                   size="sm"
                   avatarType="member"
                   avatarId={currentUserId ?? ""}
                   draftKey={`reply:${issueId}:${entry.id}`}
-                  onSubmit={(content, attachmentIds, suppressAgentIds, conciseMode) => onReply(entry.id, content, attachmentIds, suppressAgentIds, conciseMode)}
+                  onSubmit={(content, attachmentIds, suppressAgentIds, designRequest, conciseMode) => onReply(entry.id, content, attachmentIds, suppressAgentIds, designRequest, conciseMode)}
                   onAccepted={onReplyAccepted}
                 />
               </div>

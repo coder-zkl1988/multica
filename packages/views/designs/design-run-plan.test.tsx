@@ -34,6 +34,28 @@ describe("latestTodoRows", () => {
 
   // A protocol change must degrade to "no plan", never to an empty checklist
   // that reads as "the agent planned nothing".
+  it("reads Codex update_plan messages", () => {
+    const rows = latestTodoRows([{
+      id: "message-1",
+      task_id: "task-1",
+      seq: 1,
+      type: "tool_use",
+      tool: "update_plan",
+      input: {
+        plan: [
+          { step: "同步主分支并固定快照", status: "completed" },
+          { step: "形成规则、Token 与组件契约", status: "in_progress" },
+        ],
+      },
+      created_at: "2026-09-07T19:30:00Z",
+    } as never]);
+
+    expect(rows).toEqual([
+      { content: "同步主分支并固定快照", status: "completed" },
+      { content: "形成规则、Token 与组件契约", status: "in_progress" },
+    ]);
+  });
+
   it("skips an unreadable payload and keeps looking", () => {
     expect(latestTodoRows([planMessage(1, "nope")])).toEqual([]);
     expect(

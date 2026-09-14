@@ -151,6 +151,28 @@ describe("ProjectDesignSystemPreview", () => {
     expect(sandbox).not.toContain("allow-popups");
   });
 
+  it("keeps locator selection disabled in the default browse mode", () => {
+    const onSelect = vi.fn<(scope: ProjectDesignSystemScope) => void>();
+    render(
+      <ProjectDesignSystemPreview
+        previewHtml=""
+        archiveTargets={[{
+          kind: "ui_kit",
+          id: "app",
+          path: "ui_kits/app/index.html",
+          url: "/api/project-design-system-previews/workspace/system/digest/resource-capability/files/ui_kits/app/index.html",
+        }]}
+        locators={locators}
+        integritySha256="digest-1"
+        onVerification={vi.fn()}
+        onSelect={onSelect}
+      />,
+    );
+    const frame = screen.getByTitle("项目设计体系 UI Kit") as HTMLIFrameElement;
+    dispatchSelection("button-primary", frame.contentWindow, "resource-capability");
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
   it("accepts locator messages only from its own iframe and known IDs", () => {
     const onSelect = vi.fn<(scope: ProjectDesignSystemScope) => void>();
     render(
@@ -164,6 +186,7 @@ describe("ProjectDesignSystemPreview", () => {
         }]}
         locators={locators}
         integritySha256="digest-1"
+        selectionActive
         onVerification={vi.fn()}
         onSelect={onSelect}
       />,
@@ -191,6 +214,7 @@ describe("ProjectDesignSystemPreview", () => {
         locators={locators}
         integritySha256="digest-1"
         packageSchema="multica.project-design-system/v2"
+        selectionActive
         onVerification={onVerification}
         onSelect={onSelect}
       />,

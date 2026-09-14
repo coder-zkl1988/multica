@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CircleAlert, LoaderCircle, Square } from "lucide-react";
+import { Check, Circle, CircleAlert, LoaderCircle, Square } from "lucide-react";
 import { api } from "@multica/core/api";
 import { taskMessagesOptions } from "@multica/core/chat/queries";
 import { designKeys } from "@multica/core/designs/keys";
@@ -13,6 +13,7 @@ import { Badge } from "@multica/ui/components/ui/badge";
 import { Button } from "@multica/ui/components/ui/button";
 import { TranscriptButton } from "../common/task-transcript";
 import { DesignRunConversation } from "./design-run-conversation";
+import { latestTodoRows, type TodoRow } from "./design-run-plan";
 
 const STALE_AFTER_MS = 3 * 60_000;
 const ACTIVE_TASK_STATUSES = new Set(["queued", "dispatched", "running", "waiting_local_directory"]);
@@ -116,6 +117,111 @@ function newestActivityAt(
   ));
 }
 
+
+function generationProgress(rows: TodoRow[], active: boolean): number {
+  if (rows.length === 0) return active ? 0 : 100;
+  const completed = rows.filter((row) => row.status === "completed").length;
+  return Math.min(100, Math.round((completed / rows.length) * 100));
+}
+
+function GenerationStepIcon({ status }: { status: string }) {
+  if (status === "completed") {
+    return <Check className="size-3.5" />;
+  }
+  if (status === "in_progress") {
+    return <LoaderCircle className="size-3.5 animate-spin" />;
+  }
+  return <Circle className="size-3.5" />;
+}
+
+/**
+ * Adapted from Open Design v0.19.2's GenerationStatusCard under Apache-2.0.
+ * Multica derives it from real task messages instead of a second job store, so
+ * the progress card and the Agent transcript can never disagree.
+ */
+function DesignSystemGenerationProgress({
+  rows,
+  active,
+  failed,
+}: {
+  rows: TodoRow[];
+  active: boolean;
+  failed: boolean;
+}) {
+  const progress = generationProgress(rows, active);
+  const currentIndex = rows.findIndex((row) => row.status === "in_progress");
+  const nextIndex = rows.findIndex((row) => row.status !== "completed");
+  const visibleIndex = currentIndex >= 0 ? currentIndex : nextIndex;
+  const current = visibleIndex >= 0 ? rows[visibleIndex] : undefined;
+  const activeSegmentWidth = active && visibleIndex >= 0 ? 100 / rows.length : 0;
+  return (
+    <section
+      aria-label="设计体系生成进度"
+      className={`mt-4 rounded-xl border p-4 ${failed ? "border-destructive/40 bg-destructive/5" : "bg-muted/20"}`}
+    >
+      <div className="flex items-start gap-2.5">
+        <span className={`mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-md ${failed ? "bg-destructive/10 text-destructive" : "bg-primary/10 text-primary"}`}>
+          {failed ? <CircleAlert className="size-3.5" /> : active ? <LoaderCircle className="size-3.5 animate-spin" /> : <Check className="size-3.5" />}
+        </span>
+        <div className="min-w-0">
+          <h3 className="text-body font-semibold">
+            {failed ? "生成需要处理" : active ? "Agent 正在建立设计体系" : "设计体系生成完成"}
+          </h3>
+          <p className="mt-0.5 text-caption leading-5 text-muted-foreground">
+            {rows.length === 0
+              ? active ? "等待 Agent 发布执行计划，实时工具和判断会继续显示在下方。" : "任务已经结束。"
+              : current?.content ?? `已完成 ${rows.length} 个阶段。`}
+          </p>
+        </div>
+        <span className="ml-auto shrink-0 text-caption tabular-nums text-muted-foreground">
+          {rows.length === 0
+            ? active ? "准备中" : "已结束"
+            : visibleIndex >= 0 && active
+              ? `第 ${visibleIndex + 1}/${rows.length} 步 · 进行中`
+              : `${rows.length}/${rows.length} 步 · 已完成`}
+        </span>
+      </div>
+      <div
+        role="progressbar"
+        aria-label={`设计体系生成进度 ${progress}%`}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={progress}
+        aria-valuetext={rows.length === 0
+          ? active ? "正在准备执行计划" : "任务已结束"
+          : visibleIndex >= 0 && active
+            ? `已完成 ${rows.filter((row) => row.status === "completed").length} 步，第 ${visibleIndex + 1} 步进行中`
+            : `已完成 ${rows.length} 步`}
+        className="relative mt-3 h-1.5 overflow-hidden rounded-full bg-muted"
+      >
+        <span className="absolute inset-y-0 left-0 rounded-full bg-primary transition-[width] duration-300" style={{ width: `${progress}%` }} />
+        {activeSegmentWidth > 0 ? (
+          <span
+            aria-hidden="true"
+            className="absolute inset-y-0 animate-pulse rounded-full bg-primary/35"
+            style={{ left: `${progress}%`, width: `${activeSegmentWidth}%` }}
+          />
+        ) : null}
+      </div>
+      {rows.length > 0 ? (
+        <ol className="mt-3 grid gap-1.5">
+          {rows.slice(0, 8).map((row, index) => (
+            <li
+              key={`${index}-${row.content}`}
+              className={`flex items-start gap-2 text-caption leading-5 ${row.status === "completed" ? "text-muted-foreground" : "text-foreground"}`}
+            >
+              <span className={`mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full ${row.status === "in_progress" ? "bg-primary/10 text-primary" : row.status === "completed" ? "bg-emerald-500/10 text-emerald-600" : "text-muted-foreground"}`}>
+                <GenerationStepIcon status={row.status} />
+              </span>
+              <span className={row.status === "completed" ? "line-through" : undefined}>{row.content}</span>
+            </li>
+          ))}
+        </ol>
+      ) : null}
+    </section>
+  );
+}
+
 /**
  * Live evidence of one design task: status, agent, start time, elapsed time,
  * last activity and a stop control. Shared by the project design system and
@@ -153,7 +259,14 @@ export function DesignTaskActivity({
 }) {
   const [now, setNow] = useState(() => Date.now());
   const [cancelError, setCancelError] = useState<string | null>(null);
-  const { data: messages = [] } = useQuery(taskMessagesOptions(task?.id ?? ""));
+  const active = Boolean(task && ACTIVE_TASK_STATUSES.has(task.status));
+  const { data: messages = [] } = useQuery({
+    ...taskMessagesOptions(task?.id ?? ""),
+    // Task message queries are otherwise effectively static. Keep every active
+    // design run polling so todo updates, questions and Agent messages do not
+    // freeze when a websocket event is delayed or unavailable.
+    refetchInterval: active ? 1000 : false,
+  });
 
   useEffect(() => {
     if (!task || !ACTIVE_TASK_STATUSES.has(task.status)) return;
@@ -195,6 +308,7 @@ export function DesignTaskActivity({
   const agent = agents.find((candidate) => candidate.id === task.agent_id);
   const canStop = ACTIVE_TASK_STATUSES.has(task.status);
   const isRepositoryAnalysis = task.operation === "repository_analysis";
+  const planRows = latestTodoRows(messages);
 
   return (
     <section aria-label="智能体任务活动" className={compact ? "border-t py-5" : "border-b py-5"}>
@@ -218,12 +332,19 @@ export function DesignTaskActivity({
           truncated ambient line: same messages, but readable in order. The
           transcript dialog above stays for the full, filterable record. */}
       {showConversation ? (
-        <DesignRunConversation
-          messages={messages}
-          live={canStop}
-          className="mt-3"
-          {...(onAnswerForm ? { onAnswerForm } : {})}
-        />
+        <>
+          <DesignSystemGenerationProgress
+            rows={planRows}
+            active={canStop}
+            failed={task.status === "failed" || task.status === "cancelled"}
+          />
+          <DesignRunConversation
+            messages={messages}
+            live={canStop}
+            className="mt-3"
+            {...(onAnswerForm ? { onAnswerForm } : {})}
+          />
+        </>
       ) : null}
 
       <dl className={`mt-4 grid gap-4 ${compact ? "grid-cols-2" : "sm:grid-cols-4"}`}>
@@ -286,10 +407,12 @@ export function ProjectDesignSystemTaskActivity({
   system,
   agents,
   compact = false,
+  onAnswerForm,
 }: {
   system: ProjectDesignSystem;
   agents: Agent[];
   compact?: boolean;
+  onAnswerForm?: (text: string) => void;
 }) {
   const wsId = useWorkspaceId();
   const queryClient = useQueryClient();
@@ -298,6 +421,7 @@ export function ProjectDesignSystemTaskActivity({
       task={system.active_task}
       agents={agents}
       compact={compact}
+      {...(onAnswerForm ? { onAnswerForm } : {})}
       onStopped={() => Promise.all([
         queryClient.invalidateQueries({
           // Every repository scope of this project, because a repository

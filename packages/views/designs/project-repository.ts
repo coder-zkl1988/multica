@@ -11,11 +11,14 @@ export function repositoryUrl(resource: ProjectResource): string {
   return typeof ref?.url === "string" ? ref.url.trim() : "";
 }
 
+export function repositoryName(label: string | null | undefined, url: string, fallback = "未命名仓库"): string {
+  const named = label?.trim();
+  if (named) return named;
+  const normalized = url.trim().replace(/\.git$/, "").replace(/\/+$/, "");
+  if (!normalized) return fallback;
+  return normalized.split(/[/:]/).filter(Boolean).pop() || fallback;
+}
+
 export function repositoryLabel(resource: ProjectResource): string {
-  const label = resource.label?.trim();
-  if (label) return label;
-  const url = repositoryUrl(resource);
-  if (!url) return "未命名仓库";
-  const normalized = url.replace(/\.git$/, "").replace(/\/+$/, "");
-  return normalized.split("/").pop() || normalized;
+  return repositoryName(resource.label, repositoryUrl(resource));
 }

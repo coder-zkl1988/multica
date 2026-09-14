@@ -75,7 +75,7 @@ import {
 import { useConfigStore } from "@multica/core/config";
 import { designDocumentWorkspaceListOptions } from "@multica/core/designs";
 import type { DesignDocument, LocalDirectoryExecutionMode } from "@multica/core/types";
-import { designDocumentCover } from "../designs/design-document-card";
+import { DesignDocumentCover } from "../designs/design-document-thumbnail";
 import { LocalDirectoryModeOptions } from "../projects/components/local-directory-mode-dialog";
 
 /**
@@ -1155,7 +1155,6 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
                 )}
                 {filteredWorkspaceDesigns.map((doc) => {
                   const checked = selectedDesigns.some((d) => d.id === doc.id);
-                  const cover = designDocumentCover(doc);
                   const sourceProject = projectTitleById.get(doc.project_id) ?? "";
                   return (
                     <button
@@ -1173,13 +1172,9 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
                         readOnly
                         className="size-3.5"
                       />
-                      <span
-                        style={cover.style}
-                        aria-hidden
-                        className="flex size-7 shrink-0 items-center justify-center rounded-md text-micro font-medium text-faint-foreground"
-                      >
-                        {cover.initial}
-                      </span>
+                      <div className="relative flex h-14 w-24 shrink-0 overflow-hidden rounded-md">
+                        <DesignDocumentCover document={doc} variant="saved" />
+                      </div>
                       <span className="min-w-0 flex-1 text-left">
                         <span className="block truncate font-medium">
                           {doc.title.trim() || t(($) => $.create_project.designs_untitled)}

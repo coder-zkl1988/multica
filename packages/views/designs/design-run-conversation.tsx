@@ -47,7 +47,7 @@ function ConversationRow({
     // answers "what is left", and the transcript is exactly where that answer
     // scrolls away. An unreadable payload still falls through to the ordinary
     // tool line, so a protocol change stays visible instead of vanishing.
-    if (item.tool === "todo_write" && todoRows(item.input).length > 0) {
+    if ((item.tool === "todo_write" || item.tool === "update_plan") && todoRows(item.input).length > 0) {
       return null;
     }
     const summary = toolSummary(item);

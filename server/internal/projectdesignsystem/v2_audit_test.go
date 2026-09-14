@@ -208,6 +208,35 @@ func TestAuditV2RejectsEmbeddedSourceTextReference(t *testing.T) {
 	}
 }
 
+func TestAuditV2AllowsDeclaredPackageLocalHTMLNavigation(t *testing.T) {
+	root := copyV2Fixture(t)
+	if err := os.MkdirAll(filepath.Join(root, "preview"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	preview := `<main data-design-node-id="details" data-design-node-kind="block" data-design-node-label="Details" style="color:var(--color-action)">Details <a href="../ui-kit/index.html#orders">Back</a></main>`
+	if err := os.WriteFile(filepath.Join(root, "preview", "details.html"), []byte(preview), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	indexPath := filepath.Join(root, "ui-kit", "index.html")
+	index := `<main id="orders" data-design-node-id="orders" data-design-node-kind="block" data-design-node-label="Orders" style="color:var(--color-action)"><a href="../preview/details.html#details">Details</a></main>`
+	if err := os.WriteFile(indexPath, []byte(index), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CollectV2Directory(root, validV2Binding()); err != nil {
+		t.Fatalf("CollectV2Directory() rejected declared package-local HTML navigation: %v", err)
+	}
+}
+
+func TestAuditV2RejectsUndeclaredLocalHTMLNavigation(t *testing.T) {
+	root := copyV2Fixture(t)
+	index := `<main data-design-node-id="orders" data-design-node-kind="block" data-design-node-label="Orders" style="color:var(--color-action)"><a href="../preview/missing.html">Missing</a></main>`
+	if err := os.WriteFile(filepath.Join(root, "ui-kit", "index.html"), []byte(index), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	collected, err := CollectV2Directory(root, validV2Binding())
+	assertV2DiagnosticCode(t, collected.Audit, err, "html_url_unsafe")
+}
+
 func TestAuditV2RejectsActiveSVGNetworkReferences(t *testing.T) {
 	t.Run("inline SVG", func(t *testing.T) {
 		root := copyV2Fixture(t)

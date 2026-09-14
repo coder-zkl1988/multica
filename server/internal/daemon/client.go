@@ -17,7 +17,9 @@ import (
 	"time"
 
 	"github.com/multica-ai/multica/server/internal/designdocument"
+	"github.com/multica-ai/multica/server/internal/designimplementation"
 	"github.com/multica-ai/multica/server/internal/opendesign"
+	"github.com/multica-ai/multica/server/internal/projectdesignsystem"
 	"github.com/multica-ai/multica/server/pkg/agent"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 	"github.com/multica-ai/multica/server/pkg/remotemcp"
@@ -566,6 +568,30 @@ func (c *Client) UploadProjectDesignSystemPackage(
 	}
 }
 
+func (c *Client) DownloadProjectDesignSystemBaseArchive(ctx context.Context, taskID string, reference projectdesignsystem.BasePackageReference) ([]byte, error) {
+	if strings.TrimSpace(taskID) == "" {
+		return nil, errors.New("project design system base archive task ID is required")
+	}
+	if err := projectdesignsystem.ValidateBasePackageReference(reference); err != nil {
+		return nil, err
+	}
+	requestPath := fmt.Sprintf("/api/daemon/tasks/%s/project-design-system/base-package", taskID)
+	var lastErr error
+	for attempt := 0; ; attempt++ {
+		archive, err := c.downloadProjectDesignSystemBaseArchive(ctx, requestPath, reference)
+		if err == nil {
+			return archive, nil
+		}
+		lastErr = err
+		if ctx.Err() != nil || !isTransientError(err) || attempt >= len(openDesignArchiveRetrySchedule) {
+			return nil, lastErr
+		}
+		if sleepErr := retrySleep(ctx, openDesignArchiveRetrySchedule[attempt]); sleepErr != nil {
+			return nil, lastErr
+		}
+	}
+}
+
 func (c *Client) DownloadOpenDesignBaseArchive(ctx context.Context, taskID string, reference opendesign.BasePackageReference) ([]byte, error) {
 	if strings.TrimSpace(taskID) == "" {
 		return nil, errors.New("Open Design base archive task ID is required")
@@ -855,6 +881,10 @@ func (c *Client) CompleteTask(ctx context.Context, taskID, output, branchName, s
 		case *DesignDocumentPackageReceipt:
 			if value != nil {
 				body["design_document_package"] = value
+			}
+		case *designimplementation.Receipt:
+			if value != nil {
+				body["design_implementation"] = value
 			}
 		case IssueCompletionReport:
 			if value.Intent != nil {
@@ -1601,6 +1631,51 @@ func validProjectDesignSystemPackageDigest(value string) bool {
 	raw := strings.TrimPrefix(value, "sha256:")
 	decoded, err := hex.DecodeString(raw)
 	return err == nil && hex.EncodeToString(decoded) == raw
+}
+
+func (c *Client) downloadProjectDesignSystemBaseArchive(ctx context.Context, path string, reference projectdesignsystem.BasePackageReference) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
+	if err != nil {
+		return nil, err
+	}
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	c.setIdentityHeaders(req)
+
+	archiveClient := *c.client
+	if archiveClient.Timeout == 0 || archiveClient.Timeout < openDesignArchiveDownloadTimeout {
+		archiveClient.Timeout = openDesignArchiveDownloadTimeout
+	}
+	resp, err := archiveClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		data, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return nil, &requestError{Method: http.MethodGet, Path: path, StatusCode: resp.StatusCode, Body: strings.TrimSpace(string(data))}
+	}
+	if contentType := strings.TrimSpace(strings.Split(resp.Header.Get("Content-Type"), ";")[0]); contentType != projectdesignsystem.BasePackageArchiveContentType {
+		return nil, fmt.Errorf("project design system base archive has unexpected content type %q", contentType)
+	}
+	if digest := resp.Header.Get(projectdesignsystem.BasePackageDigestHeader); digest != reference.ContentDigest {
+		return nil, errors.New("project design system base archive digest header does not match the pinned reference")
+	}
+	if slot := resp.Header.Get(projectdesignsystem.BasePackageSlotHeader); slot != reference.Slot {
+		return nil, errors.New("project design system base archive slot header does not match the pinned reference")
+	}
+	if sourceTaskID := resp.Header.Get(projectdesignsystem.BasePackageSourceTaskHeader); sourceTaskID != reference.SourceTaskID {
+		return nil, errors.New("project design system base archive source task header does not match the pinned reference")
+	}
+	archive, err := io.ReadAll(io.LimitReader(resp.Body, int64(projectdesignsystem.MaxArchiveBytes)+1))
+	if err != nil {
+		return nil, fmt.Errorf("read project design system base archive: %w", err)
+	}
+	if len(archive) == 0 || len(archive) > projectdesignsystem.MaxArchiveBytes {
+		return nil, errors.New("project design system base archive has an invalid size")
+	}
+	return archive, nil
 }
 
 func (c *Client) downloadOpenDesignBaseArchive(ctx context.Context, path string, reference opendesign.BasePackageReference) ([]byte, error) {

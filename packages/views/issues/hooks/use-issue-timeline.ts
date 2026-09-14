@@ -9,6 +9,7 @@ import {
 import type { QueryClient } from "@tanstack/react-query";
 import type {
   Comment,
+  CommentDesignRequest,
   TimelineEntry,
   Reaction,
 } from "@multica/core/types";
@@ -64,6 +65,7 @@ function commentToTimelineEntry(c: Comment): TimelineEntry {
     resolved_by_type: c.resolved_by_type,
     resolved_by_id: c.resolved_by_id,
     source_task_id: c.source_task_id,
+    design_delivery: c.design_delivery,
   };
 }
 
@@ -363,10 +365,12 @@ export function useIssueTimeline(issueId: string, userId?: string) {
   // on success — so a slow send no longer leaves the box full next to an
   // already-posted comment, and a failed send keeps the draft.
   const submitComment = useCallback(
-    async (content: string, attachmentIds?: string[], suppressAgentIds?: string[], conciseMode?: boolean): Promise<string | false> => {
+    async (content: string, attachmentIds?: string[], suppressAgentIds?: string[], designRequestOrConcise?: CommentDesignRequest | boolean, conciseMode?: boolean): Promise<string | false> => {
       if (!content.trim() || !userId) return false;
+      const designRequest = typeof designRequestOrConcise === "boolean" ? undefined : designRequestOrConcise;
+      const requestedConciseMode = typeof designRequestOrConcise === "boolean" ? designRequestOrConcise : conciseMode;
       try {
-        const comment = await createComment({ content, attachmentIds, suppressAgentIds, conciseMode });
+        const comment = await createComment({ content, attachmentIds, suppressAgentIds, designRequest, conciseMode: requestedConciseMode });
         warnUnhandledTriggers(comment?.trigger_outcomes, comment?.content);
         return comment.id;
       } catch (err) {
@@ -382,8 +386,10 @@ export function useIssueTimeline(issueId: string, userId?: string) {
   );
 
   const submitReply = useCallback(
-    async (parentId: string, content: string, attachmentIds?: string[], suppressAgentIds?: string[], conciseMode?: boolean): Promise<string | false> => {
+    async (parentId: string, content: string, attachmentIds?: string[], suppressAgentIds?: string[], designRequestOrConcise?: CommentDesignRequest | boolean, conciseMode?: boolean): Promise<string | false> => {
       if (!content.trim() || !userId) return false;
+      const designRequest = typeof designRequestOrConcise === "boolean" ? undefined : designRequestOrConcise;
+      const requestedConciseMode = typeof designRequestOrConcise === "boolean" ? designRequestOrConcise : conciseMode;
       try {
         const comment = await createComment({
           content,
@@ -391,7 +397,8 @@ export function useIssueTimeline(issueId: string, userId?: string) {
           parentId,
           attachmentIds,
           suppressAgentIds,
-          conciseMode,
+          designRequest,
+          conciseMode: requestedConciseMode,
         });
         warnUnhandledTriggers(comment?.trigger_outcomes, comment?.content);
         return comment.id;

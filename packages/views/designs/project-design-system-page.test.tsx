@@ -159,23 +159,28 @@ describe("ProjectDesignSystemPage", () => {
     for (const mock of Object.values(apiMocks)) mock.mockReset();
   });
 
-  it("renders dynamic DESIGN sections and omits absent categories", async () => {
+  it("uses the UI Kit first and renders DESIGN sections in the files view", async () => {
+    const user = userEvent.setup();
     renderPage();
 
+    expect(await screen.findByRole("region", { name: "在线 UI Kit 主画布" })).toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: "设计文件" }));
     expect(await screen.findByRole("heading", { name: "品牌原则" })).toBeInTheDocument();
     expect(screen.getByText("保持清晰、克制，并优先支持高频工作。")).toBeInTheDocument();
     expect(screen.queryByText("动效")).not.toBeInTheDocument();
     expect(screen.queryByText("字体")).not.toBeInTheDocument();
   });
 
-  it("renders actual token groups without exposing source filenames", async () => {
+  it("renders actual token groups in the files view without exposing source filenames", async () => {
+    const user = userEvent.setup();
     renderPage();
 
+    await user.click(await screen.findByRole("tab", { name: "设计文件" }));
     expect(await screen.findByRole("heading", { name: "色彩" })).toBeInTheDocument();
     expect(screen.getByText("--color-action-primary")).toBeInTheDocument();
     expect(screen.getByText("#2463EB")).toBeInTheDocument();
-    expect(screen.queryByText("DESIGN.md")).not.toBeInTheDocument();
-    expect(screen.queryByText("tokens.css")).not.toBeInTheDocument();
+    expect(screen.getByText("DESIGN.md")).toBeInTheDocument();
+    expect(screen.getByText("tokens.css")).toBeInTheDocument();
     expect(screen.queryByText("components.html")).not.toBeInTheDocument();
   });
 
@@ -184,6 +189,7 @@ describe("ProjectDesignSystemPage", () => {
     apiMocks.adjustProjectDesignSystem.mockResolvedValue(makeSystem());
     renderPage();
 
+    await user.click(await screen.findByRole("tab", { name: "设计文件" }));
     await screen.findByRole("heading", { name: "品牌原则" });
     await user.click(screen.getByRole("button", { name: "调整设计体系" }));
     await user.selectOptions(screen.getByLabelText("执行智能体"), "agent-2");
@@ -214,6 +220,7 @@ describe("ProjectDesignSystemPage", () => {
     }));
     renderPage();
 
+    await user.click(await screen.findByRole("tab", { name: "设计文件" }));
     await screen.findByText("保持清晰、克制，并优先支持高频工作。");
     await user.click(screen.getByRole("button", { name: "调整设计体系" }));
     await user.type(screen.getByLabelText("调整要求"), "改成明亮风格");
@@ -331,9 +338,10 @@ describe("ProjectDesignSystemPage", () => {
     }));
     renderPage(saved);
 
+    await user.click(await screen.findByRole("tab", { name: "设计文件" }));
     await screen.findByText("保持清晰、克制，并优先支持高频工作。");
     fireEvent.click(screen.getByRole("button", { name: "更多操作" }));
-    await user.click(await screen.findByRole("menuitem", { name: "重新生成设计体系" }));
+    await user.click(await screen.findByRole("menuitem", { name: "重新生成" }));
     expect(apiMocks.regenerateProjectDesignSystem).not.toHaveBeenCalled();
     expect(screen.getByText("已保存内容会继续保留，新的结果将先成为草稿。")).toBeInTheDocument();
     expect(screen.getByText("保持清晰、克制，并优先支持高频工作。")).toBeInTheDocument();

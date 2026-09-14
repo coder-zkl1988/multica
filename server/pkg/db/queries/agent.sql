@@ -2761,7 +2761,11 @@ RETURNING *;
 WITH desired AS (
     SELECT CASE WHEN EXISTS (
         SELECT 1 FROM agent_task_queue q
-        WHERE q.agent_id = $1 AND q.status IN ('dispatched', 'running')
+        WHERE q.agent_id = $1
+          AND q.status IN ('dispatched', 'running')
+          -- Programmatic-first design generation borrows the runtime as a
+          -- machine carrier but launches no Agent/model process.
+          AND COALESCE(q.context->>'execution_mode', '') <> 'programmatic_first'
     ) THEN 'working' ELSE 'idle' END AS status
 )
 UPDATE agent AS a

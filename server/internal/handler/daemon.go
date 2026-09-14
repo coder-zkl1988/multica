@@ -25,6 +25,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/auth"
 	"github.com/multica-ai/multica/server/internal/daemonws"
+	"github.com/multica-ai/multica/server/internal/designimplementation"
 	"github.com/multica-ai/multica/server/internal/designpreview"
 	"github.com/multica-ai/multica/server/internal/entitlement"
 	"github.com/multica-ai/multica/server/internal/integrations/channel"
@@ -2658,7 +2659,7 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 				ID:          effectiveTriggerUUID,
 				WorkspaceID: runtime.WorkspaceID,
 			}); err == nil {
-				resp.TriggerCommentContent = comment.Content
+				resp.TriggerCommentContent = commentDesignDeliveryContent(comment)
 				resp.TriggerThreadID = uuidToString(comment.ID)
 				if comment.ParentID.Valid {
 					resp.TriggerThreadID = uuidToString(comment.ParentID)
@@ -3327,15 +3328,22 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 			resp.WorkspaceID = projectDesignSystemCtx.WorkspaceID
 			resp.ProjectID = projectDesignSystemCtx.ProjectID
 			resp.ProjectDesignSystemContext = json.RawMessage(task.Context)
-			// Package generation and adjustment use only the frozen repository
-			// analysis snapshot. The repository-analysis operation itself needs
-			// the live project resources to produce that snapshot.
+			// Every repository-scoped design-system operation receives only its
+			// selected repository. The daemon pins the default branch and builds
+			// immutable evidence before the Agent starts.
 			resp.Repos = nil
 			resp.ProjectResources = nil
+			if projectDesignSystemNeedsLiveRepository(projectDesignSystemCtx) &&
+				strings.TrimSpace(projectDesignSystemCtx.WorkspaceRepositoryID) != "" &&
+				strings.TrimSpace(projectDesignSystemCtx.WorkspaceRepositoryURL) != "" {
+				resp.Repos = []RepoData{{URL: projectDesignSystemCtx.WorkspaceRepositoryURL, Ref: projectDesignSystemCtx.WorkspaceRepositoryRef}}
+				resp.ProjectTitle = projectDesignSystemCtx.WorkspaceRepositoryLabel
+			}
+			workspaceRepositorySelected := strings.TrimSpace(projectDesignSystemCtx.WorkspaceRepositoryID) != ""
 			if projectUUID, err := util.ParseUUID(projectDesignSystemCtx.ProjectID); err == nil {
 				if project, err := h.Queries.GetProjectInWorkspace(r.Context(), db.GetProjectInWorkspaceParams{ID: projectUUID, WorkspaceID: runtime.WorkspaceID}); err == nil {
 					resp.ProjectTitle = project.Title
-					if projectDesignSystemCtx.Operation == service.ProjectDesignSystemRepositoryAnalysis {
+					if projectDesignSystemNeedsLiveRepository(projectDesignSystemCtx) && !workspaceRepositorySelected {
 						var projectRepos []RepoData
 						// Upstream retired the project-scoped helper in favour of the
 						// workspace-scoped query; the runtime's workspace is the one
@@ -3358,10 +3366,16 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 								out = append(out, ProjectResourceData{ID: uuidToString(row.ID), ResourceType: row.ResourceType, ResourceRef: ref, Label: label})
 								if row.ResourceType == "github_repo" {
 									var payload struct {
-										URL string `json:"url"`
+										URL               string `json:"url"`
+										Ref               string `json:"ref,omitempty"`
+										DefaultBranchHint string `json:"default_branch_hint,omitempty"`
 									}
 									if json.Unmarshal(row.ResourceRef, &payload) == nil && payload.URL != "" {
-										projectRepos = append(projectRepos, RepoData{URL: payload.URL})
+										ref := strings.TrimSpace(payload.Ref)
+										if ref == "" {
+											ref = strings.TrimSpace(payload.DefaultBranchHint)
+										}
+										projectRepos = append(projectRepos, RepoData{URL: payload.URL, Ref: ref})
 									}
 								}
 							}
@@ -3369,6 +3383,9 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 						}
 						if len(projectRepos) > 0 {
 							resp.Repos = projectRepos
+						}
+						if strings.TrimSpace(projectDesignSystemCtx.ProjectResourceID) != "" {
+							scopeDesignDocumentRepositories(&resp, projectDesignSystemCtx.ProjectResourceID)
 						}
 					}
 				}
@@ -3723,6 +3740,21 @@ func (h *Handler) populateContextTaskProject(ctx context.Context, resp *AgentTas
 	if len(repos) > 0 {
 		resp.Repos = repos
 	}
+}
+
+func projectDesignSystemNeedsLiveRepository(taskContext service.ProjectDesignSystemTaskContext) bool {
+	if taskContext.Operation == service.ProjectDesignSystemRepositoryAnalysis {
+		return true
+	}
+	repositoryScoped := strings.TrimSpace(taskContext.WorkspaceRepositoryID) != "" ||
+		strings.TrimSpace(taskContext.ProjectResourceID) != ""
+	// Every repository-scoped design-system operation receives the exact read-only
+	// checkout. Adjustments remain base-first and may spot-check indexed paths, but
+	// missing repository access must fail before the Agent starts rather than force
+	// it to guess from a URL or compatibility summary.
+	return repositoryScoped && (taskContext.Operation == service.ProjectDesignSystemGenerate ||
+		taskContext.Operation == service.ProjectDesignSystemAdjust ||
+		taskContext.Operation == service.ProjectDesignSystemRegenerate)
 }
 
 // scopeDesignDocumentRepositories narrows a design document claim to the
@@ -4305,10 +4337,11 @@ func (h *Handler) ReportTaskProgress(w http.ResponseWriter, r *http.Request) {
 
 // CompleteTask marks a running task as completed.
 type TaskCompleteRequest struct {
-	PRURL     string `json:"pr_url"`
-	Output    string `json:"output"`
-	SessionID string `json:"session_id"` // Claude session ID for future resumption
-	WorkDir   string `json:"work_dir"`   // working directory used during execution
+	PRURL                string                        `json:"pr_url"`
+	Output               string                        `json:"output"`
+	SessionID            string                        `json:"session_id"` // Claude session ID for future resumption
+	DesignImplementation *designimplementation.Receipt `json:"design_implementation,omitempty"`
+	WorkDir              string                        `json:"work_dir"` // working directory used during execution
 	// DurableWorkDir is the configured project directory that replaces a
 	// disposable task worktree after the daemon confirms the worktree is gone.
 	DurableWorkDir string `json:"durable_work_dir,omitempty"`
@@ -4326,6 +4359,9 @@ type TaskCompleteRequest struct {
 	// collect -> audit -> preview -> upload gate. The handler re-reads the
 	// archive and re-derives every field before it becomes a draft.
 	DesignDocumentPackage *DesignDocumentPackageReceipt `json:"design_document_package,omitempty"`
+	// DesignDocumentGrounding is raw JSON, not caller-supplied text: it is
+	// strictly decoded and normalized before persistence below.
+	DesignDocumentGrounding json.RawMessage `json:"design_document_grounding,omitempty"`
 	// SessionRolloutMissing: the daemon withheld this task's Codex session
 	// because its rollout was missing (MUL-5305). Clear the resume pointer and
 	// flag the continuity gap for the next claim.
@@ -4357,10 +4393,10 @@ type ProjectDesignSystemPackageReceipt struct {
 const taskCompleteRequestMaxBytes int64 = 2 << 20
 
 // sanitizeTaskCompleteRequest / sanitizeTaskFailRequest scrub every
-// caller-supplied string on a terminal task callback. Both request types are
-// flat bags of strings, so this is exhaustive by construction — but that also
-// means a NEW string field must be added here, or it reopens GH #7098 through a
-// fresh door. The task-row columns these feed (error, work_dir,
+// caller-supplied string field on a terminal task callback; they are exhaustive
+// for those fields. Raw JSON receipts such as DesignDocumentGrounding are not
+// text-sanitized here and must pass strict schema validation instead. The
+// task-row columns these feed (error, work_dir,
 // durable_work_dir, branch_name, session_id) are all TEXT, and result is
 // JSONB; neither tolerates a NUL.
 func sanitizeTaskCompleteRequest(req *TaskCompleteRequest) {
@@ -4451,6 +4487,23 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	if designimplementation.IsTask(existingTask.TriggerSummary.String) {
+		identity, ok := h.designImplementationIdentityForTask(r.Context(), existingTask, workspaceID)
+		claim, err := designimplementation.ValidateReceipt(req.DesignImplementation, time.Now(), taskID)
+		if !ok || err != nil || claim.WorkspaceID != workspaceID || claim.IssueID != uuidToString(existingTask.IssueID) ||
+			!designimplementation.ClaimMatchesTaskIdentity(claim, identity) {
+			message := "design implementation result receipt is missing or invalid"
+			if err != nil {
+				message += ": " + err.Error()
+			}
+			h.failTask(w, r, taskID, workspaceID, TaskFailRequest{
+				Error: message, FailureReason: "design_implementation_result_invalid",
+				SessionID: req.SessionID, WorkDir: req.WorkDir, DurableWorkDir: req.DurableWorkDir,
+				BranchName: req.BranchName, SessionRolloutMissing: req.SessionRolloutMissing, RetiredSessionID: req.RetiredSessionID,
+			})
+			return
+		}
+	}
 
 	var createdDraft *db.DesignDraft
 	var analyzedProfile *db.DesignSystemProfile
@@ -4503,7 +4556,7 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 		}
 		preparedProjectDesignSystem = &prepared
 	} else if existingTask.Status == "running" && isDesignDocumentTaskContext(existingTask) {
-		prepared, prepareErr := h.prepareDesignDocumentCompletion(r.Context(), existingTask, workspaceID, req.DesignDocumentPackage)
+		prepared, prepareErr := h.prepareDesignDocumentCompletion(r.Context(), existingTask, workspaceID, req.DesignDocumentPackage, req.DesignDocumentGrounding)
 		if prepareErr != nil {
 			failedTask, failErr := h.TaskService.FailTask(r.Context(), existingTask.ID, prepareErr.Error(), req.SessionID, req.WorkDir, req.BranchName, "design_document_invalid_package", req.SessionRolloutMissing, req.RetiredSessionID, req.DurableWorkDir)
 			if failErr != nil {
@@ -4753,6 +4806,8 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// A successful V2 completion is already the final single-Agent draft.
+
 	if pmoSnapshot != nil {
 		// Privacy: log task/run identity only, never snapshot content.
 		slog.Info("pmo sync preview stored", "task_id", taskID, "run_id", pmoSyncCtx.RunID)
@@ -4813,6 +4868,13 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, taskToResponse(*task, workspaceID))
 }
 
+func designRestoreTaskCompletionStatus(summary designRestoreResultSummary, policyViolation string) string {
+	if summary.Status == "blocked" || summary.Status == "failed" || policyViolation != "" {
+		return "failed"
+	}
+	return "completed"
+}
+
 func (h *Handler) updateDesignRestoreTaskFromAgentCompletion(ctx context.Context, task db.AgentTaskQueue, req TaskCompleteRequest) error {
 	var restoreCtx service.DesignRestoreTaskContext
 	if err := json.Unmarshal(task.Context, &restoreCtx); err != nil || restoreCtx.Type != service.DesignRestoreTaskContextType {
@@ -4823,14 +4885,8 @@ func (h *Handler) updateDesignRestoreTaskFromAgentCompletion(ctx context.Context
 		return err
 	}
 	summary := parseDesignRestoreResultSummary(req.Output)
-	status := "completed"
-	if summary.Status == "blocked" || summary.Status == "failed" || strings.Contains(strings.ToLower(req.Output), "blocked") || strings.Contains(strings.ToLower(req.Output), "阻塞") {
-		status = "failed"
-	}
 	policyViolation := designRestorePolicyViolation(restoreCtx, req.Output, summary)
-	if policyViolation != "" {
-		status = "failed"
-	}
+	status := designRestoreTaskCompletionStatus(summary, policyViolation)
 	policyWarning := designRestorePolicyWarning(restoreCtx, summary)
 	result := map[string]any{
 		"output":           req.Output,
@@ -5167,7 +5223,7 @@ func (h *Handler) buildCoalescedCommentData(ctx context.Context, workspaceID pgt
 			ID:         uuidToString(comment.ID),
 			ThreadID:   uuidToString(comment.ID),
 			AuthorType: comment.AuthorType,
-			Content:    comment.Content,
+			Content:    commentDesignDeliveryContent(comment),
 			CreatedAt:  timestampToString(comment.CreatedAt),
 		}
 		if comment.ParentID.Valid {

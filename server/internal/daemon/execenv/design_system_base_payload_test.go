@@ -6,17 +6,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/multica-ai/multica/server/internal/projectdesignsystem"
 )
 
-// writeV2BaseDirectory materializes base/ from INLINE artifact text. A task
-// that carries a reference instead — schema, slot and digest, with no
-// contents — produces an agent workspace that cannot be written, and the task
-// dies before the agent ever starts.
-//
-// This matters because the two shapes both look like a "base package" in a
-// task context, and only one of them works. The copy path builds the inline
-// shape for exactly this reason.
-func TestV2BaseDirectoryNeedsInlineArtifactsNotAReference(t *testing.T) {
+func TestV2BaseDirectorySupportsArchiveReferenceAndInlineCompatibility(t *testing.T) {
 	inline := map[string]any{
 		"design_md":        "# Acme\n\n## Principles\n\nCalm.\n",
 		"tokens_css":       ":root { --color-action: #1677ff; }\n",
@@ -27,29 +21,58 @@ func TestV2BaseDirectoryNeedsInlineArtifactsNotAReference(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal inline base: %v", err)
 	}
-	workDir := t.TempDir()
-	// base/ is stamped read-only, which also blocks TempDir cleanup.
-	t.Cleanup(func() { _ = os.Chmod(filepath.Join(workDir, "base"), 0o755) })
-	if err := writeV2BaseDirectory(workDir, map[string]json.RawMessage{
-		"operation":    json.RawMessage(`"generate"`),
-		"base_package": inlineJSON,
+	inlineDir := t.TempDir()
+	t.Cleanup(func() { _ = os.Chmod(filepath.Join(inlineDir, "base"), 0o755) })
+	if err := writeV2BaseDirectory(inlineDir, map[string]json.RawMessage{
+		"operation":           json.RawMessage(`"adjust"`),
+		"base_package_sha256": json.RawMessage(`"sha256:` + strings.Repeat("a", 64) + `"`),
+		"base_package":        inlineJSON,
 	}, &sidecarManifest{}); err != nil {
-		t.Fatalf("inline base payload must materialize, got: %v", err)
+		t.Fatalf("inline compatibility base must materialize: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(inlineDir, "base", "DESIGN.md")); err != nil {
+		t.Fatalf("inline DESIGN.md was not materialized: %v", err)
 	}
 
-	// The reference shape a V2 package decoder returns must be rejected
-	// loudly rather than producing a half-written base directory.
+	reference := projectdesignsystem.BasePackageReference{
+		Schema:        projectdesignsystem.BasePackageReferenceSchema,
+		Slot:          "saved",
+		ContentDigest: "sha256:" + strings.Repeat("b", 64),
+		SourceTaskID:  "task-source",
+		Binding: projectdesignsystem.PackageBinding{
+			WorkspaceID: "workspace", ProjectID: "project", DesignSystemID: "system",
+			TaskID: "task-source", AgentID: "agent", Operation: "generate",
+			InputSnapshotSHA256: "sha256:" + strings.Repeat("c", 64),
+		},
+	}
+	referenceJSON, err := json.Marshal(reference)
+	if err != nil {
+		t.Fatalf("marshal base reference: %v", err)
+	}
 	referenceDir := t.TempDir()
-	t.Cleanup(func() { _ = os.Chmod(filepath.Join(referenceDir, "base"), 0o755) })
-	err = writeV2BaseDirectory(referenceDir, map[string]json.RawMessage{
-		"operation": json.RawMessage(`"generate"`),
-		"base_package": json.RawMessage(`{
-			"schema": "multica.project-design-system/v2",
-			"slot": "saved",
-			"integrity_sha256": "sha256:aaaa"
-		}`),
-	}, &sidecarManifest{})
-	if err == nil {
-		t.Fatal("a reference-only base package was accepted; it cannot materialize base/ and the task would die writing its workspace")
+	if err := writeV2BaseDirectory(referenceDir, map[string]json.RawMessage{
+		"operation":           json.RawMessage(`"adjust"`),
+		"base_package_sha256": json.RawMessage(`"` + reference.ContentDigest + `"`),
+		"base_package":        referenceJSON,
+	}, &sidecarManifest{}); err != nil {
+		t.Fatalf("valid archive reference must reserve base for daemon restore: %v", err)
+	}
+	entries, err := os.ReadDir(filepath.Join(referenceDir, "base"))
+	if err != nil {
+		t.Fatalf("read reserved base directory: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("reference base must stay empty until daemon restore, got %d entries", len(entries))
+	}
+
+	bad := reference
+	bad.ContentDigest = "sha256:" + strings.Repeat("d", 64)
+	badJSON, _ := json.Marshal(bad)
+	if err := writeV2BaseDirectory(t.TempDir(), map[string]json.RawMessage{
+		"operation":           json.RawMessage(`"adjust"`),
+		"base_package_sha256": json.RawMessage(`"` + reference.ContentDigest + `"`),
+		"base_package":        badJSON,
+	}, &sidecarManifest{}); err == nil {
+		t.Fatal("mismatched base reference digest was accepted")
 	}
 }

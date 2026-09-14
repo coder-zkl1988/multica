@@ -1,0 +1,1 @@
+DROP INDEX CONCURRENTLY IF EXISTS idx_project_design_system_workspace_repository;

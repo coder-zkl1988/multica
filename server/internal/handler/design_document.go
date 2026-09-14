@@ -82,20 +82,23 @@ type CreateDesignDocumentRequest struct {
 }
 
 type DesignDocumentResponse struct {
-	ID                string                           `json:"id"`
-	WorkspaceID       string                           `json:"workspace_id"`
-	ProjectID         string                           `json:"project_id"`
-	ProjectResourceID string                           `json:"project_resource_id,omitempty"`
-	IssueID           string                           `json:"issue_id,omitempty"`
-	Title             string                           `json:"title"`
-	Platform          string                           `json:"platform"`
-	Recipe            string                           `json:"recipe"`
-	Status            string                           `json:"status"`
-	DraftRevisionID   string                           `json:"draft_revision_id,omitempty"`
-	SavedRevisionID   string                           `json:"saved_revision_id,omitempty"`
-	ActiveTask        *ProjectDesignSystemTaskResponse `json:"active_task"`
-	InputSnapshot     json.RawMessage                  `json:"input_snapshot"`
-	LastError         json.RawMessage                  `json:"last_error"`
+	ID                    string                           `json:"id"`
+	DesignRef             string                           `json:"design_ref,omitempty"`
+	Source                string                           `json:"source"`
+	WorkspaceID           string                           `json:"workspace_id"`
+	ProjectID             string                           `json:"project_id"`
+	ProjectResourceID     string                           `json:"project_resource_id,omitempty"`
+	WorkspaceRepositoryID string                           `json:"workspace_repository_id,omitempty"`
+	IssueID               string                           `json:"issue_id,omitempty"`
+	Title                 string                           `json:"title"`
+	Platform              string                           `json:"platform"`
+	Recipe                string                           `json:"recipe"`
+	Status                string                           `json:"status"`
+	DraftRevisionID       string                           `json:"draft_revision_id,omitempty"`
+	SavedRevisionID       string                           `json:"saved_revision_id,omitempty"`
+	ActiveTask            *ProjectDesignSystemTaskResponse `json:"active_task"`
+	InputSnapshot         json.RawMessage                  `json:"input_snapshot"`
+	LastError             json.RawMessage                  `json:"last_error"`
 	// Whether this run had repository evidence. The UI must not let a user
 	// assume the agent read code when it did not.
 	RepositoryGrounded bool   `json:"repository_grounded"`
@@ -109,17 +112,24 @@ type DesignDocumentResponse struct {
 // belong here — server-side ids and timestamps would make the digest differ
 // between two identical requests.
 type designDocumentInputSnapshot struct {
-	AgentID           string `json:"agent_id"`
-	ProjectResourceID string `json:"project_resource_id,omitempty"`
-	IssueID           string `json:"issue_id,omitempty"`
+	AgentID               string `json:"agent_id"`
+	ProjectResourceID     string `json:"project_resource_id,omitempty"`
+	WorkspaceRepositoryID string `json:"workspace_repository_id,omitempty"`
+	IssueID               string `json:"issue_id,omitempty"`
 	// The design system the user named for this run, frozen with the rest of
 	// the inputs so a regeneration reruns under the same choice (DC-060).
-	DesignSystemID      string          `json:"design_system_id,omitempty"`
-	BuiltinDesignSystem string          `json:"builtin_design_system,omitempty"`
-	Platform            string          `json:"platform"`
-	Recipe              string          `json:"recipe"`
-	Brief               string          `json:"brief"`
-	Attachments         json.RawMessage `json:"attachments,omitempty"`
+	DesignSystemID      string `json:"design_system_id,omitempty"`
+	BuiltinDesignSystem string `json:"builtin_design_system,omitempty"`
+	// Explicit choice belongs only to comment delivery; legacy launcher defaults stay unchanged.
+	DesignSystemChoice string `json:"design_system_choice,omitempty"`
+	// ResolvedDesignContext is server-derived after request validation. It is
+	// frozen beside the user choice so regeneration cannot reinterpret a mutable
+	// saved slot. It is never decoded from client JSON.
+	ResolvedDesignContext *service.ResolvedDesignContext `json:"resolved_design_context,omitempty"`
+	Platform              string                         `json:"platform"`
+	Recipe                string                         `json:"recipe"`
+	Brief                 string                         `json:"brief"`
+	Attachments           json.RawMessage                `json:"attachments,omitempty"`
 }
 
 // issueOriginDesignDocument marks an issue the design launcher opened beside a
@@ -356,6 +366,14 @@ func (h *Handler) CreateDesignDocument(w http.ResponseWriter, r *http.Request) {
 		Brief:               req.Brief,
 		Attachments:         attachmentsJSON,
 	}
+	input.ResolvedDesignContext, err = h.resolveInitialDesignDocumentContext(
+		r.Context(), h.Queries, workspaceUUID, projectUUID, scope.ProjectResourceID, req.DesignSystemID, req.BuiltinDesignSystem,
+	)
+	if err != nil {
+		deleteCompanionIssue()
+		writeProjectDesignSystemRequestError(w, err)
+		return
+	}
 	inputJSON, err := json.Marshal(input)
 	if err != nil || len(inputJSON) > designDocumentMaxSnapshotBytes {
 		deleteCompanionIssue()
@@ -372,7 +390,7 @@ func (h *Handler) CreateDesignDocument(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.TaskService.NotifyTaskEnqueued(r.Context(), task)
-	writeJSON(w, http.StatusCreated, designDocumentResponse(document, &task))
+	writeJSON(w, http.StatusCreated, designDocumentResponse(document, &task, h.designDocumentRepositoryGrounded(r.Context(), document)))
 }
 
 // resolveOptionalDesignDocumentIssue accepts an empty issue, and otherwise
@@ -442,15 +460,36 @@ func (h *Handler) ListDesignDocuments(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// Three ways to ask: a project lists its design library, an issue lists
-	// the designs pointing at it, and — with neither — the whole workspace.
-	// The workspace form is what the create-project modal's design picker
-	// reads: the project being created owns no documents yet, so a project-
-	// or issue-scoped list has nothing to offer it.
+	// Four ways to ask: an issue, a selected repository, a project, or the whole
+	// workspace. Repository and issue scope are deliberately incompatible.
+	query := r.URL.Query()
+	rawProjectID := strings.TrimSpace(query.Get("project_id"))
+	rawIssueID := strings.TrimSpace(query.Get("issue_id"))
+	rawResourceID := strings.TrimSpace(query.Get("project_resource_id"))
+	rawWorkspaceRepositoryID := strings.TrimSpace(query.Get("workspace_repository_id"))
+	if rawWorkspaceRepositoryID != "" && (rawProjectID != "" || rawIssueID != "" || rawResourceID != "") {
+		writeProjectDesignSystemError(w, http.StatusBadRequest, "invalid_request", "settings repository scope cannot be combined with project or issue scope")
+		return
+	}
+	if rawResourceID != "" && (rawProjectID == "" || rawIssueID != "") {
+		writeProjectDesignSystemError(w, http.StatusBadRequest, "invalid_request", "project_resource_id requires project scope without issue scope")
+		return
+	}
 	var documents []db.DesignDocument
 	var err error
-	if raw := strings.TrimSpace(r.URL.Query().Get("issue_id")); raw != "" {
-		issueUUID, ok := parseUUIDOrBadRequest(w, raw, "issue_id")
+	switch {
+	case rawWorkspaceRepositoryID != "":
+		repositoryUUID, ok := parseUUIDOrBadRequest(w, rawWorkspaceRepositoryID, "workspace_repository_id")
+		if !ok {
+			return
+		}
+		if _, repositoryErr := loadWorkspaceRepository(r.Context(), h.Queries, workspaceUUID, repositoryUUID); repositoryErr != nil {
+			writeProjectDesignSystemError(w, http.StatusNotFound, "workspace_repository_not_found", "settings repository not found")
+			return
+		}
+		documents, err = h.Queries.ListDesignDocumentsByWorkspaceRepository(r.Context(), db.ListDesignDocumentsByWorkspaceRepositoryParams{WorkspaceID: workspaceUUID, WorkspaceRepositoryID: repositoryUUID})
+	case rawIssueID != "":
+		issueUUID, ok := parseUUIDOrBadRequest(w, rawIssueID, "issue_id")
 		if !ok {
 			return
 		}
@@ -461,8 +500,25 @@ func (h *Handler) ListDesignDocuments(w http.ResponseWriter, r *http.Request) {
 			WorkspaceID: workspaceUUID,
 			IssueID:     issueUUID,
 		})
-	} else if raw := strings.TrimSpace(r.URL.Query().Get("project_id")); raw != "" {
-		projectUUID, ok := parseUUIDOrBadRequest(w, raw, "project_id")
+	case rawResourceID != "":
+		projectUUID, ok := parseUUIDOrBadRequest(w, rawProjectID, "project_id")
+		if !ok {
+			return
+		}
+		resourceUUID, ok := parseUUIDOrBadRequest(w, rawResourceID, "project_resource_id")
+		if !ok {
+			return
+		}
+		if !h.validateDesignRepositoryScope(w, r, workspaceUUID, projectUUID, resourceUUID) {
+			return
+		}
+		documents, err = h.Queries.ListDesignDocumentsByRepository(r.Context(), db.ListDesignDocumentsByRepositoryParams{
+			WorkspaceID:       workspaceUUID,
+			ProjectID:         projectUUID,
+			ProjectResourceID: resourceUUID,
+		})
+	case rawProjectID != "":
+		projectUUID, ok := parseUUIDOrBadRequest(w, rawProjectID, "project_id")
 		if !ok {
 			return
 		}
@@ -476,7 +532,7 @@ func (h *Handler) ListDesignDocuments(w http.ResponseWriter, r *http.Request) {
 			WorkspaceID: workspaceUUID,
 			ProjectID:   projectUUID,
 		})
-	} else {
+	default:
 		documents, err = h.Queries.ListDesignDocumentsInWorkspace(r.Context(), workspaceUUID)
 	}
 	if err != nil {
@@ -504,7 +560,13 @@ func (h *Handler) ListDesignDocuments(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		responses = append(responses, designDocumentResponse(document, activeTask))
+		repositoryGrounded := h.designDocumentRepositoryGrounded(r.Context(), document)
+		response := designDocumentResponse(document, activeTask, repositoryGrounded)
+		if err := h.attachMulticaDesignAssetRef(r.Context(), &response, document, requestUserID(r), time.Now()); err != nil {
+			writeProjectDesignSystemError(w, http.StatusInternalServerError, "design_ref_failed", "failed to create design reference")
+			return
+		}
+		responses = append(responses, response)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"documents": responses})
 }
@@ -586,22 +648,50 @@ func designDocumentStatus(document db.DesignDocument, task *db.AgentTaskQueue) s
 	}
 }
 
-func designDocumentResponse(document db.DesignDocument, task *db.AgentTaskQueue) DesignDocumentResponse {
+func repositoryGroundingAvailable(raw []byte) bool {
+	grounding, err := designdocument.ValidateRepositoryGrounding(raw)
+	return err == nil && grounding.Status == designdocument.GroundingAvailable
+}
+
+func designDocumentDisplayRevisionID(document db.DesignDocument) pgtype.UUID {
+	if document.DraftRevisionID.Valid {
+		return document.DraftRevisionID
+	}
+	return document.SavedRevisionID
+}
+
+// The evidence flag fails closed: unreadable, missing, or unavailable revision
+// evidence must never be promoted to grounded. The workspace scope keeps the
+// revision read tied to the document that selected it.
+func (h *Handler) designDocumentRepositoryGrounded(ctx context.Context, document db.DesignDocument) bool {
+	revisionID := designDocumentDisplayRevisionID(document)
+	if !revisionID.Valid {
+		return false
+	}
+	revision, err := h.Queries.GetDesignDocumentRevisionInWorkspace(ctx, db.GetDesignDocumentRevisionInWorkspaceParams{
+		ID: revisionID, WorkspaceID: document.WorkspaceID,
+	})
+	return err == nil && repositoryGroundingAvailable(revision.RepositoryGrounding)
+}
+
+func designDocumentResponse(document db.DesignDocument, task *db.AgentTaskQueue, repositoryGrounded bool) DesignDocumentResponse {
 	response := DesignDocumentResponse{
-		ID:                 uuidToString(document.ID),
-		WorkspaceID:        uuidToString(document.WorkspaceID),
-		ProjectID:          uuidToString(document.ProjectID),
-		ProjectResourceID:  uuidToString(document.ProjectResourceID),
-		IssueID:            uuidToString(document.IssueID),
-		Title:              document.Title,
-		Platform:           document.Platform,
-		Recipe:             document.Recipe,
-		Status:             designDocumentStatus(document, task),
-		DraftRevisionID:    uuidToString(document.DraftRevisionID),
-		SavedRevisionID:    uuidToString(document.SavedRevisionID),
-		InputSnapshot:      jsonOrDefault(document.InputSnapshot, `{}`),
-		LastError:          jsonOrDefault(document.LastError, `null`),
-		RepositoryGrounded: document.ProjectResourceID.Valid,
+		ID:                    uuidToString(document.ID),
+		Source:                "multica",
+		WorkspaceID:           uuidToString(document.WorkspaceID),
+		ProjectID:             uuidToString(document.ProjectID),
+		ProjectResourceID:     uuidToString(document.ProjectResourceID),
+		WorkspaceRepositoryID: uuidToString(document.WorkspaceRepositoryID),
+		IssueID:               uuidToString(document.IssueID),
+		Title:                 document.Title,
+		Platform:              document.Platform,
+		Recipe:                document.Recipe,
+		Status:                designDocumentStatus(document, task),
+		DraftRevisionID:       uuidToString(document.DraftRevisionID),
+		SavedRevisionID:       uuidToString(document.SavedRevisionID),
+		InputSnapshot:         jsonOrDefault(document.InputSnapshot, `{}`),
+		LastError:             jsonOrDefault(document.LastError, `null`),
+		RepositoryGrounded:    repositoryGrounded,
 	}
 	if document.CreatedAt.Valid {
 		response.CreatedAt = document.CreatedAt.Time.UTC().Format(time.RFC3339Nano)
@@ -658,18 +748,38 @@ func (h *Handler) createDesignDocumentTask(
 	}
 	defer tx.Rollback(ctx)
 	queries := h.Queries.WithTx(tx)
+	document, task, err := h.enqueueDesignDocumentTask(ctx, queries, workspaceID, requesterID, projectID, scope, issueID, agentID, title, input, inputJSON, attachments)
+	if err != nil {
+		return db.DesignDocument{}, db.AgentTaskQueue{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return db.DesignDocument{}, db.AgentTaskQueue{}, projectDesignSystemInternalError("transaction_failed", "failed to commit design generation")
+	}
+	return document, task, nil
+}
+
+func (h *Handler) enqueueDesignDocumentTask(
+	ctx context.Context, queries *db.Queries, workspaceID, requesterID, projectID pgtype.UUID,
+	scope projectDesignSystemScope, issueID, agentID pgtype.UUID, title string,
+	input designDocumentInputSnapshot, inputJSON []byte, attachments []designDocumentAttachmentSnapshot,
+) (db.DesignDocument, db.AgentTaskQueue, error) {
+	var workspaceRepositoryID pgtype.UUID
+	if input.WorkspaceRepositoryID != "" {
+		workspaceRepositoryID = parseUUID(input.WorkspaceRepositoryID)
+	}
 
 	document, err := queries.CreateDesignDocument(ctx, db.CreateDesignDocumentParams{
-		WorkspaceID:       workspaceID,
-		ProjectID:         projectID,
-		ProjectResourceID: scope.ProjectResourceID,
-		IssueID:           issueID,
-		Title:             title,
-		Platform:          input.Platform,
-		Recipe:            input.Recipe,
-		CurrentAgentID:    agentID,
-		InputSnapshot:     inputJSON,
-		CreatedBy:         requesterID,
+		WorkspaceID:           workspaceID,
+		ProjectID:             projectID,
+		ProjectResourceID:     scope.ProjectResourceID,
+		WorkspaceRepositoryID: workspaceRepositoryID,
+		IssueID:               issueID,
+		Title:                 title,
+		Platform:              input.Platform,
+		Recipe:                input.Recipe,
+		CurrentAgentID:        agentID,
+		InputSnapshot:         inputJSON,
+		CreatedBy:             requesterID,
 	})
 	if err != nil {
 		return db.DesignDocument{}, db.AgentTaskQueue{}, projectDesignSystemInternalError("create_failed", "failed to create design document")
@@ -721,9 +831,6 @@ func (h *Handler) createDesignDocumentTask(
 	if err != nil {
 		return db.DesignDocument{}, db.AgentTaskQueue{}, projectDesignSystemInternalError("update_failed", "failed to attach the design task")
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return db.DesignDocument{}, db.AgentTaskQueue{}, projectDesignSystemInternalError("transaction_failed", "failed to commit design generation")
-	}
 	return document, task, nil
 }
 
@@ -733,6 +840,118 @@ func (h *Handler) createDesignDocumentTask(
 // sees exactly what the first run saw (bar the agent, which the caller may
 // have replaced). The design system is re-resolved from the frozen CHOICE, not
 // copied: its digest is pinned here so the run itself stays deterministic.
+func (h *Handler) resolveInitialDesignDocumentContext(
+	ctx context.Context,
+	queries *db.Queries,
+	workspaceID pgtype.UUID,
+	projectID pgtype.UUID,
+	projectResourceID pgtype.UUID,
+	designSystemID string,
+	builtinDesignSystem string,
+) (*service.ResolvedDesignContext, error) {
+	designSystemUUID := pgtype.UUID{}
+	if designSystemID != "" {
+		parsed, err := util.ParseUUID(designSystemID)
+		if err != nil {
+			return nil, &projectDesignSystemRequestError{status: http.StatusBadRequest, code: "design_system_invalid", message: "design_system_id is invalid"}
+		}
+		designSystemUUID = parsed
+	}
+	var builtinContext *service.BuiltinDesignContext
+	if builtinDesignSystem != "" {
+		detail, found, err := designsystemcatalogue.Get(builtinDesignSystem)
+		if err != nil {
+			return nil, projectDesignSystemInternalError("design_context_failed", "failed to load the built-in design system")
+		}
+		if !found {
+			return nil, &projectDesignSystemRequestError{status: http.StatusNotFound, code: "design_system_not_found", message: "built-in design system not found"}
+		}
+		builtinContext = &service.BuiltinDesignContext{Slug: detail.Slug, Name: detail.Name, Category: detail.Category, DesignMarkdown: detail.DesignMarkdown, TokensCSS: detail.TokensCSS}
+	}
+	// Repository runs always resolve their repository-scoped saved package. An
+	// explicit selection is a confirmation of that package, not a request to
+	// reinterpret it as a workspace-wide system.
+	resolvedSystemID := designSystemUUID
+	if projectResourceID.Valid {
+		resolvedSystemID = pgtype.UUID{}
+	}
+	resolved, err := (service.ProjectDesignContextResolver{Store: queries, AllowedHosts: h.projectDesignSystemAllowedHosts()}).Resolve(ctx, service.ResolveProjectDesignContextParams{
+		WorkspaceID: workspaceID, ProjectID: projectID, ProjectResourceID: projectResourceID,
+		DesignSystemID: resolvedSystemID, Builtin: builtinContext,
+	})
+	if err != nil {
+		if errors.Is(err, service.ErrSavedDesignContextInvalid) {
+			return nil, &projectDesignSystemRequestError{status: http.StatusUnprocessableEntity, code: "design_context_invalid", message: "saved design system is invalid"}
+		}
+		return nil, projectDesignSystemInternalError("design_context_failed", "failed to resolve design context")
+	}
+	if projectResourceID.Valid {
+		if resolved.Source != service.DesignContextSourceCloudSavedRepository {
+			return nil, &projectDesignSystemRequestError{status: http.StatusUnprocessableEntity, code: "repository_design_system_required", message: "this repository has no saved design system"}
+		}
+		if resolved.Package == nil || resolved.Package.ProjectResourceID != uuidToString(projectResourceID) || resolved.Package.ProjectID != uuidToString(projectID) {
+			return nil, &projectDesignSystemRequestError{status: http.StatusUnprocessableEntity, code: "repository_design_system_required", message: "the repository's exact saved design system is required"}
+		}
+		if designSystemID != "" && resolved.Package.DesignSystemID != designSystemID {
+			return nil, &projectDesignSystemRequestError{status: http.StatusUnprocessableEntity, code: "repository_design_system_required", message: "the selected design system is not this repository's saved design system"}
+		}
+	}
+	if !projectResourceID.Valid && designSystemID != "" && resolved.Package != nil && resolved.Package.ProjectID != uuidToString(projectID) {
+		return nil, &projectDesignSystemRequestError{status: http.StatusUnprocessableEntity, code: "design_context_invalid", message: "chosen design system belongs to another project"}
+	}
+	return &resolved, nil
+}
+
+// designDocumentPinnedContext returns the server-derived context frozen in a
+// document snapshot, or a bounded legacy fallback for no-repository documents.
+// Repository-bound snapshots cannot operate without provenance: compatibility
+// would silently turn a missing/tampered pinned package into current-state
+// fallback.
+func designDocumentPinnedContext(document db.DesignDocument, input designDocumentInputSnapshot) (service.ResolvedDesignContext, error) {
+	invalid := &projectDesignSystemRequestError{
+		status: http.StatusUnprocessableEntity, code: "design_context_invalid",
+		message: "the stored repository design context is missing or invalid",
+	}
+	if input.DesignSystemChoice != "" {
+		if input.ResolvedDesignContext == nil || input.ResolvedDesignContext.ProjectID != uuidToString(document.ProjectID) {
+			return service.ResolvedDesignContext{}, invalid
+		}
+		pinned := *input.ResolvedDesignContext
+		switch input.DesignSystemChoice {
+		case "none":
+			if input.DesignSystemID != "" || pinned.Source != service.DesignContextSourceNone || pinned.Package != nil || pinned.Builtin != nil || pinned.Digest != "" {
+				return service.ResolvedDesignContext{}, invalid
+			}
+		case "selected":
+			if pinned.Package == nil || pinned.Package.DesignSystemID != input.DesignSystemID || pinned.Digest == "" || pinned.Package.SavedPackageID == "" || pinned.Package.ArchiveObjectKey == "" {
+				return service.ResolvedDesignContext{}, invalid
+			}
+		default:
+			return service.ResolvedDesignContext{}, invalid
+		}
+		return pinned, nil
+	}
+	if document.ProjectResourceID.Valid {
+		if input.ResolvedDesignContext == nil {
+			return service.ResolvedDesignContext{}, invalid
+		}
+		contextValue := *input.ResolvedDesignContext
+		if contextValue.Source != service.DesignContextSourceCloudSavedRepository || contextValue.Package == nil ||
+			contextValue.ProjectID != uuidToString(document.ProjectID) || contextValue.Package.Scope != service.DesignContextScopeRepository ||
+			contextValue.Package.ProjectID != uuidToString(document.ProjectID) ||
+			contextValue.Package.ProjectResourceID != uuidToString(document.ProjectResourceID) ||
+			contextValue.Digest == "" || contextValue.Package.DesignSystemID == "" ||
+			contextValue.Package.SavedPackageID == "" || contextValue.Package.ArchiveObjectKey == "" {
+			return service.ResolvedDesignContext{}, invalid
+		}
+		return contextValue, nil
+	}
+	if input.ResolvedDesignContext == nil {
+		return service.ResolvedDesignContext{}, nil
+	}
+	return *input.ResolvedDesignContext, nil
+}
+
 func (h *Handler) designDocumentGenerateTaskContext(
 	ctx context.Context,
 	queries *db.Queries,
@@ -747,53 +966,11 @@ func (h *Handler) designDocumentGenerateTaskContext(
 	inputJSON []byte,
 	attachments []designDocumentAttachmentSnapshot,
 ) ([]byte, error) {
-	// Pin the design system the agent must design under: the user's explicit
-	// choice when there is one (DC-060), otherwise the repository -> project
-	// fallback (DC-052).
-	designSystemUUID := pgtype.UUID{}
-	if input.DesignSystemID != "" {
-		parsed, err := util.ParseUUID(input.DesignSystemID)
-		if err != nil {
-			return nil, &projectDesignSystemRequestError{
-				status: http.StatusBadRequest, code: "design_system_invalid", message: "design_system_id is invalid",
-			}
-		}
-		designSystemUUID = parsed
-	}
-	var builtinContext *service.BuiltinDesignContext
-	if input.BuiltinDesignSystem != "" {
-		detail, found, err := designsystemcatalogue.Get(input.BuiltinDesignSystem)
-		if err != nil {
-			return nil, projectDesignSystemInternalError("design_context_failed", "failed to load the built-in design system")
-		}
-		if !found {
-			return nil, &projectDesignSystemRequestError{
-				status: http.StatusNotFound, code: "design_system_not_found", message: "built-in design system not found",
-			}
-		}
-		builtinContext = &service.BuiltinDesignContext{
-			Slug:           detail.Slug,
-			Name:           detail.Name,
-			Category:       detail.Category,
-			DesignMarkdown: detail.DesignMarkdown,
-			TokensCSS:      detail.TokensCSS,
-		}
-	}
-	designContext, err := (service.ProjectDesignContextResolver{
-		Store:        queries,
-		AllowedHosts: h.projectDesignSystemAllowedHosts(),
-	}).Resolve(ctx, service.ResolveProjectDesignContextParams{
-		WorkspaceID:       workspaceID,
-		ProjectID:         projectID,
-		ProjectResourceID: projectResourceID,
-		DesignSystemID:    designSystemUUID,
-		Builtin:           builtinContext,
-	})
+	designContext, err := designDocumentPinnedContext(db.DesignDocument{
+		ProjectID: projectID, ProjectResourceID: projectResourceID,
+	}, input)
 	if err != nil {
-		if errors.Is(err, service.ErrSavedDesignContextInvalid) {
-			return nil, &projectDesignSystemRequestError{status: http.StatusUnprocessableEntity, code: "design_context_invalid", message: "saved design system is invalid"}
-		}
-		return nil, projectDesignSystemInternalError("design_context_failed", "failed to resolve design context")
+		return nil, err
 	}
 	designContextJSON, err := json.Marshal(designContext)
 	if err != nil {
@@ -839,7 +1016,7 @@ func (h *Handler) designDocumentGenerateTaskContext(
 		PackageSchema:       designDocumentPackageSchema,
 		InputSnapshotSHA256: inputDigest,
 		ExecutionReady:      true,
-		Input:               designDocumentGenerateInput(projectResourceID.Valid, attachments),
+		Input:               designDocumentGenerateInput(projectResourceID.Valid, attachments, designContext),
 	})
 	if err != nil {
 		return nil, projectDesignSystemInternalError("context_failed", "failed to build agent task context")
@@ -851,15 +1028,20 @@ func (h *Handler) designDocumentGenerateTaskContext(
 // (DC-053): a repository was attached, so the daemon checks it out and grounds
 // the run against it; or none was, so the daemon records explicitly that no
 // code was read and the agent designs from the requirement alone.
-func designDocumentGenerateInput(repositoryAttached bool, attachments []designDocumentAttachmentSnapshot) service.DesignDocumentTaskInput {
+func designDocumentGenerateInput(repositoryAttached bool, attachments []designDocumentAttachmentSnapshot, designContext service.ResolvedDesignContext) service.DesignDocumentTaskInput {
 	mode := service.DesignDocumentGroundingUnavailable
 	if repositoryAttached {
 		mode = service.DesignDocumentGroundingPending
+	}
+	var designSystem *service.DesignDocumentDesignSystemReference
+	if designContext.Package != nil && designContext.Digest != "" {
+		designSystem = &service.DesignDocumentDesignSystemReference{ContentDigest: designContext.Digest}
 	}
 	return service.DesignDocumentTaskInput{
 		SchemaVersion:       service.DesignDocumentInputSchema,
 		RepositoryGrounding: mode,
 		Attachments:         designDocumentTaskAttachments(attachments),
+		DesignSystem:        designSystem,
 	}
 }
 

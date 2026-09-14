@@ -13,6 +13,7 @@ import {
   SwatchBook,
 } from "lucide-react";
 import { api } from "@multica/core/api";
+import { designKeys } from "@multica/core/designs/keys";
 import {
   builtinDesignSystemDetailOptions,
   builtinDesignSystemListOptions,
@@ -24,9 +25,7 @@ import type {
   BuiltinDesignSystem,
   BuiltinDesignSystemArtifact,
   BuiltinDesignSystemDetail,
-  ProjectDesignSystem,
   ProjectDesignSystemCatalogueEntry,
-  ProjectDesignSystemTokenGroup,
 } from "@multica/core/types";
 import { Badge } from "@multica/ui/components/ui/badge";
 import { Button } from "@multica/ui/components/ui/button";
@@ -44,12 +43,12 @@ import { builtinDesignSystemLogoURL } from "./design-system-domains";
 import { DesignFilterPill } from "./design-filter-pill";
 import { DesignFilterSelect } from "./design-filter-select";
 import { PLATFORM_OPTIONS } from "./design-task-composer";
+import { ProjectDesignSystemPreview } from "./project-design-system-preview";
 
 /**
- * Ownership scope. Only `team` has data: a design system belongs to a project
- * in this workspace, and neither an author nor an official publisher exists on
- * the catalogue payload. The other two scopes therefore say why they are empty
- * instead of borrowing the workspace's systems and calling them something else.
+ * Ownership scope. Saved project and repository systems remain one canonical
+ * record; the catalogue projects them into 我的 when the current requester
+ * created them, or 团队 when another workspace member did.
  */
 type LibraryScope = "mine" | "team" | "official";
 
@@ -60,8 +59,8 @@ const SCOPE_LABELS: ReadonlyArray<{ value: LibraryScope; label: string }> = [
 ];
 
 const SCOPE_EMPTY_COPY: Record<LibraryScope, string> = {
-  mine: "设计体系归属项目，目前没有按个人归属的体系。你在项目里创建的体系会出现在「团队」中。",
-  team: "工作区还没有已保存的设计体系。在项目的「设计体系」里生成一套，保存后就会出现在这里。",
+  mine: "这里还没有你保存的设计体系。在项目或仓库中保存后，会作为同一套体系出现在这里。",
+  team: "其他工作区成员还没有保存可共享的设计体系。",
   official: "没有匹配的官方设计体系。",
 };
 
@@ -108,182 +107,59 @@ function RowPaletteMark({ swatches, seed }: { swatches: string[]; seed: string }
   );
 }
 
-// Every saved system in the catalogue belongs to a project of this workspace,
-// and the payload carries no author or publisher. Splitting "mine" or "official"
-// out of it would be invention, so both stay empty until the data exists.
-function scopeOf(_entry: ProjectDesignSystemCatalogueEntry): LibraryScope {
-  return "team";
-}
-
-function looksLikeColor(value: string): boolean {
-  return /^\s*(#[0-9a-f]{3,8}|(rgb|rgba|hsl|hsla|oklch|oklab|lab|lch|color)\()/i.test(value);
-}
-
-type TokenSection = "color" | "typography" | "shape" | "other";
-
-const SECTION_KEYWORDS: ReadonlyArray<{ section: TokenSection; pattern: RegExp }> = [
-  { section: "color", pattern: /(色|颜色|palette|colou?r|brand|accent|surface|semantic)/i },
-  { section: "typography", pattern: /(字|排版|font|typo|text|type\b|lead)/i },
-  { section: "shape", pattern: /(圆角|阴影|描边|radius|shadow|elevation|border|stroke)/i },
-];
-
-/**
- * Which section of the detail panel a token group belongs to. The package
- * contract does not name these sections, so the label decides first and the
- * token values decide when the label says nothing.
- */
-function classifyTokenGroup(group: ProjectDesignSystemTokenGroup): TokenSection {
-  const haystack = `${group.label} ${group.id}`;
-  for (const { section, pattern } of SECTION_KEYWORDS) {
-    if (pattern.test(haystack)) return section;
-  }
-  const colorTokens = group.tokens.filter((token) => looksLikeColor(token.value)).length;
-  if (group.tokens.length > 0 && colorTokens * 2 >= group.tokens.length) return "color";
-  return "other";
-}
-
-function SectionCard({
-  title,
-  count,
-  children,
-}: {
-  title: string;
-  count?: number;
-  children: React.ReactNode;
-}) {
-  return (
-    <section className="rounded-xl border bg-card p-4">
-      <div className="flex items-center gap-2 text-caption font-medium text-muted-foreground">
-        <span>{title}</span>
-        {typeof count === "number" ? <span className="font-mono tabular-nums">{count}</span> : null}
-      </div>
-      <div className="mt-3">{children}</div>
-    </section>
-  );
-}
-
-function SectionEmpty({ children }: { children: React.ReactNode }) {
-  return <p className="text-caption text-muted-foreground">{children}</p>;
-}
-
-function ColorSection({ groups }: { groups: ProjectDesignSystemTokenGroup[] }) {
-  const tokens = groups.flatMap((group) => group.tokens);
-  return (
-    <SectionCard title="色彩" count={tokens.length || undefined}>
-      {tokens.length === 0 ? (
-        <SectionEmpty>这套体系还没有色彩令牌。</SectionEmpty>
-      ) : (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-5">
-          {tokens.slice(0, 20).map((token) => (
-            <div key={token.name} className="min-w-0">
-              <span
-                className="block h-10 rounded-lg border"
-                // The swatch is the system's own token value, not a palette of
-                // ours — showing it any other colour would be showing a lie.
-                style={{ background: token.value }}
-                title={`${token.name}: ${token.value}`}
-              />
-              <span className="mt-1.5 block truncate font-mono text-micro text-muted-foreground">
-                {token.name}
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
-    </SectionCard>
-  );
-}
-
-function TokenRowsSection({
-  title,
-  groups,
-  emptyCopy,
-}: {
-  title: string;
-  groups: ProjectDesignSystemTokenGroup[];
-  emptyCopy: string;
-}) {
-  const tokens = groups.flatMap((group) => group.tokens);
-  return (
-    <SectionCard title={title} count={tokens.length || undefined}>
-      {tokens.length === 0 ? (
-        <SectionEmpty>{emptyCopy}</SectionEmpty>
-      ) : (
-        <dl className="flex flex-col gap-2">
-          {tokens.slice(0, 12).map((token) => (
-            <div key={token.name} className="flex min-w-0 items-baseline justify-between gap-3">
-              <dt className="min-w-0 truncate font-mono text-caption text-foreground">{token.name}</dt>
-              <dd className="min-w-0 shrink-0 truncate font-mono text-micro text-muted-foreground">
-                {token.value}
-              </dd>
-            </div>
-          ))}
-        </dl>
-      )}
-    </SectionCard>
-  );
-}
-
-function ComponentSection({ system }: { system: ProjectDesignSystem }) {
-  const locators = system.content.locators ?? [];
-  return (
-    <SectionCard title="组件" count={locators.length || undefined}>
-      {locators.length === 0 ? (
-        <SectionEmpty>这套体系还没有登记组件或区块。</SectionEmpty>
-      ) : (
-        <div className="flex flex-wrap gap-1.5">
-          {locators.slice(0, 24).map((locator) => (
-            <Badge key={locator.id} variant="outline" className="max-w-52 px-1.5 text-micro font-normal">
-              <span className="truncate">{locator.label || locator.id}</span>
-            </Badge>
-          ))}
-        </div>
-      )}
-    </SectionCard>
-  );
+function scopeOf(entry: ProjectDesignSystemCatalogueEntry): LibraryScope {
+  return entry.ownership_scope ?? "team";
 }
 
 function SystemDetail({
   entry,
-  onOpenProject,
+  onOpenSystem,
 }: {
   entry: ProjectDesignSystemCatalogueEntry;
-  onOpenProject: (projectId: string) => void;
+  onOpenSystem: (entry: ProjectDesignSystemCatalogueEntry) => void;
 }) {
   const wsId = useWorkspaceId();
   const { data: system, isLoading, error } = useQuery(projectDesignSystemDetailOptions(wsId, entry.id));
-
-  const groups = useMemo(() => {
-    const buckets: Record<TokenSection, ProjectDesignSystemTokenGroup[]> = {
-      color: [],
-      typography: [],
-      shape: [],
-      other: [],
-    };
-    for (const group of system?.content.token_groups ?? []) {
-      buckets[classifyTokenGroup(group)].push(group);
+  const archivePreview = useQuery({
+    queryKey: [
+      ...designKeys.projectDesignSystemPackagePreview(wsId, entry.id),
+      system?.preview_validation.integrity_sha256 || "saved",
+    ],
+    queryFn: () => api.getProjectDesignSystemPackagePreview(entry.id),
+    enabled: Boolean(system?.id && system.preview_validation.status === "passed"),
+    retry: false,
+  });
+  const archiveTargets = useMemo(() => {
+    const preview = archivePreview.data;
+    if (!preview?.content_digest || !preview.targets.length) return [];
+    try {
+      return preview.targets.map((target) => ({
+        ...target,
+        url: api.getProjectDesignSystemPackagePreviewFileURL(
+          entry.id,
+          wsId,
+          preview.content_digest,
+          preview.resource_access_token,
+          target.path,
+        ),
+      }));
+    } catch {
+      return [];
     }
-    return buckets;
-  }, [system]);
+  }, [archivePreview.data, entry.id, wsId]);
 
-  // A saved catalogue entry can be under adjustment by the time it is opened,
-  // and only the detail payload knows that.
   const isDraft = system?.status === "draft" || system?.has_unsaved_changes === true;
-  const scopedToRepository = Boolean(entry.project_resource_id);
+  const scopedToRepository = Boolean(entry.workspace_repository_id || entry.project_resource_id);
 
   return (
-    <div className="flex min-w-0 flex-col gap-4">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-4">
       <header className="flex min-w-0 flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 flex-1 basis-60">
           <div className="flex min-w-0 flex-wrap items-center gap-2">
             <h2 className="min-w-0 break-words text-title font-semibold">
               {entry.name.trim() || "未命名设计体系"}
             </h2>
-            {isDraft ? (
-              <Badge variant="secondary" className="shrink-0 px-1.5 text-micro font-normal">
-                草稿
-              </Badge>
-            ) : null}
+            {isDraft ? <Badge variant="secondary" className="shrink-0 px-1.5 text-micro font-normal">草稿</Badge> : null}
             <Badge variant="outline" className="shrink-0 gap-1 px-1.5 text-micro font-normal">
               {scopedToRepository ? <GitBranch className="size-3" /> : <Package className="size-3" />}
               {scopedToRepository ? "仓库专属" : "项目通用"}
@@ -295,52 +171,30 @@ function SystemDetail({
               : `独立设计体系 · ${platformLabel(entry.platform)}`}
           </p>
         </div>
-        {entry.project_id ? (
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            className="h-7 shrink-0"
-            onClick={() => onOpenProject(entry.project_id)}
-          >
-            <FolderOpen className="size-3.5" />
-            打开项目
-          </Button>
-        ) : null}
+        <Button type="button" size="sm" variant="outline" className="h-7 shrink-0" onClick={() => onOpenSystem(entry)}>
+          {scopedToRepository ? <GitBranch className="size-3.5" /> : entry.project_id ? <FolderOpen className="size-3.5" /> : <ExternalLink className="size-3.5" />}
+          {scopedToRepository ? "打开仓库" : entry.project_id ? "打开项目" : "打开体系"}
+        </Button>
       </header>
 
       {isLoading ? (
-        <div className="grid gap-3 lg:grid-cols-2">
-          {Array.from({ length: 4 }).map((_, index) => (
-            <Skeleton key={index} className="h-40 w-full rounded-xl" />
-          ))}
-        </div>
+        <Skeleton className="min-h-[520px] w-full flex-1 rounded-xl" />
       ) : error || !system ? (
-        <div className="rounded-xl border border-dashed px-4 py-8 text-center text-body text-muted-foreground">
-          无法加载这套设计体系的内容。
-        </div>
+        <div className="rounded-xl border border-dashed px-4 py-12 text-center text-body text-muted-foreground">无法加载这套设计体系的内容。</div>
       ) : (
-        <div className="grid gap-3 lg:grid-cols-2">
-          <ColorSection groups={groups.color} />
-          <TokenRowsSection
-            title="字体与字号"
-            groups={groups.typography}
-            emptyCopy="这套体系还没有字体与字号令牌。"
+        <section className="flex min-h-[520px] flex-1 flex-col overflow-hidden rounded-xl border bg-white" aria-label="已保存设计体系 UI Kit">
+          <ProjectDesignSystemPreview
+            previewHtml={system.content.preview_html}
+            archiveTargets={archiveTargets}
+            platform={system.platform}
+            locators={system.content.locators}
+            integritySha256={system.content.integrity_sha256}
+            selectionEnabled={false}
+            packageSchema={system.content.package_schema}
+            onVerification={() => {}}
+            onSelect={() => {}}
           />
-          <ComponentSection system={system} />
-          <TokenRowsSection
-            title="圆角与阴影"
-            groups={groups.shape}
-            emptyCopy="这套体系还没有圆角与阴影令牌。"
-          />
-          {groups.other.length > 0 ? (
-            <TokenRowsSection
-              title="其他令牌"
-              groups={groups.other}
-              emptyCopy="没有其他令牌。"
-            />
-          ) : null}
-        </div>
+        </section>
       )}
     </div>
   );
@@ -877,11 +731,11 @@ function CreateDesignSystemButton({ onCreate }: { onCreate: () => void }) {
  * workspace default that projects would inherit (DC-052 / migration §4.7).
  */
 export function DesignSystemLibrary({
-  onOpenProject,
+  onOpenSystem,
   onCreate,
 }: {
-  /** Opens the project that owns a system, where it can be edited. */
-  onOpenProject: (projectId: string) => void;
+  /** Opens the exact project, repository or standalone scope that owns a system. */
+  onOpenSystem: (entry: ProjectDesignSystemCatalogueEntry) => void;
   /** Opens the standalone creation page. */
   onCreate: () => void;
 }) {
@@ -892,6 +746,7 @@ export function DesignSystemLibrary({
   // 官方 opens first: a workspace starts with no saved systems of its own,
   // and the bundled catalogue is the scope that always has something to show.
   const [scope, setScope] = useState<LibraryScope>("official");
+  const [scopeSelectedByUser, setScopeSelectedByUser] = useState(false);
   const [platform, setPlatform] = useState<string>(ALL_PLATFORMS);
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState("");
@@ -899,6 +754,10 @@ export function DesignSystemLibrary({
   // The official scope is served by the bundled catalogue, so its count comes
   // from there rather than from the workspace's saved systems.
   const { data: builtinSystems = [] } = useQuery(builtinDesignSystemListOptions(wsId));
+  useEffect(() => {
+    if (scopeSelectedByUser) return;
+    setScope(entries.some((entry) => scopeOf(entry) === "mine") ? "mine" : "official");
+  }, [entries, scopeSelectedByUser]);
   const scopeCounts = useMemo(() => {
     const counts: Record<LibraryScope, number> = { mine: 0, team: 0, official: builtinSystems.length };
     for (const entry of entries) counts[scopeOf(entry)] += 1;
@@ -940,6 +799,7 @@ export function DesignSystemLibrary({
               count={scopeCounts[option.value]}
               selected={scope === option.value}
               onClick={() => {
+                setScopeSelectedByUser(true);
                 setScope(option.value);
                 setPlatform(ALL_PLATFORMS);
                 setSelectedId("");
@@ -1011,7 +871,7 @@ export function DesignSystemLibrary({
 
           <section className="min-w-0 flex-1 overflow-y-auto p-4 lg:p-5">
             {selected ? (
-              <SystemDetail entry={selected} onOpenProject={onOpenProject} />
+              <SystemDetail entry={selected} onOpenSystem={onOpenSystem} />
             ) : (
               <Empty className="border py-12">
                 <EmptyHeader>

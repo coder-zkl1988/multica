@@ -3,6 +3,8 @@ package execenv
 import (
 	"strings"
 	"testing"
+
+	"github.com/multica-ai/multica/server/internal/designimplementation"
 )
 
 // TestClassifyTask pins the precedence rule on classifyTask. All four
@@ -17,6 +19,7 @@ func TestClassifyTask(t *testing.T) {
 		{"chat", TaskContextForEnv{ChatSessionID: "c"}, kindChat},
 		{"quick-create", TaskContextForEnv{QuickCreatePrompt: "p"}, kindQuickCreate},
 		{"autopilot", TaskContextForEnv{AutopilotRunID: "r"}, kindAutopilotRunOnly},
+		{"design-implementation", TaskContextForEnv{DesignImplementation: &designimplementation.TaskIdentity{DesignRef: "d"}}, kindDesignImplementation},
 		{"issue-comment-triggered", TaskContextForEnv{IssueID: "i", TriggerCommentID: "c"}, kindIssue},
 		{"issue-assignment-triggered", TaskContextForEnv{IssueID: "i"}, kindIssue},
 		{"issue-bare", TaskContextForEnv{}, kindIssue},
@@ -47,6 +50,7 @@ func TestTaskKindHasIssueContext(t *testing.T) {
 		{kindAutopilotRunOnly, false},
 		{kindQuickCreate, false},
 		{kindChat, false},
+		{kindDesignImplementation, false},
 	}
 	for _, tc := range cases {
 		if got := tc.kind.hasIssueContext(); got != tc.want {
@@ -127,7 +131,7 @@ func TestBuildMetaSkillContentSlimKindMatrix(t *testing.T) {
 	}
 	allKinds := map[taskKind]bool{
 		kindIssue: true, kindAutopilotRunOnly: true,
-		kindQuickCreate: true, kindChat: true,
+		kindQuickCreate: true, kindChat: true, kindDesignImplementation: true,
 	}
 	issueKinds := map[taskKind]bool{kindIssue: true}
 	checks := []sectionCheck{
@@ -141,7 +145,7 @@ func TestBuildMetaSkillContentSlimKindMatrix(t *testing.T) {
 		{"## Output", allKinds},
 		{"## Comment Formatting", issueKinds},
 		{"## Repositories", map[taskKind]bool{
-			kindIssue: true, kindAutopilotRunOnly: true, kindChat: true,
+			kindIssue: true, kindAutopilotRunOnly: true, kindChat: true, kindDesignImplementation: true,
 		}},
 		{"## Instruction Precedence", issueKinds},
 		{"## Sub-issue Creation", issueKinds},
@@ -161,6 +165,8 @@ func TestBuildMetaSkillContentSlimKindMatrix(t *testing.T) {
 			Repos: baseRepo, AgentSkills: baseSkill},
 		kindIssue: {IssueID: "i-1", AgentName: "Eve", AgentID: "eve-1",
 			Repos: baseRepo, AgentSkills: baseSkill},
+		kindDesignImplementation: {IssueID: "i-1", AgentName: "Eve", AgentID: "eve-1",
+			Repos: baseRepo, AgentSkills: baseSkill, DesignImplementation: &designimplementation.TaskIdentity{DesignRef: "d"}},
 	}
 
 	for kind, ctx := range fixtures {
@@ -176,6 +182,28 @@ func TestBuildMetaSkillContentSlimKindMatrix(t *testing.T) {
 			if !want && present {
 				t.Errorf("kind=%d: heading %q should NOT be in slim brief (matrix gating regression)", kind, c.heading)
 			}
+		}
+	}
+}
+
+func TestDesignImplementationWorkflowCapturesResultWithoutIssueSideEffects(t *testing.T) {
+	out := buildMetaSkillContent("codex", TaskContextForEnv{
+		IssueID: "issue-1", DesignImplementation: &designimplementation.TaskIdentity{DesignRef: "design-1"},
+	})
+	for _, want := range []string{
+		"server-managed design implementation task",
+		"Do NOT call `multica issue get`, `multica issue comment add`, or `multica issue status`",
+		"Do not create a local commit, push, PR, or merge",
+		"do not create or upload screenshots, recordings, or traces",
+		"implementation-result.json",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("design implementation workflow missing %q", want)
+		}
+	}
+	for _, banned := range []string{"\n## Comment Formatting\n", "\n## Issue Metadata\n", "\n## Mentions\n", "\n## Attachments\n", "Post exactly ONE comment per run"} {
+		if strings.Contains(out, banned) {
+			t.Errorf("design implementation workflow contains issue side-effect guidance %q", banned)
 		}
 	}
 }

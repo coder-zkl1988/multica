@@ -2,8 +2,6 @@ package handler
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -31,13 +29,6 @@ type projectDesignSystemPackagePreviewResponse struct {
 	ResourceAccessToken     string                              `json:"resource_access_token"`
 	ResourceAccessExpiresAt string                              `json:"resource_access_expires_at"`
 	Targets                 []projectdesignsystem.PreviewTarget `json:"targets"`
-}
-
-type nativeBasePackageReference struct {
-	Schema          string `json:"schema"`
-	Slot            string `json:"slot"`
-	IntegritySHA256 string `json:"integrity_sha256"`
-	SourceTaskID    string `json:"source_task_id"`
 }
 
 func (h *Handler) GetProjectDesignSystemPackagePreview(w http.ResponseWriter, r *http.Request) {
@@ -157,9 +148,8 @@ func (h *Handler) DownloadProjectDesignSystemBasePackage(w http.ResponseWriter, 
 		writeNativeBasePackageUnavailable(w)
 		return
 	}
-	var reference nativeBasePackageReference
-	if json.Unmarshal(taskContext.BasePackage, &reference) != nil || reference.Schema != projectdesignsystem.PackageSchemaV2 ||
-		reference.Slot == "" || !validNativePackageDigest("sha256:"+reference.IntegritySHA256) || reference.SourceTaskID == "" {
+	var reference projectdesignsystem.BasePackageReference
+	if json.Unmarshal(taskContext.BasePackage, &reference) != nil || projectdesignsystem.ValidateBasePackageReference(reference) != nil {
 		if isOpenDesignBasePackage(taskContext.BasePackage) {
 			h.DownloadOpenDesignBaseArchive(w, r)
 			return
@@ -183,23 +173,23 @@ func (h *Handler) DownloadProjectDesignSystemBasePackage(w http.ResponseWriter, 
 		return
 	}
 	selected, err := h.Queries.GetProjectDesignSystemPackageBySlot(r.Context(), db.GetProjectDesignSystemPackageBySlotParams{DesignSystemID: system.ID, Slot: reference.Slot, WorkspaceID: system.WorkspaceID})
-	if err != nil || selected.PackageSchema != projectdesignsystem.PackageSchemaV2 || selected.IntegritySha256 != reference.IntegritySHA256 ||
+	if err != nil || selected.PackageSchema != projectdesignsystem.PackageSchemaV2 || "sha256:"+selected.IntegritySha256 != reference.ContentDigest ||
 		!selected.SourceTaskID.Valid || uuidToString(selected.SourceTaskID) != reference.SourceTaskID {
 		writeNativeBasePackageUnavailable(w)
 		return
 	}
 	manifest, archive, err := h.loadNativeProjectDesignSystemPackageArchive(r.Context(), system, selected)
-	if err != nil || manifest.ContentDigest != "sha256:"+reference.IntegritySHA256 {
+	if err != nil || manifest.ContentDigest != reference.ContentDigest || manifest.Binding != reference.Binding {
 		writeNativeBasePackageUnavailable(w)
 		return
 	}
-	w.Header().Set("Content-Type", nativePackageArchiveContentType)
+	w.Header().Set("Content-Type", projectdesignsystem.BasePackageArchiveContentType)
 	w.Header().Set("Content-Length", strconv.Itoa(len(archive)))
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set(nativePackageDigestHeader, manifest.ContentDigest)
-	w.Header().Set("X-Multica-Design-Package-Slot", reference.Slot)
-	w.Header().Set("X-Multica-Design-Package-Source-Task-ID", reference.SourceTaskID)
+	w.Header().Set(projectdesignsystem.BasePackageDigestHeader, manifest.ContentDigest)
+	w.Header().Set(projectdesignsystem.BasePackageSlotHeader, reference.Slot)
+	w.Header().Set(projectdesignsystem.BasePackageSourceTaskHeader, reference.SourceTaskID)
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(archive)
 }
@@ -351,29 +341,15 @@ func nativePackagePreviewContentType(artifactPath string) (string, bool) {
 }
 
 func nativePackagePreviewBridgeScript(capability string) string {
-	return "(()=>{const capability=" + strconv.Quote(capability) + ";document.addEventListener(\"click\",event=>{const target=event.target;const node=target instanceof Element?target.closest(\"[data-design-node-id]\"):null;if(!node)return;event.preventDefault();parent.postMessage({type:\"multica:project-design-system-select\",id:node.dataset.designNodeId,capability},\"*\")})})();"
+	return projectdesignsystem.RuntimePreviewBridgeScript(capability)
 }
 
 func nativePackagePreviewCSP(capability string) string {
-	digest := sha256.Sum256([]byte(nativePackagePreviewBridgeScript(capability)))
-	return "default-src 'self' data:; script-src 'sha256-" + base64.StdEncoding.EncodeToString(digest[:]) + "'; connect-src 'none'; object-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'"
+	return projectdesignsystem.RuntimePreviewCSP(nativePackagePreviewBridgeScript(capability))
 }
 
 func injectNativePackagePreviewBridge(html []byte, capability string) []byte {
-	body := string(html)
-	const link = `<link rel="stylesheet" href="tokens.css">`
-	script := "<script>" + nativePackagePreviewBridgeScript(capability) + "</script>"
-	if index := strings.Index(body, "</head>"); index >= 0 {
-		body = body[:index] + link + body[index:]
-	} else {
-		body = link + body
-	}
-	if index := strings.Index(body, "</body>"); index >= 0 {
-		body = body[:index] + script + body[index:]
-	} else {
-		body += script
-	}
-	return []byte(body)
+	return projectdesignsystem.InjectRuntimePreviewHTML(html, nativePackagePreviewBridgeScript(capability))
 }
 
 func isOpenDesignBasePackage(raw json.RawMessage) bool {

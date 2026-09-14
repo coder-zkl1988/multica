@@ -5,12 +5,16 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Bot,
   Check,
+  ChevronDown,
+  ChevronRight,
   CircleAlert,
+  FileCode2,
   LoaderCircle,
   MoreHorizontal,
   RefreshCcw,
   Save,
   SlidersHorizontal,
+  Sparkles,
   Target,
   Trash2,
   X,
@@ -54,16 +58,14 @@ import {
 import { Textarea } from "@multica/ui/components/ui/textarea";
 import { ReadonlyContent } from "../editor";
 import { ProjectDesignSystemPreview } from "./project-design-system-preview";
+import "./open-design-system-workspace.css";
 import {
   ProjectDesignSystemTaskActivity,
   taskStatusLabel,
 } from "./project-design-system-task-activity";
 
-const PLATFORM_LABELS: Record<string, string> = {
-  web: "Web",
-  mobile: "移动端",
-  cross_platform: "跨端",
-};
+
+
 
 const TOKEN_GROUP_LABELS: Record<string, string> = {
   ref: "基础 Token",
@@ -72,6 +74,15 @@ const TOKEN_GROUP_LABELS: Record<string, string> = {
   system: "语义 Token",
   cmp: "组件 Token",
   component: "组件 Token",
+  color: "色彩 Token",
+  font: "字体 Token",
+  typography: "字体 Token",
+  line: "行高 Token",
+  spacing: "间距 Token",
+  space: "间距 Token",
+  radius: "圆角 Token",
+  control: "控件尺寸 Token",
+  shadow: "阴影 Token",
 };
 
 // The standalone detail page reuses these for its generating/failed branches.
@@ -302,6 +313,9 @@ function updateSystemCache(
   system: ProjectDesignSystem,
 ) {
   queryClient.setQueryData(designKeys.projectDesignSystem(wsId, system.id), system);
+  if (system.workspace_repository_id) {
+    queryClient.setQueryData(designKeys.projectDesignSystemByWorkspaceRepository(wsId, system.workspace_repository_id), system);
+  }
   // Refresh every repository scope currently showing this system instead of
   // one rebuilt key: a repository without its own system reads the
   // project-level one, so the cached scope is not derivable from the
@@ -426,7 +440,9 @@ function AdjustmentPanel({
       {regenerateConfirmation ? (
         <section className="border-t py-5">
           <div role="alert" className="border-l-2 border-amber-500 bg-amber-500/5 px-3 py-2 text-caption leading-5">
-            已保存内容会继续保留，新的结果将先成为草稿。
+            {system.workspace_repository_id || system.project_resource_id
+              ? "将重新生成一套设计体系。已保存内容继续保留，新结果先成为草稿。"
+              : "已保存内容会继续保留，新的结果将先成为草稿。"}
           </div>
           <div className="mt-3 flex gap-2">
             <Button type="button" size="sm" variant="outline" className="flex-1" onClick={onCancelRegenerate}>
@@ -498,6 +514,13 @@ export function ProjectDesignSystemCanvas({
   const [adjustmentOpen, setAdjustmentOpen] = useState(false);
   const [verificationAttempt, setVerificationAttempt] = useState(0);
   const [verificationError, setVerificationError] = useState<string | null>(null);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [reviewTab, setReviewTab] = useState<"kit" | "files">("kit");
+  const [openReviewSections, setOpenReviewSections] = useState<Set<string>>(() => new Set([
+    ...system.content.sections.map((section) => `section:${section.id}`),
+    ...system.content.token_groups.map((group) => `tokens:${group.id}`),
+    "ui-kit",
+  ]));
 
   const overriddenAgentId = agentOverrides[system.id];
   const selectedAgentId = Object.prototype.hasOwnProperty.call(agentOverrides, system.id)
@@ -505,6 +528,7 @@ export function ProjectDesignSystemCanvas({
     : system.current_agent_id ?? "";
   const selectedAgent = agents.find((agent) => agent.id === selectedAgentId);
   const isBusy = Boolean(system.active_task || system.status === "generating");
+  const repositoryScoped = Boolean(system.workspace_repository_id || system.project_resource_id);
 
   const archivePreview = useQuery({
     queryKey: [
@@ -581,7 +605,8 @@ export function ProjectDesignSystemCanvas({
     onMutate: () => setActionError(null),
     onSuccess: (updated) => {
       updateSystemCache(queryClient, wsId, updated);
-      toast.success("已保存为项目设计体系");
+      void queryClient.invalidateQueries({ queryKey: designKeys.projectDesignSystemCatalogue(wsId) });
+      toast.success(updated.workspace_repository_id || updated.project_resource_id ? "已保存为仓库设计体系" : "已保存为项目设计体系");
     },
     onError: (mutationError) => {
       const message = mutationError instanceof Error ? mutationError.message : "保存失败，请稍后重试。";
@@ -618,7 +643,6 @@ export function ProjectDesignSystemCanvas({
     },
   });
 
-  const selectedScopeLabel = scopeLabel(selectedScope, system);
   const canSave = Boolean(
     system.status === "draft"
       && system.has_unsaved_changes
@@ -626,9 +650,12 @@ export function ProjectDesignSystemCanvas({
       && !isBusy
       && !saveSystem.isPending,
   );
-  const saveActionLabel = system.saved_at ? "保存调整" : "保存为项目设计体系";
+  const saveActionLabel = system.saved_at
+    ? "保存调整"
+    : system.workspace_repository_id || system.project_resource_id
+      ? "保存为仓库设计体系"
+      : "保存为项目设计体系";
   const showSaveAction = !system.saved_at || system.has_unsaved_changes;
-  const showSystemTitle = Boolean(project ? system.name.trim() && system.name.trim() !== project.title.trim() : system.name.trim());
   const isDiscardingAdjustment = Boolean(system.saved_at);
   const discardDisabled = Boolean(
     isBusy
@@ -639,29 +666,23 @@ export function ProjectDesignSystemCanvas({
       || verifyPreview.isPending,
   );
 
-  const navigationItems = useMemo(() => {
-    return [
-      ...system.content.sections.map((section) => ({
-        id: `section-${section.id}`,
-        label: section.title,
-        scope: { kind: "section" as const, id: section.id },
-      })),
-      ...system.content.token_groups.map((group) => ({
-        id: `tokens-${group.id}`,
-        label: tokenGroupLabel(group),
-        scope: { kind: "token_group" as const, id: group.id },
-      })),
-    ];
-  }, [system]);
   const resolvedTokenValues = useMemo(
     () => resolveTokenValues(system.content.token_groups),
     [system.content.token_groups],
   );
 
-  const selectAndScroll = (scope: ProjectDesignSystemScope, targetId: string) => {
-    setSelectedScope(scope);
-    document.getElementById(targetId)?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+
+
+  const toggleReviewSection = (key: string) => {
+    setOpenReviewSections((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
   };
+
+
 
   const panel = (
     <AdjustmentPanel
@@ -695,213 +716,184 @@ export function ProjectDesignSystemCanvas({
   );
 
   return (
-    <div data-testid="project-design-system-canvas" className="flex h-full min-h-0 flex-1 flex-col bg-background">
-      <header className="shrink-0 border-b px-4 py-2 lg:px-6">
-        <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-            {showSystemTitle ? <h1 className="break-words text-body font-semibold">{system.name}</h1> : null}
-            <Badge variant="outline">{PLATFORM_LABELS[system.platform] ?? "未指定平台"}</Badge>
-            <Badge variant={system.status === "saved" ? "secondary" : "outline"}>{statusLabel(system)}</Badge>
-            {system.has_unsaved_changes ? <Badge variant="outline">有未保存更改</Badge> : null}
-            <span className="text-caption text-muted-foreground">最近更新 {formatDate(system.updated_at)}</span>
+    <div data-testid="project-design-system-canvas" className={`od-design-system-flow ds-workspace h-full ${system.active_task ? "" : "ds-workspace--single"}`}>
+      {system.active_task ? (
+        <aside className="ds-project-chat">
+          <div className="ds-project-chat__bar">
+            <span className="icon-only" aria-hidden><Bot className="size-4" /></span>
+            <strong>{system.name || project?.title || "设计体系"}</strong>
+            <span>{statusLabel(system)}</span>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              onClick={() => {
-                setSelectedScope({ kind: "all" });
-                setAdjustmentOpen(true);
-              }}
-            >
-              <SlidersHorizontal className="h-3.5 w-3.5" />
-              调整设计体系
-            </Button>
-            {showSaveAction ? (
+          <div className="ds-project-chat__pane">
+            <div className="ds-sidebar-stack">
+              <div className="ds-sidebar-card">
+                <ProjectDesignSystemTaskActivity system={system} agents={agents} compact />
+              </div>
+            </div>
+          </div>
+        </aside>
+      ) : null}
+
+      <main className="ds-review-main">
+        <header className="ds-review-tabs">
+          <Button type="button" variant="ghost" size="sm">
+            <Sparkles className="size-4" />
+            {system.name || "设计体系"}
+          </Button>
+          <div className="segmented" role="tablist" aria-label="设计体系审阅视图">
+            <button type="button" role="tab" aria-selected={reviewTab === "kit"} className={reviewTab === "kit" ? "active" : ""} onClick={() => { setReviewTab("kit"); setSelectionMode(false); }}>
+              在线 UI Kit
+            </button>
+            <button type="button" role="tab" aria-selected={reviewTab === "files"} className={reviewTab === "files" ? "active" : ""} onClick={() => { setReviewTab("files"); setSelectionMode(false); }}>
+              设计文件
+            </button>
+          </div>
+          <div className="flex items-center gap-2">
+            {reviewTab === "kit" && system.content.selection_enabled ? (
               <Button
                 type="button"
                 size="sm"
-                aria-label={saveActionLabel}
-                disabled={!canSave}
-                onClick={() => saveSystem.mutate(system)}
+                variant={selectionMode ? "secondary" : "outline"}
+                aria-pressed={selectionMode}
+                onClick={() => setSelectionMode((current) => !current)}
               >
-                {saveSystem.isPending ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                <Target className="size-3.5" />
+                {selectionMode ? "退出选择" : "选择调整"}
+              </Button>
+            ) : null}
+            <Button type="button" size="sm" variant="outline" onClick={() => { setSelectionMode(false); setSelectedScope({ kind: "all" }); setAdjustmentOpen(true); }}>
+              <SlidersHorizontal className="size-3.5" />
+              调整设计体系
+            </Button>
+            {repositoryScoped ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={isBusy || regenerateSystem.isPending}
+                onClick={() => {
+                  setRegenerateConfirmation(true);
+                  setAdjustmentOpen(true);
+                }}
+              >
+                <RefreshCcw className="size-3.5" />
+                重新生成
+              </Button>
+            ) : null}
+            {showSaveAction ? (
+              <Button type="button" size="sm" aria-label={saveActionLabel} disabled={!canSave} onClick={() => saveSystem.mutate(system)}>
+                {saveSystem.isPending ? <LoaderCircle className="size-3.5 animate-spin" /> : <Save className="size-3.5" />}
                 {saveActionLabel}
               </Button>
             ) : null}
             <DropdownMenu>
               <DropdownMenuTrigger render={<Button type="button" size="icon-sm" variant="outline" aria-label="更多操作" />}>
-                <MoreHorizontal className="h-4 w-4" />
+                <MoreHorizontal className="size-4" />
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
-                {system.has_unsaved_changes ? (
-                  <DropdownMenuItem
-                    disabled={discardDisabled}
-                    variant="destructive"
-                    onClick={() => setDiscardConfirmation(true)}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                    放弃草稿
+                <DropdownMenuItem onClick={() => { setSelectedScope({ kind: "all" }); setAdjustmentOpen(true); }}>
+                  <SlidersHorizontal className="size-4" />调整设计体系
+                </DropdownMenuItem>
+                {!repositoryScoped ? (
+                  <DropdownMenuItem disabled={isBusy || regenerateSystem.isPending} onClick={() => { setRegenerateConfirmation(true); setAdjustmentOpen(true); }}>
+                    <RefreshCcw className="size-4" />重新生成
                   </DropdownMenuItem>
                 ) : null}
-                <DropdownMenuItem
-                  disabled={isBusy || regenerateSystem.isPending}
-                  onClick={() => {
-                    setRegenerateConfirmation(true);
-                    setAdjustmentOpen(true);
-                  }}
-                >
-                  <RefreshCcw className="h-4 w-4" />
-                  重新生成设计体系
-                </DropdownMenuItem>
+                {system.has_unsaved_changes ? (
+                  <DropdownMenuItem disabled={discardDisabled} variant="destructive" onClick={() => setDiscardConfirmation(true)}>
+                    <Trash2 className="size-4" />放弃草稿
+                  </DropdownMenuItem>
+                ) : null}
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
-        </div>
-      </header>
+        </header>
 
-      <div className="min-h-0 flex-1 overflow-auto">
-        <div className="mx-auto grid w-full max-w-[1600px] gap-x-8 px-5 py-7 lg:grid-cols-[180px_minmax(0,1fr)] lg:px-7">
-          <nav aria-label="设计体系内容" className="hidden min-w-0 lg:block">
-            <div className="sticky top-6 space-y-1 border-l pl-3">
-              {navigationItems.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  aria-label={`选择范围：${item.label}`}
-                  className={`block w-full rounded-sm px-2 py-1.5 text-left text-caption leading-5 ${selectedScope.kind === item.scope.kind && selectedScope.id === item.scope.id ? "bg-muted font-medium text-foreground" : "text-muted-foreground hover:text-foreground"}`}
-                  onClick={() => selectAndScroll(item.scope, item.id)}
-                >
-                  {item.label}
-                </button>
-              ))}
-              <button
-                type="button"
-                className="block w-full rounded-sm px-2 py-1.5 text-left text-caption leading-5 text-muted-foreground hover:text-foreground"
-                onClick={() => document.getElementById("ui-kit")?.scrollIntoView?.({ behavior: "smooth", block: "start" })}
-              >
-                在线 UI Kit
-              </button>
-            </div>
-          </nav>
+        <div className="ds-review-scroll">
+          {reviewTab === "files" ? (
+            <div className="ds-review-column">
+              <h1>设计体系文件</h1>
+              <div className="ds-review-rule" aria-hidden />
+              <div className="ds-file-list mb-5">
+                <article><FileCode2 className="size-5" /><span><strong>DESIGN.md</strong><small>人和 Agent 共用的设计规则</small></span><Badge variant="outline">规则</Badge></article>
+                <article><FileCode2 className="size-5" /><span><strong>tokens.css</strong><small>唯一可执行 Token 来源</small></span><Badge variant="outline">Tokens</Badge></article>
+                <article><FileCode2 className="size-5" /><span><strong>ui-kit/index.html</strong><small>在线 UI Kit 入口</small></span><Badge variant="outline">预览</Badge></article>
+                {archiveTargets.map((target) => (
+                  <article key={target.id}><FileCode2 className="size-5" /><span><strong>{target.path}</strong><small>{target.kind}</small></span><Badge variant="outline">页面</Badge></article>
+                ))}
+              </div>
 
-          <main className="min-w-0 space-y-10">
-            {system.content.sections.map((section) => (
-              <section key={section.id} id={`section-${section.id}`} className="group/design-section scroll-mt-6 border-b pb-8">
-                <div className="mb-4 flex items-start justify-between gap-3">
-                  <h2 className="break-words text-title font-semibold">{section.title}</h2>
-                  <div className="flex shrink-0 items-center gap-1">
-                    {selectedScope.kind === "section" && selectedScope.id === section.id ? (
-                      <Badge variant="secondary"><Check className="h-3 w-3" />已定位</Badge>
-                    ) : null}
-                    <Button
-                      type="button"
-                      size="icon-sm"
-                      variant="ghost"
-                      className="lg:opacity-0 lg:transition-opacity lg:group-hover/design-section:opacity-100 lg:focus-visible:opacity-100"
-                      aria-label={`调整 ${section.title}`}
-                      title={`调整 ${section.title}`}
-                      onClick={() => {
-                        setSelectedScope({ kind: "section", id: section.id });
-                        setAdjustmentOpen(true);
-                      }}
-                    >
-                      <SlidersHorizontal className="h-3.5 w-3.5" />
-                    </Button>
-                  </div>
-                </div>
-                <ReadonlyContent content={section.markdown} className="max-w-none text-body leading-7" />
-              </section>
-            ))}
-
-            {system.content.token_groups.map((group) => {
-              const label = tokenGroupLabel(group);
-              return (
-                <section key={group.id} id={`tokens-${group.id}`} className="group/design-section scroll-mt-6 border-b pb-8">
-                  <div className="mb-4 flex items-start justify-between gap-3">
-                    <h2 className="break-words text-title font-semibold">{label}</h2>
-                    <div className="flex shrink-0 items-center gap-1">
-                      {selectedScope.kind === "token_group" && selectedScope.id === group.id ? (
-                        <Badge variant="secondary"><Check className="h-3 w-3" />已定位</Badge>
+              <div className="ds-review-sections">
+                {system.content.sections.map((section) => {
+                  const key = `section:${section.id}`;
+                  const open = openReviewSections.has(key);
+                  return (
+                    <article id={`review-section-${section.id}`} className="ds-review-section scroll-mt-4" key={section.id}>
+                      <button type="button" aria-label={`选择范围：${section.title}`} className="ds-review-section__head" onClick={() => { setSelectedScope({ kind: "section", id: section.id }); toggleReviewSection(key); }}>
+                        <span><h2>{section.title}</h2><small>来自当前 DESIGN.md 的设计规则</small></span>
+                        {open ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
+                      </button>
+                      {open ? (
+                        <div className="ds-review-section__body">
+                          <div className="ds-section-actions">
+                            <button type="button" className="ghost success"><Check className="size-3.5" />看起来不错</button>
+                            <button type="button" aria-label={`调整 ${section.title}`} title={`调整 ${section.title}`} className="ghost danger" onClick={() => { setSelectedScope({ kind: "section", id: section.id }); setAdjustmentOpen(true); }}><SlidersHorizontal className="size-3.5" />需要调整</button>
+                          </div>
+                          <ReadonlyContent content={section.markdown} className="max-w-none text-body leading-7" />
+                        </div>
                       ) : null}
-                      <Button
-                        type="button"
-                        size="icon-sm"
-                        variant="ghost"
-                        className="lg:opacity-0 lg:transition-opacity lg:group-hover/design-section:opacity-100 lg:focus-visible:opacity-100"
-                        aria-label={`调整 ${label}`}
-                        title={`调整 ${label}`}
-                        onClick={() => {
-                          setSelectedScope({ kind: "token_group", id: group.id });
-                          setAdjustmentOpen(true);
-                        }}
-                      >
-                        <SlidersHorizontal className="h-3.5 w-3.5" />
-                      </Button>
-                    </div>
-                  </div>
-                  <div className="grid gap-x-6 sm:grid-cols-2">
-                    {group.tokens.map((token) => {
-                      const resolvedValue = resolvedTokenValues.get(token.name) ?? token.value;
-                      const originalValue = resolvedValue === token.value ? undefined : token.value;
-                      return (
-                        <div key={token.name} data-token-name={token.name} className="flex min-w-0 items-center gap-3 border-t py-3 first:border-t-0 sm:[&:nth-child(2)]:border-t-0">
-                          <TokenPreview token={token} value={resolvedValue} />
-                          <div className="min-w-0 flex-1">
-                            <div className="break-all text-caption font-medium">{token.name}</div>
-                            <div title={originalValue} className="mt-0.5 break-all font-mono text-caption text-muted-foreground">{resolvedValue}</div>
+                    </article>
+                  );
+                })}
+
+                {system.content.token_groups.map((group) => {
+                  const key = `tokens:${group.id}`;
+                  const open = openReviewSections.has(key);
+                  return (
+                    <article id={`review-tokens-${group.id}`} className="ds-review-section scroll-mt-4" key={key}>
+                      <button type="button" aria-label={`选择范围：${tokenGroupLabel(group)}`} className="ds-review-section__head" onClick={() => { setSelectedScope({ kind: "token_group", id: group.id }); toggleReviewSection(key); }}>
+                        <span><h2>{tokenGroupLabel(group)}</h2><small>{group.tokens.length} 个可执行 Token</small></span>
+                        {open ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
+                      </button>
+                      {open ? (
+                        <div className="ds-review-section__body">
+                          <div className="od-token-grid">
+                            {group.tokens.map((token) => {
+                              const value = resolvedTokenValues.get(token.name) ?? token.value;
+                              return (
+                                <div data-token-name={token.name} className="od-token-row" key={token.name}>
+                                  <TokenPreview token={token} value={value} />
+                                  <strong>{token.name}</strong>
+                                  <code title={value !== token.value ? token.value : undefined}>{value}</code>
+                                </div>
+                              );
+                            })}
                           </div>
                         </div>
-                      );
-                    })}
-                  </div>
-                </section>
-              );
-            })}
+                      ) : null}
+                    </article>
+                  );
+                })}
 
-            <section id="ui-kit" className="scroll-mt-6">
-              <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-                <div>
-                  <h2 className="text-title font-semibold">在线 UI Kit</h2>
-                  <p className="mt-1 text-caption text-muted-foreground">点击预览中的组件或区块，可将调整范围定位到对应内容。</p>
-                </div>
-                {selectedScope.kind === "component" || selectedScope.kind === "block" ? (
-                  <div className="flex items-center gap-1">
-                    <Badge variant="secondary"><Target className="h-3 w-3" />{selectedScopeLabel}</Badge>
-                    <Button
-                      type="button"
-                      size="icon-sm"
-                      variant="ghost"
-                      aria-label={`调整 ${selectedScopeLabel}`}
-                      title={`调整 ${selectedScopeLabel}`}
-                      onClick={() => setAdjustmentOpen(true)}
-                    >
-                      <SlidersHorizontal className="h-3.5 w-3.5" />
-                    </Button>
-                  </div>
-                ) : null}
               </div>
+            </div>
+          ) : (
+            <div className="flex h-full min-h-0 flex-col bg-white">
+              {selectionMode ? (
+                <div role="status" className="flex shrink-0 items-center justify-between gap-3 border-b bg-primary/5 px-4 py-2 text-caption text-primary">
+                  <span>选择调整已开启：点击带标记的组件或区块后才会打开调整面板。</span>
+                  <Button type="button" size="sm" variant="ghost" onClick={() => setSelectionMode(false)}>退出选择</Button>
+                </div>
+              ) : null}
               {system.preview_validation.status === "failed" || verificationError ? (
-                <div role="alert" className="mb-3 flex flex-col gap-3 border-l-2 border-destructive bg-destructive/5 px-3 py-2 text-caption text-destructive sm:flex-row sm:items-center sm:justify-between">
+                <div role="alert" className="flex shrink-0 items-center justify-between gap-3 border-b bg-destructive/5 px-4 py-2 text-caption text-destructive">
                   <span>{verificationError ?? "UI Kit 验证未通过，当前草稿不能保存。"}</span>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    className="shrink-0"
-                    disabled={verifyPreview.isPending}
-                    onClick={() => {
-                      setVerificationError(null);
-                      setVerificationAttempt((current) => current + 1);
-                    }}
-                  >
-                    <RefreshCcw className="h-3.5 w-3.5" />
-                    重新验证预览
+                  <Button type="button" size="sm" variant="outline" disabled={verifyPreview.isPending} onClick={() => { setVerificationError(null); setVerificationAttempt((current) => current + 1); }}>
+                    <RefreshCcw className="size-3.5" />重新验证预览
                   </Button>
                 </div>
               ) : null}
-              <div className="overflow-hidden border bg-white">
+              <section className="min-h-0 flex-1 overflow-hidden" aria-label="在线 UI Kit 主画布">
                 <ProjectDesignSystemPreview
                   previewHtml={system.content.preview_html}
                   archiveTargets={archiveTargets}
@@ -909,62 +901,44 @@ export function ProjectDesignSystemCanvas({
                   locators={system.content.locators}
                   integritySha256={system.content.integrity_sha256}
                   selectionEnabled={system.content.selection_enabled}
+                  selectionActive={selectionMode}
                   packageSchema={system.content.package_schema}
                   verificationAttempt={verificationAttempt}
                   onVerification={(receipt) => {
                     if (system.preview_validation.status === "passed" || verifyPreview.isPending) return;
                     verifyPreview.mutate(receipt);
                   }}
-                  onSelect={setSelectedScope}
+                  onSelect={(scope) => { setSelectionMode(false); setSelectedScope(scope); setAdjustmentOpen(true); }}
                 />
-              </div>
-            </section>
-          </main>
+              </section>
+            </div>
+          )}
         </div>
-      </div>
+      </main>
 
       <Sheet open={adjustmentOpen} onOpenChange={setAdjustmentOpen}>
         <SheetContent side="right" className="w-[min(92vw,400px)] overflow-y-auto sm:max-w-[400px]">
-          <SheetHeader className="border-b">
-            <SheetTitle>调整设计体系</SheetTitle>
-          </SheetHeader>
+          <SheetHeader className="border-b"><SheetTitle>调整设计体系</SheetTitle></SheetHeader>
           <div className="px-4 pb-6">{panel}</div>
         </SheetContent>
       </Sheet>
 
-      <AlertDialog
-        open={discardConfirmation}
-        onOpenChange={(open) => {
-          if (!open && !discardDraft.isPending) setDiscardConfirmation(false);
-        }}
-      >
+      <AlertDialog open={discardConfirmation} onOpenChange={(open) => { if (!open && !discardDraft.isPending) setDiscardConfirmation(false); }}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>
-              {isDiscardingAdjustment ? "放弃本次调整？" : "放弃当前草稿？"}
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              {isDiscardingAdjustment
-                ? "放弃后将恢复最近一次保存的设计体系，本次调整草稿不会保留。"
-                : "放弃后将返回创建设计体系，已填写的项目、品牌和参考资料仍会保留。"}
-            </AlertDialogDescription>
+            <AlertDialogTitle>{isDiscardingAdjustment ? "放弃本次调整？" : "放弃当前草稿？"}</AlertDialogTitle>
+            <AlertDialogDescription>{isDiscardingAdjustment ? "放弃后将恢复最近一次保存的设计体系，本次调整草稿不会保留。" : "放弃后将返回创建设计体系，已填写的项目、品牌和参考资料仍会保留。"}</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel disabled={discardDraft.isPending}>取消</AlertDialogCancel>
-            <AlertDialogAction
-              disabled={discardDisabled}
-              className="bg-destructive text-white hover:bg-destructive/90"
-              onClick={(event) => {
-                event.preventDefault();
-                if (!discardDisabled) discardDraft.mutate(system);
-              }}
-            >
-              {discardDraft.isPending ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : null}
+            <AlertDialogAction disabled={discardDisabled} className="bg-destructive text-white hover:bg-destructive/90" onClick={(event) => { event.preventDefault(); if (!discardDisabled) discardDraft.mutate(system); }}>
+              {discardDraft.isPending ? <LoaderCircle className="size-3.5 animate-spin" /> : null}
               {isDiscardingAdjustment ? "确认放弃调整" : "确认放弃草稿"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
     </div>
+
   );
 }

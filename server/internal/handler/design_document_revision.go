@@ -427,7 +427,7 @@ func (h *Handler) RestoreDesignDocumentRevision(w http.ResponseWriter, r *http.R
 		return
 	}
 	if document.DraftRevisionID.Valid && document.DraftRevisionID == revision.ID {
-		writeJSON(w, http.StatusOK, designDocumentResponse(document, nil))
+		writeJSON(w, http.StatusOK, designDocumentResponse(document, nil, h.designDocumentRepositoryGrounded(r.Context(), document)))
 		return
 	}
 	restored, err := h.Queries.SetDesignDocumentDraftRevision(r.Context(), db.SetDesignDocumentDraftRevisionParams{
@@ -437,7 +437,7 @@ func (h *Handler) RestoreDesignDocumentRevision(w http.ResponseWriter, r *http.R
 		writeProjectDesignSystemError(w, http.StatusInternalServerError, "restore_failed", "failed to restore the design document revision")
 		return
 	}
-	writeJSON(w, http.StatusOK, designDocumentResponse(restored, nil))
+	writeJSON(w, http.StatusOK, designDocumentResponse(restored, nil, h.designDocumentRepositoryGrounded(r.Context(), restored)))
 }
 
 // DownloadDesignDocumentRevisionArchive hands the user a revision's package as

@@ -61,7 +61,7 @@ func (h *Handler) DeliverDesignDocument(w http.ResponseWriter, r *http.Request) 
 			writeProjectDesignSystemError(w, http.StatusInternalServerError, "deliver_failed", "failed to detach the design document")
 			return
 		}
-		writeJSON(w, http.StatusOK, designDocumentResponse(updated, nil))
+		writeJSON(w, http.StatusOK, designDocumentResponse(updated, nil, h.designDocumentRepositoryGrounded(r.Context(), updated)))
 		return
 	}
 
@@ -94,7 +94,7 @@ func (h *Handler) DeliverDesignDocument(w http.ResponseWriter, r *http.Request) 
 	// Best effort, like every other system comment: the delivery itself is the
 	// link, and a comment that failed to post must not undo it.
 	h.createDesignDocumentDeliveryComment(r.Context(), issue, updated)
-	writeJSON(w, http.StatusOK, designDocumentResponse(updated, nil))
+	writeJSON(w, http.StatusOK, designDocumentResponse(updated, nil, h.designDocumentRepositoryGrounded(r.Context(), updated)))
 }
 
 func (h *Handler) createDesignDocumentDeliveryComment(ctx context.Context, issue db.Issue, document db.DesignDocument) {

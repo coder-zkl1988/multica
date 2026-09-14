@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS idx_project_design_system_workspace_repository ON project_design_system (workspace_id, workspace_repository_id) WHERE workspace_repository_id IS NOT NULL;

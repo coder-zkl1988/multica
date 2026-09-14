@@ -15,6 +15,25 @@ export interface Reaction {
   comment_revision?: number;
 }
 
+export interface CommentDesignRequest {
+  request_id: string;
+  operation: "design" | "implement";
+  agent_id: string;
+  project_resource_id: string;
+  design_system_id?: string;
+  design_ref?: string;
+  revision_id?: string;
+  frame_refs?: string[];
+}
+
+export interface CommentDesignDelivery {
+  operation: "design" | "implement";
+  task_id: string;
+  document_id?: string;
+  agent_id: string;
+  project_resource_id: string;
+}
+
 export interface Comment {
   id: string;
   issue_id: string;
@@ -40,6 +59,7 @@ export interface Comment {
   // keys off the id rather than a dedicated `type`, because `type` is
   // client-supplied on the generic comment endpoint and would be forgeable.
   quick_action_id?: string | null;
+  design_delivery?: CommentDesignDelivery;
   // Per-target result of every explicit @agent / @squad mention in this comment
   // (MUL-4525 §2). Present only on create/edit responses; older servers omit it.
   trigger_outcomes?: CommentTriggerOutcome[];

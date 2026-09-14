@@ -12,3 +12,8 @@ attribution for non-interface use. See the LICENSE file for the full text.
 
 This NOTICE file is provided for attribution purposes only and does not
 modify the Multica License.
+
+Portions of the Design Center repository evidence selection, generation progress,
+and inline Agent interaction experience are adapted from Open Design v0.19.2,
+developed by Nexu
+(https://github.com/nexu-io/open-design), under the Apache License, Version 2.0.

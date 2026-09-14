@@ -3,6 +3,7 @@ export { DesignFilePage } from "./design-file-page";
 export { DesignFramePage } from "./design-frame-page";
 export { DesignDraftPage } from "./design-draft-page";
 export { DesignDocumentPage } from "./design-document-page";
+export { DesignDocumentSavedPage } from "./design-document-saved-page";
 export { DesignRestoreTaskPage } from "./design-restore-task-page";
 export { ProjectDesignSystemCanvas } from "./project-design-system-canvas";
 export { WorkspaceDesignSystemCreate } from "./workspace-design-system-create";

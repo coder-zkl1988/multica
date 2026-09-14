@@ -3,7 +3,7 @@ import { forwardRef, useEffect, useRef, useState, useImperativeHandle } from "re
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { DesignDelivery, Issue, IssueStatusEntry, Label, TimelineEntry } from "@multica/core/types";
+import type { Issue, IssueStatusEntry, Label, TimelineEntry } from "@multica/core/types";
 import { I18nProvider } from "@multica/core/i18n/react";
 import { toast } from "sonner";
 import { useResolvedExpandStore } from "@multica/core/issues/stores/resolved-expand-store";
@@ -321,8 +321,6 @@ const mockApiObj = vi.hoisted(() => ({
   listAgents: vi.fn().mockResolvedValue([]),
   getProject: vi.fn(),
   listProjects: vi.fn().mockResolvedValue({ projects: [] }),
-  listDesignDeliveries: vi.fn().mockResolvedValue({ deliveries: [] }),
-  listDesignRestoreTasks: vi.fn().mockResolvedValue({ tasks: [] }),
 }));
 
 vi.mock("@multica/core/api", () => ({
@@ -596,61 +594,7 @@ const mockTimeline: TimelineEntry[] = [
   },
 ];
 
-function createChildIssue(overrides: Partial<Issue> = {}): Issue {
-  return {
-    ...mockIssue,
-    id: "child-1",
-    number: 2,
-    identifier: "TES-2",
-    title: "UI设计",
-    description: null,
-    status: "todo",
-    priority: "none",
-    assignee_type: null,
-    assignee_id: null,
-    parent_issue_id: "issue-1",
-    due_date: null,
-    metadata: { design_role: "ui_design" },
-    created_at: "2026-01-21T00:00:00Z",
-    updated_at: "2026-01-21T00:00:00Z",
-    ...overrides,
-  };
-}
 
-function createActiveDesignDelivery(
-  overrides: Partial<DesignDelivery> = {},
-): DesignDelivery {
-  return {
-    id: "delivery-1",
-    workspace_id: "ws-1",
-    project_id: null,
-    source_issue_id: "issue-1",
-    target_issue_id: "frontend-1",
-    file_id: "file-1",
-    revision_id: "rev-1",
-    scope: {},
-    status: "active",
-    delivered_by: "user-1",
-    delivered_at: "2026-07-01T00:00:00Z",
-    cancelled_by: null,
-    cancelled_at: null,
-    cancel_reason: null,
-    audit_metadata: {},
-    created_at: "2026-07-01T00:00:00Z",
-    updated_at: "2026-07-01T00:00:00Z",
-    ...overrides,
-  };
-}
-
-function createRawDesignFallbackDelivery(overrides: Partial<DesignDelivery> = {}): DesignDelivery {
-  return createActiveDesignDelivery({
-    scope: {
-      source_type: "raw_design_revision",
-      fallback_policy: "frontend_full_restore_fallback",
-    },
-    ...overrides,
-  });
-}
 
 // ---------------------------------------------------------------------------
 // Import component under test (after mocks)
@@ -783,8 +727,6 @@ describe("IssueDetail (shared)", () => {
       { user_id: "user-1", name: "Test User", email: "test@test.com", role: "admin" },
     ]);
     mockApiObj.listAgents.mockResolvedValue([]);
-    mockApiObj.listDesignDeliveries.mockResolvedValue({ deliveries: [] });
-    mockApiObj.listDesignRestoreTasks.mockResolvedValue({ tasks: [] });
     // Reset project mock — individual tests override per case. Default fixture
     // has project_id: null so getProject is not invoked.
     mockApiObj.getProject.mockReset();
@@ -1053,56 +995,12 @@ describe("IssueDetail (shared)", () => {
     expect(leaf.closest("a")).toHaveAttribute("href", "/test/issues/issue-1");
   });
 
-  it("disables the quick done action for UI design issues without delivery", async () => {
+
+  it("allows ordinary completion regardless of a design title or legacy role metadata", async () => {
     mockApiObj.getIssue.mockResolvedValue({
       ...mockIssue,
       title: "UI设计",
       metadata: { design_role: "ui_design" },
-    });
-
-    const { onDone } = renderIssueDetailWithDoneAction();
-
-    const doneButton = await screen.findByRole("button", { name: "Complete UI restore, or deliver the design to frontend, before marking this UI design issue done." });
-    await waitFor(() => {
-      expect(doneButton).toBeDisabled();
-    });
-    expect(doneButton).toHaveAttribute("aria-label", "Complete UI restore, or deliver the design to frontend, before marking this UI design issue done.");
-
-    fireEvent.click(doneButton);
-    expect(mockApiObj.updateIssue).not.toHaveBeenCalledWith("issue-1", expect.objectContaining({ status: "done" }));
-    expect(onDone).not.toHaveBeenCalled();
-  });
-
-  it("keeps the quick done action disabled for UI design issues with plain active delivery", async () => {
-    mockApiObj.getIssue.mockResolvedValue({
-      ...mockIssue,
-      title: "UI设计",
-      metadata: { design_role: "ui_design" },
-    });
-    mockApiObj.listDesignDeliveries.mockResolvedValue({
-      deliveries: [createActiveDesignDelivery()],
-    });
-
-    const { onDone } = renderIssueDetailWithDoneAction();
-
-    const doneButton = await screen.findByRole("button", { name: "Complete UI restore, or deliver the design to frontend, before marking this UI design issue done." });
-    await waitFor(() => {
-      expect(doneButton).toBeDisabled();
-    });
-
-    fireEvent.click(doneButton);
-    expect(mockApiObj.updateIssue).not.toHaveBeenCalledWith("issue-1", expect.objectContaining({ status: "done" }));
-    expect(onDone).not.toHaveBeenCalled();
-  });
-
-  it("allows the quick done action for UI design issues with raw design fallback delivery", async () => {
-    mockApiObj.getIssue.mockResolvedValue({
-      ...mockIssue,
-      title: "UI设计",
-      metadata: { design_role: "ui_design" },
-    });
-    mockApiObj.listDesignDeliveries.mockResolvedValue({
-      deliveries: [createRawDesignFallbackDelivery()],
     });
 
     const { onDone } = renderIssueDetailWithDoneAction();
@@ -1119,117 +1017,6 @@ describe("IssueDetail (shared)", () => {
     expect(onDone).toHaveBeenCalled();
   });
 
-  it("disables done in the status property picker for UI design issues without delivery", async () => {
-    mockApiObj.getIssue.mockResolvedValue({
-      ...mockIssue,
-      title: "UI设计",
-      metadata: { design_role: "ui_design" },
-    });
-
-    renderIssueDetail();
-
-    const statusTrigger = await screen.findByRole("button", { name: /In Progress/i });
-    await waitFor(() => {
-      expect(statusTrigger).toBeEnabled();
-    });
-
-    fireEvent.click(statusTrigger);
-
-    const doneItem = await screen.findByRole("button", { name: /Done/i });
-    expect(doneItem).toBeDisabled();
-
-    fireEvent.click(doneItem);
-    expect(mockApiObj.updateIssue).not.toHaveBeenCalledWith(
-      "issue-1",
-      expect.objectContaining({ status: "done" }),
-    );
-  });
-
-  it("allows done in the status property picker for UI design issues with raw design fallback delivery", async () => {
-    mockApiObj.getIssue.mockResolvedValue({
-      ...mockIssue,
-      title: "UI设计",
-      metadata: { design_role: "ui_design" },
-    });
-    mockApiObj.listDesignDeliveries.mockResolvedValue({
-      deliveries: [createRawDesignFallbackDelivery()],
-    });
-
-    renderIssueDetail();
-
-    const statusTrigger = await screen.findByRole("button", { name: /In Progress/i });
-    await waitFor(() => {
-      expect(statusTrigger).toBeEnabled();
-    });
-
-    fireEvent.click(statusTrigger);
-
-    const doneItem = await screen.findByRole("button", { name: /Done/i });
-    expect(doneItem).toBeEnabled();
-    fireEvent.click(doneItem);
-
-    await waitFor(() => {
-      expect(mockApiObj.updateIssue).toHaveBeenCalledWith(
-        "issue-1",
-        expect.objectContaining({ status: "done" }),
-      );
-    });
-  });
-
-  it("disables done in a UI design sub-issue status picker without delivery", async () => {
-    mockApiObj.listChildIssues.mockResolvedValue({
-      issues: [createChildIssue()],
-    });
-
-    renderIssueDetail();
-
-    await screen.findByText("Sub-issues");
-    const subIssueStatusTrigger = await screen.findByRole("button", { name: /^Todo$/i });
-    await waitFor(() => {
-      expect(subIssueStatusTrigger).toBeEnabled();
-    });
-
-    fireEvent.click(subIssueStatusTrigger);
-
-    const doneItem = await screen.findByRole("button", { name: /Done/i });
-    expect(doneItem).toBeDisabled();
-
-    fireEvent.click(doneItem);
-    expect(mockApiObj.updateIssue).not.toHaveBeenCalledWith(
-      "child-1",
-      expect.objectContaining({ status: "done" }),
-    );
-  });
-
-  it("allows done in a UI design sub-issue status picker with raw design fallback delivery", async () => {
-    mockApiObj.listChildIssues.mockResolvedValue({
-      issues: [createChildIssue()],
-    });
-    mockApiObj.listDesignDeliveries.mockResolvedValue({
-      deliveries: [createRawDesignFallbackDelivery({ source_issue_id: "child-1" })],
-    });
-
-    renderIssueDetail();
-
-    await screen.findByText("Sub-issues");
-    const subIssueStatusTrigger = await screen.findByRole("button", { name: /^Todo$/i });
-    await waitFor(() => {
-      expect(subIssueStatusTrigger).toBeEnabled();
-    });
-
-    fireEvent.click(subIssueStatusTrigger);
-
-    const doneItem = await screen.findByRole("button", { name: /Done/i });
-    expect(doneItem).toBeEnabled();
-    fireEvent.click(doneItem);
-
-    await waitFor(() => {
-      expect(mockApiObj.updateIssue).toHaveBeenCalledWith(
-        "child-1",
-        expect.objectContaining({ status: "done" }),
-      );
-    });
-  });
 
   it("omits the project breadcrumb segment when the issue has no project_id", async () => {
     // Default fixture has project_id: null.

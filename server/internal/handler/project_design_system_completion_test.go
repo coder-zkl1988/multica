@@ -322,6 +322,39 @@ func TestProjectDesignSystemFailureAndCancellationPreserveExistingPackage(t *tes
 	}
 }
 
+func TestCancelStandaloneProjectDesignSystemTaskClearsActiveState(t *testing.T) {
+	fixture := createProjectDesignSystemCompletionFixture(t, service.ProjectDesignSystemGenerate)
+	if _, err := testPool.Exec(context.Background(), `
+		UPDATE project_design_system
+		SET project_id = NULL
+		WHERE id = $1
+	`, fixture.System.ID); err != nil {
+		t.Fatalf("make design system standalone: %v", err)
+	}
+	if _, err := testPool.Exec(context.Background(), `
+		UPDATE agent_task_queue
+		SET context = jsonb_set(context, '{project_id}', '""'::jsonb)
+		WHERE id = $1
+	`, fixture.TaskID); err != nil {
+		t.Fatalf("clear standalone task project id: %v", err)
+	}
+
+	if _, err := testHandler.TaskService.CancelTaskByUser(context.Background(), parseUUID(fixture.TaskID)); err != nil {
+		t.Fatalf("cancel standalone design system task: %v", err)
+	}
+
+	var status string
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT status FROM agent_task_queue WHERE id = $1
+	`, fixture.TaskID).Scan(&status); err != nil {
+		t.Fatalf("load cancelled standalone task: %v", err)
+	}
+	if status != "cancelled" {
+		t.Fatalf("task status = %q, want cancelled", status)
+	}
+	assertProjectDesignSystemFailureState(t, fixture.System.ID, fixture.TaskID, "project_design_system_cancelled")
+}
+
 func TestCompleteProjectDesignSystemBodyLimitPreservesOrdinaryCompletion(t *testing.T) {
 	t.Run("ordinary task remains compatible", func(t *testing.T) {
 		taskID := createOrdinaryCompletionTask(t)

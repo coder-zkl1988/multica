@@ -1,4 +1,4 @@
-import type { CommentAuthorType, Reaction } from "./comment";
+import type { CommentAuthorType, CommentDesignDelivery, Reaction } from "./comment";
 import type { Attachment } from "./attachment";
 
 export interface AssigneeFrequencyEntry {
@@ -33,6 +33,7 @@ export interface TimelineEntry {
   resolved_by_type?: CommentAuthorType | null;
   resolved_by_id?: string | null;
   source_task_id?: string | null;
+  design_delivery?: CommentDesignDelivery;
   /** Set by frontend coalescing when consecutive identical activities are merged. */
   coalesced_count?: number;
 }

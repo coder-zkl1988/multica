@@ -169,6 +169,50 @@ func (q *Queries) GetProjectResourceInWorkspace(ctx context.Context, arg GetProj
 	return i, err
 }
 
+const listDesignRepositoriesInWorkspace = `-- name: ListDesignRepositoriesInWorkspace :many
+SELECT resource.id, resource.project_id, project.title AS project_title,
+       resource.label, resource.resource_ref
+FROM project_resource AS resource
+JOIN project ON project.id = resource.project_id
+WHERE resource.workspace_id = $1
+  AND resource.resource_type = 'github_repo'
+ORDER BY project.title ASC, resource.label ASC, resource.id ASC
+`
+
+type ListDesignRepositoriesInWorkspaceRow struct {
+	ID           pgtype.UUID `json:"id"`
+	ProjectID    pgtype.UUID `json:"project_id"`
+	ProjectTitle string      `json:"project_title"`
+	Label        pgtype.Text `json:"label"`
+	ResourceRef  []byte      `json:"resource_ref"`
+}
+
+func (q *Queries) ListDesignRepositoriesInWorkspace(ctx context.Context, workspaceID pgtype.UUID) ([]ListDesignRepositoriesInWorkspaceRow, error) {
+	rows, err := q.db.Query(ctx, listDesignRepositoriesInWorkspace, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListDesignRepositoriesInWorkspaceRow{}
+	for rows.Next() {
+		var i ListDesignRepositoriesInWorkspaceRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProjectID,
+			&i.ProjectTitle,
+			&i.Label,
+			&i.ResourceRef,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listProjectResources = `-- name: ListProjectResources :many
 SELECT id, project_id, workspace_id, resource_type, resource_ref, label, position, created_at, created_by FROM project_resource
 WHERE project_id = $1

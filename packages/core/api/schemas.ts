@@ -103,6 +103,7 @@ import type {
   DesignDocumentRevision,
   ListDesignDocumentRevisionsResponse,
   ListDesignDocumentsResponse,
+  ListDesignRepositoriesResponse,
   DesignDocumentShare,
   ListDesignDocumentSharesResponse,
   DesignDocumentShareExchange,
@@ -111,6 +112,7 @@ import type {
   DesignDraftMaterializeResponse,
   DesignDocumentStatus,
   DesignFileDetailResponse,
+  DesignAssetFramesResponse,
   DesignSystemProfile,
   DesignRestoreTask,
   DispatchDesignRestoreTaskResponse,
@@ -949,6 +951,14 @@ export const EMPTY_ATTACHMENT: Attachment = {
   created_at: "",
 };
 
+const CommentDesignDeliverySchema = z.object({
+  operation: z.enum(["design", "implement"]),
+  task_id: z.string().min(1),
+  document_id: z.string().optional(),
+  agent_id: z.string().min(1),
+  project_resource_id: z.string().min(1),
+}).loose().optional().catch(undefined);
+
 // All object schemas use `.loose()` so unknown server-side fields pass
 // through unchanged. zod 4's `.object()` defaults to STRIP, which would
 // silently drop new fields and surface as a "field neither showed up in
@@ -974,6 +984,7 @@ const TimelineEntrySchema = z.object({
   reactions: z.array(ReactionSchema).optional(),
   attachments: z.array(AttachmentSchema).optional(),
   source_task_id: z.string().nullable().optional(),
+  design_delivery: CommentDesignDeliverySchema,
   coalesced_count: z.number().optional(),
 }).loose();
 
@@ -1080,6 +1091,7 @@ export const CommentSchema = z.object({
   source_task_id: z.string().nullable().optional(),
   // Set only on comments a quick action produced (MUL-5465). Server-only.
   quick_action_id: z.string().nullable().optional(),
+  design_delivery: CommentDesignDeliverySchema,
 }).loose();
 
 export const CommentsListSchema = z.array(CommentSchema);
@@ -1789,10 +1801,104 @@ export const EMPTY_LIST_DESIGN_DELIVERIES_RESPONSE: ListDesignDeliveriesResponse
   deliveries: [],
 };
 
-const DesignFileSchema = z.object({
+export const SetDesignAssetRepositoryAssociationResponseSchema = z.object({
+  project_id: z.string(),
+  project_resource_id: z.string(),
+  count: z.number().int().nonnegative(),
+});
+
+export const DesignAssetFrameSchema = z.object({
+  frame_ref: z.string(),
+  selection_key: z.string(),
+  title: z.string(),
+  thumbnail_url: z.string().optional(),
+  description: z.string().optional(),
+}).loose();
+
+export const DesignAssetFramesResponseSchema = z.object({
+  design_ref: z.string(),
+  revision_id: z.string(),
+  content_digest: z.string(),
+  frames: z.array(DesignAssetFrameSchema),
+}).loose();
+
+export const EMPTY_DESIGN_ASSET_FRAMES_RESPONSE: DesignAssetFramesResponse = {
+  design_ref: "",
+  revision_id: "",
+  content_digest: "",
+  frames: [],
+};
+
+const DesignImplementationContextSchema = z.object({
+  schema_version: z.literal("multica.design-implementation-context/v1"),
+  implementation_ref: z.string(),
+  design_ref: z.string(),
+  revision_id: z.string(),
+  content_digest: z.string(),
+  frame_refs: z.array(z.string()),
+  project_id: z.string(),
+  issue_id: z.string(),
+  task_id: z.string().optional(),
+  project_resource_id: z.string(),
+  design_title: z.string(),
+  package: z.object({
+    source: z.string(),
+    archive_path: z.string().optional(),
+    content_digest: z.string(),
+    restore_pack_scope: z.record(z.string(), z.unknown()).optional(),
+  }).loose().optional(),
+  source_instructions: z.array(z.string()).optional(),
+  verification_targets: z.array(z.string()).optional(),
+  design_system_digest: z.string().optional(),
+  allowed_write_paths: z.array(z.string()),
+  verification_requirements: z.array(z.string()),
+  paths: z.object({
+    context_path: z.string(),
+    design_manifest_path: z.string(),
+    design_package_path: z.string(),
+    scope_path: z.string(),
+    repository_context_path: z.string(),
+    result_path: z.string(),
+  }).loose(),
+  source_capabilities: z.object({
+    has_layers: z.boolean(),
+    has_prototype: z.boolean(),
+    has_assets: z.boolean(),
+    has_interactions: z.boolean(),
+  }).loose(),
+}).loose();
+
+export const BuildDesignImplementationPromptResponseSchema = z.object({
+  prompt: z.string(),
+  mcp_arguments: z.record(z.string(), z.unknown()),
+  context: DesignImplementationContextSchema,
+}).loose();
+
+export const DesignImplementationPreviewEvidenceListSchema = z.array(z.object({
+  frame_ref: z.string().catch(""),
+  status: z.string().catch(""),
+  path: z.string().catch(""),
+  summary: z.string().catch(""),
+  url: z.string().refine((value) => {
+    if (/\\|\s/.test(value)) return false;
+    try {
+      const url = new URL(value);
+      return (url.protocol === "https:" || url.protocol === "http:") && !!url.hostname && !url.username && !url.password;
+    } catch {
+      return false;
+    }
+  }).optional().catch(undefined),
+})).catch([]);
+
+
+export const DesignFileSchema = z.object({
   id: z.string(),
+  design_ref: z.string().optional(),
+  source: z.string().optional(),
   workspace_id: z.string(),
   project_id: z.string().nullable().optional(),
+  project_resource_id: z.string().nullable().catch(null).default(null),
+  workspace_repository_id: z.string().nullable().catch(null).default(null),
   folder_id: z.string().nullable().optional(),
   title: z.string(),
   description: z.string().nullable().default(null),
@@ -1817,11 +1923,12 @@ const DesignRevisionSchema = z.object({
   created_at: z.string(),
 }).loose();
 
-const EMPTY_DESIGN_FILE_DETAIL_RESPONSE: DesignFileDetailResponse = {
+export const EMPTY_DESIGN_FILE_DETAIL_RESPONSE: DesignFileDetailResponse = {
   file: {
     id: "",
     workspace_id: "",
     project_id: null,
+    project_resource_id: null,
     folder_id: null,
     title: "",
     description: null,
@@ -2329,6 +2436,11 @@ const ProjectDesignSystemInputSnapshotSchema = z.preprocess(
   (value) => value == null ? {} : value,
   z.object({
     agent_id: z.string().catch("").optional(),
+    generation_mode: z.enum(["agent", "programmatic_first"]).optional(),
+    workspace_repository_id: z.string().catch("").optional(),
+    workspace_repository_url: z.string().catch("").optional(),
+    workspace_repository_label: z.string().catch("").optional(),
+    workspace_repository_ref: z.string().catch("").optional(),
     platform: ProjectDesignSystemPlatformSchema.optional(),
     brief: z.string().catch("").optional(),
     references: z.preprocess(
@@ -2380,6 +2492,7 @@ const ProjectDesignSystemTaskSchema = z.object({
   agent_id: z.string(),
   status: z.string().catch("").default(""),
   operation: z.string().catch("").default(""),
+  execution_mode: z.string().catch("").optional(),
   error: z.string().nullable().catch(null).default(null),
   failure_reason: z.string().nullable().catch(null).default(null),
   wait_reason: z.string().nullable().catch(null).default(null),
@@ -2397,6 +2510,7 @@ export const ProjectDesignSystemSchema = z.object({
   // system, and older backends never send it, so an absent field defaults to
   // the project-level scope rather than failing the parse.
   project_resource_id: z.string().catch("").default(""),
+  workspace_repository_id: z.string().catch("").default(""),
   name: z.string().catch("").default(""),
   platform: ProjectDesignSystemPlatformSchema,
   current_agent_id: z.string().nullable().catch(null).default(null),
@@ -2424,6 +2538,7 @@ export const EMPTY_PROJECT_DESIGN_SYSTEM: ProjectDesignSystem = {
   workspace_id: "",
   project_id: "",
   project_resource_id: "",
+  workspace_repository_id: "",
   name: "",
   platform: "",
   current_agent_id: null,
@@ -2465,10 +2580,12 @@ export const ProjectDesignSystemCatalogueEntrySchema = z.object({
   project_title: z.string().catch("").default(""),
   // The server omits the field for a project-level system (DC-052).
   project_resource_id: z.string().catch("").default(""),
+  workspace_repository_id: z.string().catch("").default(""),
   name: z.string().catch("").default(""),
   platform: ProjectDesignSystemPlatformSchema,
   summary: z.string().catch("").default(""),
   has_draft_package: z.boolean().catch(false).default(false),
+  ownership_scope: z.enum(["mine", "team"]).catch("team").default("team"),
   saved_at: z.string().catch("").default(""),
 }).loose();
 
@@ -2496,6 +2613,15 @@ function normalizeDesignDocumentStatus(value: unknown): DesignDocumentStatus {
   }
 }
 
+export const DesignDocumentLivePreviewSchema = z.object({
+  task_id: z.string().min(1),
+  document_id: z.string().min(1),
+  content_digest: z.string().min(1),
+  files: z.record(z.string(), z.string()),
+  entry_path: z.string().min(1),
+  updated_at: z.string(),
+}).refine((preview) => !!preview.files[preview.entry_path]);
+
 /**
  * Design document created by the design centre home composer (DC-042).
  *
@@ -2508,9 +2634,11 @@ function normalizeDesignDocumentStatus(value: unknown): DesignDocumentStatus {
  */
 export const DesignDocumentSchema = z.object({
   id: z.string().catch("").default(""),
+  design_ref: z.string().catch("").default(""),
   workspace_id: z.string().catch("").default(""),
   project_id: z.string().catch("").default(""),
   project_resource_id: z.string().catch("").default(""),
+  workspace_repository_id: z.string().catch("").default(""),
   issue_id: z.string().catch("").default(""),
   title: z.string().catch("").default(""),
   platform: ProjectDesignSystemPlatformSchema,
@@ -2534,9 +2662,11 @@ export const DesignDocumentSchema = z.object({
 
 export const EMPTY_DESIGN_DOCUMENT: DesignDocument = {
   id: "",
+  design_ref: "",
   workspace_id: "",
   project_id: "",
   project_resource_id: "",
+  workspace_repository_id: "",
   issue_id: "",
   title: "",
   platform: "",
@@ -2562,6 +2692,27 @@ export const ListDesignDocumentsResponseSchema = z.object({
 
 export const EMPTY_LIST_DESIGN_DOCUMENTS_RESPONSE: ListDesignDocumentsResponse = {
   documents: [],
+};
+
+export const DesignRepositoryListItemSchema = z.object({
+  id: z.string(),
+  project_id: z.string(),
+  project_title: z.string(),
+  label: z.string(),
+  description: z.string().catch("").default(""),
+  repository_url: z.string(),
+  default_branch_hint: z.string(),
+});
+
+export const ListDesignRepositoriesResponseSchema = z.object({
+  repositories: z.preprocess(
+    (value) => Array.isArray(value) ? value : [],
+    z.array(DesignRepositoryListItemSchema).catch([]),
+  ),
+});
+
+export const EMPTY_LIST_DESIGN_REPOSITORIES_RESPONSE: ListDesignRepositoriesResponse = {
+  repositories: [],
 };
 
 /**

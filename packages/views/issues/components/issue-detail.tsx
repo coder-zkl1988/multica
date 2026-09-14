@@ -67,7 +67,6 @@ import type { Attachment, Issue, IssueProperty, IssueStatus, IssueStatusCategory
 import { contentReferencesAttachment } from "@multica/core/types";
 import { STATUS_CONFIG } from "@multica/core/issues/config";
 import { formatDateOnly, isPastDateOnly } from "@multica/core/issues/date";
-import { ISSUE_DESIGN_ROLE_UI, issueDesignRole } from "@multica/core/issues/design-role";
 import { useUpdateIssue } from "@multica/core/issues/mutations";
 import { toast } from "sonner";
 import { errorCode } from "@multica/core/api";
@@ -96,7 +95,6 @@ import { IssueAgentHeaderChip } from "./issue-agent-header-chip";
 import { ExecutionLogSection } from "./execution-log-section";
 import { IssueTestCoverage } from "../../testing/components/issue-test-coverage";
 import { IssueDesignDocumentsSection } from "./issue-design-documents-section";
-import { IssueDesignRestoreSection, isRawDesignFallbackDelivery } from "./issue-design-restore-section";
 import { QuickActionsSection } from "./quick-actions-section";
 import { PluginPanelSection } from "../../plugins";
 import { PullRequestList } from "./pull-request-list";
@@ -109,7 +107,6 @@ import { useWorkspaceId } from "@multica/core/hooks";
 import { useRecentContextStore } from "@multica/core/chat";
 import { useModalStore } from "@multica/core/modals";
 import { issueListOptions, issueDetailOptions, childIssuesOptions, childIssueProgressOptions, issueAttachmentsOptions } from "@multica/core/issues/queries";
-import { designDeliveriesByIssueOptions, designRestoreTaskListOptions } from "@multica/core/designs/queries";
 import { projectDetailOptions } from "@multica/core/projects/queries";
 import { ProjectIcon } from "../../projects/components/project-icon";
 import { issueLabelsOptions } from "@multica/core/labels";
@@ -702,7 +699,6 @@ function SubIssueRow({
   customProperties: IssueProperty[];
 }) {
   const { t } = useT("issues");
-  const wsId = useWorkspaceId();
   const locale = useLocale();
   const paths = useWorkspacePaths();
   const updateIssue = useUpdateIssue();
@@ -711,25 +707,6 @@ function SubIssueRow({
   // Category, not key: a custom status in the done/cancelled categories is
   // finished work and has to strike through like any other. (MUL-6243)
   const isDone = issueBehavesAsAny(child, ["done", "cancelled"]);
-  const isUiDesignIssue = issueDesignRole(child) === ISSUE_DESIGN_ROLE_UI;
-  const { data: designDeliveries = [], isLoading: designDeliveriesLoading } = useQuery({
-    ...designDeliveriesByIssueOptions(wsId, child.id),
-    enabled: isUiDesignIssue,
-  });
-  const { data: restoreTasks = [], isLoading: restoreTasksLoading } = useQuery({
-    ...designRestoreTaskListOptions(wsId),
-    enabled: isUiDesignIssue,
-  });
-  const hasRawDesignFallbackDelivery = isUiDesignIssue && designDeliveries.some((delivery) => delivery.status === "active" && delivery.source_issue_id === child.id && isRawDesignFallbackDelivery(delivery));
-  const hasCompletedRestoreTask = isUiDesignIssue && restoreTasks.some((task) => task.issue_id === child.id && task.status === "completed");
-  const completionCheckLoading = isUiDesignIssue && (designDeliveriesLoading || restoreTasksLoading);
-  const completionBlocked = isUiDesignIssue && !completionCheckLoading && !hasRawDesignFallbackDelivery && !hasCompletedRestoreTask;
-  const completionBlockedCopy = completionCheckLoading
-    ? t(($) => $.detail.mark_done_checking_design_delivery)
-    : completionBlocked
-      ? t(($) => $.detail.mark_done_requires_design_delivery)
-      : null;
-  const disabledDoneStatus = completionBlockedCopy ? { done: completionBlockedCopy } : undefined;
   const labels = rowProps.labels ? (child.labels ?? []) : [];
   const customPropsWithValue = customProperties.filter(
     (p) => child.properties?.[p.id] !== undefined,
@@ -802,7 +779,6 @@ function SubIssueRow({
           status={child.status}
           onUpdate={handleUpdate}
           align="start"
-          disabledStatuses={disabledDoneStatus}
           trigger={
             <>
               <StatusIcon
@@ -1398,29 +1374,6 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
       return cached?.description != null ? cached : undefined;
     },
   });
-  const isUiDesignIssue = issue ? issueDesignRole(issue) === ISSUE_DESIGN_ROLE_UI : false;
-  const designDeliveryQuery = useQuery({
-    ...designDeliveriesByIssueOptions(wsId, issue?.id ?? ""),
-    enabled: !!issue && isUiDesignIssue,
-  });
-  const { data: designDeliveries = [], isLoading: designDeliveriesLoading } = designDeliveryQuery;
-  const restoreTaskQuery = useQuery({
-    ...designRestoreTaskListOptions(wsId),
-    enabled: !!issue && isUiDesignIssue,
-  });
-  const { data: restoreTasks = [], isLoading: restoreTasksLoading } = restoreTaskQuery;
-  const uiDesignHasRawDesignFallbackDelivery = isUiDesignIssue && designDeliveries.some((delivery) => delivery.status === "active" && delivery.source_issue_id === issue?.id && isRawDesignFallbackDelivery(delivery));
-  const uiDesignHasCompletedRestoreTask = isUiDesignIssue && restoreTasks.some((task) => task.issue_id === issue?.id && task.status === "completed");
-  const uiDesignCompletionCheckLoading = isUiDesignIssue && (designDeliveriesLoading || restoreTasksLoading);
-  const uiDesignCompletionBlocked = isUiDesignIssue && !uiDesignCompletionCheckLoading && !uiDesignHasRawDesignFallbackDelivery && !uiDesignHasCompletedRestoreTask;
-  const uiDesignCompletionBlockedCopy = uiDesignCompletionCheckLoading
-    ? t(($) => $.detail.mark_done_checking_design_delivery)
-    : uiDesignCompletionBlocked
-      ? t(($) => $.detail.mark_done_requires_design_delivery)
-      : null;
-  const markDoneDisabled = !!uiDesignCompletionBlockedCopy;
-  const markDoneTooltip = uiDesignCompletionBlockedCopy ?? t(($) => $.detail.mark_done_tooltip);
-  const disabledDoneStatus = uiDesignCompletionBlockedCopy ? { done: uiDesignCompletionBlockedCopy } : undefined;
 
   const openCommentSubIssue = useCallback((commentId: string) => {
     if (!issue) return;
@@ -2392,7 +2345,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
         {propertiesOpen && <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 pl-2">
           {/* Core props — always rendered. */}
           <PropRow label={t(($) => $.detail.prop_status)}>
-            <StatusPicker status={issue.status} onUpdate={handleUpdateField} align="start" disabledStatuses={disabledDoneStatus} />
+            <StatusPicker status={issue.status} onUpdate={handleUpdateField} align="start" />
           </PropRow>
           <PropRow label={t(($) => $.detail.prop_assignee)}>
             <AssigneePicker assigneeType={issue.assignee_type} assigneeId={issue.assignee_id} onUpdate={handleUpdateField} align="start" />
@@ -2679,7 +2632,6 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
 
       <IssueDesignDocumentsSection issue={issue} />
 
-      <IssueDesignRestoreSection issue={issue} agents={agents} />
 
       {/* Metadata — agent-facing free-form KV bag. The values almost
           never mean anything to humans, so the trigger row matches the
@@ -2735,6 +2687,8 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
         <div className="pb-3" id={`comment-${item.id}`}>
           <CommentCard
             issueId={id}
+            issue={issue}
+            agents={agents}
             entry={item.entry}
             replies={timelineView.threadReplies.get(item.id) ?? EMPTY_REPLIES}
             currentUserId={user?.id}
@@ -2871,8 +2825,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
                         variant="ghost"
                         size="icon-sm"
                         className="text-muted-foreground"
-                        aria-label={markDoneTooltip}
-                        disabled={markDoneDisabled}
+                        aria-label={t(($) => $.detail.mark_done_tooltip)}
                         onClick={() => { handleUpdateField({ status: "done" }); onDone?.(); }}
                       >
                         <CircleCheck />
@@ -2880,7 +2833,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
                     </span>
                   }
                 />
-                <TooltipContent side="bottom">{markDoneTooltip}</TooltipContent>
+                <TooltipContent side="bottom">{t(($) => $.detail.mark_done_tooltip)}</TooltipContent>
               </Tooltip>
             )}
             {onDone && issueBehavesAs(issue, "done") && (
@@ -3535,6 +3488,8 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
             <CommentInput
               key={id}
               issueId={id}
+              issue={issue}
+              agents={agents}
               onSubmit={submitComment}
               onAccepted={scrollToTimelineBottom}
             />

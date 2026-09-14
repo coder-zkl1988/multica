@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/auth"
 	"github.com/multica-ai/multica/server/internal/entitlement"
 	"github.com/multica-ai/multica/server/internal/service"
+	"github.com/multica-ai/multica/server/internal/testutil"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -405,6 +407,145 @@ func restorePackGroupedNativeJSONForTest(title string) map[string]any {
 		},
 	}
 	return nativeJSON
+}
+
+func TestDiscoverDesignRestorePackGroupsKeepsExactHintFrameIDs(t *testing.T) {
+	document := restorePackGroupedNativeJSONForTest("Exact Hint Group")
+	hints := document["restoreHints"].(map[string]any)["figmaGroups"].(map[string]any)
+	group := hints["group-wallet"].(map[string]any)
+	delete(group, "id")
+	delete(group, "sourceNodeId")
+	delete(group, "name")
+	group["frameIds"] = []string{"frame-secondary"}
+	raw, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatal(err)
+	}
+
+	groups := discoverDesignRestorePackGroups(decoded)
+	if len(groups) != 1 || groups[0].ID != "group-wallet" || !stringSlicesEqual(groups[0].FrameIDs, []string{"frame-secondary"}) {
+		t.Fatalf("groups = %+v, want map-key identity and exact hinted frame IDs", groups)
+	}
+}
+
+func TestDiscoverDesignRestorePackGroupsIncludesExactFigmaPageSelection(t *testing.T) {
+	document := contextDesignNativeJSON("Selected Figma Frames")
+	frames := document["frames"].([]map[string]any)
+	frames[0]["sourceNodeId"] = "0:2"
+	frames[1]["sourceNodeId"] = "0:423"
+	document["source"] = map[string]any{
+		"tool":      "figma",
+		"scope":     "page",
+		"pageId":    "0:1",
+		"pageName":  "页面 1",
+		"nodeIds":   []string{"0:2", "0:423"},
+		"sourceKey": "figma:local-file:page:0:1:scope:page:nodes:0:2,0:423",
+	}
+	raw, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &document); err != nil {
+		t.Fatal(err)
+	}
+
+	groups := discoverDesignRestorePackGroups(document)
+	if len(groups) != 1 {
+		t.Fatalf("groups = %+v, want one exact Figma selection group", groups)
+	}
+	if groups[0].ID != "selection:figma:local-file:page:0:1:scope:page:nodes:0:2,0:423" ||
+		groups[0].Name != "页面 1" ||
+		!stringSlicesEqual(groups[0].FrameIDs, []string{"frame-main", "frame-secondary"}) {
+		t.Fatalf("group = %+v, want stable source identity and ordered selected frames", groups[0])
+	}
+}
+
+func TestDiscoverDesignRestorePackGroupsRejectsPartialFigmaPageSelection(t *testing.T) {
+	document := contextDesignNativeJSON("Partial Figma Selection")
+	frames := document["frames"].([]map[string]any)
+	frames[0]["sourceNodeId"] = "0:2"
+	frames[1]["sourceNodeId"] = "0:423"
+	document["source"] = map[string]any{
+		"tool":      "figma",
+		"scope":     "page",
+		"pageId":    "0:1",
+		"nodeIds":   []string{"0:2", "0:999"},
+		"sourceKey": "figma:local-file:page:0:1:scope:page:nodes:0:2,0:999",
+	}
+
+	if groups := discoverDesignRestorePackGroups(document); len(groups) != 0 {
+		t.Fatalf("groups = %+v, want no group for partially mapped selection", groups)
+	}
+}
+
+func TestResolveDesignRestorePackGroupFrameIDsFiltersUnknownFrames(t *testing.T) {
+	document := restorePackGroupedNativeJSONForTest("Stale Hint Group")
+	hints := document["restoreHints"].(map[string]any)["figmaGroups"].(map[string]any)
+	group := hints["group-wallet"].(map[string]any)
+	group["frameIds"] = []string{"frame-stale", "frame-secondary", "frame-main", "frame-secondary"}
+	raw, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &document); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name  string
+		scope DesignRestoreScopeV1
+		want  []string
+	}{
+		{
+			name:  "hint",
+			scope: DesignRestoreScopeV1{Kind: "figma_group", GroupID: "group-wallet"},
+			want:  []string{"frame-secondary", "frame-main"},
+		},
+		{
+			name: "scope",
+			scope: DesignRestoreScopeV1{
+				Kind: "figma_group", GroupID: "group-wallet",
+				FrameIDs: []string{"frame-stale", "frame-main", "frame-main", "frame-secondary"},
+			},
+			want: []string{"frame-main", "frame-secondary"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, _ := resolveDesignRestorePackGroupFrameIDs(document, tt.scope)
+			if !stringSlicesEqual(got, tt.want) {
+				t.Fatalf("frame IDs = %v, want authoritative intersection %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestResolveDesignRestorePackFramesRejectsAllStaleGroup(t *testing.T) {
+	document := restorePackGroupedNativeJSONForTest("Stale Group")
+	hints := document["restoreHints"].(map[string]any)["figmaGroups"].(map[string]any)
+	hints["group-wallet"].(map[string]any)["frameIds"] = []string{"frame-stale"}
+	raw, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &document); err != nil {
+		t.Fatal(err)
+	}
+
+	frameIDs, _, err := resolveDesignRestorePackFrames(document, DesignRestoreScopeV1{
+		Kind: "figma_group", GroupID: "group-wallet",
+	})
+	if err == nil || len(frameIDs) != 0 {
+		t.Fatalf("resolve stale group = (%v, %v), want not found", frameIDs, err)
+	}
+	if discovered := discoverDesignRestorePackGroups(document); len(discovered) != 0 {
+		t.Fatalf("discovered stale groups = %+v, want none", discovered)
+	}
 }
 
 func nativeJSONWithFrameNamesForTest(names []string) map[string]any {
@@ -2979,6 +3120,95 @@ func TestListAndGetDesignFiles(t *testing.T) {
 	}
 }
 
+func TestListDesignFilesProjectScopeIncludesUnlinked(t *testing.T) {
+	projectID := dbfx.Project(t, "design-file-project-scope")
+	resourceID := repositoryListResource(t, projectID, "github_repo", "repository project scope")
+	linked := repositoryListDesignFile(t, projectID, resourceID, "project scope linked")
+	unlinked := repositoryListDesignFile(t, projectID, nil, "project scope unlinked")
+
+	payload := listDesignFilesForRepositoryTest(t, projectID, "")
+	assertRepositoryDesignFileIDs(t, payload.DesignFiles, linked, unlinked)
+}
+
+func TestListDesignFilesByRepositoryIsExact(t *testing.T) {
+	projectID := dbfx.Project(t, "design-file-repository-list")
+	otherProjectID := dbfx.Project(t, "design-file-repository-list-other")
+	resourceA := repositoryListResource(t, projectID, "github_repo", "repository list A")
+	resourceB := repositoryListResource(t, projectID, "github_repo", "repository list B")
+	foreignResource := repositoryListResource(t, otherProjectID, "github_repo", "repository list foreign")
+	nonRepository := repositoryListResource(t, projectID, "notion_page", "repository list non-repository")
+	fileA := repositoryListDesignFile(t, projectID, resourceA, "repository file A")
+	fileB := repositoryListDesignFile(t, projectID, resourceB, "repository file B")
+	unlinked := repositoryListDesignFile(t, projectID, nil, "repository file unlinked")
+
+	projectPayload := listDesignFilesForRepositoryTest(t, projectID, "")
+	assertRepositoryDesignFileIDs(t, projectPayload.DesignFiles, fileA, fileB, unlinked)
+
+	payloadA := listDesignFilesForRepositoryTest(t, projectID, resourceA)
+	assertRepositoryDesignFileIDs(t, payloadA.DesignFiles, fileA)
+	assertRepositoryDesignFileResource(t, payloadA.DesignFiles, fileA, resourceA)
+
+	payloadB := listDesignFilesForRepositoryTest(t, projectID, resourceB)
+	assertRepositoryDesignFileIDs(t, payloadB.DesignFiles, fileB)
+
+	foreign := testutil.Call(t, testHandler.ListDesignFiles, listDesignFilesRequest(projectID, foreignResource))
+	assertProjectDesignSystemErrorCode(t, foreign.ResponseRecorder, http.StatusConflict, "project_resource_project_mismatch")
+
+	nonRepo := testutil.Call(t, testHandler.ListDesignFiles, listDesignFilesRequest(projectID, nonRepository))
+	assertProjectDesignSystemErrorCode(t, nonRepo.ResponseRecorder, http.StatusBadRequest, "project_resource_not_repository")
+}
+
+func TestListDesignFilesRejectsRepositoryWithoutProject(t *testing.T) {
+	projectID := dbfx.Project(t, "design-file-repository-without-project")
+	resourceID := repositoryListResource(t, projectID, "github_repo", "repository without project")
+	resp := testutil.Call(t, testHandler.ListDesignFiles, listDesignFilesRequest("", resourceID))
+	assertProjectDesignSystemErrorCode(t, resp.ResponseRecorder, http.StatusBadRequest, "invalid_request")
+}
+
+func listDesignFilesRequest(projectID, resourceID string) *http.Request {
+	return repositoryListRequest("/api/design-files", projectID, resourceID)
+}
+
+func listDesignFilesForRepositoryTest(t *testing.T, projectID, resourceID string) struct {
+	DesignFiles []DesignFileResponse `json:"design_files"`
+	Total       int                  `json:"total"`
+} {
+	t.Helper()
+	var payload struct {
+		DesignFiles []DesignFileResponse `json:"design_files"`
+		Total       int                  `json:"total"`
+	}
+	testutil.Call(t, testHandler.ListDesignFiles, listDesignFilesRequest(projectID, resourceID)).
+		Want(http.StatusOK).JSON(&payload)
+	return payload
+}
+
+func assertRepositoryDesignFileIDs(t *testing.T, files []DesignFileResponse, want ...string) {
+	t.Helper()
+	got := make([]string, len(files))
+	updatedAt := make([]string, len(files))
+	for i, file := range files {
+		got[i] = file.ID
+		updatedAt[i] = file.UpdatedAt
+	}
+	assertRepositoryIDsExact(t, "design file IDs", got, want)
+	assertRepositoryUpdatedAtDescending(t, "design file", updatedAt)
+}
+
+func assertRepositoryDesignFileResource(t *testing.T, files []DesignFileResponse, fileID, resourceID string) {
+	t.Helper()
+	for _, file := range files {
+		if file.ID != fileID {
+			continue
+		}
+		if file.ProjectResourceID == nil || *file.ProjectResourceID != resourceID {
+			t.Fatalf("design file %s resource = %v, want %q", fileID, file.ProjectResourceID, resourceID)
+		}
+		return
+	}
+	t.Fatalf("design file %s missing from response", fileID)
+}
+
 func TestGetDesignFileContextReturnsSummaryWithoutNativeJSON(t *testing.T) {
 	created := createDesignFileForTest(t, "Context Design")
 	req := withURLParam(newRequest("GET", "/api/design-files/"+created.File.ID+"/context?workspace_id="+testWorkspaceID, nil), "id", created.File.ID)
@@ -3179,6 +3409,13 @@ func TestCreateDesignRestorePackFrameScope(t *testing.T) {
 	if resp["version"] != "1.0" {
 		t.Fatalf("version = %#v", resp["version"])
 	}
+	var nativeRaw []byte
+	if err := testPool.QueryRow(context.Background(), `SELECT native_json FROM design_revision WHERE id = $1`, created.CurrentRevision.ID).Scan(&nativeRaw); err != nil {
+		t.Fatal(err)
+	}
+	if resp["contentDigest"] != digestDesignAssetBytes(nativeRaw) {
+		t.Fatalf("contentDigest = %#v, want digest for the exact revision native JSON", resp["contentDigest"])
+	}
 	scope := resp["scope"].(map[string]any)
 	if scope["kind"] != "frame" || scope["frameId"] != "frame-main" {
 		t.Fatalf("scope = %#v", scope)
@@ -3207,7 +3444,8 @@ func TestCreateDesignRestorePackFrameScope(t *testing.T) {
 
 func TestCreateDesignRestorePackFigmaGroupScope(t *testing.T) {
 	created := createDesignFileForTest(t, "Restore Pack Group Design")
-	updateDesignRevisionNativeJSONForTest(t, created.CurrentRevision.ID, restorePackGroupedNativeJSONForTest("Restore Pack Group Design"))
+	nativeJSON := restorePackGroupedNativeJSONForTest("Restore Pack Group Design")
+	updateDesignRevisionNativeJSONForTest(t, created.CurrentRevision.ID, nativeJSON)
 
 	req := withURLParam(newRequest("POST", "/api/design-files/"+created.File.ID+"/restore-pack?workspace_id="+testWorkspaceID, map[string]any{
 		"scope": map[string]any{
@@ -3235,6 +3473,22 @@ func TestCreateDesignRestorePackFigmaGroupScope(t *testing.T) {
 	structure := resp["designStructure"].(map[string]any)
 	if structure["mode"] != "figma_group" || structure["groupName"] != "钱包首页" {
 		t.Fatalf("designStructure = %#v", structure)
+	}
+	if structure["groupId"] != "group-wallet" || structure["frameCount"] != float64(len(frames)) || !reflect.DeepEqual(structure["frameIds"], []any{"frame-main", "frame-secondary"}) {
+		t.Fatalf("designStructure did not bind exact group membership: %#v", structure)
+	}
+	for _, rawFrame := range frames {
+		frame := rawFrame.(map[string]any)
+		if frame["designFileId"] != created.File.ID || frame["revisionId"] != created.CurrentRevision.ID || frame["frameId"] == "" {
+			t.Fatalf("frame did not bind exact file/revision/frame identity: %#v", frame)
+		}
+	}
+	var nativeRaw []byte
+	if err := testPool.QueryRow(context.Background(), `SELECT native_json FROM design_revision WHERE id = $1`, created.CurrentRevision.ID).Scan(&nativeRaw); err != nil {
+		t.Fatal(err)
+	}
+	if resp["contentDigest"] != digestDesignAssetBytes(nativeRaw) {
+		t.Fatalf("contentDigest = %#v, want digest for the exact revision native JSON", resp["contentDigest"])
 	}
 }
 

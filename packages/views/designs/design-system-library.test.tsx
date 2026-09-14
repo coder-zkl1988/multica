@@ -4,9 +4,19 @@ import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { getBuiltinDesignSystem, getProjectDesignSystem, listBuiltinDesignSystems, listProjectDesignSystemCatalogue, listProjects } = vi.hoisted(() => ({
+const {
+  getBuiltinDesignSystem,
+  getProjectDesignSystem,
+  getProjectDesignSystemPackagePreview,
+  getProjectDesignSystemPackagePreviewFileURL,
+  listBuiltinDesignSystems,
+  listProjectDesignSystemCatalogue,
+  listProjects,
+} = vi.hoisted(() => ({
   getBuiltinDesignSystem: vi.fn(),
   getProjectDesignSystem: vi.fn(),
+  getProjectDesignSystemPackagePreview: vi.fn(),
+  getProjectDesignSystemPackagePreviewFileURL: vi.fn(),
   listBuiltinDesignSystems: vi.fn(),
   listProjectDesignSystemCatalogue: vi.fn(),
   listProjects: vi.fn(),
@@ -16,6 +26,8 @@ vi.mock("@multica/core/api", () => ({
   api: {
     getBuiltinDesignSystem,
     getProjectDesignSystem,
+    getProjectDesignSystemPackagePreview,
+    getProjectDesignSystemPackagePreviewFileURL,
     listBuiltinDesignSystems,
     listProjectDesignSystemCatalogue,
     listProjects,
@@ -106,6 +118,7 @@ const PROJECT_SYSTEM = {
   platform: "web",
   summary: "统一看板的产品视觉语言。",
   has_draft_package: false,
+  ownership_scope: "team" as const,
   saved_at: "2026-08-16T00:00:00Z",
 };
 
@@ -118,6 +131,7 @@ const REPOSITORY_SYSTEM = {
   platform: "mobile",
   summary: "",
   has_draft_package: false,
+  ownership_scope: "team" as const,
   saved_at: "2026-08-16T02:00:00Z",
 };
 
@@ -155,27 +169,38 @@ function systemDetail(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function renderLibrary(onOpenProject = vi.fn(), onCreate = vi.fn()) {
+function renderLibrary(onOpenSystem = vi.fn(), onCreate = vi.fn()) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   const ui: ReactNode = (
     <QueryClientProvider client={queryClient}>
-      <DesignSystemLibrary onOpenProject={onOpenProject} onCreate={onCreate} />
+      <DesignSystemLibrary onOpenSystem={onOpenSystem} onCreate={onCreate} />
     </QueryClientProvider>
   );
   render(ui);
-  return onOpenProject;
+  return onOpenSystem;
 }
 
 describe("DesignSystemLibrary", () => {
   beforeEach(() => {
     getProjectDesignSystem.mockReset();
+    getProjectDesignSystemPackagePreview.mockReset();
+    getProjectDesignSystemPackagePreviewFileURL.mockReset();
     listProjectDesignSystemCatalogue.mockReset();
     listBuiltinDesignSystems.mockReset();
     getBuiltinDesignSystem.mockReset();
     listProjectDesignSystemCatalogue.mockResolvedValue({ design_systems: [PROJECT_SYSTEM] });
     getProjectDesignSystem.mockResolvedValue(systemDetail());
+    getProjectDesignSystemPackagePreview.mockResolvedValue({
+      schema: "multica.open-design-archive-preview/v1",
+      slot: "saved",
+      content_digest: `sha256:${"a".repeat(64)}`,
+      resource_access_token: `v1.1788836400.${"b".repeat(64)}`,
+      resource_access_expires_at: "2026-09-08T12:00:00Z",
+      targets: [{ kind: "ui_kit", id: "ui-kit", path: "ui-kit/index.html" }],
+    });
+    getProjectDesignSystemPackagePreviewFileURL.mockImplementation((_systemId, _workspaceId, _digest, _token, path) => `/api/archive/${path}`);
     listBuiltinDesignSystems.mockResolvedValue({ design_systems: [BUILTIN_APPLE, BUILTIN_STRIPE] });
     listProjects.mockReset();
     listProjects.mockResolvedValue({ projects: [{ id: "project-1", title: "官网改版", color: "#3b82f6", icon: "" }] });
@@ -314,16 +339,15 @@ describe("DesignSystemLibrary", () => {
     expect(screen.getByRole("button", { name: /Stripe/ })).toBeInTheDocument();
   });
 
-  it("opens the first saved system and shows its own token sections", async () => {
+  it("opens the first saved system and renders its actual saved UI Kit", async () => {
     renderLibrary();
     await userEvent.click(await screen.findByRole("button", { name: /团队/ }));
 
     expect(await screen.findByRole("heading", { name: "Multica Web" })).toBeInTheDocument();
     expect(screen.getByText("项目绑定 · 看板体验 · Web")).toBeInTheDocument();
-    expect(await screen.findByText("--brand")).toBeInTheDocument();
-    expect(screen.getByText("--text-body")).toBeInTheDocument();
-    expect(screen.getByText("--radius")).toBeInTheDocument();
-    expect(screen.getByText("主按钮")).toBeInTheDocument();
+    const frame = await screen.findByTitle("项目设计体系 UI Kit");
+    expect(frame).toHaveAttribute("src", "/api/archive/ui-kit/index.html");
+    expect(getProjectDesignSystemPackagePreview).toHaveBeenCalledWith("system-1");
   });
 
   it("shows the system's summary first and the saved/draft dot OD marks rows with", async () => {
@@ -384,25 +408,52 @@ describe("DesignSystemLibrary", () => {
     expect(await screen.findByText("草稿")).toBeInTheDocument();
   });
 
-  it("says why an ownership scope is empty instead of borrowing another one's systems", async () => {
+  it("shows systems saved by the current requester under 我的", async () => {
+    listProjectDesignSystemCatalogue.mockResolvedValue({
+      design_systems: [{ ...PROJECT_SYSTEM, ownership_scope: "mine" }],
+    });
+    renderLibrary();
+
+    expect(await screen.findByRole("heading", { name: "Multica Web" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /我的/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("项目绑定 · 看板体验 · Web")).toBeInTheDocument();
+  });
+
+  it("keeps another member's saved systems under 团队", async () => {
     const user = userEvent.setup();
     renderLibrary();
 
-    const mine = await screen.findByRole("button", { name: /我的/ });
-    await user.click(mine);
-
+    await user.click(await screen.findByRole("button", { name: /我的/ }));
     expect(await screen.findByText("这里还没有设计体系")).toBeInTheDocument();
-    expect(screen.getByText(/设计体系归属项目/)).toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: "Multica Web" })).not.toBeInTheDocument();
+    expect(screen.getByText(/还没有你保存的设计体系/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /团队/ }));
+    expect(await screen.findByRole("heading", { name: "Multica Web" })).toBeInTheDocument();
   });
 
   it("hands editing back to the project that owns the system", async () => {
     const user = userEvent.setup();
-    const onOpenProject = renderLibrary();
+    const onOpenSystem = renderLibrary();
     await user.click(await screen.findByRole("button", { name: /团队/ }));
 
     await user.click(await screen.findByRole("button", { name: "打开项目" }));
-    expect(onOpenProject).toHaveBeenCalledWith("project-1");
+    expect(onOpenSystem).toHaveBeenCalledWith(PROJECT_SYSTEM);
+  });
+
+  it("hands a repository system back to its exact repository scope", async () => {
+    listProjectDesignSystemCatalogue.mockResolvedValue({ design_systems: [REPOSITORY_SYSTEM] });
+    getProjectDesignSystem.mockResolvedValue(systemDetail({
+      id: REPOSITORY_SYSTEM.id,
+      project_resource_id: REPOSITORY_SYSTEM.project_resource_id,
+      name: REPOSITORY_SYSTEM.name,
+      platform: REPOSITORY_SYSTEM.platform,
+    }));
+    const user = userEvent.setup();
+    const onOpenSystem = renderLibrary();
+    await user.click(await screen.findByRole("button", { name: /团队/ }));
+
+    await user.click(await screen.findByRole("button", { name: "打开仓库" }));
+    expect(onOpenSystem).toHaveBeenCalledWith(REPOSITORY_SYSTEM);
   });
 
   it("keeps the list usable when the detail payload cannot be loaded", async () => {

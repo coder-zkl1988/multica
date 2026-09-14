@@ -12,6 +12,7 @@ INSERT INTO design_document (
     workspace_id,
     project_id,
     project_resource_id,
+    workspace_repository_id,
     issue_id,
     title,
     platform,
@@ -26,6 +27,7 @@ SELECT
     sqlc.arg('workspace_id'),
     sqlc.arg('project_id'),
     sqlc.narg('project_resource_id'),
+    sqlc.narg('workspace_repository_id'),
     sqlc.narg('issue_id'),
     sqlc.arg('title'),
     sqlc.arg('platform'),
@@ -68,6 +70,28 @@ SELECT * FROM design_document
 WHERE workspace_id = sqlc.arg('workspace_id')
   AND issue_id = sqlc.arg('issue_id')
 ORDER BY updated_at DESC;
+
+-- A repository owns only the documents explicitly linked to it (DC-053).
+-- Most recently touched first; unlinked project documents stay in the
+-- project-scope list and are deliberately absent here.
+-- name: ListDesignDocumentsByRepository :many
+SELECT * FROM design_document
+WHERE workspace_id = sqlc.arg('workspace_id')
+  AND project_id = sqlc.arg('project_id')
+  AND project_resource_id = sqlc.arg('project_resource_id')
+ORDER BY updated_at DESC;
+
+-- Settings-repository documents are independent of projects and project_resource.
+-- name: ListDesignDocumentsByWorkspaceRepository :many
+SELECT * FROM design_document
+WHERE workspace_id = sqlc.arg('workspace_id')
+  AND workspace_repository_id = sqlc.arg('workspace_repository_id')
+ORDER BY updated_at DESC;
+
+-- name: CountDesignDocumentsByWorkspaceRepository :one
+SELECT count(*) FROM design_document
+WHERE workspace_id = sqlc.arg('workspace_id')
+  AND workspace_repository_id = sqlc.arg('workspace_repository_id');
 
 -- The workspace-wide list, most recently touched first. The project create
 -- modal's design picker is the one caller: it must offer documents from every
@@ -144,7 +168,8 @@ INSERT INTO design_document_revision (
     source_task_id,
     agent_id,
     instruction,
-    scope
+    scope,
+    repository_grounding
 ) VALUES (
     sqlc.arg('workspace_id'),
     sqlc.arg('design_document_id'),
@@ -164,7 +189,8 @@ INSERT INTO design_document_revision (
     sqlc.narg('source_task_id'),
     sqlc.narg('agent_id'),
     sqlc.narg('instruction'),
-    sqlc.narg('scope')
+    sqlc.narg('scope'),
+    sqlc.narg('repository_grounding')
 )
 RETURNING *;
 
@@ -236,6 +262,10 @@ WITH deleted_shares AS (
     WHERE design_document_share.workspace_id = sqlc.arg('workspace_id')
       AND design_document_share.design_document_id = sqlc.arg('id')
     RETURNING design_document_share.id
+),
+deleted_live_previews AS (
+    DELETE FROM design_document_live_preview
+    WHERE workspace_id = sqlc.arg('workspace_id') AND document_id = sqlc.arg('id')
 ),
 deleted_revisions AS (
     DELETE FROM design_document_revision
@@ -337,3 +367,19 @@ RETURNING *;
 SELECT * FROM design_document_share
 WHERE token = sqlc.arg('token')
   AND revoked_at IS NULL;
+
+-- Repository scope is an intentional, human-managed link (DC-052). It may
+-- change only while no generation/adjust/regenerate task is running: a live
+-- run has already pinned its own repository input.
+-- name: SetDesignDocumentRepository :one
+UPDATE design_document SET
+    project_resource_id = sqlc.narg('project_resource_id'),
+    updated_at = now()
+WHERE id = sqlc.arg('id')
+  AND workspace_id = sqlc.arg('workspace_id')
+  AND active_task_id IS NULL
+RETURNING *;
+
+-- name: DetachDesignDocumentsFromProjectResource :exec
+UPDATE design_document SET project_resource_id = NULL
+WHERE workspace_id = $1 AND project_resource_id = $2;

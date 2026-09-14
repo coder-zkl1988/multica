@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/multica-ai/multica/server/internal/entitlement"
+	"github.com/multica-ai/multica/server/internal/testutil"
 )
 
 func createDesignDeliveryIssueForTest(t *testing.T, title, status, parentID, projectID string) string {
@@ -478,7 +478,7 @@ func TestCancelDesignDeliveryMarksActiveDeliveryCancelled(t *testing.T) {
 	}
 }
 
-func TestUIDesignDoneRejectsPlainActiveDeliveryWithoutRestoreOrFallback(t *testing.T) {
+func TestUIDesignDoneAllowsPlainActiveDeliveryWithoutRestoreOrFallback(t *testing.T) {
 	created := createDesignFileForTest(t, "UI Done Active Delivery Design")
 	if created.CurrentRevision == nil {
 		t.Fatal("expected current revision")
@@ -506,8 +506,8 @@ func TestUIDesignDoneRejectsPlainActiveDeliveryWithoutRestoreOrFallback(t *testi
 	updateW := httptest.NewRecorder()
 	updateReq := withURLParam(newRequest("PUT", "/api/issues/"+uiIssueID+"?workspace_id="+testWorkspaceID, map[string]any{"status": "done"}), "id", uiIssueID)
 	testHandler.UpdateIssue(updateW, updateReq)
-	if updateW.Code != http.StatusConflict {
-		t.Fatalf("UpdateIssue UI done with plain active delivery: expected 409, got %d: %s", updateW.Code, updateW.Body.String())
+	if updateW.Code != http.StatusOK {
+		t.Fatalf("UpdateIssue UI done with plain active delivery: expected 200, got %d: %s", updateW.Code, updateW.Body.String())
 	}
 
 	var uiStatus, frontendStatus string
@@ -517,8 +517,8 @@ func TestUIDesignDoneRejectsPlainActiveDeliveryWithoutRestoreOrFallback(t *testi
 	if err := testPool.QueryRow(context.Background(), `SELECT status FROM issue WHERE id = $1`, frontendIssueID).Scan(&frontendStatus); err != nil {
 		t.Fatalf("load frontend issue status: %v", err)
 	}
-	if uiStatus != "todo" {
-		t.Fatalf("ui issue status = %q, want todo", uiStatus)
+	if uiStatus != "done" {
+		t.Fatalf("ui issue status = %q, want done", uiStatus)
 	}
 	if frontendStatus != "backlog" {
 		t.Fatalf("frontend issue status = %q, want backlog", frontendStatus)
@@ -574,112 +574,39 @@ func TestUIDesignDonePromotesFrontendIssueWithRawDesignFallbackDelivery(t *testi
 	}
 }
 
-func TestUIDesignDoneRequiresActiveDelivery(t *testing.T) {
-	projectID := createProjectForDesignTest(t, "UI Done Requires Delivery Project")
-	parentID := createDesignDeliveryIssueForTest(t, "服务记录开发", "todo", "", projectID)
-	uiIssueID := createDesignDeliveryIssueForTest(t, "体验确认", "todo", parentID, projectID)
-	if _, err := testPool.Exec(context.Background(), `
-		UPDATE issue
-		SET metadata = '{"design_role":"ui_design"}'::jsonb
-		WHERE id = $1
-	`, uiIssueID); err != nil {
-		t.Fatalf("mark ui issue role: %v", err)
-	}
-
-	updateW := httptest.NewRecorder()
-	updateReq := withURLParam(newRequest("PUT", "/api/issues/"+uiIssueID+"?workspace_id="+testWorkspaceID, map[string]any{"status": "done"}), "id", uiIssueID)
-	testHandler.UpdateIssue(updateW, updateReq)
-	if updateW.Code != http.StatusConflict {
-		t.Fatalf("UpdateIssue UI done without delivery: expected 409, got %d: %s", updateW.Code, updateW.Body.String())
-	}
-
-	var issueStatus string
-	if err := testPool.QueryRow(context.Background(), `SELECT status FROM issue WHERE id = $1`, uiIssueID).Scan(&issueStatus); err != nil {
-		t.Fatalf("load ui issue status: %v", err)
-	}
-	if issueStatus != "todo" {
-		t.Fatalf("ui issue status = %q, want todo", issueStatus)
-	}
-	if !strings.Contains(updateW.Body.String(), uiDesignDeliveryRequiredBeforeDoneMessage) {
-		t.Fatalf("expected error message %q, got %s", uiDesignDeliveryRequiredBeforeDoneMessage, updateW.Body.String())
-	}
-}
-
-func TestBatchUIDesignDoneSkipsIssueWithoutActiveDelivery(t *testing.T) {
-	projectID := createProjectForDesignTest(t, "Batch UI Done Requires Delivery Project")
-	parentID := createDesignDeliveryIssueForTest(t, "服务记录开发", "todo", "", projectID)
-	uiIssueID := createDesignDeliveryIssueForTest(t, "体验确认", "todo", parentID, projectID)
-	plainIssueID := createDesignDeliveryIssueForTest(t, "文案确认", "todo", parentID, projectID)
-	if _, err := testPool.Exec(context.Background(), `
-		UPDATE issue
-		SET metadata = '{"design_role":"ui_design"}'::jsonb
-		WHERE id = $1
-	`, uiIssueID); err != nil {
-		t.Fatalf("mark ui issue role: %v", err)
-	}
-
-	updateW := httptest.NewRecorder()
-	updateReq := newRequest("POST", "/api/issues/batch-update?workspace_id="+testWorkspaceID, map[string]any{
-		"issue_ids": []string{uiIssueID, plainIssueID},
-		"updates":   map[string]any{"status": "done"},
+func TestUIDesignDoneDoesNotRequireLegacyDelivery(t *testing.T) {
+	issueID := dbfx.Issue(t, "UI design review", testutil.Cols{
+		"status": "todo", "metadata": `{"design_role":"ui_design"}`,
 	})
-	testHandler.BatchUpdateIssues(updateW, updateReq)
-	if updateW.Code != http.StatusOK {
-		t.Fatalf("BatchUpdateIssues: expected 200, got %d: %s", updateW.Code, updateW.Body.String())
+	request := withURLParam(newRequest(http.MethodPut, "/api/issues/"+issueID+"?workspace_id="+testWorkspaceID, map[string]any{"status": "done"}), "id", issueID)
+	testutil.Call(t, testHandler.UpdateIssue, request).Want(http.StatusOK)
+	var status string
+	if err := testPool.QueryRow(context.Background(), "SELECT status FROM issue WHERE id = $1", issueID).Scan(&status); err != nil {
+		t.Fatal(err)
 	}
-	var resp struct {
-		Updated int `json:"updated"`
-		Skipped []struct {
-			IssueID    string `json:"issue_id"`
-			Identifier string `json:"identifier"`
-			Title      string `json:"title"`
-			Reason     string `json:"reason"`
-		} `json:"skipped"`
-	}
-	if err := json.NewDecoder(updateW.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode batch response: %v", err)
-	}
-	if resp.Updated != 1 {
-		t.Fatalf("updated = %d, want 1", resp.Updated)
-	}
-	if len(resp.Skipped) != 1 {
-		t.Fatalf("skipped length = %d, want 1", len(resp.Skipped))
-	}
-	if resp.Skipped[0].IssueID != uiIssueID {
-		t.Fatalf("skipped issue_id = %q, want %q", resp.Skipped[0].IssueID, uiIssueID)
-	}
-	if resp.Skipped[0].Title != "体验确认" {
-		t.Fatalf("skipped title = %q, want 体验确认", resp.Skipped[0].Title)
-	}
-	if resp.Skipped[0].Reason != uiDesignDeliveryRequiredBeforeDoneMessage {
-		t.Fatalf("skipped reason = %q, want %q", resp.Skipped[0].Reason, uiDesignDeliveryRequiredBeforeDoneMessage)
-	}
-
-	statuses := map[string]string{}
-	rows, err := testPool.Query(context.Background(), `SELECT id::text, status FROM issue WHERE id IN ($1, $2)`, uiIssueID, plainIssueID)
-	if err != nil {
-		t.Fatalf("load issue statuses: %v", err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var id, status string
-		if err := rows.Scan(&id, &status); err != nil {
-			t.Fatalf("scan issue status: %v", err)
-		}
-		statuses[id] = status
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatalf("iterate issue statuses: %v", err)
-	}
-	if statuses[uiIssueID] != "todo" {
-		t.Fatalf("ui issue status = %q, want todo", statuses[uiIssueID])
-	}
-	if statuses[plainIssueID] != "done" {
-		t.Fatalf("plain issue status = %q, want done", statuses[plainIssueID])
+	if status != "done" {
+		t.Fatalf("legacy design role blocked explicit completion: %s", status)
 	}
 }
 
-func TestGitHubAdvanceUIDesignDoneRequiresActiveDelivery(t *testing.T) {
+func TestBatchUIDesignDoneDoesNotRequireLegacyDelivery(t *testing.T) {
+	issueID := dbfx.Issue(t, "UI design review", testutil.Cols{
+		"status": "todo", "metadata": `{"design_role":"ui_design"}`,
+	})
+	request := newRequest(http.MethodPost, "/api/issues/batch-update?workspace_id="+testWorkspaceID, map[string]any{
+		"issue_ids": []string{issueID}, "updates": map[string]any{"status": "done"},
+	})
+	testutil.Call(t, testHandler.BatchUpdateIssues, request).Want(http.StatusOK)
+	var status string
+	if err := testPool.QueryRow(context.Background(), "SELECT status FROM issue WHERE id = $1", issueID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "done" {
+		t.Fatalf("legacy design role blocked batch completion: %s", status)
+	}
+}
+
+func TestGitHubAdvanceUIDesignDoneWithoutActiveDelivery(t *testing.T) {
 	projectID := createProjectForDesignTest(t, "GitHub UI Done Requires Delivery Project")
 	parentID := createDesignDeliveryIssueForTest(t, "服务记录开发", "todo", "", projectID)
 	uiIssueID := createDesignDeliveryIssueForTest(t, "体验确认", "in_progress", parentID, projectID)
@@ -701,7 +628,7 @@ func TestGitHubAdvanceUIDesignDoneRequiresActiveDelivery(t *testing.T) {
 	if err := testPool.QueryRow(context.Background(), `SELECT status FROM issue WHERE id = $1`, uiIssueID).Scan(&issueStatus); err != nil {
 		t.Fatalf("load ui issue status: %v", err)
 	}
-	if issueStatus != "in_progress" {
-		t.Fatalf("ui issue status = %q, want in_progress", issueStatus)
+	if issueStatus != "done" {
+		t.Fatalf("ui issue status = %q, want done", issueStatus)
 	}
 }

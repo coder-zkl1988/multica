@@ -54,6 +54,10 @@ type preparedDesignDocumentCompletion struct {
 	AgentID     pgtype.UUID
 	Validated   designdocument.ValidatedPackage
 	Receipt     *DesignDocumentPackageReceipt
+	// RepositoryGrounding is normalized bytes from a strictly validated daemon
+	// receipt. Empty means no explicit receipt and, for pinned runs, inheritance
+	// from BaseRevisionID during persistence.
+	RepositoryGrounding json.RawMessage
 	// Stored verbatim from the re-validated archive so the persisted rows are
 	// the bytes the server verified, not a re-encoding of them.
 	Brief    []byte
@@ -78,6 +82,7 @@ func (h *Handler) prepareDesignDocumentCompletion(
 	task db.AgentTaskQueue,
 	workspaceID string,
 	receipt *DesignDocumentPackageReceipt,
+	repositoryGrounding json.RawMessage,
 ) (preparedDesignDocumentCompletion, error) {
 	var taskContext service.DesignDocumentTaskContext
 	if err := json.Unmarshal(task.Context, &taskContext); err != nil ||
@@ -174,6 +179,14 @@ func (h *Handler) prepareDesignDocumentCompletion(
 		return preparedDesignDocumentCompletion{}, errors.New("design document package did not pass browser preview")
 	}
 
+	repositoryGrounding, err = validateDesignDocumentCompletionGrounding(
+		taskContext.Input.RepositoryGrounding,
+		repositoryGrounding,
+	)
+	if err != nil {
+		return preparedDesignDocumentCompletion{}, err
+	}
+
 	brief, err := designdocument.ReadArtifact(archive, validated.Manifest.Files, "brief.json")
 	if err != nil {
 		return preparedDesignDocumentCompletion{}, fmt.Errorf("read design document brief: %w", err)
@@ -184,14 +197,15 @@ func (h *Handler) prepareDesignDocumentCompletion(
 	}
 
 	return preparedDesignDocumentCompletion{
-		TaskContext: taskContext,
-		WorkspaceID: workspaceUUID,
-		DocumentID:  documentUUID,
-		AgentID:     task.AgentID,
-		Validated:   validated,
-		Receipt:     receipt,
-		Brief:       brief,
-		Coverage:    coverage,
+		TaskContext:         taskContext,
+		WorkspaceID:         workspaceUUID,
+		DocumentID:          documentUUID,
+		AgentID:             task.AgentID,
+		Validated:           validated,
+		Receipt:             receipt,
+		Brief:               brief,
+		RepositoryGrounding: repositoryGrounding,
+		Coverage:            coverage,
 	}, nil
 }
 
@@ -211,6 +225,48 @@ func designDocumentPreviewTargets(targets []designdocument.PreviewTarget) ([]des
 	return out, nil
 }
 
+// validateDesignDocumentCompletionGrounding normalizes the daemon receipt and
+// applies the task's grounding mode. Pinned runs always discard a caller
+// receipt; persistence copies the immutable base revision's evidence instead.
+func validateDesignDocumentCompletionGrounding(mode string, raw json.RawMessage) (json.RawMessage, error) {
+	if mode == service.DesignDocumentGroundingPinned {
+		return nil, nil
+	}
+	if len(raw) == 0 {
+		if mode == service.DesignDocumentGroundingPending {
+			return nil, errors.New("design document repository grounding is required")
+		}
+		switch mode {
+		case service.DesignDocumentGroundingUnavailable, service.DesignDocumentGroundingPinned:
+			return nil, nil
+		default:
+			return nil, errors.New("unknown design document grounding mode")
+		}
+	}
+
+	grounding, err := designdocument.ValidateRepositoryGrounding(raw)
+	if err != nil {
+		return nil, err
+	}
+	switch mode {
+	case service.DesignDocumentGroundingPending:
+		if grounding.Status != designdocument.GroundingAvailable {
+			return nil, errors.New("pending repository grounding must be available")
+		}
+	case service.DesignDocumentGroundingUnavailable:
+		if grounding.Status != designdocument.GroundingUnavailable {
+			return nil, errors.New("unavailable repository grounding must remain unavailable")
+		}
+	default:
+		return nil, errors.New("unknown design document grounding mode")
+	}
+	normalized, err := json.Marshal(grounding)
+	if err != nil {
+		return nil, err
+	}
+	return normalized, nil
+}
+
 // designDocumentBindingFromContext is the server side of the package binding
 // contract; daemon.DecodeDesignDocumentTaskBinding is the other. Both must
 // produce the identical value for the same task, and TestDesignDocumentBinding-
@@ -222,13 +278,17 @@ func designDocumentPreviewTargets(targets []designdocument.PreviewTarget) ([]des
 // no explicit revision_id.
 func designDocumentBindingFromContext(taskContext service.DesignDocumentTaskContext, task db.AgentTaskQueue) designdocument.PackageBinding {
 	taskID := uuidToString(task.ID)
+	revisionID := taskContext.RevisionID
+	if revisionID == "" {
+		revisionID = taskID
+	}
 	return designdocument.PackageBinding{
 		WorkspaceID:         taskContext.WorkspaceID,
 		ProjectID:           taskContext.ProjectID,
 		ProjectResourceID:   taskContext.ProjectResourceID,
 		IssueID:             taskContext.IssueID,
 		DesignDocumentID:    taskContext.DesignDocumentID,
-		RevisionID:          taskID,
+		RevisionID:          revisionID,
 		TaskID:              taskID,
 		AgentID:             taskContext.AgentID,
 		Platform:            taskContext.Platform,
@@ -302,6 +362,20 @@ func persistDesignDocumentCompletion(
 		baseRevisionID = parsed
 	}
 
+	repositoryGrounding := prepared.RepositoryGrounding
+	if len(repositoryGrounding) == 0 && baseRevisionID.Valid {
+		baseRevision, err := queries.GetDesignDocumentRevisionInWorkspace(ctx, db.GetDesignDocumentRevisionInWorkspaceParams{
+			ID: baseRevisionID, WorkspaceID: prepared.WorkspaceID,
+		})
+		if err != nil {
+			return db.DesignDocument{}, fmt.Errorf("load design document base revision grounding: %w", err)
+		}
+		if baseRevision.DesignDocumentID != prepared.DocumentID {
+			return db.DesignDocument{}, errors.New("design document base revision does not belong to this document")
+		}
+		repositoryGrounding = baseRevision.RepositoryGrounding
+	}
+
 	revision, err := queries.CreateDesignDocumentRevision(ctx, db.CreateDesignDocumentRevisionParams{
 		WorkspaceID:         prepared.WorkspaceID,
 		DesignDocumentID:    prepared.DocumentID,
@@ -322,6 +396,7 @@ func persistDesignDocumentCompletion(
 		AgentID:             prepared.AgentID,
 		Instruction:         pgtype.Text{String: prepared.TaskContext.Instruction, Valid: prepared.TaskContext.Instruction != ""},
 		Scope:               prepared.TaskContext.Scope,
+		RepositoryGrounding: repositoryGrounding,
 	})
 	if err != nil {
 		return db.DesignDocument{}, fmt.Errorf("create design document revision: %w", err)

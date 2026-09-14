@@ -37,6 +37,10 @@ func createDesignDocumentRevisionFixture(t *testing.T) designDocumentRevisionFix
 // createDesignDocumentRevisionFixtureWith lets a test add files to the package
 // before it is collected, e.g. the optional critique.json.
 func createDesignDocumentRevisionFixtureWith(t *testing.T, extraFiles map[string]string) designDocumentRevisionFixture {
+	return createDesignDocumentRevisionFixtureWithBinding(t, extraFiles, nil)
+}
+
+func createDesignDocumentRevisionFixtureWithBinding(t *testing.T, extraFiles map[string]string, mutate func(*designdocument.PackageBinding)) designDocumentRevisionFixture {
 	t.Helper()
 	ctx := context.Background()
 	queries := db.New(testPool)
@@ -72,6 +76,9 @@ func createDesignDocumentRevisionFixtureWith(t *testing.T, extraFiles map[string
 		Platform:            "web",
 		InputSnapshotSHA256: "sha256:" + strings.Repeat("a", 64),
 		DesignSystemSHA256:  "sha256:" + strings.Repeat("e", 64),
+	}
+	if mutate != nil {
+		mutate(&binding)
 	}
 	root := copyDesignDocumentFixture(t)
 	for name, contents := range extraFiles {

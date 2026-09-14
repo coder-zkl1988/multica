@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const navigate = vi.hoisted(() => vi.fn());
 const {
   createDesignDocument,
+  getIssue,
   listAgents,
   listDesignDocuments,
   listDesignScenarioRecipes,
@@ -22,6 +23,7 @@ const {
   sendChatMessage,
 } = vi.hoisted(() => ({
   createDesignDocument: vi.fn(),
+  getIssue: vi.fn(),
   listAgents: vi.fn(),
   listDesignDocuments: vi.fn(),
   listDesignScenarioRecipes: vi.fn(),
@@ -40,6 +42,7 @@ const {
 vi.mock("@multica/core/api", () => ({
   api: {
     createDesignDocument,
+    getIssue,
     createChatSession,
     sendChatMessage,
     listAgents,
@@ -80,6 +83,7 @@ vi.mock("../common/actor-avatar", () => ({
 }));
 
 import { I18nProvider } from "@multica/core/i18n/react";
+import { designKeys } from "@multica/core/designs/keys";
 import zhCommon from "../locales/zh-Hans/common.json";
 import zhIssues from "../locales/zh-Hans/issues.json";
 import zhProjects from "../locales/zh-Hans/projects.json";
@@ -184,6 +188,7 @@ async function pickAgent(user: ReturnType<typeof userEvent.setup>) {
 describe("DesignTaskComposer", () => {
   beforeEach(() => {
     createDesignDocument.mockReset();
+    getIssue.mockReset();
     listAgents.mockReset();
     listDesignDocuments.mockReset();
     listDesignScenarioRecipes.mockReset();
@@ -223,12 +228,21 @@ describe("DesignTaskComposer", () => {
       total: 1,
     });
     createDesignDocument.mockResolvedValue(createdDocument());
+    getIssue.mockResolvedValue({
+      id: "issue-1",
+      workspace_id: "ws-1",
+      project_id: "project-1",
+      identifier: "CRM-12",
+      title: "客户列表页需求",
+      status: "todo",
+    });
   });
 
   // The typewriter tests install fake timers; restore them even when their
   // assertions throw so later suites keep real time.
   afterEach(() => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   it("keeps submit closed until project, agent and brief are all present", async () => {
@@ -248,6 +262,36 @@ describe("DesignTaskComposer", () => {
     await user.type(screen.getByLabelText("页面需求描述"), "客户列表页");
     await waitFor(() => expect(screen.getByRole("button", { name: "生成页面设计" })).toBeEnabled());
     expect(createDesignDocument).not.toHaveBeenCalled();
+  });
+
+  it("creates from a locked issue context with its agent and sole repository prefilled", async () => {
+    const user = userEvent.setup();
+    const invalidateQueries = vi.spyOn(QueryClient.prototype, "invalidateQueries");
+    renderComposer(vi.fn(), {
+      initialContext: {
+        projectId: "project-1",
+        issueId: "issue-1",
+        agentId: AGENT.id,
+      },
+    });
+
+    expect(await screen.findByRole("button", { name: "项目" })).toBeDisabled();
+    expect(await screen.findByRole("button", { name: "任务卡片" })).toBeDisabled();
+    await user.type(screen.getByLabelText("页面需求描述"), "客户列表页");
+    await user.click(screen.getByRole("button", { name: "生成页面设计" }));
+
+    await waitFor(() => expect(createDesignDocument).toHaveBeenCalledTimes(1));
+    expect(createDesignDocument.mock.calls[0]?.[0]).toMatchObject({
+      project_id: "project-1",
+      issue_id: "issue-1",
+      agent_id: "agent-1",
+      project_resource_id: "resource-h5",
+      brief: "客户列表页",
+    });
+    expect(createDesignDocument.mock.calls[0]?.[0]).not.toHaveProperty("create_issue");
+    expect(invalidateQueries).toHaveBeenCalledWith({
+      queryKey: designKeys.documentsByIssue("ws-1", "issue-1"),
+    });
   });
 
   // The composer has no platform pill (device switching lives on the

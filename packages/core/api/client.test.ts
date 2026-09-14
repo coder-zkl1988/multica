@@ -10,6 +10,39 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe("issue comment design delivery", () => {
+  const comment = { id: "comment-1", issue_id: "issue-1", author_type: "member", author_id: "user-1", content: "Design checkout", type: "comment", parent_id: null, created_at: "2026-09-08T00:00:00Z", updated_at: "2026-09-08T00:00:00Z" };
+  it("carries explicit delivery intent and reads its durable task/document identity", async () => {
+    const request = { request_id: "request-1", operation: "design" as const, agent_id: "chosen-agent", project_resource_id: "repository-1" };
+    const delivery = { operation: "design", task_id: "task-1", document_id: "document-1", agent_id: "chosen-agent", project_resource_id: "repository-1" };
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ...comment, design_delivery: delivery }), { status: 201 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const result = await new ApiClient("https://api.example.test").createComment("issue-1", comment.content, undefined, undefined, undefined, undefined, { designRequest: request });
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({ content: comment.content, type: "comment", design_request: request });
+    expect(result.design_delivery).toEqual(delivery);
+  });
+  it("keeps the ordinary comment readable when additive delivery metadata is malformed", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ ...comment, design_delivery: { task_id: 42, operation: "future" } }), { status: 201 })));
+    const result = await new ApiClient("https://api.example.test").createComment("issue-1", comment.content);
+    expect(result.id).toBe("comment-1");
+    expect(result.design_delivery).toBeUndefined();
+  });
+  it("shows no live snapshot for 204, malformed, or another task's preview", async () => {
+    const snapshot = { task_id: "task-other", document_id: "document-1", content_digest: "digest", files: { "prototype/index.html": "PGgxPkhlbGxvPC9oMT4=" }, entry_path: "prototype/index.html", updated_at: "2026-09-08" };
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ...snapshot, files: [] })))
+      .mockResolvedValueOnce(new Response(JSON.stringify(snapshot)))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ...snapshot, task_id: "task-1" }))));
+    const client = new ApiClient("https://api.example.test");
+    await expect(client.getDesignDocumentLivePreview("document-1", "task-1")).resolves.toBeNull();
+    await expect(client.getDesignDocumentLivePreview("document-1", "task-1")).resolves.toBeNull();
+    await expect(client.getDesignDocumentLivePreview("document-1", "task-1")).resolves.toBeNull();
+    await expect(client.getDesignDocumentLivePreview("document-1", "task-1")).resolves.toMatchObject({ task_id: "task-1", document_id: "document-1", entry_path: "prototype/index.html" });
+  });
+});
+
+
 describe("ApiClient design documents", () => {
   it("lists Design Documents for a project", async () => {
     const document = { id: "document-1", project_id: "project-1", title: "Checkout", draft_revision_id: "revision-1", created_at: "2026-08-14T00:00:00Z", updated_at: "2026-08-14T00:00:00Z" };

@@ -3,8 +3,9 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { deleteDesignDocument, downloadDesignDocumentRevisionArchive, toastError, toastSuccess } =
+const { getDesignDocumentRevision, deleteDesignDocument, downloadDesignDocumentRevisionArchive, toastError, toastSuccess } =
   vi.hoisted(() => ({
+    getDesignDocumentRevision: vi.fn(),
     deleteDesignDocument: vi.fn(),
     downloadDesignDocumentRevisionArchive: vi.fn(),
     toastError: vi.fn(),
@@ -12,7 +13,7 @@ const { deleteDesignDocument, downloadDesignDocumentRevisionArchive, toastError,
   }));
 
 vi.mock("@multica/core/api", () => ({
-  api: { deleteDesignDocument, downloadDesignDocumentRevisionArchive },
+  api: { getDesignDocumentRevision, deleteDesignDocument, downloadDesignDocumentRevisionArchive },
 }));
 
 vi.mock("@multica/core/hooks", () => ({
@@ -81,6 +82,7 @@ describe("DesignDocumentCard menu", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     deleteDesignDocument.mockResolvedValue(undefined);
+    getDesignDocumentRevision.mockImplementation(async (_documentId: string, id: string) => ({ id, pages: [], preview_targets: [], prototype_entry: "", resource_base_path: "", files: [] }));
   });
 
   // The card's own open control is a button, so the menu trigger has to be a

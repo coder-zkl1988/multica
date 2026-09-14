@@ -16,6 +16,9 @@ vi.mock("@multica/ui/components/ui/resizable", () => ({
 
 const {
   adjustDesignDocument,
+  createDesignDocument,
+  getProjectDesignSystemForProject,
+  listDesignRepositories,
   uploadFile,
   discardDesignDocumentDraft,
   getDesignDocument,
@@ -34,6 +37,9 @@ const {
   toastSuccess,
 } = vi.hoisted(() => ({
   adjustDesignDocument: vi.fn(),
+  createDesignDocument: vi.fn(),
+  getProjectDesignSystemForProject: vi.fn(),
+  listDesignRepositories: vi.fn(),
   uploadFile: vi.fn(),
   discardDesignDocumentDraft: vi.fn(),
   getDesignDocument: vi.fn(),
@@ -55,6 +61,9 @@ const {
 vi.mock("@multica/core/api", () => ({
   api: {
     adjustDesignDocument,
+    createDesignDocument,
+    getProjectDesignSystemForProject,
+    listDesignRepositories,
     uploadFile,
     discardDesignDocumentDraft,
     getDesignDocument,
@@ -105,7 +114,8 @@ vi.mock("../common/actor-avatar", () => ({
 
 import { I18nProvider } from "@multica/core/i18n/react";
 import zhCommon from "../locales/zh-Hans/common.json";
-import { DesignDocumentPage, defaultRevisionId, documentErrorMessage, previewEntries } from "./design-document-page";
+import { DesignDocumentPage, defaultRevisionId, documentErrorMessage } from "./design-document-page";
+import { previewEntries } from "./design-document-preview";
 
 const AGENT = { id: "agent-1", workspace_id: "ws-1", name: "小设计", runtime_id: "runtime-1", runtime_bound: true, archived_at: null };
 
@@ -114,7 +124,7 @@ function document(overrides: Record<string, unknown> = {}) {
     id: "document-1",
     workspace_id: "ws-1",
     project_id: "project-1",
-    project_resource_id: "",
+    project_resource_id: "repository-1",
     issue_id: "",
     title: "订单总览",
     platform: "web",
@@ -123,7 +133,7 @@ function document(overrides: Record<string, unknown> = {}) {
     draft_revision_id: "revision-2",
     saved_revision_id: "",
     active_task: null,
-    input_snapshot: { brief: "做一个订单总览页，支持筛选。" },
+    input_snapshot: inputSnapshot(),
     last_error: null,
     repository_grounded: false,
     created_at: "2026-08-19T00:00:00Z",
@@ -182,6 +192,39 @@ function revision(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function inputSnapshot(overrides: Record<string, unknown> = {}) {
+  return {
+    agent_id: "agent-1",
+    project_resource_id: "repository-1",
+    issue_id: "",
+    platform: "web",
+    recipe: "ui-mockup",
+    brief: "做一个订单总览页，支持筛选。",
+    attachments: [{ attachment_id: "attachment-1" }],
+    resolved_design_context: {
+      version: "multica.design-context/v1",
+      project_id: "project-1",
+      source: "cloud_saved_repository_design_system",
+      digest: `sha256:${"a".repeat(64)}`,
+      package: {
+        scope: "repository", project_id: "project-1", project_resource_id: "repository-1",
+        design_system_id: "system-1", saved_package_id: "package-1", archive_object_key: "internal/package.zip", name: "订单后台体系",
+      },
+    },
+    ...overrides,
+  };
+}
+
+function system(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "system-1", workspace_id: "ws-1", project_id: "project-1", project_resource_id: "repository-1",
+    name: "订单后台体系", platform: "web", current_agent_id: "agent-1", status: "saved", active_task: null,
+    input_snapshot: {}, content: { sections: [], token_groups: [], locators: [], preview_html: "", integrity_sha256: "a".repeat(64) },
+    has_unsaved_changes: false, last_error: null, activity: [], created_at: "", updated_at: "", saved_at: "",
+    ...overrides,
+  };
+}
+
 function renderPage() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   render(
@@ -218,6 +261,8 @@ beforeEach(() => {
   getProject.mockResolvedValue({ id: "project-1", title: "CRM", workspace_id: "ws-1" });
   listAgents.mockResolvedValue([AGENT]);
   listTaskMessages.mockResolvedValue([]);
+  listDesignRepositories.mockResolvedValue({ repositories: [{ id: "repository-1", project_id: "project-1", project_title: "CRM", label: "main", repository_url: "https://example.test/repo.git", default_branch_hint: "main" }] });
+  getProjectDesignSystemForProject.mockResolvedValue(system());
   listIssues.mockResolvedValue({ issues: [{ id: "issue-1", identifier: "MUL-7", title: "实现订单总览", status: "todo" }], total: 1 });
   deliverDesignDocument.mockImplementation(async (_id: string, body: { issue_id: string }) => document({ issue_id: body.issue_id }));
   adjustDesignDocument.mockResolvedValue(document({ status: "running", active_task: { id: "task-3", agent_id: "agent-1", status: "queued", operation: "adjust", error: null, created_at: "2026-08-19T00:20:00Z", started_at: null, completed_at: null } }));
@@ -289,7 +334,9 @@ describe("DesignDocumentPage", () => {
     expect(within(timeline).getByText("草稿")).toBeInTheDocument();
     // Only a revision that is not the draft offers to be brought back.
     expect(within(timeline).getAllByRole("button", { name: "回退到此版本" })).toHaveLength(1);
-    expect(screen.getByText("未做仓库取证")).toBeInTheDocument();
+    expect(screen.getAllByText("未做仓库取证").length).toBeGreaterThan(0);
+    expect(screen.getByText(/已关联仓库 repository-1/)).toBeInTheDocument();
+    expect(screen.queryByText("已按仓库取证")).not.toBeInTheDocument();
   });
 
   // Open Design's 预览/代码 toggle: the same revision, rendered or read. The
@@ -323,6 +370,141 @@ describe("DesignDocumentPage", () => {
   // Every adjustment addresses the whole document. The page-scope toggle is
   // gone: it made each send ask which of two things it meant, and a mark on
   // the canvas already narrows more precisely than a page ever could.
+  it("shows run status, repository provenance, and the selected revision gates", async () => {
+    const resolved = {
+      version: "multica.design-context/v1",
+      project_id: "project-1",
+      source: "cloud_saved_repository_design_system",
+      digest: `sha256:${"a".repeat(64)}`,
+      package: {
+        scope: "repository",
+        project_id: "project-1",
+        project_resource_id: "repository-1",
+        design_system_id: "system-1",
+        saved_package_id: "package-1",
+        archive_object_key: "internal/package.zip",
+        name: "订单后台体系",
+      },
+    };
+    getDesignDocument.mockResolvedValue(document({
+      status: "saved",
+      saved_revision_id: "revision-2",
+      repository_grounded: true,
+      input_snapshot: {
+        agent_id: "agent-1",
+        project_resource_id: "repository-1",
+        issue_id: "",
+        platform: "web",
+        recipe: "ui-mockup",
+        brief: "做一个订单总览页",
+        attachments: [{ attachment_id: "attachment-1" }],
+        resolved_design_context: resolved,
+      },
+    }));
+    renderPage();
+
+    const region = await screen.findByRole("region", { name: "运行状态与来源" });
+    expect(within(region).getByText("完成")).toBeInTheDocument();
+    expect(within(region).getByText("订单后台体系")).toBeInTheDocument();
+    expect(within(region).getByText(/system-1/)).toBeInTheDocument();
+    expect(within(region).getByText(/package-1/)).toBeInTheDocument();
+    expect(within(region).getByText(/aaaaaaaa/)).toBeInTheDocument();
+    expect(within(region).getByText(/已关联仓库 repository-1/)).toBeInTheDocument();
+    expect(within(region).getByText("已按仓库取证")).toBeInTheDocument();
+    expect(await within(region).findByText("Audit 通过")).toBeInTheDocument();
+    expect(within(region).getByText("Preview 暂无结果")).toBeInTheDocument();
+    expect(region.textContent).not.toContain("internal/package.zip");
+
+    expect(within(region).getByText("Audit 通过")).toBeInTheDocument();
+    expect(within(region).getByText("Preview 暂无结果")).toBeInTheDocument();
+  });
+
+  it("keeps task wait and failure reasons visible while preserving the prior version", async () => {
+    const failedTask = { id: "task-1", agent_id: "agent-1", status: "failed", operation: "generate", error: null, failure_reason: "Runtime 连接中断", created_at: "2026-08-19T00:00:00Z", started_at: "2026-08-19T00:00:01Z", completed_at: "2026-08-19T00:05:00Z" };
+    getDesignDocument.mockResolvedValue(document({ status: "failed", draft_revision_id: "", saved_revision_id: "revision-1", last_error: "runtime went offline", active_task: failedTask }));
+    renderPage();
+
+    const region = await screen.findByRole("region", { name: "运行状态与来源" });
+    expect(within(region).getByText("失败")).toBeInTheDocument();
+    expect(within(region).getByText("执行失败")).toBeInTheDocument();
+    expect(within(region).getByText(/Runtime 连接中断/)).toBeInTheDocument();
+    expect(screen.getByText("runtime went offline")).toBeInTheDocument();
+    expect(screen.getByText("上一版仍然可用，可以在此基础上继续调整。")).toBeInTheDocument();
+  });
+
+  it("explains that ordinary adjustment and first-run regeneration stay frozen", async () => {
+    getDesignDocument.mockResolvedValue(document({
+      status: "failed",
+      draft_revision_id: "",
+      saved_revision_id: "",
+      active_task: { id: "task-1", agent_id: "agent-1", status: "failed", operation: "generate", error: null, created_at: "2026-08-19T00:00:00Z" },
+    }));
+    listDesignDocumentRevisions.mockResolvedValue({ revisions: [] });
+    renderPage();
+
+    expect(await screen.findByText(/沿用首次提交的需求、参考文件与冻结设计体系重新运行/)).toBeInTheDocument();
+
+  });
+
+  it("hides the latest-system action when the saved digest is unchanged", async () => {
+    getProjectDesignSystemForProject.mockResolvedValue(system({ content: { sections: [], token_groups: [], locators: [], preview_html: "", integrity_sha256: "a".repeat(64) } }));
+    renderPage();
+    await screen.findByTitle("订单总览 · 首页");
+    expect(screen.queryByRole("button", { name: "使用最新设计体系新建设计稿" })).not.toBeInTheDocument();
+  });
+
+  it("creates a new document from the frozen request under the latest repository system", async () => {
+    getProjectDesignSystemForProject.mockResolvedValue(system({ id: "system-2", content: { sections: [], token_groups: [], locators: [], preview_html: "", integrity_sha256: "b".repeat(64) } }));
+    createDesignDocument.mockResolvedValue(document({ id: "document-2" }));
+    renderPage();
+    await screen.findByRole("button", { name: "使用最新设计体系新建设计稿" });
+    await userEvent.click(screen.getByRole("button", { name: "使用最新设计体系新建设计稿" }));
+    expect(await screen.findByText("新建设计稿前确认")).toBeInTheDocument();
+    expect(screen.getByText(/将复用这份设计稿冻结的需求与参考文件/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "确认新建设计稿" }));
+    await waitFor(() => expect(createDesignDocument).toHaveBeenCalledWith({
+      project_id: "project-1",
+      agent_id: "agent-1",
+      project_resource_id: "repository-1",
+      issue_id: "",
+      design_system_id: "system-2",
+      platform: "web",
+      recipe: "ui-mockup",
+      brief: "做一个订单总览页，支持筛选。",
+      attachments: [{ attachment_id: "attachment-1" }],
+    }));
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith("/acme/designs/documents/document-2"));
+    expect(getDesignDocument).toHaveBeenCalledWith("document-1");
+  });
+
+  it("keeps the current page and reports an actionable creation error", async () => {
+    getProjectDesignSystemForProject.mockResolvedValue(system({ id: "system-2", content: { sections: [], token_groups: [], locators: [], preview_html: "", integrity_sha256: "b".repeat(64) } }));
+    createDesignDocument.mockRejectedValue(new Error("agent unavailable"));
+    renderPage();
+    await screen.findByRole("button", { name: "使用最新设计体系新建设计稿" });
+    await userEvent.click(screen.getByRole("button", { name: "使用最新设计体系新建设计稿" }));
+    await userEvent.click(screen.getByRole("button", { name: "确认新建设计稿" }));
+    await waitFor(() => expect(toastError).toHaveBeenCalledWith("agent unavailable"));
+    expect(await screen.findByTitle("订单总览 · 首页")).toBeInTheDocument();
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it("offers no action when frozen attachments or the request are malformed", async () => {
+    getDesignDocument.mockResolvedValue(document({ input_snapshot: { ...inputSnapshot(), attachments: [{ attachment_id: 1 }] } }));
+    getProjectDesignSystemForProject.mockResolvedValue(system({ integrity: "b".repeat(64) }));
+    renderPage();
+    await screen.findByTitle("订单总览 · 首页");
+    expect(screen.queryByRole("button", { name: "使用最新设计体系新建设计稿" })).not.toBeInTheDocument();
+  });
+
+  it("disables the latest-system action while a document is running", async () => {
+    getProjectDesignSystemForProject.mockResolvedValue(system({ id: "system-2", content: { sections: [], token_groups: [], locators: [], preview_html: "", integrity_sha256: "b".repeat(64) } }));
+    getDesignDocument.mockResolvedValue(document({ status: "running", active_task: { id: "task-9", agent_id: "agent-1", status: "running", operation: "adjust", error: null, created_at: "2026-08-19T00:20:00Z", started_at: "2026-08-19T00:20:01Z", completed_at: null } }));
+    renderPage();
+    const button = await screen.findByRole("button", { name: "使用最新设计体系新建设计稿" });
+    expect(button).toBeDisabled();
+  });
+
   it("sends an adjustment against the revision on screen", async () => {
     renderPage();
     await screen.findByTitle("订单总览 · 首页");

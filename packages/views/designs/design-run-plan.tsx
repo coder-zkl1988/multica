@@ -11,17 +11,23 @@ export interface TodoRow {
 }
 
 /**
- * Reads a `todo_write` payload. Returns an empty list for anything unreadable
+ * Reads a `todo_write` or Codex `update_plan` payload. Returns an empty list for anything unreadable
  * so a protocol change degrades to "no plan" rather than a broken one.
  */
 export function todoRows(input: Record<string, unknown> | undefined): TodoRow[] {
-  const raw = input?.["todos"];
+  const raw = Array.isArray(input?.["todos"])
+    ? input?.["todos"]
+    : input?.["plan"];
   if (!Array.isArray(raw)) return [];
   const rows: TodoRow[] = [];
   for (const entry of raw) {
     if (!entry || typeof entry !== "object") continue;
     const record = entry as Record<string, unknown>;
-    const content = typeof record.content === "string" ? record.content.trim() : "";
+    const content = typeof record.content === "string"
+      ? record.content.trim()
+      : typeof record.step === "string"
+        ? record.step.trim()
+        : "";
     if (!content) continue;
     const status = typeof record.status === "string" ? record.status : "pending";
     rows.push({ content, status });
@@ -38,7 +44,7 @@ export function todoRows(input: Record<string, unknown> | undefined): TodoRow[] 
 export function latestTodoRows(messages: TaskMessagePayload[]): TodoRow[] {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
-    if (!message || message.type !== "tool_use" || message.tool !== "todo_write") continue;
+    if (!message || message.type !== "tool_use" || (message.tool !== "todo_write" && message.tool !== "update_plan")) continue;
     const rows = todoRows(message.input as Record<string, unknown> | undefined);
     if (rows.length > 0) return rows;
   }

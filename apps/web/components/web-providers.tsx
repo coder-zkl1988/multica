@@ -26,6 +26,15 @@ function hasLegacyToken(): boolean {
   }
 }
 
+function canUseCookieAuth(apiBaseUrl?: string): boolean {
+  if (typeof window === "undefined" || !apiBaseUrl) return true;
+  try {
+    return new URL(apiBaseUrl, window.location.href).origin === window.location.origin;
+  } catch {
+    return true;
+  }
+}
+
 // Derive WebSocket URL from the page origin so self-hosted / LAN deployments
 // work without an explicit runtime wsUrl. The Next.js runtime proxy handles
 // /ws -> backend when the deployment keeps WebSockets same-origin.
@@ -54,7 +63,7 @@ export function WebProviders({
   apiBaseUrl?: string;
   wsUrl?: string;
 }) {
-  const cookieAuth = !hasLegacyToken();
+  const cookieAuth = !hasLegacyToken() && canUseCookieAuth(apiBaseUrl);
   const syncUserLocale = useUserLocaleSyncEnabled();
   // Stable identity reference so downstream effects keyed on it don't see a
   // new object on every parent render.

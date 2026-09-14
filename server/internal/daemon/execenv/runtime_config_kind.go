@@ -38,6 +38,9 @@ const (
 	// kindDesignRestore: server-managed Gallery Native restore execution whose
 	// structured result is captured directly.
 	kindDesignRestore
+	// kindDesignImplementation: issue-triggered code restoration whose result
+	// file and repository evidence are collected directly by the daemon.
+	kindDesignImplementation
 	// kindDesignSystemProfileAnalyze: server-managed analysis of an uploaded
 	// Figma UI specification whose JSON result is stored by the server.
 	kindDesignSystemProfileAnalyze
@@ -69,6 +72,8 @@ func classifyTask(ctx TaskContextForEnv) taskKind {
 		return kindPMOSync
 	case ctx.DesignRestoreContext != "":
 		return kindDesignRestore
+	case ctx.DesignImplementation != nil:
+		return kindDesignImplementation
 	case ctx.UIDraftCreateContext != "":
 		return kindUIDraftCreate
 	default:

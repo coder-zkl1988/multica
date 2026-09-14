@@ -14,6 +14,7 @@ import pg from "pg";
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || `http://localhost:${process.env.PORT || "8080"}`;
 const DATABASE_URL = process.env.DATABASE_URL ?? "postgres://multica:multica@localhost:5432/multica?sslmode=disable";
 const JWT_SECRET = process.env.JWT_SECRET || "multica-dev-secret-change-in-production";
+const USE_SY_SSO = /^(1|true|yes|on)$/i.test(process.env.USE_SY_SSO?.trim() ?? "");
 
 function signInternalToken(userId: string, email: string, expiresAt: number) {
   const encode = (value: object) => Buffer.from(JSON.stringify(value)).toString("base64url");
@@ -21,7 +22,7 @@ function signInternalToken(userId: string, email: string, expiresAt: number) {
   const claims = encode({
     sub: userId,
     email,
-    auth_source: "sso",
+    ...(USE_SY_SSO ? { auth_source: "sso" } : {}),
     iat: Math.floor(Date.now() / 1000),
     exp: expiresAt,
   });
@@ -115,7 +116,14 @@ export class TestApiClient {
 
   async getWorkspaces(): Promise<TestWorkspace[]> {
     const res = await this.authedFetch("/api/workspaces");
-    return res.json();
+    if (!res.ok) {
+      throw new Error(`GET /api/workspaces failed with status ${res.status}`);
+    }
+    const body: unknown = await res.json();
+    if (!Array.isArray(body)) {
+      throw new Error("GET /api/workspaces returned a non-array response");
+    }
+    return body as TestWorkspace[];
   }
 
   setWorkspaceId(id: string) {

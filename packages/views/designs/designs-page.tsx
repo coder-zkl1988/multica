@@ -1,17 +1,29 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { ClipboardList, Copy, Eye, FileJson, Folder, House, Palette, Plus, Search, Sparkles, Trash2, Users, X } from "lucide-react";
+import { ClipboardList, Copy, Eye, FileJson, Folder, GitBranch, House, Palette, Plus, Search, Sparkles, Trash2, Users, X } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api } from "@multica/core/api";
 import { designKeys } from "@multica/core/designs/keys";
-import { designDocumentListOptions, designDraftListOptions, designFileListOptions, designFolderListOptions, designScenarioRecipeListOptions, designSystemListOptions, designTemplateListOptions, projectDesignSystemByProjectOptions, projectDesignSystemCatalogueOptions } from "@multica/core/designs/queries";
+import {
+  designDocumentListByWorkspaceRepositoryOptions,
+  designDocumentListOptions,
+  designDraftListOptions,
+  designFileListOptions,
+  designFolderListOptions,
+  designRepositoryCatalogueOptions,
+  designScenarioRecipeListOptions,
+  designTemplateListOptions,
+  projectDesignSystemByProjectOptions,
+  projectDesignSystemByWorkspaceRepositoryOptions,
+  projectDesignSystemCatalogueOptions,
+} from "@multica/core/designs/queries";
+import { designDocumentToAssetItem } from "@multica/core/designs";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
-import { projectResourcesOptions } from "@multica/core/projects";
 import { agentListOptions } from "@multica/core/workspace/queries";
-import type { DesignCatalogTemplate, DesignDocument, DesignDraft, DesignFile, DesignFolder, GalleryJsonPatchOperation, Project } from "@multica/core/types";
+import type { DesignCatalogTemplate, DesignDocument, DesignDraft, DesignFile, DesignFolder, GalleryJsonPatchOperation, Project, ProjectDesignSystemCatalogueEntry } from "@multica/core/types";
 import { Badge } from "@multica/ui/components/ui/badge";
 import { Button } from "@multica/ui/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@multica/ui/components/ui/dropdown-menu";
@@ -39,7 +51,10 @@ import { DesignSystemLibrary } from "./design-system-library";
 import { DesignTaskComposer, type DesignRecipeSelection } from "./design-task-composer";
 import { FigmaPluginDownload } from "./figma-plugin-download";
 import { FigmaMCPGuide } from "./figma-mcp-guide";
-import { ProjectDesignSystemWorkspace } from "./project-design-system-workspace";
+import { DesignMvpViewSwitcher, type DesignMvpViewMode } from "./design-mvp-view-switcher";
+import { ProjectDesignSystemContent } from "./project-design-system-workspace";
+import { WorkspaceDesignSystemCreate } from "./workspace-design-system-create";
+import { repositoryName } from "./project-repository";
 import "./design-wash.css";
 
 type ToolMenuState = { x: number; y: number; file: DesignFile } | null;
@@ -53,6 +68,15 @@ type DesignHomePanel = "create" | "community" | "systems";
  * a filter that silently matches everything.
  */
 type DesignArtifactFilter = "all" | "prototype" | "slides";
+
+interface DesignRepositoryWorkspace {
+  id: string;
+  projectId: string;
+  projectTitle: string;
+  label: string;
+  repositoryUrl: string;
+  defaultBranchHint: string;
+}
 
 // The one workspace tab that always exists (DC-048). It is not closeable and
 // carries no project, so it is a sentinel rather than a project id. 创作,
@@ -292,14 +316,21 @@ export function DesignsPage({ figmaPluginDownloadUrl }: { figmaPluginDownloadUrl
   const wsId = useWorkspaceId();
   const paths = useWorkspacePaths();
   const navigation = useNavigation();
+  const initialProjectId = navigation.searchParams.get("create_project_id")?.trim() ?? "";
+  const initialIssueId = navigation.searchParams.get("create_issue_id")?.trim() ?? "";
+  const initialAgentId = navigation.searchParams.get("create_agent_id")?.trim() ?? "";
+  const initialContext = initialProjectId && initialIssueId
+    ? { projectId: initialProjectId, issueId: initialIssueId, agentId: initialAgentId || undefined }
+    : undefined;
   const queryClient = useQueryClient();
   const documentActions = useDesignDocumentActions();
-  const { data: files = [], isLoading, error, refetch } = useQuery(designFileListOptions(wsId));
+  const { data: allFiles = [] } = useQuery(designFileListOptions(wsId));
   const { data: folders = [] } = useQuery(designFolderListOptions(wsId));
   const { data: templates = [], isLoading: templatesLoading } = useQuery(designTemplateListOptions(wsId));
   const { data: drafts = [], isLoading: draftsLoading } = useQuery(designDraftListOptions(wsId));
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
   const { data: projectData } = useQuery({ queryKey: ["projects", wsId, "designs"], queryFn: () => api.listProjects() });
+  const { data: repositories = [] } = useQuery(designRepositoryCatalogueOptions(wsId));
   const projects = projectData?.projects ?? [];
   const [search, setSearch] = useState("");
   const [toolMenu, setToolMenu] = useState<ToolMenuState>(null);
@@ -309,39 +340,61 @@ export function DesignsPage({ figmaPluginDownloadUrl }: { figmaPluginDownloadUrl
   const [deleteFolderTarget, setDeleteFolderTarget] = useState<{ folder: DesignFolder; count: number } | null>(null);
   const [draftDialog, setDraftDialog] = useState<DraftDialogState>(null);
   const [materializingDraftId, setMaterializingDraftId] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<DesignMvpViewMode>("project");
   const [activeWorkspaceTabId, setActiveWorkspaceTabId] = useState(DESIGN_HOME_TAB_ID);
   const [openProjectIds, setOpenProjectIds] = useState<string[]>([]);
+  const [openRepositoryIds, setOpenRepositoryIds] = useState<string[]>([]);
   const [activeTab, setActiveTab] = useState<DesignAssetTab>("designs");
   const [homePanel, setHomePanel] = useState<DesignHomePanel>("create");
   const [artifactFilter, setArtifactFilter] = useState<DesignArtifactFilter>("all");
   // A recipe the community tab handed to the home composer (DC-041). The token
   // makes re-picking the same recipe a real event rather than a no-op.
   const [recipeSelection, setRecipeSelection] = useState<DesignRecipeSelection | null>(null);
-  // Design system scope per project (DC-052): empty is the project-level
-  // system, otherwise the id of one of the project's github_repo resources.
-  const [designScopeByProject, setDesignScopeByProject] = useState<Record<string, string>>({});
-  const selectedProjectId = FIXED_WORKSPACE_TAB_IDS.has(activeWorkspaceTabId) ? "" : activeWorkspaceTabId;
-  const { data: designSystems = [], isLoading: designSystemsLoading } = useQuery(designSystemListOptions(wsId, selectedProjectId || undefined));
-  const { data: projectResources = [] } = useQuery({
-    ...projectResourcesOptions(wsId, selectedProjectId),
+  const activeObjectId = FIXED_WORKSPACE_TAB_IDS.has(activeWorkspaceTabId) ? "" : activeWorkspaceTabId;
+  const selectedRepository = viewMode === "repository"
+    ? repositories.find((repository) => repository.id === activeObjectId)
+    : undefined;
+  const selectedProjectId = viewMode === "project" ? activeObjectId : "";
+  const selectedRepositoryId = selectedRepository?.id ?? "";
+  const selectedAssetScope = selectedRepositoryId
+    ? { kind: "workspace_repository" as const, workspaceRepositoryId: selectedRepositoryId }
+    : selectedProjectId
+      ? { kind: "project" as const, projectId: selectedProjectId }
+      : undefined;
+  const { data: files = [], isLoading, error, refetch } = useQuery({
+    ...designFileListOptions(wsId, selectedAssetScope),
+    enabled: Boolean(selectedAssetScope),
+  });
+  const projectDocumentsQuery = useQuery({
+    ...designDocumentListOptions(wsId, selectedProjectId),
     enabled: Boolean(selectedProjectId),
   });
-  const designRepositories = useMemo(
-    () => projectResources.filter((resource) => resource.resource_type === "github_repo"),
-    [projectResources],
-  );
-  // A stored scope can point at a repository that has since been detached.
-  const selectedDesignRepositoryId = designRepositories.some(
-    (repository) => repository.id === designScopeByProject[selectedProjectId],
-  )
-    ? designScopeByProject[selectedProjectId] ?? ""
+  const repositoryDocumentsQuery = useQuery({
+    ...designDocumentListByWorkspaceRepositoryOptions(wsId, selectedRepositoryId),
+    enabled: Boolean(selectedRepositoryId),
+  });
+  const projectDocuments = selectedRepositoryId
+    ? repositoryDocumentsQuery.data ?? []
+    : projectDocumentsQuery.data ?? [];
+  const projectDocumentsLoading = selectedRepositoryId
+    ? repositoryDocumentsQuery.isLoading
+    : projectDocumentsQuery.isLoading;
+  const selectedRepositoryName = selectedRepository
+    ? repositoryName(selectedRepository.label, selectedRepository.repositoryUrl, selectedRepository.projectTitle)
     : "";
-  const { data: projectDesignSystem, isLoading: projectDesignSystemLoading } = useQuery(projectDesignSystemByProjectOptions(wsId, selectedProjectId, selectedDesignRepositoryId));
-  // Page-design documents of the open project (DC-042). Idle without one, so
-  // the home tab never asks for a list the endpoint does not serve.
-  const { data: projectDocuments = [], isLoading: projectDocumentsLoading } = useQuery(
-    designDocumentListOptions(wsId, selectedProjectId),
-  );
+  const projectSystemQuery = useQuery({
+    ...projectDesignSystemByProjectOptions(wsId, selectedProjectId),
+    enabled: false,
+  });
+  const repositorySystemQuery = useQuery({
+    ...projectDesignSystemByWorkspaceRepositoryOptions(wsId, selectedRepositoryId),
+    enabled: Boolean(selectedRepositoryId),
+    refetchInterval: (query) => (
+      query.state.data?.active_task || query.state.data?.status === "generating" ? 1000 : false
+    ),
+  });
+  const projectDesignSystem = selectedRepositoryId ? repositorySystemQuery.data : projectSystemQuery.data;
+  const projectDesignSystemLoading = selectedRepositoryId ? repositorySystemQuery.isLoading : projectSystemQuery.isLoading;
   // Counts on the home sub-tabs come from the same caches their panels read,
   // so a badge can never claim a number its panel does not show.
   const { data: scenarioRecipes = [] } = useQuery(designScenarioRecipeListOptions(wsId));
@@ -349,17 +402,35 @@ export function DesignsPage({ figmaPluginDownloadUrl }: { figmaPluginDownloadUrl
 
   const projectById = useMemo(() => new Map(projects.map((project) => [project.id, project])), [projects]);
   const folderById = useMemo(() => new Map(folders.map((folder) => [folder.id, folder])), [folders]);
-  const fileById = useMemo(() => new Map(files.map((file) => [file.id, file])), [files]);
+  const fileById = useMemo(() => new Map(allFiles.map((file) => [file.id, file])), [allFiles]);
   useEffect(() => {
     const validProjectIds = new Set(projects.map((project) => project.id));
-    if (!FIXED_WORKSPACE_TAB_IDS.has(activeWorkspaceTabId) && !validProjectIds.has(activeWorkspaceTabId)) {
-      setActiveWorkspaceTabId(DESIGN_HOME_TAB_ID);
-    }
     setOpenProjectIds((current) => {
       const next = current.filter((projectId) => validProjectIds.has(projectId));
       return next.length === current.length && next.every((projectId, index) => projectId === current[index]) ? current : next;
     });
-  }, [activeWorkspaceTabId, projects]);
+  }, [projects]);
+  useEffect(() => {
+    const validRepositoryIds = new Set(repositories.map((repository) => repository.id));
+    setOpenRepositoryIds((current) => {
+      const next = current.filter((repositoryId) => validRepositoryIds.has(repositoryId));
+      return next.length === current.length && next.every((repositoryId, index) => repositoryId === current[index]) ? current : next;
+    });
+  }, [repositories]);
+  useEffect(() => {
+    if (FIXED_WORKSPACE_TAB_IDS.has(activeWorkspaceTabId)) return;
+    const validIds = new Set(
+      viewMode === "project"
+        ? projects.map((project) => project.id)
+        : repositories.map((repository) => repository.id),
+    );
+    if (!validIds.has(activeWorkspaceTabId)) setActiveWorkspaceTabId(DESIGN_HOME_TAB_ID);
+  }, [activeWorkspaceTabId, projects, repositories, viewMode]);
+  useEffect(() => {
+    if (activeTab === "templates" || (viewMode === "project" && activeTab === "systems")) {
+      setActiveTab("designs");
+    }
+  }, [activeTab, viewMode]);
   const availableAgents = useMemo(() => agents.filter((agent) => !agent.archived_at && agent.runtime_id), [agents]);
   const defaultAgentId = availableAgents[0]?.id ?? "";
   const deleteDesign = useMutation({
@@ -480,7 +551,7 @@ export function DesignsPage({ figmaPluginDownloadUrl }: { figmaPluginDownloadUrl
     setToolMenu(null);
   };
 
-  const projectFiles = useMemo(() => files.filter((file) => file.project_id === selectedProjectId), [files, selectedProjectId]);
+  const projectFiles = files;
   const projectFolders = useMemo(() => folders.filter((folder) => folder.project_id === selectedProjectId), [folders, selectedProjectId]);
   const projectTemplates = useMemo(() => templates.filter((template) => template.metadata?.project_id === selectedProjectId), [templates, selectedProjectId]);
   const projectTemplateIds = useMemo(() => new Set(projectTemplates.map((template) => template.id)), [projectTemplates]);
@@ -499,9 +570,7 @@ export function DesignsPage({ figmaPluginDownloadUrl }: { figmaPluginDownloadUrl
     ? "搜索设计稿…"
     : activeTab === "drafts"
       ? "搜索设计草稿…"
-      : activeTab === "templates"
-        ? "搜索模版…"
-        : "搜索设计体系…";
+      : "搜索设计体系…";
   const filtered = useMemo(() => {
     const query = searchQuery;
     if (!query) return projectFiles;
@@ -548,17 +617,62 @@ export function DesignsPage({ figmaPluginDownloadUrl }: { figmaPluginDownloadUrl
       const folderGroup = folderMap.get(fKey) ?? { folderKey: fKey, folderName: fName, items: [] };
       folderGroup.items.push(file);
     }
-    return Array.from(folderMap.values()).filter((folder) => folder.items.length > 0 || !searchQuery);
-  }, [filtered, folderById, projectFolders, searchQuery]);
+    return Array.from(folderMap.values()).filter(
+      (folder) => folder.items.length > 0 || (viewMode === "project" && !searchQuery),
+    );
+  }, [filtered, folderById, projectFolders, searchQuery, viewMode]);
   const selectedProject = projectById.get(selectedProjectId);
   const openProjects = openProjectIds
     .map((projectId) => projectById.get(projectId))
     .filter((project): project is Project => Boolean(project));
+  const repositoryById = useMemo(
+    () => new Map(repositories.map((repository) => [repository.id, repository])),
+    [repositories],
+  );
+  const openRepositories = openRepositoryIds
+    .map((repositoryId) => repositoryById.get(repositoryId))
+    .filter((repository): repository is DesignRepositoryWorkspace => Boolean(repository));
   const unopenedProjects = projects.filter((project) => !openProjectIds.includes(project.id));
+  const unopenedRepositories = repositories.filter(
+    (repository) => !openRepositoryIds.includes(repository.id),
+  );
   const projectDesignSystemCount = projectDesignSystem?.id ? 1 : 0;
+  const repositorySystemHasContent = Boolean(
+    projectDesignSystem?.content.preview_html
+      || projectDesignSystem?.content.sections.length
+      || projectDesignSystem?.content.token_groups.length,
+  );
+  const showRepositorySystemContent = Boolean(
+    projectDesignSystem?.active_task
+      || projectDesignSystem?.status === "generating"
+      || (projectDesignSystem?.id && (
+        repositorySystemHasContent
+          || projectDesignSystem.status === "draft"
+          || projectDesignSystem.status === "saved"
+      )),
+  );
+  const repositorySystemSnapshot = projectDesignSystem?.input_snapshot;
+  const repositorySystemSourceLinks = repositorySystemSnapshot?.references
+    ?.filter((reference) => reference.kind === "link" && reference.value)
+    .map((reference) => reference.value as string) ?? [];
+  const savedDocuments = useMemo(
+    () => projectDocuments.filter((document) => Boolean(document.saved_revision_id)),
+    [projectDocuments],
+  );
+  const draftDocuments = useMemo(
+    () => projectDocuments.filter((document) => designDocumentToAssetItem(document).hasDraftVersion),
+    [projectDocuments],
+  );
+  const filteredDraftDocuments = useMemo(() => {
+    if (!searchQuery) return draftDocuments;
+    return draftDocuments.filter((document) => [document.title, document.status]
+      .join(" ")
+      .toLowerCase()
+      .includes(searchQuery));
+  }, [draftDocuments, searchQuery]);
   // Every recipe in this phase produces a prototype, so the artifact row can
   // filter honestly without inventing a kind the documents do not carry.
-  const visibleDocuments = artifactFilter === "slides" ? [] : projectDocuments;
+  const visibleDocuments = artifactFilter === "slides" ? [] : savedDocuments;
   const openDocument = (document: DesignDocument) => {
     navigation.push(paths.designDocumentDetail(document.id));
   };
@@ -566,12 +680,6 @@ export function DesignsPage({ figmaPluginDownloadUrl }: { figmaPluginDownloadUrl
   const openProjectTab = (projectId: string) => {
     setOpenProjectIds((current) => current.includes(projectId) ? current : [...current, projectId]);
     setActiveWorkspaceTabId(projectId);
-  };
-  // The library hands a project over for its design system, so the tab opens
-  // on 设计体系, not on whichever asset tab was last active.
-  const openProjectSystems = (projectId: string) => {
-    openProjectTab(projectId);
-    setActiveTab("systems");
   };
   // "新建设计稿" starts where every design task starts — the home composer —
   // rather than opening a second creation path beside it.
@@ -587,13 +695,58 @@ export function DesignsPage({ figmaPluginDownloadUrl }: { figmaPluginDownloadUrl
       setActiveWorkspaceTabId(next[Math.min(closingIndex, next.length - 1)] ?? DESIGN_HOME_TAB_ID);
     }
   };
+  const openRepositoryTab = (repositoryId: string) => {
+    setOpenRepositoryIds((current) => current.includes(repositoryId) ? current : [...current, repositoryId]);
+    setActiveWorkspaceTabId(repositoryId);
+  };
+  const closeRepositoryTab = (repositoryId: string) => {
+    const closingIndex = openRepositoryIds.indexOf(repositoryId);
+    const next = openRepositoryIds.filter((id) => id !== repositoryId);
+    setOpenRepositoryIds(next);
+    if (activeWorkspaceTabId === repositoryId) {
+      setActiveWorkspaceTabId(next[Math.min(closingIndex, next.length - 1)] ?? DESIGN_HOME_TAB_ID);
+    }
+  };
+  const openCatalogueSystem = (entry: ProjectDesignSystemCatalogueEntry) => {
+    if (entry.workspace_repository_id || entry.project_resource_id) {
+      const repositoryId = entry.workspace_repository_id || entry.project_resource_id;
+      setViewMode("repository");
+      openRepositoryTab(repositoryId);
+      setActiveTab("systems");
+      return;
+    }
+    if (entry.project_id) {
+      setViewMode("project");
+      openProjectTab(entry.project_id);
+      setActiveTab("designs");
+      return;
+    }
+    navigation.push(paths.projectDesignSystemDetail(entry.id));
+  };
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
       <div aria-hidden="true" className="design-wash-bg pointer-events-none absolute inset-0 z-0" />
       <div className="relative z-10 flex min-h-0 flex-1 flex-col overflow-hidden">
         <div className="flex shrink-0 flex-col border-b bg-muted/20 sm:flex-row sm:items-end sm:justify-between">
-          <div role="tablist" aria-label="设计项目" className="flex min-w-0 items-end gap-1 overflow-x-auto overflow-y-hidden px-3 pt-2 sm:px-4">
+          <div className="flex min-w-0 flex-1 items-end gap-2 px-3 pt-2 sm:px-4">
+            <div className="mb-1 shrink-0">
+              <DesignMvpViewSwitcher
+                mode={viewMode}
+                onModeChange={(nextMode) => {
+                  if (nextMode === viewMode) return;
+                  setViewMode(nextMode);
+                  setActiveWorkspaceTabId(DESIGN_HOME_TAB_ID);
+                  setActiveTab("designs");
+                  setSearch("");
+                }}
+              />
+            </div>
+            <div
+              role="tablist"
+              aria-label={viewMode === "project" ? "设计项目" : "设计仓库"}
+              className="flex min-w-0 flex-1 items-end gap-1 overflow-x-auto overflow-y-hidden"
+            >
             {/* Home is fixed (DC-048): it carries no project, so there is
                 nothing to close. 创作 / 社区 / 设计体系 are its sub-tabs. */}
             {(() => {
@@ -613,7 +766,7 @@ export function DesignsPage({ figmaPluginDownloadUrl }: { figmaPluginDownloadUrl
                 </div>
               );
             })()}
-            {openProjects.map((project) => {
+            {(viewMode === "project" ? openProjects : []).map((project) => {
               const active = project.id === activeWorkspaceTabId;
               return (
                 <div
@@ -642,23 +795,74 @@ export function DesignsPage({ figmaPluginDownloadUrl }: { figmaPluginDownloadUrl
                 </div>
               );
             })}
+            {(viewMode === "repository" ? openRepositories : []).map((repository) => {
+              const active = repository.id === activeWorkspaceTabId;
+              const title = `${repository.projectTitle} · ${repositoryName(repository.label, repository.repositoryUrl, repository.projectTitle)}`;
+              return (
+                <div
+                  key={repository.id}
+                  title={`${title} · ${repository.repositoryUrl}`}
+                  className={`group/repository-tab -mb-px flex h-9 w-48 shrink-0 items-center rounded-t-md border px-1 transition-colors ${active ? "border-border border-b-background bg-background text-foreground shadow-sm" : "border-transparent text-muted-foreground hover:bg-background/70 hover:text-foreground"}`}
+                >
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={active}
+                    className="flex min-w-0 flex-1 items-center gap-2 px-2 text-left text-body"
+                    onClick={() => setActiveWorkspaceTabId(repository.id)}
+                  >
+                    <GitBranch className="h-3.5 w-3.5 shrink-0" />
+                    <span className="truncate">{title}</span>
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={`关闭仓库 ${title}`}
+                    title={`关闭仓库 ${title}`}
+                    className="flex size-6 shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity hover:bg-muted hover:text-foreground focus-visible:opacity-100 group-hover/repository-tab:opacity-100"
+                    onClick={() => closeRepositoryTab(repository.id)}
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </div>
+              );
+            })}
             <DropdownMenu>
               <DropdownMenuTrigger
                 render={
-                  <button type="button" aria-label="打开项目" title="打开项目" className="mb-1 flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-background hover:text-foreground">
+                  <button
+                    type="button"
+                    aria-label={viewMode === "project" ? "打开项目" : "打开仓库"}
+                    title={viewMode === "project" ? "打开项目" : "打开仓库"}
+                    className="mb-1 flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-background hover:text-foreground"
+                  >
                     <Plus className="h-4 w-4" />
                   </button>
                 }
               />
-              <DropdownMenuContent align="start" className="w-56">
-                {unopenedProjects.length ? unopenedProjects.map((project) => (
-                  <DropdownMenuItem key={project.id} onClick={() => openProjectTab(project.id)}>
-                    <Folder className="h-4 w-4" />
-                    <span className="truncate">{project.title}</span>
-                  </DropdownMenuItem>
-                )) : <DropdownMenuItem disabled>所有项目均已打开</DropdownMenuItem>}
+              <DropdownMenuContent align="start" className="w-72">
+                {viewMode === "project" ? (
+                  unopenedProjects.length ? unopenedProjects.map((project) => (
+                    <DropdownMenuItem key={project.id} onClick={() => openProjectTab(project.id)}>
+                      <Folder className="h-4 w-4" />
+                      <span className="truncate">{project.title}</span>
+                    </DropdownMenuItem>
+                  )) : <DropdownMenuItem disabled>所有项目均已打开</DropdownMenuItem>
+                ) : (
+                  unopenedRepositories.length ? unopenedRepositories.map((repository) => (
+                    <DropdownMenuItem key={repository.id} onClick={() => openRepositoryTab(repository.id)}>
+                      <GitBranch className="h-4 w-4" />
+                      <span className="min-w-0">
+                        <span className="block truncate">{repositoryName(repository.label, repository.repositoryUrl, repository.projectTitle)}</span>
+                        <span className="block truncate text-caption text-muted-foreground">
+                          {repository.projectTitle} · {repository.repositoryUrl}
+                        </span>
+                      </span>
+                    </DropdownMenuItem>
+                  )) : <DropdownMenuItem disabled>所有仓库均已打开</DropdownMenuItem>
+                )}
               </DropdownMenuContent>
             </DropdownMenu>
+            </div>
           </div>
           <div className="flex shrink-0 items-center gap-2 px-3 py-2 sm:px-4">
             {selectedProjectId && activeTab !== "systems" ? (
@@ -708,6 +912,7 @@ export function DesignsPage({ figmaPluginDownloadUrl }: { figmaPluginDownloadUrl
                   onBrowseRecipes={() => setHomePanel("community")}
                   onOpenDocument={openDocument}
                   recipeSelection={recipeSelection}
+                  initialContext={initialContext}
                 />
               </TabsContent>
 
@@ -726,7 +931,7 @@ export function DesignsPage({ figmaPluginDownloadUrl }: { figmaPluginDownloadUrl
                     project and repository, and this library never introduces a
                     workspace default projects would inherit (DC-052). */}
                 <DesignSystemLibrary
-                  onOpenProject={openProjectSystems}
+                  onOpenSystem={openCatalogueSystem}
                   onCreate={() => navigation.push(paths.projectDesignSystemNew())}
                 />
               </TabsContent>
@@ -746,7 +951,9 @@ export function DesignsPage({ figmaPluginDownloadUrl }: { figmaPluginDownloadUrl
           <Tabs
             value={activeTab}
             onValueChange={(value) => {
-              if (value === "designs" || value === "drafts" || value === "templates" || value === "systems") setActiveTab(value);
+              if (value === "designs" || value === "drafts" || (viewMode === "repository" && value === "systems")) {
+                setActiveTab(value);
+              }
             }}
             className="min-h-0 flex-1 gap-0 overflow-hidden"
           >
@@ -757,23 +964,22 @@ export function DesignsPage({ figmaPluginDownloadUrl }: { figmaPluginDownloadUrl
                   <span>设计稿</span>
                   {/* Both halves of the tab: generated page designs and the
                       files imported into it. */}
-                  <Badge variant="secondary" className="h-4 min-w-4 rounded-full px-1 text-micro font-normal tabular-nums">{projectFiles.length + projectDocuments.length}</Badge>
+                  <Badge variant="secondary" className="h-4 min-w-4 rounded-full px-1 text-micro font-normal tabular-nums">{projectFiles.length + savedDocuments.length}</Badge>
                 </TabsTrigger>
                 <TabsTrigger value="drafts" className="h-10 flex-none gap-2 px-1 group-data-horizontal/tabs:after:bottom-0">
                   <ClipboardList className="h-3.5 w-3.5" />
                   <span>设计草稿</span>
-                  <Badge variant="secondary" className="h-4 min-w-4 rounded-full px-1 text-micro font-normal tabular-nums">{pendingDesignDrafts.length}</Badge>
+                  <Badge variant="secondary" className="h-4 min-w-4 rounded-full px-1 text-micro font-normal tabular-nums">
+                    {draftDocuments.length + (viewMode === "project" ? pendingDesignDrafts.length : 0)}
+                  </Badge>
                 </TabsTrigger>
-                <TabsTrigger value="templates" className="h-10 flex-none gap-2 px-1 group-data-horizontal/tabs:after:bottom-0">
-                  <FileJson className="h-3.5 w-3.5" />
-                  <span>模版</span>
-                  <Badge variant="secondary" className="h-4 min-w-4 rounded-full px-1 text-micro font-normal tabular-nums">{projectTemplates.length}</Badge>
-                </TabsTrigger>
-                <TabsTrigger value="systems" className="h-10 flex-none gap-2 px-1 group-data-horizontal/tabs:after:bottom-0">
-                  <Palette className="h-3.5 w-3.5" />
-                  <span>设计体系</span>
-                  <Badge variant="secondary" className="h-4 min-w-4 rounded-full px-1 text-micro font-normal tabular-nums">{projectDesignSystemCount}</Badge>
-                </TabsTrigger>
+                {viewMode === "repository" ? (
+                  <TabsTrigger value="systems" className="h-10 flex-none gap-2 px-1 group-data-horizontal/tabs:after:bottom-0">
+                    <Palette className="h-3.5 w-3.5" />
+                    <span>设计体系</span>
+                    <Badge variant="secondary" className="h-4 min-w-4 rounded-full px-1 text-micro font-normal tabular-nums">{projectDesignSystemCount}</Badge>
+                  </TabsTrigger>
+                ) : null}
               </TabsList>
             </div>
 
@@ -783,13 +989,13 @@ export function DesignsPage({ figmaPluginDownloadUrl }: { figmaPluginDownloadUrl
                   <div role="group" aria-label="设计稿形态" className="flex flex-wrap items-center gap-1.5">
                     <DesignFilterPill
                       label="全部"
-                      count={projectDocuments.length}
+                      count={savedDocuments.length}
                       selected={artifactFilter === "all"}
                       onClick={() => setArtifactFilter("all")}
                     />
                     <DesignFilterPill
                       label="原型"
-                      count={projectDocuments.length}
+                      count={savedDocuments.length}
                       selected={artifactFilter === "prototype"}
                       onClick={() => setArtifactFilter("prototype")}
                     />
@@ -818,13 +1024,18 @@ export function DesignsPage({ figmaPluginDownloadUrl }: { figmaPluginDownloadUrl
                 ) : visibleDocuments.length > 0 ? (
                   <div className="grid gap-4 grid-cols-2 min-[564px]:grid-cols-3 min-[756px]:grid-cols-4 min-[948px]:grid-cols-5">
                     {visibleDocuments.map((document) => (
-                      <DesignDocumentCard
-                        key={document.id}
-                        document={document}
-                        projectTitle={selectedProject?.title ?? ""}
-                        onOpen={() => openDocument(document)}
-                        {...documentActions.cardProps(document)}
-                      />
+                      <div key={document.id} className="min-w-0 space-y-2">
+                        <DesignDocumentCard
+                          document={document}
+                          variant="saved"
+                          projectTitle={selectedProject?.title ?? ""}
+                          onOpen={() => navigation.push(paths.designDocumentDetail(document.id) + "/view")}
+                          {...documentActions.cardProps(document)}
+                        />
+                        {document.draft_revision_id && document.draft_revision_id !== document.saved_revision_id ? (
+                          <Badge variant="outline" className="text-caption">有未保存调整</Badge>
+                        ) : null}
+                      </div>
                     ))}
                   </div>
                 ) : (
@@ -864,16 +1075,25 @@ export function DesignsPage({ figmaPluginDownloadUrl }: { figmaPluginDownloadUrl
 
             <TabsContent value="drafts" className="min-h-0 overflow-auto p-4">
               <section className="space-y-3">
-                {draftsLoading ? (
+                {projectDocumentsLoading || (viewMode === "project" && draftsLoading) ? (
                   <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">{Array.from({ length: 4 }).map((_, index) => <Skeleton key={index} className="aspect-[4/3] w-full" />)}</div>
-                ) : filteredDrafts.length === 0 ? (
+                ) : filteredDraftDocuments.length === 0 && (viewMode === "repository" || filteredDrafts.length === 0) ? (
                   <InlineEmpty>{searchQuery ? `没有匹配“${search}”的设计草稿。` : "暂无设计草稿。"}</InlineEmpty>
                 ) : (
                   <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-                    {filteredDrafts.map((draft) => {
+                    {filteredDraftDocuments.map((document) => (
+                      <DesignDocumentCard
+                        key={document.id}
+                        document={document}
+                        projectTitle={selectedProject?.title ?? ""}
+                        onOpen={() => openDocument(document)}
+                        {...documentActions.cardProps(document)}
+                      />
+                    ))}
+                    {viewMode === "project" ? filteredDrafts.map((draft) => {
                       const previewFile = draft.generated_file_id ? fileById.get(draft.generated_file_id) : draft.file_id ? fileById.get(draft.file_id) : undefined;
                       return <DraftReviewCard key={draft.id} draft={draft} previewFile={previewFile} materializing={materializingDraftId === draft.id} onMaterialize={(item) => materializeDraft.mutate(item)} />;
-                    })}
+                    }) : null}
                   </div>
                 )}
               </section>
@@ -893,22 +1113,35 @@ export function DesignsPage({ figmaPluginDownloadUrl }: { figmaPluginDownloadUrl
               </section>
             </TabsContent>
 
-            <TabsContent value="systems" className="min-h-0 overflow-hidden">
-              {selectedProject ? (
-                <ProjectDesignSystemWorkspace
-                  project={selectedProject}
-                  agents={agents}
-                  designFiles={projectFiles}
-                  legacyProfiles={designSystems}
-                  system={projectDesignSystem}
-                  isLoading={projectDesignSystemLoading || designSystemsLoading}
-                  repositories={designRepositories}
-                  selectedRepositoryId={selectedDesignRepositoryId}
-                  onSelectRepository={(projectResourceId) => setDesignScopeByProject((current) => ({
-                    ...current,
-                    [selectedProject.id]: projectResourceId,
-                  }))}
-                />
+            <TabsContent value="systems" className="flex min-h-0 flex-1 overflow-hidden">
+              {selectedRepository ? (
+                showRepositorySystemContent ? (
+                  <ProjectDesignSystemContent
+                    agents={agents}
+                    designFiles={projectFiles}
+                    legacyProfiles={[]}
+                    system={projectDesignSystem}
+                    isLoading={projectDesignSystemLoading}
+                    repositories={[]}
+                    selectedRepositoryId=""
+                  />
+                ) : (
+                  <WorkspaceDesignSystemCreate
+                    key={selectedRepository.id}
+                    embedded
+                    initialScope="repository"
+                    initialRepositoryId={selectedRepository.id}
+                    initialName={`${selectedRepositoryName} 设计体系`}
+                    initialBrief={repositorySystemSnapshot?.brief?.trim()
+                      || `为设置中的 ${selectedRepositoryName} 仓库建立设计体系。`}
+                    initialAgentId={repositorySystemSnapshot?.agent_id
+                      || (availableAgents.length === 1 ? defaultAgentId : "")}
+                    initialPlatform={repositorySystemSnapshot?.platform || "web"}
+                    initialSourceLinks={repositorySystemSourceLinks.length
+                      ? repositorySystemSourceLinks
+                      : [selectedRepository.repositoryUrl]}
+                  />
+                )
               ) : null}
             </TabsContent>
           </Tabs>

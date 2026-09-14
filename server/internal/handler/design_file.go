@@ -62,13 +62,6 @@ func designRestoreAgentLabelFromInput(input json.RawMessage) string {
 	return "前端 Agent"
 }
 
-func (h *Handler) canCompleteUIDesignIssue(ctx context.Context, issue db.Issue, nextStatus string) bool {
-	if issue.Status == "done" || nextStatus != "done" || !isUIDesignIssue(issue) {
-		return true
-	}
-	return h.uiDesignDelivered(ctx, issue)
-}
-
 type designRestoreResultSummary struct {
 	Status                   string                     `json:"status"`
 	Summary                  string                     `json:"summary"`
@@ -479,19 +472,23 @@ func (h *Handler) replaceDesignRestoreMappingsFromSummary(ctx context.Context, t
 }
 
 type DesignFileResponse struct {
-	ID                string          `json:"id"`
-	WorkspaceID       string          `json:"workspace_id"`
-	ProjectID         *string         `json:"project_id,omitempty"`
-	FolderID          *string         `json:"folder_id,omitempty"`
-	Title             string          `json:"title"`
-	Description       *string         `json:"description"`
-	SourceType        string          `json:"source_type"`
-	SourceRef         json.RawMessage `json:"source_ref"`
-	ThumbnailURL      *string         `json:"thumbnail_url,omitempty"`
-	CurrentRevisionID *string         `json:"current_revision_id"`
-	CreatedBy         *string         `json:"created_by"`
-	CreatedAt         string          `json:"created_at"`
-	UpdatedAt         string          `json:"updated_at"`
+	ID                    string          `json:"id"`
+	DesignRef             string          `json:"design_ref,omitempty"`
+	Source                string          `json:"source"`
+	WorkspaceID           string          `json:"workspace_id"`
+	ProjectID             *string         `json:"project_id,omitempty"`
+	FolderID              *string         `json:"folder_id,omitempty"`
+	Title                 string          `json:"title"`
+	Description           *string         `json:"description"`
+	SourceType            string          `json:"source_type"`
+	SourceRef             json.RawMessage `json:"source_ref"`
+	ThumbnailURL          *string         `json:"thumbnail_url,omitempty"`
+	CurrentRevisionID     *string         `json:"current_revision_id"`
+	ProjectResourceID     *string         `json:"project_resource_id"`
+	WorkspaceRepositoryID *string         `json:"workspace_repository_id"`
+	CreatedBy             *string         `json:"created_by"`
+	CreatedAt             string          `json:"created_at"`
+	UpdatedAt             string          `json:"updated_at"`
 }
 
 type DesignRevisionResponse struct {
@@ -1027,18 +1024,21 @@ func generateFigmaImportCode() (string, error) {
 
 func designFileToResponse(file db.DesignFile) DesignFileResponse {
 	return DesignFileResponse{
-		ID:                uuidToString(file.ID),
-		WorkspaceID:       uuidToString(file.WorkspaceID),
-		ProjectID:         uuidToPtr(file.ProjectID),
-		FolderID:          uuidToPtr(file.FolderID),
-		Title:             file.Title,
-		Description:       textToPtr(file.Description),
-		SourceType:        file.SourceType,
-		SourceRef:         json.RawMessage(file.SourceRef),
-		CurrentRevisionID: uuidToPtr(file.CurrentRevisionID),
-		CreatedBy:         uuidToPtr(file.CreatedBy),
-		CreatedAt:         timestampToString(file.CreatedAt),
-		UpdatedAt:         timestampToString(file.UpdatedAt),
+		ID:                    uuidToString(file.ID),
+		Source:                "figma",
+		WorkspaceID:           uuidToString(file.WorkspaceID),
+		ProjectID:             uuidToPtr(file.ProjectID),
+		FolderID:              uuidToPtr(file.FolderID),
+		Title:                 file.Title,
+		Description:           textToPtr(file.Description),
+		SourceType:            file.SourceType,
+		SourceRef:             json.RawMessage(file.SourceRef),
+		CurrentRevisionID:     uuidToPtr(file.CurrentRevisionID),
+		ProjectResourceID:     uuidToPtr(file.ProjectResourceID),
+		WorkspaceRepositoryID: uuidToPtr(file.WorkspaceRepositoryID),
+		CreatedBy:             uuidToPtr(file.CreatedBy),
+		CreatedAt:             timestampToString(file.CreatedAt),
+		UpdatedAt:             timestampToString(file.UpdatedAt),
 	}
 }
 
@@ -1048,6 +1048,45 @@ func parseOptionalUUIDOrBadRequest(w http.ResponseWriter, raw string, field stri
 		return pgtype.UUID{}, true
 	}
 	return parseUUIDOrBadRequest(w, raw, field)
+}
+
+// validateDesignRepositoryScope proves the repository selected by a read
+// projection belongs to the same workspace and project, and really is a code
+// repository. The associated sqlc query still applies all three ids, so this
+// validation never substitutes for exact filtering.
+func (h *Handler) validateDesignRepositoryScope(
+	w http.ResponseWriter,
+	r *http.Request,
+	workspaceID pgtype.UUID,
+	projectID pgtype.UUID,
+	resourceID pgtype.UUID,
+) bool {
+	if _, err := h.Queries.GetProjectInWorkspace(r.Context(), db.GetProjectInWorkspaceParams{
+		ID: projectID, WorkspaceID: workspaceID,
+	}); err != nil {
+		writeProjectDesignSystemError(w, http.StatusNotFound, "project_not_found", "project not found")
+		return false
+	}
+	resource, err := h.Queries.GetProjectResourceInWorkspace(r.Context(), db.GetProjectResourceInWorkspaceParams{
+		ID: resourceID, WorkspaceID: workspaceID,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeProjectDesignSystemError(w, http.StatusNotFound, "project_resource_not_found", "repository not found")
+		return false
+	}
+	if err != nil {
+		writeProjectDesignSystemError(w, http.StatusInternalServerError, "project_resource_lookup_failed", "failed to load repository")
+		return false
+	}
+	if resource.ProjectID != projectID {
+		writeProjectDesignSystemError(w, http.StatusConflict, "project_resource_project_mismatch", "repository does not belong to project")
+		return false
+	}
+	if resource.ResourceType != projectResourceTypeGitHubRepo {
+		writeProjectDesignSystemError(w, http.StatusBadRequest, "project_resource_not_repository", "resource is not a code repository")
+		return false
+	}
+	return true
 }
 
 func (h *Handler) validateDesignProjectFolder(w http.ResponseWriter, r *http.Request, workspaceID pgtype.UUID, projectID pgtype.UUID, folderID pgtype.UUID, requireProject bool) bool {
@@ -2081,7 +2120,61 @@ func (h *Handler) ListDesignFiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	files, err := h.Queries.ListDesignFiles(r.Context(), wsUUID)
+	query := r.URL.Query()
+	rawProjectID := strings.TrimSpace(query.Get("project_id"))
+	rawResourceID := strings.TrimSpace(query.Get("project_resource_id"))
+	rawWorkspaceRepositoryID := strings.TrimSpace(query.Get("workspace_repository_id"))
+	if rawWorkspaceRepositoryID != "" && (rawProjectID != "" || rawResourceID != "") {
+		writeProjectDesignSystemError(w, http.StatusBadRequest, "invalid_request", "settings repository scope cannot be combined with project scope")
+		return
+	}
+	if rawResourceID != "" && rawProjectID == "" {
+		writeProjectDesignSystemError(w, http.StatusBadRequest, "invalid_request", "project_id is required with project_resource_id")
+		return
+	}
+
+	var files []db.DesignFile
+	var err error
+	switch {
+	case rawWorkspaceRepositoryID != "":
+		repositoryUUID, ok := parseUUIDOrBadRequest(w, rawWorkspaceRepositoryID, "workspace_repository_id")
+		if !ok {
+			return
+		}
+		if _, repositoryErr := loadWorkspaceRepository(r.Context(), h.Queries, wsUUID, repositoryUUID); repositoryErr != nil {
+			writeProjectDesignSystemError(w, http.StatusNotFound, "workspace_repository_not_found", "settings repository not found")
+			return
+		}
+		files, err = h.Queries.ListDesignFilesByWorkspaceRepository(r.Context(), db.ListDesignFilesByWorkspaceRepositoryParams{WorkspaceID: wsUUID, WorkspaceRepositoryID: repositoryUUID})
+	case rawProjectID == "":
+		files, err = h.Queries.ListDesignFiles(r.Context(), wsUUID)
+	case rawResourceID != "":
+		projectUUID, ok := parseUUIDOrBadRequest(w, rawProjectID, "project_id")
+		if !ok {
+			return
+		}
+		resourceUUID, ok := parseUUIDOrBadRequest(w, rawResourceID, "project_resource_id")
+		if !ok {
+			return
+		}
+		if !h.validateDesignRepositoryScope(w, r, wsUUID, projectUUID, resourceUUID) {
+			return
+		}
+		files, err = h.Queries.ListDesignFilesByRepository(r.Context(), db.ListDesignFilesByRepositoryParams{
+			WorkspaceID: wsUUID, ProjectID: projectUUID, ProjectResourceID: resourceUUID,
+		})
+	default:
+		projectUUID, ok := parseUUIDOrBadRequest(w, rawProjectID, "project_id")
+		if !ok {
+			return
+		}
+		if !h.validateDesignProjectFolder(w, r, wsUUID, projectUUID, pgtype.UUID{}, true) {
+			return
+		}
+		files, err = h.Queries.ListDesignFilesByProject(r.Context(), db.ListDesignFilesByProjectParams{
+			WorkspaceID: wsUUID, ProjectID: projectUUID, FolderID: pgtype.UUID{},
+		})
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list design files")
 		return
@@ -2093,6 +2186,10 @@ func (h *Handler) ListDesignFiles(w http.ResponseWriter, r *http.Request) {
 		if file.CurrentRevisionID.Valid {
 			if revision, err := h.Queries.GetDesignRevisionInWorkspace(r.Context(), db.GetDesignRevisionInWorkspaceParams{ID: file.CurrentRevisionID, WorkspaceID: wsUUID}); err == nil {
 				resp[i].ThumbnailURL = thumbnailFromNativeJSON(revision.NativeJson)
+				if err := attachFigmaDesignAssetRef(&resp[i], file, revision, requestUserID(r), time.Now()); err != nil {
+					writeError(w, http.StatusInternalServerError, "failed to create design reference")
+					return
+				}
 			}
 		}
 	}
@@ -2477,6 +2574,10 @@ func (h *Handler) GetDesignFile(w http.ResponseWriter, r *http.Request) {
 		if err == nil {
 			revisionResp := designRevisionToResponse(revision)
 			resp.CurrentRevision = &revisionResp
+			if err := attachFigmaDesignAssetRef(&resp.File, file, revision, requestUserID(r), time.Now()); err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to create design reference")
+				return
+			}
 		}
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -7844,6 +7945,7 @@ func buildDesignRestorePackFromNativeJSON(file db.DesignFile, revision db.Design
 	hints := designRestoreImplementationHints(packFrames)
 	return map[string]any{
 		"version":             "1.0",
+		"contentDigest":       digestDesignAssetBytes(revision.NativeJson),
 		"designFile":          map[string]any{"id": uuidToString(file.ID), "title": file.Title, "sourceType": file.SourceType},
 		"revision":            map[string]any{"id": uuidToString(revision.ID), "number": revision.RevisionNumber, "status": revision.Status},
 		"scope":               scope,
@@ -7914,11 +8016,26 @@ func resolveDesignRestorePackFrames(doc map[string]any, scope DesignRestoreScope
 }
 
 func resolveDesignRestorePackGroupFrameIDs(doc map[string]any, scope DesignRestoreScopeV1) ([]string, map[string]any) {
+	knownFrameIDs := map[string]struct{}{}
+	for _, frame := range asObjectSlice(doc["frames"]) {
+		if frameID := strings.TrimSpace(stringField(frame, "id")); frameID != "" {
+			knownFrameIDs[frameID] = struct{}{}
+		}
+	}
+	filterKnownFrameIDs := func(frameIDs []string) []string {
+		out := make([]string, 0, len(frameIDs))
+		for _, frameID := range uniqueOrderedStrings(frameIDs) {
+			if _, ok := knownFrameIDs[frameID]; ok {
+				out = append(out, frameID)
+			}
+		}
+		return out
+	}
 	if len(scope.FrameIDs) > 0 {
-		return uniqueOrderedStrings(scope.FrameIDs), map[string]any{"id": scope.GroupID, "name": scope.GroupName}
+		return filterKnownFrameIDs(scope.FrameIDs), map[string]any{"id": scope.GroupID, "name": scope.GroupName}
 	}
 	if group := findDesignRestorePackGroupHint(doc, scope); group != nil {
-		return stringsFromAnySlice(group["frameIds"]), group
+		return filterKnownFrameIDs(stringsFromAnySlice(group["frameIds"])), group
 	}
 	out := []string{}
 	meta := map[string]any{}
@@ -7934,20 +8051,145 @@ func resolveDesignRestorePackGroupFrameIDs(doc map[string]any, scope DesignResto
 			out = append(out, frameID)
 		}
 	}
-	return uniqueOrderedStrings(out), meta
+	return filterKnownFrameIDs(out), meta
+}
+
+type designRestorePackGroup struct {
+	ID       string
+	Name     string
+	FrameIDs []string
+}
+
+func designRestorePackFigmaSelectionScope(doc map[string]any) (DesignRestoreScopeV1, bool) {
+	source, _ := doc["source"].(map[string]any)
+	if stringField(source, "tool") != "figma" || stringField(source, "scope") != "page" {
+		return DesignRestoreScopeV1{}, false
+	}
+	nodeIDs := uniqueOrderedStrings(stringsFromAnySlice(source["nodeIds"]))
+	sourceKey := strings.TrimSpace(stringField(source, "sourceKey"))
+	if len(nodeIDs) < 2 || sourceKey == "" {
+		return DesignRestoreScopeV1{}, false
+	}
+	frameIDBySourceNodeID := make(map[string]string, len(nodeIDs))
+	for _, frame := range asObjectSlice(doc["frames"]) {
+		sourceNodeID := strings.TrimSpace(stringField(frame, "sourceNodeId"))
+		frameID := strings.TrimSpace(stringField(frame, "id"))
+		if sourceNodeID == "" || frameID == "" {
+			continue
+		}
+		if _, duplicate := frameIDBySourceNodeID[sourceNodeID]; duplicate {
+			return DesignRestoreScopeV1{}, false
+		}
+		frameIDBySourceNodeID[sourceNodeID] = frameID
+	}
+	frameIDs := make([]string, 0, len(nodeIDs))
+	for _, nodeID := range nodeIDs {
+		frameID, ok := frameIDBySourceNodeID[nodeID]
+		if !ok {
+			return DesignRestoreScopeV1{}, false
+		}
+		frameIDs = append(frameIDs, frameID)
+	}
+	return DesignRestoreScopeV1{
+		Kind:      "figma_group",
+		GroupID:   "selection:" + sourceKey,
+		GroupName: firstString(source, "pageName", "fileName"),
+		FrameIDs:  frameIDs,
+	}, true
+}
+
+func discoverDesignRestorePackGroups(doc map[string]any) []designRestorePackGroup {
+	candidates := make([]DesignRestoreScopeV1, 0)
+	seenCandidates := map[string]struct{}{}
+	addCandidate := func(scope DesignRestoreScopeV1) {
+		var key string
+		switch {
+		case scope.GroupID != "":
+			key = "id:" + scope.GroupID
+		case scope.GroupName != "":
+			key = "name:" + scope.GroupName
+		case len(scope.GroupPath) > 0:
+			key = "path:" + strings.Join(scope.GroupPath, "\x00")
+		default:
+			return
+		}
+		if _, exists := seenCandidates[key]; exists {
+			return
+		}
+		seenCandidates[key] = struct{}{}
+		candidates = append(candidates, scope)
+	}
+
+	restoreHints, _ := doc["restoreHints"].(map[string]any)
+	hints, _ := restoreHints["figmaGroups"].(map[string]any)
+	hintKeys := make([]string, 0, len(hints))
+	for key := range hints {
+		hintKeys = append(hintKeys, key)
+	}
+	sort.Strings(hintKeys)
+	for _, key := range hintKeys {
+		group, ok := hints[key].(map[string]any)
+		if !ok {
+			continue
+		}
+		groupID := firstString(group, "id", "groupId", "sourceNodeId")
+		if groupID == "" {
+			groupID = key
+		}
+		addCandidate(DesignRestoreScopeV1{
+			Kind: "figma_group", GroupID: groupID, GroupName: firstString(group, "name", "groupName"),
+			GroupPath: stringsFromAnySlice(group["groupPath"]),
+		})
+	}
+	for _, frame := range asObjectSlice(doc["frames"]) {
+		source, _ := frame["source"].(map[string]any)
+		addCandidate(DesignRestoreScopeV1{
+			Kind: "figma_group", GroupID: firstString(source, "groupId", "id", "sourceNodeId"),
+			GroupName: stringField(source, "groupName"), GroupPath: stringsFromAnySlice(source["groupPath"]),
+		})
+	}
+	if selection, ok := designRestorePackFigmaSelectionScope(doc); ok {
+		addCandidate(selection)
+	}
+
+	groups := make([]designRestorePackGroup, 0, len(candidates))
+	seenGroups := map[string]struct{}{}
+	for _, candidate := range candidates {
+		frameIDs, meta := resolveDesignRestorePackGroupFrameIDs(doc, candidate)
+		groupID := firstString(meta, "id", "groupId", "sourceNodeId")
+		if groupID == "" {
+			groupID = candidate.GroupID
+		}
+		if groupID == "" || len(frameIDs) == 0 {
+			continue
+		}
+		if _, exists := seenGroups[groupID]; exists {
+			continue
+		}
+		seenGroups[groupID] = struct{}{}
+		name := firstString(meta, "name", "groupName")
+		if name == "" {
+			name = candidate.GroupName
+		}
+		groups = append(groups, designRestorePackGroup{ID: groupID, Name: name, FrameIDs: frameIDs})
+	}
+	return groups
 }
 
 func findDesignRestorePackGroupHint(doc map[string]any, scope DesignRestoreScopeV1) map[string]any {
 	restoreHints, _ := doc["restoreHints"].(map[string]any)
 	groups, _ := restoreHints["figmaGroups"].(map[string]any)
-	for _, raw := range groups {
+	for key, raw := range groups {
 		group, ok := raw.(map[string]any)
 		if !ok {
 			continue
 		}
 		if scope.GroupID != "" {
-			for _, key := range []string{"id", "groupId", "sourceNodeId"} {
-				if stringField(group, key) == scope.GroupID {
+			if key == scope.GroupID {
+				return group
+			}
+			for _, field := range []string{"id", "groupId", "sourceNodeId"} {
+				if stringField(group, field) == scope.GroupID {
 					return group
 				}
 			}

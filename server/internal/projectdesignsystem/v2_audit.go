@@ -39,7 +39,7 @@ func auditV2Package(
 ) v2AuditResult {
 	result := v2AuditResult{}
 	diagnostics := make([]Diagnostic, 0)
-	for _, required := range []string{"DESIGN.md", "tokens.css", "source/index.json"} {
+	for _, required := range []string{"DESIGN.md", "tokens.css", "source/index.json", "ui-kit/index.html"} {
 		if len(bytes.TrimSpace(files[required])) == 0 {
 			diagnostics = append(diagnostics, errorDiagnostic("artifact_missing", required, required+" must be present and non-empty"))
 		}
@@ -237,9 +237,13 @@ func walkV2HTML(
 				result.diagnostics = append(result.diagnostics, errorDiagnostic("html_event_handler", name, "HTML event attributes are not allowed"))
 			case key == "srcdoc" || key == "srcset":
 				result.diagnostics = append(result.diagnostics, errorDiagnostic("html_forbidden_attribute", name, "Attribute "+key+" is not allowed"))
-			case key == "href" || key == "xlink:href":
+			case key == "href":
+				if value != "" && !strings.HasPrefix(value, "#") && (tag != "a" || !validV2LocalHTMLNavigation(value, name, artifacts)) {
+					result.diagnostics = append(result.diagnostics, errorDiagnostic("html_url_unsafe", name, "links must use fragments or declared package-local HTML targets"))
+				}
+			case key == "xlink:href":
 				if value != "" && !strings.HasPrefix(value, "#") {
-					result.diagnostics = append(result.diagnostics, errorDiagnostic("html_url_unsafe", name, "links must use fragment-only targets"))
+					result.diagnostics = append(result.diagnostics, errorDiagnostic("html_url_unsafe", name, "SVG links must use fragment-only targets"))
 				}
 			case key == "src":
 				if tag != "img" || !validV2LocalResource(value, name, "asset", artifacts) {
@@ -779,6 +783,15 @@ func validV2LocalCSSResource(raw, basePath string, artifacts map[string]Artifact
 	}
 	entry, exists := artifacts[resolved]
 	return exists && (entry.Role == "asset" || entry.Role == "font")
+}
+
+func validV2LocalHTMLNavigation(raw, basePath string, artifacts map[string]ArtifactIndexEntry) bool {
+	resolved, ok := resolveV2LocalResource(raw, basePath)
+	if !ok || strings.HasPrefix(resolved, "#") {
+		return false
+	}
+	entry, exists := artifacts[resolved]
+	return exists && (entry.Role == "ui_kit" || entry.Role == "preview")
 }
 
 func validV2LocalResource(raw, basePath, role string, artifacts map[string]ArtifactIndexEntry) bool {

@@ -108,6 +108,112 @@ history.replaceState({}, "", "#orders");
 	}
 }
 
+func TestAuditAcceptsRegexLiteralsAndDivision(t *testing.T) {
+	root := copyFixture(t)
+	writeFixtureFile(t, root, "prototype/app.js", []byte(`
+const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const ratio = 8 / 2;
+document.body.dataset.valid = String(emailPattern.test("person@example.com") && ratio === 4);
+`))
+	collected, err := CollectDirectory(root, validBinding())
+	if err != nil {
+		t.Fatalf("CollectDirectory() rejected valid regex and division: %v (%#v)", err, collected.Audit.Diagnostics)
+	}
+}
+
+func TestAuditAcceptsRegexLiteralAfterControlHeader(t *testing.T) {
+	root := copyFixture(t)
+	writeFixtureFile(t, root, "prototype/app.js", []byte(`
+const ready = true;
+const value = "a/";
+if (ready) /a\//.test(value);
+`))
+	collected, err := CollectDirectory(root, validBinding())
+	if err != nil {
+		t.Fatalf("CollectDirectory() rejected valid statement-position regex: %v (%#v)", err, collected.Audit.Diagnostics)
+	}
+}
+
+func TestAuditRejectsForbiddenCallAfterObjectDivision(t *testing.T) {
+	root := copyFixture(t)
+	writeFixtureFile(t, root, "prototype/app.js", []byte(`const y = {} / fetch("api") / 2;`))
+	collected, err := CollectDirectory(root, validBinding())
+	assertAuditCode(t, collected.Audit, err, "prototype_script_forbidden_api")
+}
+
+func TestAuditRejectsDestructuredGlobalCapabilities(t *testing.T) {
+	tests := []struct {
+		name   string
+		script string
+		code   string
+	}{
+		{name: "direct forbidden API", script: `const {fetch} = window; fetch("/api/orders");`, code: "prototype_script_forbidden_api"},
+		{name: "renamed forbidden API", script: `const {fetch: request} = window; request("/api/orders");`, code: "prototype_script_forbidden_api"},
+		{name: "nested forbidden API", script: `const {navigator: {sendBeacon}} = window; sendBeacon("/telemetry", "{}");`, code: "prototype_script_forbidden_api"},
+		{name: "navigation", script: `const {open} = window; open("orders.html");`, code: "prototype_script_navigation_forbidden"},
+		{name: "Function constructor", script: `const {Function: Build} = globalThis; Build("return 1")();`, code: "prototype_script_forbidden_api"},
+		{name: "global alias", script: `const host = window; const {open} = host; open("orders.html");`, code: "prototype_script_navigation_forbidden"},
+		{name: "destructuring assignment", script: `let request; ({fetch: request} = window); request("/api/orders");`, code: "prototype_script_forbidden_api"},
+		{name: "member-derived alias", script: `const host = window.window; const {fetch} = host; fetch("/api/orders");`, code: "prototype_script_forbidden_api"},
+		{name: "forward closure alias", script: `function run() { const {open} = host; open("orders.html"); } const host = window; run();`, code: "prototype_script_navigation_forbidden"},
+		{name: "logical expression alias", script: `const host = window || window; const {fetch} = host; fetch("/api/orders");`, code: "prototype_script_forbidden_api"},
+		{name: "conditional expression alias", script: `const host = true ? window : window; const {fetch} = host; fetch("/api/orders");`, code: "prototype_script_forbidden_api"},
+		{name: "comma expression alias", script: `const host = (0, window); const {fetch} = host; fetch("/api/orders");`, code: "prototype_script_forbidden_api"},
+		{name: "dot property assignment", script: `const box = {}; box.host = window; const {fetch} = box.host; fetch("/api/orders");`, code: "prototype_script_dynamic_global"},
+		{name: "computed property assignment", script: `const box = {}; const key = "host"; box[key] = window; const {fetch} = box[key]; fetch("/api/orders");`, code: "prototype_script_dynamic_global"},
+		{name: "dot composite property assignment", script: `const box = {}; box.host = window || window; const {fetch} = box.host; fetch("/api/orders");`, code: "prototype_script_dynamic_global"},
+		{name: "computed composite property assignment", script: `const box = {}; const key = "host"; box[key] = true ? window : window; const {fetch} = box[key]; fetch("/api/orders");`, code: "prototype_script_dynamic_global"},
+		{name: "conditional target is not globally rooted", script: `const box = {}; (window ? box : box).host = window; const {fetch} = box.host; fetch("/api/orders");`, code: "prototype_script_dynamic_global"},
+		{name: "global target aliases local object", script: `const box = {}; window.box = box; window.box.host = window; const {fetch} = box.host; fetch("/api/orders");`, code: "prototype_script_dynamic_global"},
+		{name: "arrow parameter", script: `const run = ({fetch}) => fetch("/api/orders"); run(window);`, code: "prototype_script_forbidden_api"},
+		{name: "function parameter", script: `function run({open}) { open("orders.html"); } run(window);`, code: "prototype_script_navigation_forbidden"},
+		{name: "arrow IIFE parameter", script: `(({fetch}) => fetch("/api/orders"))(window);`, code: "prototype_script_forbidden_api"},
+		{name: "function IIFE parameter", script: `(function ({open}) { open("orders.html"); })(window);`, code: "prototype_script_navigation_forbidden"},
+		{name: "DOM query helper explicit global root", script: `const $ = (selector, root = document) => root.querySelector(selector); const {fetch} = $("body", window); fetch("/api/orders");`, code: "prototype_script_forbidden_api"},
+		{name: "DOM query helper root first explicit global", script: `const $ = (root = document, selector) => root.querySelector(selector); const {fetch} = $(window, "body"); fetch("/api/orders");`, code: "prototype_script_forbidden_api"},
+		{name: "DOM query helper root first global alias", script: `const host = window; const $ = (root = document, selector) => root.querySelector(selector); const {fetch} = $(host, "body"); fetch("/api/orders");`, code: "prototype_script_forbidden_api"},
+		{name: "DOM query helper mixed global return", script: `const $ = (selector, root = document) => selector ? root.querySelector(selector) : window; const {fetch} = $("", document); fetch("/api/orders");`, code: "prototype_script_forbidden_api"},
+		{name: "callable alias parameter", script: `const run = ({fetch}) => fetch("/api/orders"); const alias = run; alias(window);`, code: "prototype_script_forbidden_api"},
+		{name: "assigned callable alias parameter", script: `const run = ({fetch}) => fetch("/api/orders"); let alias; alias = run; alias(window);`, code: "prototype_script_forbidden_api"},
+		{name: "overwritten callable alias parameter", script: `const safe = (value) => false; const run = ({fetch}) => fetch("/api/orders"); let alias = safe; alias = run; alias(window);`, code: "prototype_script_forbidden_api"},
+		{name: "navigator binding", script: `const {sendBeacon} = navigator; sendBeacon("/telemetry", "{}");`, code: "prototype_script_forbidden_api"},
+		{name: "logical and assignment", script: `let host = {}; host &&= window; const {fetch} = host; fetch("/api/orders");`, code: "prototype_script_forbidden_api"},
+		{name: "logical or assignment", script: `let host = {}; host ||= window; const {fetch} = host; fetch("/api/orders");`, code: "prototype_script_forbidden_api"},
+		{name: "nullish assignment", script: `let host = {}; host ??= window; const {fetch} = host; fetch("/api/orders");`, code: "prototype_script_forbidden_api"},
+		{name: "function return", script: `function host() { return window; } const {fetch} = host(); fetch("/api/orders");`, code: "prototype_script_dynamic_global"},
+		{name: "wrapped function return", script: `function host() { return Object(window); } const {fetch} = host(); fetch("/api/orders");`, code: "prototype_script_dynamic_global"},
+		{name: "receiver-carried function return", script: `function host() { return [window].pop(); } const {fetch} = host(); fetch("/api/orders");`, code: "prototype_script_dynamic_global"},
+		{name: "spoofed includes return", script: `const value = window; function host() { return value.toLowerCase().includes(); } const {fetch} = host(); fetch("/api/orders");`, code: "prototype_script_dynamic_global"},
+		{name: "spoofed localeCompare return", script: `const value = window; function host() { return value.id.localeCompare(""); } const {fetch} = host(); fetch("/api/orders");`, code: "prototype_script_dynamic_global"},
+		{name: "assigned arrow wrapped return", script: `const inner = () => window; function host() { return inner(); } const {fetch} = host(); fetch("/api/orders");`, code: "prototype_script_dynamic_global"},
+		{name: "arrow IIFE wrapped return", script: `function host() { return (() => window)(); } const {fetch} = host(); fetch("/api/orders");`, code: "prototype_script_dynamic_global"},
+		{name: "tainted callable wrapped return", script: `const safe = () => false; let inner = safe; function set(value) { inner = value; } set(window); function host() { return inner(); } const {fetch} = host(); fetch("/api/orders");`, code: "prototype_script_dynamic_global"},
+		{name: "arrow return", script: `const host = () => window; const {fetch} = host(); fetch("/api/orders");`, code: "prototype_script_dynamic_global"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := copyFixture(t)
+			writeFixtureFile(t, root, "prototype/app.js", []byte(tt.script+"\n"))
+			collected, err := CollectDirectory(root, validBinding())
+			assertAuditCode(t, collected.Audit, err, tt.code)
+		})
+	}
+}
+
+func TestAuditAcceptsDestructuringFromLocalObjects(t *testing.T) {
+	root := copyFixture(t)
+	writeFixtureFile(t, root, "prototype/app.js", []byte(`
+const source = {fetch: "mock", open: true, Function: "label", navigator: {sendBeacon: false}};
+const {fetch, open, Function: Kind, navigator: {sendBeacon}} = source;
+document.body.dataset.summary = [fetch, open, Kind, sendBeacon].join(":");
+`))
+	collected, err := CollectDirectory(root, validBinding())
+	if err != nil {
+		t.Fatalf("CollectDirectory() rejected local object destructuring: %v (%#v)", err, collected.Audit.Diagnostics)
+	}
+}
+
 func TestAuditRejectsExternalMarkupResources(t *testing.T) {
 	tests := []struct {
 		name string

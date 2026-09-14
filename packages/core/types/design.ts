@@ -14,6 +14,87 @@ export type DesignDraftStatus =
   | "archived";
 export type DesignDraftGenerationMode = "legacy_patch" | "semantic_pagespec";
 export type DesignSystemProfileStatus = "draft" | "analyzing" | "analyzed" | "failed" | "archived";
+export interface DesignAssetFrame {
+  frame_ref: string;
+  selection_key: string;
+  title: string;
+  thumbnail_url?: string;
+  description?: string;
+}
+
+export interface DesignAssetFramesResponse {
+  design_ref: string;
+  revision_id: string;
+  content_digest: string;
+  frames: DesignAssetFrame[];
+}
+
+export interface BuildDesignImplementationPromptRequest {
+  revision_id: string;
+  frame_refs: string[];
+  project_resource_id: string;
+  issue_id: string;
+}
+
+export interface DesignImplementationContextPaths {
+  context_path: string;
+  design_manifest_path: string;
+  design_package_path: string;
+  scope_path: string;
+  repository_context_path: string;
+  result_path: string;
+}
+
+export interface DesignImplementationSourceCapabilities {
+  has_layers: boolean;
+  has_prototype: boolean;
+  has_assets: boolean;
+  has_interactions: boolean;
+}
+
+export interface DesignImplementationPackage {
+  source: string;
+  archive_path?: string;
+  content_digest: string;
+  restore_pack_scope?: Record<string, unknown>;
+}
+
+export interface DesignImplementationContextResponse {
+  schema_version: "multica.design-implementation-context/v1";
+  implementation_ref: string;
+  design_ref: string;
+  revision_id: string;
+  content_digest: string;
+  frame_refs: string[];
+  project_id: string;
+  issue_id: string;
+  task_id?: string;
+  project_resource_id: string;
+  design_title: string;
+  package?: DesignImplementationPackage;
+  source_instructions?: string[];
+  verification_targets?: string[];
+  design_system_digest?: string;
+  allowed_write_paths: string[];
+  verification_requirements: string[];
+  paths: DesignImplementationContextPaths;
+  source_capabilities: DesignImplementationSourceCapabilities;
+}
+
+export interface BuildDesignImplementationPromptResponse {
+  prompt: string;
+  mcp_arguments: Record<string, unknown>;
+  context: DesignImplementationContextResponse;
+}
+
+export interface DesignImplementationPreviewEvidence {
+  frame_ref: string;
+  status: string;
+  path: string;
+  summary: string;
+  url?: string;
+}
+
 export type DesignRestoreTaskStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 export type DesignRestoreTargetKind = "component" | "file" | "symbol" | "route" | "unknown";
 export type DesignRestoreTaskPurpose = "frontend_restore" | "ui_generation" | "template_annotation";
@@ -146,10 +227,26 @@ export interface GalleryNativeJson {
   source?: Record<string, unknown>;
 }
 
+/**
+ * The read scope for the unified Design Center asset projection. Project scope
+ * reads all assets in a project; repository scope reads one explicit repository.
+ */
+export type DesignAssetScope =
+  | { kind: "project"; projectId: string }
+  | { kind: "repository"; projectId: string; projectResourceId: string }
+  | { kind: "workspace_repository"; workspaceRepositoryId: string };
+
+export type DesignAssetAssociationKind = "design_file" | "design_document";
+
 export interface DesignFile {
   id: string;
+  design_ref?: string;
+  source?: string;
   workspace_id: string;
   project_id?: string | null;
+  /** Backend repository identity; null means the Design File is project-level. */
+  project_resource_id?: string | null;
+  workspace_repository_id?: string | null;
   folder_id?: string | null;
   title: string;
   description: string | null;
@@ -353,6 +450,11 @@ export interface ProjectRepositoryDesignContext {
 
 export interface ProjectDesignSystemInputSnapshot {
   agent_id?: string;
+  generation_mode?: "agent" | "programmatic_first";
+  workspace_repository_id?: string;
+  workspace_repository_url?: string;
+  workspace_repository_label?: string;
+  workspace_repository_ref?: string;
   platform?: ProjectDesignSystemPlatform | "";
   brief?: string;
   references?: ProjectDesignSystemReferenceSnapshot[];
@@ -364,9 +466,12 @@ export interface CreateProjectDesignSystemRequest {
   project_id: string;
   /** Empty creates the project-level system; a repository id creates that repository's own (DC-052). */
   project_resource_id?: string;
-  /** Name of a standalone system; ignored (and rejected) for a project system, which takes the project's title. */
+  /** Settings repository identity used by Design Center repository view. */
+  workspace_repository_id?: string;
+  /** Name of a standalone or settings-repository system; ignored (and rejected) for a project system, which takes the project's title. */
   name?: string;
   agent_id: string;
+  generation_mode?: "agent" | "programmatic_first";
   platform: ProjectDesignSystemPlatform;
   brief: string;
   references: ProjectDesignSystemReferenceInput[];
@@ -393,12 +498,16 @@ export interface ProjectDesignSystemCatalogueEntry {
   project_title: string;
   /** Empty is the project-level system; a repository id is that repository's own (DC-052). */
   project_resource_id: string;
+  /** Settings repository scope, independent of project resources. */
+  workspace_repository_id?: string;
   name: string;
   platform: ProjectDesignSystemPlatform | "";
   /** First line of the frozen creation brief — the row's OD-style summary. */
   summary: string;
   /** A draft package sits beside the saved one: the system is being adjusted. */
   has_draft_package: boolean;
+  /** Current requester created it, otherwise it belongs to another workspace member. */
+  ownership_scope?: "mine" | "team";
   saved_at: string;
 }
 
@@ -508,6 +617,7 @@ export interface ProjectDesignSystemTask {
   agent_id: string;
   status: string;
   operation: string;
+  execution_mode?: "programmatic_first" | string;
   error: string | null;
   failure_reason?: string | null;
   wait_reason?: string | null;
@@ -529,6 +639,7 @@ export interface ProjectDesignSystem {
    * requested" — it means the resolved system is the project-level one.
    */
   project_resource_id: string;
+  workspace_repository_id?: string;
   name: string;
   platform: ProjectDesignSystemPlatform | "";
   current_agent_id: string | null;
@@ -734,10 +845,13 @@ export interface CreateDesignDocumentRequest {
 
 export interface DesignDocument {
   id: string;
+  design_ref: string;
   workspace_id: string;
   project_id: string;
   /** Empty when no repository was attached to this run. */
   project_resource_id: string;
+  /** Settings repository scope, independent of project resources. */
+  workspace_repository_id?: string;
   issue_id: string;
   title: string;
   platform: ProjectDesignSystemPlatform | "";
@@ -756,6 +870,15 @@ export interface DesignDocument {
   created_at: string;
   updated_at: string;
   saved_at: string;
+}
+
+export interface DesignDocumentLivePreview {
+  task_id: string;
+  document_id: string;
+  content_digest: string;
+  files: Record<string, string>;
+  entry_path: string;
+  updated_at: string;
 }
 
 export interface ListDesignDocumentsResponse {
@@ -1406,6 +1529,32 @@ export interface DesignDraftMaterializeResponse {
 export interface ListDesignFilesResponse {
   design_files: DesignFile[];
   total: number;
+}
+
+export interface DesignRepositoryListItem {
+  id: string;
+  project_id: string;
+  project_title: string;
+  label: string;
+  description: string;
+  repository_url: string;
+  default_branch_hint: string;
+}
+
+export interface ListDesignRepositoriesResponse {
+  repositories: DesignRepositoryListItem[];
+}
+
+export interface SetDesignAssetRepositoryAssociationRequest {
+  project_id: string;
+  project_resource_id: string;
+  items: Array<{ kind: DesignAssetAssociationKind; id: string }>;
+}
+
+export interface SetDesignAssetRepositoryAssociationResponse {
+  project_id: string;
+  project_resource_id: string;
+  count: number;
 }
 
 export interface ListDesignFoldersResponse {

@@ -34,6 +34,302 @@ import (
 // true.
 type slowProbeLocalSkillListStore struct{ LocalSkillListStore }
 
+func TestDesignRestoreFullFramePreviewViolation(t *testing.T) {
+	ctx := service.DesignRestoreTaskContext{
+		RestorePolicy: json.RawMessage(`{"restoreMode":"strict-structure","allowFullFramePreview":false}`),
+		ItemContexts: json.RawMessage(`[
+			{"context":{"frame":{"width":375,"height":812},"assets":{
+				"frame_preview-frame-1":{"id":"frame_preview-frame-1","kind":"frame_preview","width":375,"height":812},
+				"frame_thumbnail-frame-1":{"id":"frame_thumbnail-frame-1","kind":"frame_thumbnail","width":375,"height":812},
+				"slice-0-651-0":{"id":"slice-0-651-0","kind":"slice","width":375,"height":812},
+				"slice-0-656-0":{"id":"slice-0-656-0","kind":"slice","width":345,"height":120}
+			}}}
+		]`),
+	}
+	if got := designRestoreFullFramePreviewViolation(ctx, "used asset frame_preview-frame-1"); got != "full_frame_preview_forbidden: frame_preview-frame-1" {
+		t.Fatalf("preview violation = %q", got)
+	}
+	if got := designRestoreFullFramePreviewViolation(ctx, "used asset slice-0-651-0"); got != "full_frame_preview_forbidden: slice-0-651-0" {
+		t.Fatalf("full-frame slice violation = %q", got)
+	}
+	if got := designRestoreFullFramePreviewViolation(ctx, "used asset slice-0-656-0 and usedFullFramePreview: false"); got != "" {
+		t.Fatalf("local slice should be allowed, got violation %q", got)
+	}
+	if got := designRestoreFullFramePreviewViolation(ctx, `{"usedFullFramePreview":true}`); got != "full_frame_preview_forbidden" {
+		t.Fatalf("explicit full-frame preview flag violation = %q", got)
+	}
+}
+
+func TestParseDesignRestoreResultSummary(t *testing.T) {
+	output := "done\nRESTORE_RESULT_JSON:\n```json\n{\"status\":\"completed\",\"files\":[\"fengchenDoc/demo.html\"],\"usedAssetIds\":[\"slice-1\"],\"usedFullFramePreview\":false}\n```"
+	summary := parseDesignRestoreResultSummary(output)
+	if summary.Status != "completed" || len(summary.Files) != 1 || summary.Files[0] != "fengchenDoc/demo.html" || len(summary.UsedAssetIDs) != 1 || summary.UsedAssetIDs[0] != "slice-1" || summary.UsedFullFramePreview {
+		t.Fatalf("unexpected summary: %+v", summary)
+	}
+}
+func TestDesignRestoreTaskCompletionStatusUsesStructuredResult(t *testing.T) {
+	output := "All blocked paths are cleared; no blockers remain.\nRESTORE_RESULT_JSON:\n```json\n{\"status\":\"completed\"}\n```"
+	summary := parseDesignRestoreResultSummary(output)
+	if got := designRestoreTaskCompletionStatus(summary, ""); got != "completed" {
+		t.Fatalf("completed result containing prose word blocked = %q, want completed", got)
+	}
+	if got := designRestoreTaskCompletionStatus(designRestoreResultSummary{Status: "blocked"}, ""); got != "failed" {
+		t.Fatalf("blocked result status = %q, want failed", got)
+	}
+	if got := designRestoreTaskCompletionStatus(designRestoreResultSummary{Status: "completed"}, "policy_violation"); got != "failed" {
+		t.Fatalf("policy violation status = %q, want failed", got)
+	}
+}
+
+func TestParseDesignRestoreResultSummaryAcceptsStringRestoreMapping(t *testing.T) {
+	output := "done\nRESTORE_RESULT_JSON:\n```json\n{\"status\":\"completed\",\"files\":[\"src/views/wallet.vue\"],\"restoreMapping\":[\"frame-1 -> wallet home\",\"frame-2/frame-3 -> account states\"],\"usedLayerIds\":[\"1-1\"],\"usedFullFramePreview\":false}\n```"
+	summary := parseDesignRestoreResultSummary(output)
+	if summary.Status != "completed" {
+		t.Fatalf("status = %q, want completed; summary=%+v", summary.Status, summary)
+	}
+	if len(summary.RestoreMapping) != 2 {
+		t.Fatalf("restoreMapping = %+v, want two entries", summary.RestoreMapping)
+	}
+	if summary.RestoreMapping[0]["layerId"] != "frame-1" || summary.RestoreMapping[0]["targetPath"] != "wallet home" {
+		t.Fatalf("first mapping = %+v", summary.RestoreMapping[0])
+	}
+	ctx := service.DesignRestoreTaskContext{RestorePolicy: json.RawMessage(`{"restoreMode":"strict-structure","allowFullFramePreview":false}`)}
+	if got := designRestorePolicyViolation(ctx, output, summary); got != "" {
+		t.Fatalf("policy violation = %q, want none", got)
+	}
+}
+
+func TestParseDesignRestoreResultSummaryKeepsVisualReview(t *testing.T) {
+	output := "done\nRESTORE_RESULT_JSON:\n```json\n{\"status\":\"completed\",\"visualFidelityScore\":87,\"visualReview\":{\"implementedRoute\":\"/service-record\",\"designScreenshot\":\"/tmp/design.png\",\"implementationScreenshot\":\"/tmp/impl.png\",\"comparisonScreenshot\":\"/tmp/compare.png\",\"remainingDiffs\":[\"头图裁切仍有轻微差异\"],\"notes\":\"二轮视觉 QA 后可验收\"}}\n```"
+	summary := parseDesignRestoreResultSummary(output)
+	if summary.VisualFidelityScore == nil || *summary.VisualFidelityScore != 87 {
+		t.Fatalf("visualFidelityScore = %v, want 87", summary.VisualFidelityScore)
+	}
+	if summary.VisualReview.ImplementedRoute != "/service-record" {
+		t.Fatalf("implementedRoute = %q", summary.VisualReview.ImplementedRoute)
+	}
+	if summary.VisualReview.DesignScreenshot != "/tmp/design.png" || summary.VisualReview.ImplementationScreenshot != "/tmp/impl.png" || summary.VisualReview.ComparisonScreenshot != "/tmp/compare.png" {
+		t.Fatalf("unexpected visual screenshots: %+v", summary.VisualReview)
+	}
+	if len(summary.VisualReview.RemainingDiffs) != 1 || summary.VisualReview.RemainingDiffs[0] != "头图裁切仍有轻微差异" {
+		t.Fatalf("remaining diffs = %+v", summary.VisualReview.RemainingDiffs)
+	}
+	if summary.VisualReview.Notes != "二轮视觉 QA 后可验收" {
+		t.Fatalf("notes = %q", summary.VisualReview.Notes)
+	}
+
+	resultJSON, err := json.Marshal(map[string]any{"summary": summary})
+	if err != nil {
+		t.Fatalf("marshal result summary: %v", err)
+	}
+	var stored struct {
+		Summary struct {
+			VisualFidelityScore *float64                   `json:"visualFidelityScore"`
+			VisualReview        *designRestoreVisualReview `json:"visualReview"`
+		} `json:"summary"`
+	}
+	if err := json.Unmarshal(resultJSON, &stored); err != nil {
+		t.Fatalf("unmarshal stored result summary: %v", err)
+	}
+	if stored.Summary.VisualFidelityScore == nil || *stored.Summary.VisualFidelityScore != 87 || stored.Summary.VisualReview == nil || stored.Summary.VisualReview.ComparisonScreenshot != "/tmp/compare.png" {
+		t.Fatalf("stored visual review lost fields: %s", string(resultJSON))
+	}
+}
+
+func TestDesignRestoreAgentLabelFromInput(t *testing.T) {
+	if got := designRestoreAgentLabelFromInput([]byte(`{"version":"1.0","purpose":"ui_generation"}`)); got != "UI Agent" {
+		t.Fatalf("ui_generation label = %q, want UI Agent", got)
+	}
+	if got := designRestoreAgentLabelFromInput([]byte(`{"version":"1.0","purpose":"frontend_restore"}`)); got != "前端 Agent" {
+		t.Fatalf("frontend_restore label = %q, want 前端 Agent", got)
+	}
+	if got := designRestoreAgentLabelFromInput([]byte(`{"version":"1.0"}`)); got != "前端 Agent" {
+		t.Fatalf("missing purpose label = %q, want legacy frontend label", got)
+	}
+}
+
+func TestDesignRestoreCompletionCommentUsesAgentLabel(t *testing.T) {
+	uiComment := designRestoreCompletionComment("UI Agent", "completed", "", "", designRestoreResultSummary{})
+	if !strings.Contains(uiComment, "UI Agent 已完成设计稿还原。") {
+		t.Fatalf("UI completion comment = %q", uiComment)
+	}
+	frontendComment := designRestoreCompletionComment("前端 Agent", "failed", "Agent 执行失败", "", designRestoreResultSummary{})
+	if !strings.Contains(frontendComment, "前端 Agent 设计稿还原未完成，需要处理。") {
+		t.Fatalf("frontend failure comment = %q", frontendComment)
+	}
+}
+
+func TestDesignRestoreMappingFieldsAcceptsRestoreResultSchema(t *testing.T) {
+	layerID, targetPath, targetKind := designRestoreMappingFields(map[string]any{
+		"itemId":          "issue-f1d40329-frame-0-468",
+		"sketchId":        "frame-0-468",
+		"targetFile":      "src/views/design-restore/RestoreView.vue",
+		"targetComponent": "RestoreView",
+	})
+	if layerID != "frame-0-468" {
+		t.Fatalf("layerID = %q, want sketchId fallback", layerID)
+	}
+	if targetPath != "src/views/design-restore/RestoreView.vue" {
+		t.Fatalf("targetPath = %q, want targetFile", targetPath)
+	}
+	if targetKind != "file" {
+		t.Fatalf("targetKind = %q, want file", targetKind)
+	}
+}
+
+func TestComputeTaskKindDesignRestore(t *testing.T) {
+	ctx, err := json.Marshal(service.DesignRestoreTaskContext{Type: service.DesignRestoreTaskContextType, RestoreTaskID: "restore-1"})
+	if err != nil {
+		t.Fatalf("marshal restore context: %v", err)
+	}
+	if got := computeTaskKind(db.AgentTaskQueue{Context: ctx}); got != "design_restore" {
+		t.Fatalf("computeTaskKind design restore = %q", got)
+	}
+	if got := computeTaskKind(db.AgentTaskQueue{Context: []byte(`{"type":"quick_create"}`)}); got != "quick_create" {
+		t.Fatalf("computeTaskKind quick create fallback = %q", got)
+	}
+}
+
+func TestDesignRestorePolicyViolationPrefersSummary(t *testing.T) {
+	ctx := service.DesignRestoreTaskContext{
+		RestorePolicy: json.RawMessage(`{"restoreMode":"strict-structure","allowFullFramePreview":false}`),
+		ItemContexts:  json.RawMessage(`[{"context":{"frame":{"width":375,"height":812},"assets":{"frame_preview-frame-1":{"id":"frame_preview-frame-1","kind":"frame_preview","width":375,"height":812}}}}]`),
+	}
+	if got := designRestorePolicyViolation(ctx, "", designRestoreResultSummary{UsedAssetIDs: []string{"frame_preview-frame-1"}}); got != "full_frame_preview_forbidden: frame_preview-frame-1" {
+		t.Fatalf("summary asset violation = %q", got)
+	}
+	if got := designRestorePolicyViolation(ctx, "", designRestoreResultSummary{UsedFullFramePreview: true}); got != "full_frame_preview_forbidden" {
+		t.Fatalf("summary flag violation = %q", got)
+	}
+}
+
+func TestDesignRestorePolicyViolationRequiresQualityFields(t *testing.T) {
+	ctx := service.DesignRestoreTaskContext{RestorePolicy: json.RawMessage(`{"restoreMode":"strict-structure","allowFullFramePreview":false}`)}
+	if got := designRestorePolicyViolation(ctx, "", designRestoreResultSummary{}); got != "missing_restore_result_json" {
+		t.Fatalf("missing json violation = %q", got)
+	}
+	if got := designRestorePolicyWarning(ctx, designRestoreResultSummary{}); got != "missing_restore_result_json" {
+		t.Fatalf("missing json warning = %q", got)
+	}
+	if got := designRestorePolicyViolation(ctx, "", designRestoreResultSummary{Status: "completed"}); got != "completed_result_missing_files" {
+		t.Fatalf("missing files violation = %q", got)
+	}
+	if got := designRestorePolicyViolation(ctx, "", designRestoreResultSummary{Status: "completed", Files: []string{"demo.html"}}); got != "completed_result_missing_restore_mapping" {
+		t.Fatalf("missing mapping violation = %q", got)
+	}
+	if got := designRestorePolicyViolation(ctx, "", designRestoreResultSummary{Status: "completed", Files: []string{"demo.html"}, RestoreMapping: []map[string]any{{"itemId": "item-1"}}}); got != "completed_result_missing_used_layer_ids" {
+		t.Fatalf("missing layers violation = %q", got)
+	}
+	if got := designRestorePolicyViolation(ctx, "", designRestoreResultSummary{Status: "blocked"}); got != "blocked_result_missing_blockers" {
+		t.Fatalf("blocked missing blockers violation = %q", got)
+	}
+	if got := designRestorePolicyViolation(ctx, "", designRestoreResultSummary{Status: "completed", Files: []string{"demo.html"}, RestoreMapping: []map[string]any{{"itemId": "item-1"}}, UsedLayerIDs: []string{"layer-1"}}); got != "" {
+		t.Fatalf("valid completed summary violation = %q", got)
+	}
+}
+
+func TestAdvanceIssueAfterDesignRestoreCompletion(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	var issueID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO issue (workspace_id, title, status, priority, creator_id, creator_type, number, position)
+		VALUES ($1, 'design restore completion fixture', 'in_progress', 'none', $2, 'member', 91801, 0)
+		RETURNING id
+	`, testWorkspaceID, testUserID).Scan(&issueID); err != nil {
+		t.Fatalf("create issue: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, issueID) })
+
+	restoreTask := db.DesignRestoreTask{IssueID: parseUUID(issueID), WorkspaceID: parseUUID(testWorkspaceID)}
+	if err := testHandler.advanceIssueAfterDesignRestoreCompletion(ctx, restoreTask, "completed"); err != nil {
+		t.Fatalf("advance completed issue: %v", err)
+	}
+	var status string
+	if err := testPool.QueryRow(ctx, `SELECT status FROM issue WHERE id = $1`, issueID).Scan(&status); err != nil {
+		t.Fatalf("read completed issue status: %v", err)
+	}
+	if status != "in_review" {
+		t.Fatalf("completed restore issue status = %q, want in_review", status)
+	}
+
+	if _, err := testPool.Exec(ctx, `UPDATE issue SET status = 'in_progress' WHERE id = $1`, issueID); err != nil {
+		t.Fatalf("reset issue status: %v", err)
+	}
+	if err := testHandler.advanceIssueAfterDesignRestoreCompletion(ctx, restoreTask, "failed"); err != nil {
+		t.Fatalf("advance failed issue: %v", err)
+	}
+	if err := testPool.QueryRow(ctx, `SELECT status FROM issue WHERE id = $1`, issueID).Scan(&status); err != nil {
+		t.Fatalf("read failed issue status: %v", err)
+	}
+	if status != "blocked" {
+		t.Fatalf("failed restore issue status = %q, want blocked", status)
+	}
+}
+
+func TestAdvanceUIDesignRestoreCompletionPromotesFrontendSibling(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	var parentID, uiIssueID, frontendIssueID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO issue (workspace_id, title, status, priority, creator_id, creator_type, number, position)
+		VALUES ($1, '发布', 'in_progress', 'none', $2, 'member', 91811, 0)
+		RETURNING id
+	`, testWorkspaceID, testUserID).Scan(&parentID); err != nil {
+		t.Fatalf("create parent issue: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM issue WHERE id IN ($1, $2, $3)`, parentID, uiIssueID, frontendIssueID)
+	})
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO issue (workspace_id, title, status, priority, creator_id, creator_type, number, position, parent_issue_id)
+		VALUES ($1, 'UI设计', 'in_progress', 'none', $2, 'member', 91812, 0, $3)
+		RETURNING id
+	`, testWorkspaceID, testUserID, parentID).Scan(&uiIssueID); err != nil {
+		t.Fatalf("create ui issue: %v", err)
+	}
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO issue (workspace_id, title, status, priority, creator_id, creator_type, number, position, parent_issue_id)
+		VALUES ($1, '前端开发', 'backlog', 'none', $2, 'member', 91813, 0, $3)
+		RETURNING id
+	`, testWorkspaceID, testUserID, parentID).Scan(&frontendIssueID); err != nil {
+		t.Fatalf("create frontend issue: %v", err)
+	}
+	created := createDesignFileForTest(t, "UI Restore Completion Promotion Design")
+	if created.CurrentRevision == nil {
+		t.Fatal("expected current revision")
+	}
+	var restoreTaskID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO design_restore_task (workspace_id, file_id, revision_id, issue_id, status, input, result, created_by)
+		VALUES ($1, $2, $3, $4, 'completed', '{}'::jsonb, '{}'::jsonb, $5)
+		RETURNING id
+	`, testWorkspaceID, created.File.ID, created.CurrentRevision.ID, uiIssueID, testUserID).Scan(&restoreTaskID); err != nil {
+		t.Fatalf("create completed restore task: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM design_restore_task WHERE id = $1`, restoreTaskID) })
+	restoreTask := db.DesignRestoreTask{IssueID: parseUUID(uiIssueID), WorkspaceID: parseUUID(testWorkspaceID)}
+	if err := testHandler.advanceIssueAfterDesignRestoreCompletion(ctx, restoreTask, "completed"); err != nil {
+		t.Fatalf("advance ui design restore completion: %v", err)
+	}
+	var uiStatus, frontendStatus string
+	if err := testPool.QueryRow(ctx, `SELECT status FROM issue WHERE id = $1`, uiIssueID).Scan(&uiStatus); err != nil {
+		t.Fatalf("read ui issue status: %v", err)
+	}
+	if uiStatus != "done" {
+		t.Fatalf("ui issue status = %q, want done", uiStatus)
+	}
+	if err := testPool.QueryRow(ctx, `SELECT status FROM issue WHERE id = $1`, frontendIssueID).Scan(&frontendStatus); err != nil {
+		t.Fatalf("read frontend issue status: %v", err)
+	}
+	if frontendStatus != "todo" {
+		t.Fatalf("frontend issue status = %q, want todo", frontendStatus)
+	}
+}
 func (s slowProbeLocalSkillListStore) HasPending(ctx context.Context, _ string) (bool, error) {
 	<-ctx.Done()
 	return false, ctx.Err()
@@ -4480,290 +4776,6 @@ func TestProjectDesignSystemClaimBlockReason(t *testing.T) {
 	}
 }
 
-func TestDesignRestoreFullFramePreviewViolation(t *testing.T) {
-	ctx := service.DesignRestoreTaskContext{
-		RestorePolicy: json.RawMessage(`{"restoreMode":"strict-structure","allowFullFramePreview":false}`),
-		ItemContexts: json.RawMessage(`[
-			{"context":{"frame":{"width":375,"height":812},"assets":{
-				"frame_preview-frame-1":{"id":"frame_preview-frame-1","kind":"frame_preview","width":375,"height":812},
-				"frame_thumbnail-frame-1":{"id":"frame_thumbnail-frame-1","kind":"frame_thumbnail","width":375,"height":812},
-				"slice-0-651-0":{"id":"slice-0-651-0","kind":"slice","width":375,"height":812},
-				"slice-0-656-0":{"id":"slice-0-656-0","kind":"slice","width":345,"height":120}
-			}}}
-		]`),
-	}
-	if got := designRestoreFullFramePreviewViolation(ctx, "used asset frame_preview-frame-1"); got != "full_frame_preview_forbidden: frame_preview-frame-1" {
-		t.Fatalf("preview violation = %q", got)
-	}
-	if got := designRestoreFullFramePreviewViolation(ctx, "used asset slice-0-651-0"); got != "full_frame_preview_forbidden: slice-0-651-0" {
-		t.Fatalf("full-frame slice violation = %q", got)
-	}
-	if got := designRestoreFullFramePreviewViolation(ctx, "used asset slice-0-656-0 and usedFullFramePreview: false"); got != "" {
-		t.Fatalf("local slice should be allowed, got violation %q", got)
-	}
-	if got := designRestoreFullFramePreviewViolation(ctx, `{"usedFullFramePreview":true}`); got != "full_frame_preview_forbidden" {
-		t.Fatalf("explicit full-frame preview flag violation = %q", got)
-	}
-}
-
-func TestParseDesignRestoreResultSummary(t *testing.T) {
-	output := "done\nRESTORE_RESULT_JSON:\n```json\n{\"status\":\"completed\",\"files\":[\"fengchenDoc/demo.html\"],\"usedAssetIds\":[\"slice-1\"],\"usedFullFramePreview\":false}\n```"
-	summary := parseDesignRestoreResultSummary(output)
-	if summary.Status != "completed" || len(summary.Files) != 1 || summary.Files[0] != "fengchenDoc/demo.html" || len(summary.UsedAssetIDs) != 1 || summary.UsedAssetIDs[0] != "slice-1" || summary.UsedFullFramePreview {
-		t.Fatalf("unexpected summary: %+v", summary)
-	}
-}
-
-func TestParseDesignRestoreResultSummaryAcceptsStringRestoreMapping(t *testing.T) {
-	output := "done\nRESTORE_RESULT_JSON:\n```json\n{\"status\":\"completed\",\"files\":[\"src/views/wallet.vue\"],\"restoreMapping\":[\"frame-1 -> wallet home\",\"frame-2/frame-3 -> account states\"],\"usedLayerIds\":[\"1-1\"],\"usedFullFramePreview\":false}\n```"
-	summary := parseDesignRestoreResultSummary(output)
-	if summary.Status != "completed" {
-		t.Fatalf("status = %q, want completed; summary=%+v", summary.Status, summary)
-	}
-	if len(summary.RestoreMapping) != 2 {
-		t.Fatalf("restoreMapping = %+v, want two entries", summary.RestoreMapping)
-	}
-	if summary.RestoreMapping[0]["layerId"] != "frame-1" || summary.RestoreMapping[0]["targetPath"] != "wallet home" {
-		t.Fatalf("first mapping = %+v", summary.RestoreMapping[0])
-	}
-	ctx := service.DesignRestoreTaskContext{RestorePolicy: json.RawMessage(`{"restoreMode":"strict-structure","allowFullFramePreview":false}`)}
-	if got := designRestorePolicyViolation(ctx, output, summary); got != "" {
-		t.Fatalf("policy violation = %q, want none", got)
-	}
-}
-
-func TestParseDesignRestoreResultSummaryKeepsVisualReview(t *testing.T) {
-	output := "done\nRESTORE_RESULT_JSON:\n```json\n{\"status\":\"completed\",\"visualFidelityScore\":87,\"visualReview\":{\"implementedRoute\":\"/service-record\",\"designScreenshot\":\"/tmp/design.png\",\"implementationScreenshot\":\"/tmp/impl.png\",\"comparisonScreenshot\":\"/tmp/compare.png\",\"remainingDiffs\":[\"头图裁切仍有轻微差异\"],\"notes\":\"二轮视觉 QA 后可验收\"}}\n```"
-	summary := parseDesignRestoreResultSummary(output)
-	if summary.VisualFidelityScore == nil || *summary.VisualFidelityScore != 87 {
-		t.Fatalf("visualFidelityScore = %v, want 87", summary.VisualFidelityScore)
-	}
-	if summary.VisualReview.ImplementedRoute != "/service-record" {
-		t.Fatalf("implementedRoute = %q", summary.VisualReview.ImplementedRoute)
-	}
-	if summary.VisualReview.DesignScreenshot != "/tmp/design.png" || summary.VisualReview.ImplementationScreenshot != "/tmp/impl.png" || summary.VisualReview.ComparisonScreenshot != "/tmp/compare.png" {
-		t.Fatalf("unexpected visual screenshots: %+v", summary.VisualReview)
-	}
-	if len(summary.VisualReview.RemainingDiffs) != 1 || summary.VisualReview.RemainingDiffs[0] != "头图裁切仍有轻微差异" {
-		t.Fatalf("remaining diffs = %+v", summary.VisualReview.RemainingDiffs)
-	}
-	if summary.VisualReview.Notes != "二轮视觉 QA 后可验收" {
-		t.Fatalf("notes = %q", summary.VisualReview.Notes)
-	}
-
-	resultJSON, err := json.Marshal(map[string]any{"summary": summary})
-	if err != nil {
-		t.Fatalf("marshal result summary: %v", err)
-	}
-	var stored struct {
-		Summary struct {
-			VisualFidelityScore *float64                   `json:"visualFidelityScore"`
-			VisualReview        *designRestoreVisualReview `json:"visualReview"`
-		} `json:"summary"`
-	}
-	if err := json.Unmarshal(resultJSON, &stored); err != nil {
-		t.Fatalf("unmarshal stored result summary: %v", err)
-	}
-	if stored.Summary.VisualFidelityScore == nil || *stored.Summary.VisualFidelityScore != 87 || stored.Summary.VisualReview == nil || stored.Summary.VisualReview.ComparisonScreenshot != "/tmp/compare.png" {
-		t.Fatalf("stored visual review lost fields: %s", string(resultJSON))
-	}
-}
-
-func TestDesignRestoreAgentLabelFromInput(t *testing.T) {
-	if got := designRestoreAgentLabelFromInput([]byte(`{"version":"1.0","purpose":"ui_generation"}`)); got != "UI Agent" {
-		t.Fatalf("ui_generation label = %q, want UI Agent", got)
-	}
-	if got := designRestoreAgentLabelFromInput([]byte(`{"version":"1.0","purpose":"frontend_restore"}`)); got != "前端 Agent" {
-		t.Fatalf("frontend_restore label = %q, want 前端 Agent", got)
-	}
-	if got := designRestoreAgentLabelFromInput([]byte(`{"version":"1.0"}`)); got != "前端 Agent" {
-		t.Fatalf("missing purpose label = %q, want legacy frontend label", got)
-	}
-}
-
-func TestDesignRestoreCompletionCommentUsesAgentLabel(t *testing.T) {
-	uiComment := designRestoreCompletionComment("UI Agent", "completed", "", "", designRestoreResultSummary{})
-	if !strings.Contains(uiComment, "UI Agent 已完成设计稿还原。") {
-		t.Fatalf("UI completion comment = %q", uiComment)
-	}
-	frontendComment := designRestoreCompletionComment("前端 Agent", "failed", "Agent 执行失败", "", designRestoreResultSummary{})
-	if !strings.Contains(frontendComment, "前端 Agent 设计稿还原未完成，需要处理。") {
-		t.Fatalf("frontend failure comment = %q", frontendComment)
-	}
-}
-
-func TestDesignRestoreMappingFieldsAcceptsRestoreResultSchema(t *testing.T) {
-	layerID, targetPath, targetKind := designRestoreMappingFields(map[string]any{
-		"itemId":          "issue-f1d40329-frame-0-468",
-		"sketchId":        "frame-0-468",
-		"targetFile":      "src/views/design-restore/RestoreView.vue",
-		"targetComponent": "RestoreView",
-	})
-	if layerID != "frame-0-468" {
-		t.Fatalf("layerID = %q, want sketchId fallback", layerID)
-	}
-	if targetPath != "src/views/design-restore/RestoreView.vue" {
-		t.Fatalf("targetPath = %q, want targetFile", targetPath)
-	}
-	if targetKind != "file" {
-		t.Fatalf("targetKind = %q, want file", targetKind)
-	}
-}
-
-func TestComputeTaskKindDesignRestore(t *testing.T) {
-	ctx, err := json.Marshal(service.DesignRestoreTaskContext{Type: service.DesignRestoreTaskContextType, RestoreTaskID: "restore-1"})
-	if err != nil {
-		t.Fatalf("marshal restore context: %v", err)
-	}
-	if got := computeTaskKind(db.AgentTaskQueue{Context: ctx}); got != "design_restore" {
-		t.Fatalf("computeTaskKind design restore = %q", got)
-	}
-	if got := computeTaskKind(db.AgentTaskQueue{Context: []byte(`{"type":"quick_create"}`)}); got != "quick_create" {
-		t.Fatalf("computeTaskKind quick create fallback = %q", got)
-	}
-}
-
-func TestDesignRestorePolicyViolationPrefersSummary(t *testing.T) {
-	ctx := service.DesignRestoreTaskContext{
-		RestorePolicy: json.RawMessage(`{"restoreMode":"strict-structure","allowFullFramePreview":false}`),
-		ItemContexts:  json.RawMessage(`[{"context":{"frame":{"width":375,"height":812},"assets":{"frame_preview-frame-1":{"id":"frame_preview-frame-1","kind":"frame_preview","width":375,"height":812}}}}]`),
-	}
-	if got := designRestorePolicyViolation(ctx, "", designRestoreResultSummary{UsedAssetIDs: []string{"frame_preview-frame-1"}}); got != "full_frame_preview_forbidden: frame_preview-frame-1" {
-		t.Fatalf("summary asset violation = %q", got)
-	}
-	if got := designRestorePolicyViolation(ctx, "", designRestoreResultSummary{UsedFullFramePreview: true}); got != "full_frame_preview_forbidden" {
-		t.Fatalf("summary flag violation = %q", got)
-	}
-}
-
-func TestDesignRestorePolicyViolationRequiresQualityFields(t *testing.T) {
-	ctx := service.DesignRestoreTaskContext{RestorePolicy: json.RawMessage(`{"restoreMode":"strict-structure","allowFullFramePreview":false}`)}
-	if got := designRestorePolicyViolation(ctx, "", designRestoreResultSummary{}); got != "missing_restore_result_json" {
-		t.Fatalf("missing json violation = %q", got)
-	}
-	if got := designRestorePolicyWarning(ctx, designRestoreResultSummary{}); got != "missing_restore_result_json" {
-		t.Fatalf("missing json warning = %q", got)
-	}
-	if got := designRestorePolicyViolation(ctx, "", designRestoreResultSummary{Status: "completed"}); got != "completed_result_missing_files" {
-		t.Fatalf("missing files violation = %q", got)
-	}
-	if got := designRestorePolicyViolation(ctx, "", designRestoreResultSummary{Status: "completed", Files: []string{"demo.html"}}); got != "completed_result_missing_restore_mapping" {
-		t.Fatalf("missing mapping violation = %q", got)
-	}
-	if got := designRestorePolicyViolation(ctx, "", designRestoreResultSummary{Status: "completed", Files: []string{"demo.html"}, RestoreMapping: []map[string]any{{"itemId": "item-1"}}}); got != "completed_result_missing_used_layer_ids" {
-		t.Fatalf("missing layers violation = %q", got)
-	}
-	if got := designRestorePolicyViolation(ctx, "", designRestoreResultSummary{Status: "blocked"}); got != "blocked_result_missing_blockers" {
-		t.Fatalf("blocked missing blockers violation = %q", got)
-	}
-	if got := designRestorePolicyViolation(ctx, "", designRestoreResultSummary{Status: "completed", Files: []string{"demo.html"}, RestoreMapping: []map[string]any{{"itemId": "item-1"}}, UsedLayerIDs: []string{"layer-1"}}); got != "" {
-		t.Fatalf("valid completed summary violation = %q", got)
-	}
-}
-
-func TestAdvanceIssueAfterDesignRestoreCompletion(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-	ctx := context.Background()
-	var issueID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO issue (workspace_id, title, status, priority, creator_id, creator_type, number, position)
-		VALUES ($1, 'design restore completion fixture', 'in_progress', 'none', $2, 'member', 91801, 0)
-		RETURNING id
-	`, testWorkspaceID, testUserID).Scan(&issueID); err != nil {
-		t.Fatalf("create issue: %v", err)
-	}
-	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, issueID) })
-
-	restoreTask := db.DesignRestoreTask{IssueID: parseUUID(issueID), WorkspaceID: parseUUID(testWorkspaceID)}
-	if err := testHandler.advanceIssueAfterDesignRestoreCompletion(ctx, restoreTask, "completed"); err != nil {
-		t.Fatalf("advance completed issue: %v", err)
-	}
-	var status string
-	if err := testPool.QueryRow(ctx, `SELECT status FROM issue WHERE id = $1`, issueID).Scan(&status); err != nil {
-		t.Fatalf("read completed issue status: %v", err)
-	}
-	if status != "in_review" {
-		t.Fatalf("completed restore issue status = %q, want in_review", status)
-	}
-
-	if _, err := testPool.Exec(ctx, `UPDATE issue SET status = 'in_progress' WHERE id = $1`, issueID); err != nil {
-		t.Fatalf("reset issue status: %v", err)
-	}
-	if err := testHandler.advanceIssueAfterDesignRestoreCompletion(ctx, restoreTask, "failed"); err != nil {
-		t.Fatalf("advance failed issue: %v", err)
-	}
-	if err := testPool.QueryRow(ctx, `SELECT status FROM issue WHERE id = $1`, issueID).Scan(&status); err != nil {
-		t.Fatalf("read failed issue status: %v", err)
-	}
-	if status != "blocked" {
-		t.Fatalf("failed restore issue status = %q, want blocked", status)
-	}
-}
-
-func TestAdvanceUIDesignRestoreCompletionPromotesFrontendSibling(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-	ctx := context.Background()
-	var parentID, uiIssueID, frontendIssueID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO issue (workspace_id, title, status, priority, creator_id, creator_type, number, position)
-		VALUES ($1, '发布', 'in_progress', 'none', $2, 'member', 91811, 0)
-		RETURNING id
-	`, testWorkspaceID, testUserID).Scan(&parentID); err != nil {
-		t.Fatalf("create parent issue: %v", err)
-	}
-	t.Cleanup(func() {
-		testPool.Exec(ctx, `DELETE FROM issue WHERE id IN ($1, $2, $3)`, parentID, uiIssueID, frontendIssueID)
-	})
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO issue (workspace_id, title, status, priority, creator_id, creator_type, number, position, parent_issue_id)
-		VALUES ($1, 'UI设计', 'in_progress', 'none', $2, 'member', 91812, 0, $3)
-		RETURNING id
-	`, testWorkspaceID, testUserID, parentID).Scan(&uiIssueID); err != nil {
-		t.Fatalf("create ui issue: %v", err)
-	}
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO issue (workspace_id, title, status, priority, creator_id, creator_type, number, position, parent_issue_id)
-		VALUES ($1, '前端开发', 'backlog', 'none', $2, 'member', 91813, 0, $3)
-		RETURNING id
-	`, testWorkspaceID, testUserID, parentID).Scan(&frontendIssueID); err != nil {
-		t.Fatalf("create frontend issue: %v", err)
-	}
-	created := createDesignFileForTest(t, "UI Restore Completion Promotion Design")
-	if created.CurrentRevision == nil {
-		t.Fatal("expected current revision")
-	}
-	var restoreTaskID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO design_restore_task (workspace_id, file_id, revision_id, issue_id, status, input, result, created_by)
-		VALUES ($1, $2, $3, $4, 'completed', '{}'::jsonb, '{}'::jsonb, $5)
-		RETURNING id
-	`, testWorkspaceID, created.File.ID, created.CurrentRevision.ID, uiIssueID, testUserID).Scan(&restoreTaskID); err != nil {
-		t.Fatalf("create completed restore task: %v", err)
-	}
-	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM design_restore_task WHERE id = $1`, restoreTaskID) })
-	restoreTask := db.DesignRestoreTask{IssueID: parseUUID(uiIssueID), WorkspaceID: parseUUID(testWorkspaceID)}
-	if err := testHandler.advanceIssueAfterDesignRestoreCompletion(ctx, restoreTask, "completed"); err != nil {
-		t.Fatalf("advance ui design restore completion: %v", err)
-	}
-	var uiStatus, frontendStatus string
-	if err := testPool.QueryRow(ctx, `SELECT status FROM issue WHERE id = $1`, uiIssueID).Scan(&uiStatus); err != nil {
-		t.Fatalf("read ui issue status: %v", err)
-	}
-	if uiStatus != "done" {
-		t.Fatalf("ui issue status = %q, want done", uiStatus)
-	}
-	if err := testPool.QueryRow(ctx, `SELECT status FROM issue WHERE id = $1`, frontendIssueID).Scan(&frontendStatus); err != nil {
-		t.Fatalf("read frontend issue status: %v", err)
-	}
-	if frontendStatus != "todo" {
-		t.Fatalf("frontend issue status = %q, want todo", frontendStatus)
-	}
-}
-
 func TestStartTaskMarksDesignRestoreTaskRunning(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
@@ -5275,5 +5287,44 @@ func TestTaskReposFallBackToWorkspaceWhenProjectHasNone(t *testing.T) {
 	got := taskRepos(nil, workspace)
 	if len(got) != 1 || got[0].URL != "https://github.com/acme/web.git" {
 		t.Fatalf("repos = %+v, want the workspace list unchanged", got)
+	}
+}
+
+// The daemon GC decides whether a task workdir can be reclaimed by testing the
+// issue status against the terminal set — `gc.go:509` compares it to
+// "done"/"cancelled", and `isKnownIssueStatus` is a hardcoded switch over the 7
+// built-ins. Neither knows custom statuses exist, and it must stay that way: an
+// installed daemon has no database, and daemons predating MUL-6243 keep running
+// against upgraded servers.
+//
+// So the normalization is the SERVER's job. Both gc-check endpoints resolve the
+// stored key to its category before answering. Without that:
+//
+//   - an issue parked on a `done`-category custom status is never terminal, so
+//     its workdir is retained forever, and
+//   - `isKnownIssueStatus` rejects the raw key, silently disabling the
+//     GCCompletedTaskTTL full-cleanup path for that issue.
+
+func TestProjectDesignSystemNeedsLiveRepositoryForRepositoryGenerationAndRefresh(t *testing.T) {
+	if !projectDesignSystemNeedsLiveRepository(service.ProjectDesignSystemTaskContext{Operation: service.ProjectDesignSystemRepositoryAnalysis}) {
+		t.Fatal("repository analysis did not request live repository context")
+	}
+	for name, contextValue := range map[string]service.ProjectDesignSystemTaskContext{
+		"settings repository":   {Operation: service.ProjectDesignSystemGenerate, WorkspaceRepositoryID: "repository-1"},
+		"project repository":    {Operation: service.ProjectDesignSystemGenerate, ProjectResourceID: "resource-1"},
+		"repository refresh":    {Operation: service.ProjectDesignSystemRegenerate, WorkspaceRepositoryID: "repository-1"},
+		"repository adjustment": {Operation: service.ProjectDesignSystemAdjust, WorkspaceRepositoryID: "repository-1"},
+	} {
+		if !projectDesignSystemNeedsLiveRepository(contextValue) {
+			t.Fatalf("%s Agent generation did not request live repository context", name)
+		}
+	}
+	for _, contextValue := range []service.ProjectDesignSystemTaskContext{
+		{Operation: service.ProjectDesignSystemGenerate},
+		{Operation: service.ProjectDesignSystemRegenerate},
+	} {
+		if projectDesignSystemNeedsLiveRepository(contextValue) {
+			t.Fatalf("%s unexpectedly requested live repository context", contextValue.Operation)
+		}
 	}
 }

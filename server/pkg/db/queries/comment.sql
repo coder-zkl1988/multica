@@ -108,7 +108,7 @@ thread_stats AS (
 SELECT c.id, c.issue_id, c.author_type, c.author_id, c.content, c.type,
        c.created_at, c.updated_at, c.parent_id, c.workspace_id,
        c.resolved_at, c.resolved_by_type, c.resolved_by_id,
-       c.source_task_id, c.quick_action_id, c.revision,
+       c.source_task_id, c.quick_action_id, c.revision, c.design_delivery,
        ts.reply_count AS reply_count,
        ts.last_activity_at AS last_activity_at
 FROM selected_roots sr
@@ -154,7 +154,7 @@ thread_stats AS (
 SELECT c.id, c.issue_id, c.author_type, c.author_id, c.content, c.type,
        c.created_at, c.updated_at, c.parent_id, c.workspace_id,
        c.resolved_at, c.resolved_by_type, c.resolved_by_id,
-       c.source_task_id, c.quick_action_id, c.revision,
+       c.source_task_id, c.quick_action_id, c.revision, c.design_delivery,
        ts.reply_count AS reply_count,
        ts.last_activity_at AS last_activity_at
 FROM selected_roots sr
@@ -195,14 +195,14 @@ descendants AS (
     SELECT c.id, c.issue_id, c.author_type, c.author_id, c.content, c.type,
            c.created_at, c.updated_at, c.parent_id, c.workspace_id,
            c.resolved_at, c.resolved_by_type, c.resolved_by_id,
-           c.source_task_id, c.quick_action_id, c.revision
+           c.source_task_id, c.quick_action_id, c.revision, c.design_delivery
     FROM comment c
     JOIN thread_root tr ON c.id = tr.id
     UNION
     SELECT c.id, c.issue_id, c.author_type, c.author_id, c.content, c.type,
            c.created_at, c.updated_at, c.parent_id, c.workspace_id,
            c.resolved_at, c.resolved_by_type, c.resolved_by_id,
-           c.source_task_id, c.quick_action_id, c.revision
+           c.source_task_id, c.quick_action_id, c.revision, c.design_delivery
     FROM comment c
     JOIN descendants d ON c.parent_id = d.id
     WHERE c.issue_id = @issue_id AND c.workspace_id = @workspace_id
@@ -211,7 +211,7 @@ reply_page AS (
     SELECT d.id, d.issue_id, d.author_type, d.author_id, d.content, d.type,
            d.created_at, d.updated_at, d.parent_id, d.workspace_id,
            d.resolved_at, d.resolved_by_type, d.resolved_by_id,
-           d.source_task_id, d.quick_action_id, d.revision
+           d.source_task_id, d.quick_action_id, d.revision, d.design_delivery
     FROM descendants d
     WHERE d.id NOT IN (SELECT id FROM thread_root)
       AND (
@@ -224,19 +224,19 @@ reply_page AS (
 SELECT id, issue_id, author_type, author_id, content, type,
        created_at, updated_at, parent_id, workspace_id,
        resolved_at, resolved_by_type, resolved_by_id,
-       source_task_id, quick_action_id, revision
+       source_task_id, quick_action_id, revision, design_delivery
 FROM (
     SELECT d.id, d.issue_id, d.author_type, d.author_id, d.content, d.type,
            d.created_at, d.updated_at, d.parent_id, d.workspace_id,
            d.resolved_at, d.resolved_by_type, d.resolved_by_id,
-           d.source_task_id, d.quick_action_id, d.revision
+           d.source_task_id, d.quick_action_id, d.revision, d.design_delivery
     FROM descendants d
     JOIN thread_root tr ON d.id = tr.id
     UNION ALL
     SELECT id, issue_id, author_type, author_id, content, type,
            created_at, updated_at, parent_id, workspace_id,
            resolved_at, resolved_by_type, resolved_by_id,
-           source_task_id, quick_action_id, revision
+           source_task_id, quick_action_id, revision, design_delivery
     FROM reply_page
 ) combined
 ORDER BY created_at ASC, id ASC;
@@ -301,7 +301,7 @@ picked AS (
 SELECT c.id, c.issue_id, c.author_type, c.author_id, c.content, c.type,
        c.created_at, c.updated_at, c.parent_id, c.workspace_id,
        c.resolved_at, c.resolved_by_type, c.resolved_by_id,
-       c.source_task_id, c.quick_action_id, c.revision,
+       c.source_task_id, c.quick_action_id, c.revision, c.design_delivery,
        p.root_id AS thread_root_id,
        p.last_activity_at AS thread_last_activity_at
 FROM picked p
@@ -342,6 +342,7 @@ WHERE issue_id = @issue_id
 SELECT * FROM comment
 WHERE issue_id = @issue_id
   AND author_type = 'member'
+  AND design_delivery IS NULL
   AND created_at > @since
 ORDER BY created_at DESC
 LIMIT 1;
@@ -381,6 +382,7 @@ LIMIT 1;
 -- the first.
 SELECT * FROM comment
 WHERE issue_id = @issue_id
+  AND design_delivery IS NULL
   AND (
       (
           author_type IN ('member', 'agent')
@@ -445,8 +447,8 @@ WITH touched_issue AS (
     WHERE issue.id = sqlc.arg(issue_id) AND issue.workspace_id = sqlc.arg(workspace_id)
     RETURNING issue.id, issue.workspace_id, issue.revision
 ), inserted_comment AS (
-    INSERT INTO comment (issue_id, workspace_id, author_type, author_id, content, type, parent_id, source_task_id, quick_action_id, via_plugin_id, id)
-    SELECT ti.id, ti.workspace_id, sqlc.arg(author_type), sqlc.arg(author_id), sqlc.arg(content), sqlc.arg(type), sqlc.narg(parent_id), sqlc.narg(source_task_id), sqlc.narg(quick_action_id), sqlc.narg(via_plugin_id), COALESCE(sqlc.narg('id')::uuid, gen_random_uuid())
+    INSERT INTO comment (issue_id, workspace_id, author_type, author_id, content, type, parent_id, source_task_id, quick_action_id, via_plugin_id, id, design_delivery)
+    SELECT ti.id, ti.workspace_id, sqlc.arg(author_type), sqlc.arg(author_id), sqlc.arg(content), sqlc.arg(type), sqlc.narg(parent_id), sqlc.narg(source_task_id), sqlc.narg(quick_action_id), sqlc.narg(via_plugin_id), COALESCE(sqlc.narg('id')::uuid, gen_random_uuid()), sqlc.narg(design_delivery)
     FROM touched_issue ti
     RETURNING *
 )
@@ -526,7 +528,7 @@ WITH locked_issue AS MATERIALIZED (
               comment.content, comment.type, comment.created_at, comment.updated_at,
               comment.parent_id, comment.workspace_id, comment.resolved_at,
               comment.resolved_by_type, comment.resolved_by_id, comment.source_task_id,
-              comment.quick_action_id, comment.via_plugin_id, comment.revision,
+              comment.quick_action_id, comment.via_plugin_id, comment.revision, comment.design_delivery,
               target.did_change
 ), touched_issue AS (
     UPDATE issue
@@ -544,7 +546,7 @@ SELECT updated_comment.id, updated_comment.issue_id, updated_comment.author_type
        updated_comment.workspace_id, updated_comment.resolved_at,
        updated_comment.resolved_by_type, updated_comment.resolved_by_id,
        updated_comment.source_task_id, updated_comment.quick_action_id,
-       updated_comment.via_plugin_id, updated_comment.revision,
+       updated_comment.via_plugin_id, updated_comment.revision, updated_comment.design_delivery,
        COALESCE((SELECT revision FROM touched_issue), 0)::bigint AS issue_revision
 FROM updated_comment;
 
@@ -798,3 +800,21 @@ FROM comment c
 JOIN ancestor_ids path ON path.id = c.id
 ORDER BY c.id
 FOR UPDATE OF c;
+
+-- name: GetCommentByDesignRequest :one
+SELECT * FROM comment
+WHERE workspace_id = @workspace_id AND author_type = @author_type AND author_id = @author_id
+  AND design_delivery->>'request_id' = @request_id::text;
+
+-- name: SetCommentDesignDelivery :one
+UPDATE comment SET design_delivery = @design_delivery
+WHERE id = @id AND workspace_id = @workspace_id
+RETURNING *;
+
+-- name: BindDesignDeliveryTask :one
+UPDATE agent_task_queue SET trigger_comment_id = @comment_id,
+    originator_user_id = @requester_id, accountable_user_id = @requester_id,
+    originator_source = 'direct_human', trigger_evidence_kind = 'comment',
+    trigger_evidence_ref_id = @comment_id, trigger_summary = @trigger_summary
+WHERE id = @id AND issue_id = @issue_id
+RETURNING *;

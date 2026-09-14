@@ -17,6 +17,38 @@ import (
 	"testing"
 )
 
+func TestV2ProjectlessPackageRoundTrip(t *testing.T) {
+	for _, operation := range []string{"generate", "regenerate", "adjust"} {
+		t.Run(operation, func(t *testing.T) {
+			binding := validV2Binding()
+			binding.ProjectID = ""
+			binding.Operation = operation
+			if operation != "generate" {
+				binding.BasePackageSHA256 = "sha256:" + strings.Repeat("b", 64)
+			}
+			collected := collectValidV2(t, binding)
+			if _, err := ValidateV2Archive(collected.Archive, binding); err != nil {
+				t.Fatal(err)
+			}
+			wrongProject := binding
+			wrongProject.ProjectID = "another-project"
+			if _, err := ValidateV2Archive(collected.Archive, wrongProject); err == nil {
+				t.Fatal("projectless archive accepted as a different project's package")
+			}
+		})
+	}
+}
+
+func TestV2BindingRejectsMalformedOptionalProject(t *testing.T) {
+	for _, project := range []string{" ", " project", "project\n", "project\x00id"} {
+		binding := validV2Binding()
+		binding.ProjectID = project
+		if _, err := CollectV2Directory(copyV2Fixture(t), binding); err == nil {
+			t.Fatalf("accepted malformed project identity %q", project)
+		}
+	}
+}
+
 func TestCollectV2DirectoryBuildsDeterministicManifestAndArchive(t *testing.T) {
 	root := copyV2Fixture(t)
 	binding := validV2Binding()

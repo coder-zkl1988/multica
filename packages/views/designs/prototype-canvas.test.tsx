@@ -30,6 +30,17 @@ afterEach(() => {
 });
 
 describe("PrototypeCanvas", () => {
+  it("selects iframe elements and prevents link navigation", () => {
+    const onPick = vi.fn();
+    render(<PrototypeCanvas html="<html></html>" frameWidth={1280} zoom={1} mode="select" title="inspect" onPick={onPick} />);
+    const frame = screen.getByTitle("inspect") as HTMLIFrameElement;
+    frame.src = "about:blank";
+    frame.contentDocument!.body.innerHTML = '<a id="target" href="/outside">Target</a>';
+    fireEvent.load(frame);
+    const target = frame.contentDocument!.getElementById("target")!;
+    expect(fireEvent.click(target)).toBe(false);
+    expect(onPick.mock.calls[0]?.[0].selector).toBe("#target");
+  });
   // The canvas mounts an agent-written page from a blob: URL, which inherits
   // THIS app's origin. That is what gives the workbench DOM access — and it is
   // exactly why the frame must never be granted allow-scripts: the package's

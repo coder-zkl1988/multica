@@ -1092,6 +1092,20 @@ func (h *Handler) DeleteProjectResource(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, "failed to delete project resource")
 		return
 	}
+	if err := queries.DetachDesignFilesFromProjectResource(r.Context(), db.DetachDesignFilesFromProjectResourceParams{
+		WorkspaceID:       project.WorkspaceID,
+		ProjectResourceID: resource.ID,
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete project resource")
+		return
+	}
+	if err := queries.DetachDesignDocumentsFromProjectResource(r.Context(), db.DetachDesignDocumentsFromProjectResourceParams{
+		WorkspaceID:       project.WorkspaceID,
+		ProjectResourceID: resource.ID,
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete project resource")
+		return
+	}
 	if err := queries.DeleteProjectResource(r.Context(), db.DeleteProjectResourceParams{
 		WorkspaceID:       project.WorkspaceID,
 		ProjectResourceID: resource.ID,

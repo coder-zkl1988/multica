@@ -143,6 +143,29 @@ func ValidateV2Archive(archive []byte, expected PackageBinding) (ValidatedV2Pack
 	return result, nil
 }
 
+// ReadV2BaseArchive revalidates a complete stored V2 package and returns
+// every package file for read-only materialization in an Agent base directory.
+// The reference carries the source run binding so the daemon never validates an
+// archive against identities inferred from untrusted archive bytes.
+func ReadV2BaseArchive(archive []byte, reference BasePackageReference) (map[string][]byte, error) {
+	if err := ValidateBasePackageReference(reference); err != nil {
+		return nil, err
+	}
+	validated, err := ValidateV2Archive(archive, reference.Binding)
+	if err != nil {
+		return nil, err
+	}
+	if validated.Manifest.ContentDigest != reference.ContentDigest {
+		return nil, errors.New("project design system base archive digest does not match the pinned reference")
+	}
+	files, _, manifestJSON, err := readAndIndexV2Archive(archive)
+	if err != nil {
+		return nil, err
+	}
+	files["manifest.json"] = append([]byte(nil), manifestJSON...)
+	return files, nil
+}
+
 func ReadV2Artifact(archive []byte, index []ArtifactIndexEntry, name string) ([]byte, error) {
 	if _, _, _, err := classifyV2Artifact(name); err != nil {
 		return nil, err
@@ -262,7 +285,7 @@ func validateV2DirectoryPath(name string) error {
 		return err
 	}
 	switch name {
-	case "source", "ui-kit", "preview", "assets", "fonts":
+	case "source", "reference", "ui-kit", "preview", "assets", "fonts":
 		return nil
 	}
 	if strings.HasPrefix(name, "assets/") || strings.HasPrefix(name, "fonts/") {
@@ -272,7 +295,12 @@ func validateV2DirectoryPath(name string) error {
 }
 
 func validateV2Binding(binding PackageBinding) error {
-	values := []string{binding.WorkspaceID, binding.ProjectID, binding.DesignSystemID, binding.TaskID, binding.AgentID}
+	values := []string{binding.WorkspaceID, binding.DesignSystemID, binding.TaskID, binding.AgentID}
+	// Workspace-owned and repository-owned systems have no project. A supplied
+	// project remains validated and must still match the archive binding exactly.
+	if binding.ProjectID != "" {
+		values = append(values, binding.ProjectID)
+	}
 	for _, value := range values {
 		if value == "" || value != strings.TrimSpace(value) || strings.IndexFunc(value, func(r rune) bool { return r < 0x20 }) >= 0 {
 			return errors.New("V2 package binding contains an invalid identity")

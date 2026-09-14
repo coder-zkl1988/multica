@@ -41,7 +41,7 @@ import {
 } from "@multica/core/designs/queries";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useFileUpload } from "@multica/core/hooks/use-file-upload";
-import { projectOpenIssuesOptions } from "@multica/core/issues/queries";
+import { issueDetailOptions, projectOpenIssuesOptions } from "@multica/core/issues/queries";
 import { projectResourcesOptions } from "@multica/core/projects";
 import { projectListOptions } from "@multica/core/projects/queries";
 import { useWorkspacePaths } from "@multica/core/paths";
@@ -68,6 +68,7 @@ import { Textarea } from "@multica/ui/components/ui/textarea";
 import { cn } from "@multica/ui/lib/utils";
 import { ActorAvatar } from "../common/actor-avatar";
 import { useNavigation } from "../navigation";
+import { useT } from "../i18n";
 import {
   PickerEmpty,
   PickerItem,
@@ -188,6 +189,12 @@ export const STATIC_BRIEF_PLACEHOLDER = "例如：做一个 CRM 客户列表页�
 export interface DesignRecipeSelection {
   token: number;
   recipe: DesignScenarioRecipe;
+}
+
+export interface DesignTaskComposerInitialContext {
+  projectId: string;
+  issueId: string;
+  agentId?: string;
 }
 
 function repositoryUrl(resource: ProjectResource): string {
@@ -345,6 +352,7 @@ export function AgentSetting({
   agentId: string;
   onChange: (agentId: string) => void;
 }) {
+  const { t } = useT("issues");
   const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState("");
   const active = useMemo(() => agents.filter((agent) => !agent.archived_at), [agents]);
@@ -359,9 +367,9 @@ export function AgentSetting({
       width="w-56"
       align="start"
       searchable
-      searchPlaceholder="搜索智能体…"
+      searchPlaceholder={t(($) => $.design_delivery.search_agents)}
       onSearchChange={setFilter}
-      triggerRender={<SettingTrigger filled={!!selected} aria-label="设计智能体" />}
+      triggerRender={<SettingTrigger filled={!!selected} aria-label={t(($) => $.design_delivery.agent)} />}
       trigger={
         selected ? (
           <>
@@ -371,7 +379,7 @@ export function AgentSetting({
         ) : (
           <>
             <Bot className="size-3.5 shrink-0" />
-            <span className="truncate">选择智能体</span>
+            <span className="truncate">{t(($) => $.design_delivery.select_agent)}</span>
           </>
         )
       }
@@ -388,7 +396,7 @@ export function AgentSetting({
               key={agent.id}
               selected={agent.id === agentId}
               disabled={!runtimeBound}
-              tooltip={runtimeBound ? undefined : "该智能体尚未绑定运行时，无法领取设计任务"}
+              tooltip={runtimeBound ? undefined : t(($) => $.design_delivery.agent_unbound)}
               onClick={() => {
                 onChange(agent.id);
                 setOpen(false);
@@ -410,17 +418,20 @@ export function AgentSetting({
  * named row rather than a clear affordance, and the copy below the row spells
  * out what each choice means for the result.
  */
-function RepositorySetting({
+export function RepositorySetting({
   repositories,
   repositoryId,
   disabled,
   onChange,
+  required = false,
 }: {
   repositories: ProjectResource[];
   repositoryId: string;
   disabled: boolean;
   onChange: (repositoryId: string) => void;
+  required?: boolean;
 }) {
+  const { t } = useT("issues");
   const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState("");
   const selected = repositories.find((repository) => repository.id === repositoryId);
@@ -436,10 +447,10 @@ function RepositorySetting({
       width="w-64"
       align="start"
       searchable
-      searchPlaceholder="搜索仓库…"
+      searchPlaceholder={t(($) => $.design_delivery.search_repositories)}
       onSearchChange={setFilter}
       triggerRender={
-        <SettingTrigger filled={!!selected} disabled={disabled} aria-label="代码仓库" />
+        <SettingTrigger filled={!!selected} disabled={disabled} aria-label={t(($) => $.design_delivery.repository)} />
       }
       trigger={
         selected ? (
@@ -450,12 +461,12 @@ function RepositorySetting({
         ) : (
           <>
             <GitBranch className="size-3.5 shrink-0" />
-            <span className="truncate">不指定仓库</span>
+            <span className="truncate">{required ? t(($) => $.design_delivery.select_repository) : t(($) => $.design_delivery.no_repository)}</span>
           </>
         )
       }
     >
-      <PickerItem
+      {!required && <PickerItem
         selected={!repositoryId}
         onClick={() => {
           onChange("");
@@ -463,8 +474,8 @@ function RepositorySetting({
         }}
       >
         <CircleDashed className="size-3.5 shrink-0 text-muted-foreground" />
-        <span className="truncate">不指定仓库</span>
-      </PickerItem>
+        <span className="truncate">{t(($) => $.design_delivery.no_repository)}</span>
+      </PickerItem>}
       {filtered.map((repository) => (
         <PickerItem
           key={repository.id}
@@ -481,7 +492,7 @@ function RepositorySetting({
       ))}
       {repositories.length === 0 ? (
         <div className="px-2 py-1.5 text-caption text-muted-foreground">
-          当前项目还没有关联代码仓库。
+          {t(($) => $.design_delivery.repositories_empty)}
         </div>
       ) : null}
       {repositories.length > 0 && filtered.length === 0 && query ? <PickerEmpty /> : null}
@@ -730,6 +741,7 @@ export function DesignSystemSetting({
   builtinSlug: string;
   onChange: (selection: { designSystemId: string; builtinSlug: string }) => void;
 }) {
+  const { t } = useT("issues");
   const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState("");
   const query = filter.trim().toLowerCase();
@@ -756,16 +768,16 @@ export function DesignSystemSetting({
       width="w-72"
       align="start"
       searchable
-      searchPlaceholder="搜索设计体系…"
+      searchPlaceholder={t(($) => $.design_delivery.search_systems)}
       onSearchChange={setFilter}
       triggerRender={
-        <SettingTrigger filled={!!selectedWorkspace || !!selectedBuiltin} aria-label="设计体系" />
+        <SettingTrigger filled={!!selectedWorkspace || !!selectedBuiltin} aria-label={t(($) => $.design_delivery.system)} />
       }
       trigger={
         <>
           <Palette className="size-3.5 shrink-0" />
           <span className="truncate">
-            {selectedWorkspace?.name ?? selectedBuiltin?.name ?? "不指定设计体系"}
+            {selectedWorkspace?.name ?? selectedBuiltin?.name ?? t(($) => $.design_delivery.no_system)}
           </span>
         </>
       }
@@ -776,11 +788,11 @@ export function DesignSystemSetting({
         onClick={() => pick({ designSystemId: "", builtinSlug: "" })}
       >
         <CircleDashed className="size-3.5 shrink-0 text-muted-foreground" />
-        <span className="truncate text-muted-foreground">不指定设计体系</span>
+        <span className="truncate text-muted-foreground">{t(($) => $.design_delivery.no_system)}</span>
       </PickerItem>
       {filteredWorkspace.length > 0 ? (
         <div className="px-2 pb-1 pt-2 text-micro font-semibold uppercase tracking-wider text-muted-foreground">
-          你的体系
+          {t(($) => $.design_delivery.your_systems)}
         </div>
       ) : null}
       {filteredWorkspace.map((system) => (
@@ -796,7 +808,7 @@ export function DesignSystemSetting({
       ))}
       {filteredBuiltin.length > 0 ? (
         <div className="px-2 pb-1 pt-2 text-micro font-semibold uppercase tracking-wider text-muted-foreground">
-          官方预设
+          {t(($) => $.design_delivery.builtin_systems)}
         </div>
       ) : null}
       {filteredBuiltin.map((system) => (
@@ -829,6 +841,7 @@ export function DesignTaskComposer({
   onBrowseRecipes,
   onOpenDocument,
   recipeSelection,
+  initialContext,
 }: {
   /** Called after the server has created the document, never before. */
   onCreated: (document: DesignDocument) => void;
@@ -838,6 +851,8 @@ export function DesignTaskComposer({
   onOpenDocument?: (document: DesignDocument) => void;
   /** A recipe picked in the community gallery, waiting to be applied. */
   recipeSelection?: DesignRecipeSelection | null;
+  /** Issue entry-point context. Project and issue stay fixed for traceability. */
+  initialContext?: DesignTaskComposerInitialContext;
 }) {
   const wsId = useWorkspaceId();
   const queryClient = useQueryClient();
@@ -849,13 +864,13 @@ export function DesignTaskComposer({
   // its slug here, and the server validates it against the catalogue.
   const [recipe, setRecipe] = useState<DesignDocumentRecipe | string>("default");
   const [appliedRecipe, setAppliedRecipe] = useState<DesignScenarioRecipe | null>(null);
-  const [projectId, setProjectId] = useState("");
-  const [agentId, setAgentId] = useState("");
+  const [projectId, setProjectId] = useState(initialContext?.projectId ?? "");
+  const [agentId, setAgentId] = useState(initialContext?.agentId ?? "");
   const [repositoryId, setRepositoryId] = useState("");
-  const [issueId, setIssueId] = useState("");
+  const [issueId, setIssueId] = useState(initialContext?.issueId ?? "");
   // Default on: a design run that leaves no trace on the tasks page is the
   // exception, not the norm. Turning it off is one click away.
-  const [createIssue, setCreateIssue] = useState(true);
+  const [createIssue, setCreateIssue] = useState(!initialContext?.issueId);
   // Mutually exclusive by construction: the server refuses a request carrying
   // both, and the picker only ever sets one of them.
   const [designSystemId, setDesignSystemId] = useState("");
@@ -915,11 +930,15 @@ export function DesignTaskComposer({
 
   const { data: projects = [] } = useQuery(projectListOptions(wsId));
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
-  const { data: projectResources = [] } = useQuery({
+  const { data: projectResources = [], isSuccess: projectResourcesLoaded } = useQuery({
     ...projectResourcesOptions(wsId, projectId),
     enabled: !!projectId,
   });
   const { data: issues = [] } = useQuery(projectOpenIssuesOptions(wsId, projectId));
+  const { data: contextIssue } = useQuery({
+    ...issueDetailOptions(wsId, initialContext?.issueId ?? ""),
+    enabled: !!initialContext?.issueId,
+  });
   const { data: workspaceSystems = [] } = useQuery(projectDesignSystemCatalogueOptions(wsId));
   const { data: builtinSystems = [] } = useQuery(builtinDesignSystemListOptions(wsId));
 
@@ -928,12 +947,21 @@ export function DesignTaskComposer({
     () => projectResources.filter((resource) => resource.resource_type === "github_repo"),
     [projectResources],
   );
+  const contextRepositorySeeded = useRef(false);
+  useEffect(() => {
+    if (!initialContext?.issueId || !projectResourcesLoaded || contextRepositorySeeded.current) return;
+    contextRepositorySeeded.current = true;
+    if (repositories.length === 1) setRepositoryId(repositories[0]!.id);
+  }, [initialContext?.issueId, projectResourcesLoaded, repositories]);
+  const issueOptions = contextIssue && !issues.some((issue) => issue.id === contextIssue.id)
+    ? [contextIssue, ...issues]
+    : issues;
   // A repository or issue chosen before the project changed no longer belongs
   // to it; the server would reject them, so drop them for rendering too.
   const activeRepositoryId = repositories.some((repository) => repository.id === repositoryId)
     ? repositoryId
     : "";
-  const activeIssueId = issues.some((issue) => issue.id === issueId) ? issueId : "";
+  const activeIssueId = initialContext?.issueId || (issues.some((issue) => issue.id === issueId) ? issueId : "");
 
   const trimmedBrief = brief.trim();
   const briefTooLong = brief.length > BRIEF_MAX_LENGTH;
@@ -957,6 +985,12 @@ export function DesignTaskComposer({
       await queryClient.invalidateQueries({
         queryKey: designKeys.documents(wsId, created.project_id || projectId),
       });
+      const linkedIssueId = created.issue_id || activeIssueId;
+      if (linkedIssueId) {
+        await queryClient.invalidateQueries({
+          queryKey: designKeys.documentsByIssue(wsId, linkedIssueId),
+        });
+      }
       // DC-053: never let the result read as if the agent inspected code when
       // it did not. The server's own flag decides, not what was submitted.
       toast.success(
@@ -1146,7 +1180,14 @@ export function DesignTaskComposer({
                     projectId={projectId || null}
                     onUpdate={(updates) => setProjectId(updates.project_id ?? "")}
                     align="start"
-                    triggerRender={<SettingTrigger filled={!!selectedProject} aria-label="项目" />}
+                    disabled={!!initialContext?.projectId}
+                    triggerRender={
+                      <SettingTrigger
+                        filled={!!selectedProject}
+                        disabled={!!initialContext?.projectId}
+                        aria-label="项目"
+                      />
+                    }
                   />
                   <RepositorySetting
                     repositories={repositories}
@@ -1155,10 +1196,10 @@ export function DesignTaskComposer({
                     onChange={setRepositoryId}
                   />
                   <IssueDestinationSetting
-                    issues={issues}
+                    issues={issueOptions}
                     issueId={activeIssueId}
                     createIssue={createIssue}
-                    disabled={!projectId}
+                    disabled={!projectId || !!initialContext?.issueId}
                     onChangeIssue={setIssueId}
                     onChangeCreate={setCreateIssue}
                   />

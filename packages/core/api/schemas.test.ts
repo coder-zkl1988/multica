@@ -1379,6 +1379,20 @@ describe("DesignDocumentSchema", () => {
     expect(parsed.saved_revision_id).toBe("");
   });
 
+  it("keeps the saved implementation identity returned for a Multica document", () => {
+    const parsed = DesignDocumentSchema.parse({
+      ...EMPTY_DESIGN_DOCUMENT,
+      id: "document-1",
+      design_ref: "design-ref-document",
+      source: "multica",
+      saved_revision_id: "revision-saved",
+    });
+
+    expect(parsed.design_ref).toBe("design-ref-document");
+    expect(parsed.source).toBe("multica");
+  });
+
+
   it("degrades an unknown status to empty instead of trusting it", () => {
     const parsed = DesignDocumentSchema.parse({
       ...EMPTY_DESIGN_DOCUMENT,
@@ -1770,6 +1784,7 @@ describe("ProjectDesignSystemSchema", () => {
       },
       input_snapshot: {
         agent_id: "agent-1",
+        generation_mode: "programmatic_first",
         platform: "web",
         brief: "CRM design system",
         references: [{ kind: "brand_color", label: "Primary", value: "#2463EB" }],
@@ -1791,11 +1806,22 @@ describe("ProjectDesignSystemSchema", () => {
           conflicts: [],
         },
       },
+      active_task: {
+        id: "task-quick",
+        agent_id: "agent-1",
+        status: "running",
+        operation: "generate",
+        execution_mode: "programmatic_first",
+        error: null,
+        created_at: "2026-09-01T00:00:00Z",
+      },
     });
 
     expect(parsed.status).toBe("validating");
     expect(parsed.preview_validation.status).toBe("pending");
     expect(parsed.preview_validation.report).toEqual({ source: "browser" });
+    expect(parsed.input_snapshot.generation_mode).toBe("programmatic_first");
+    expect(parsed.active_task?.execution_mode).toBe("programmatic_first");
     expect(parsed.input_snapshot.repository_analysis?.facts[0]?.source_paths).toEqual([
       "packages/views/designs/designs-page.tsx",
     ]);

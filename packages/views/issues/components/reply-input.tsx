@@ -6,8 +6,12 @@ import { FileUploadButton } from "@multica/ui/components/common/file-upload-butt
 import { SubmitButton } from "@multica/ui/components/common/submit-button";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { contentReferencesAttachment } from "@multica/core/types";
+import type { Agent, CommentDesignRequest, Issue } from "@multica/core/types";
+import { Button } from "@multica/ui/components/ui/button";
+import { Palette } from "lucide-react";
+import { CommentDesignDeliveryComposer } from "./comment-design-delivery-composer";
 import { formatShortcut, useShortcut } from "@multica/core/shortcuts";
-import { useCommentDraftStore, useCommentComposerStore, type CommentDraftKey } from "@multica/core/issues/stores";
+import { useCommentDraftStore, useCommentComposerStore } from "@multica/core/issues/stores";
 import { ConciseModeToggle } from "./concise-mode-toggle";
 import { cn } from "@multica/ui/lib/utils";
 import type { AvatarSize } from "@multica/ui/lib/avatar-size";
@@ -23,28 +27,34 @@ import { useQuickActionMenu } from "../hooks/use-quick-action-menu";
 
 interface ReplyInputProps {
   issueId: string;
+  issue?: Issue;
+  agents?: Agent[];
   parentId: string;
   placeholder?: string;
   avatarType: string;
   avatarId: string;
   /** Resolves true on success, false on failure — the reply box keeps its text
    *  (locked + spinning) until then, clearing only on success. */
-  onSubmit: (content: string, attachmentIds?: string[], suppressAgentIds?: string[], conciseMode?: boolean) => Promise<string | boolean>;
+  onSubmit: (content: string, attachmentIds?: string[], suppressAgentIds?: string[], designRequest?: CommentDesignRequest | boolean, conciseMode?: boolean) => Promise<string | boolean>;
   /** Called after the server accepts the reply and the composer is cleared. */
   onAccepted?: (commentId: string) => void;
   size?: "sm" | "default";
-  /** When set, hydrates/persists the in-progress reply via the draft store.
-   *  Required for replies inside virtualized timeline threads, where the
-   *  enclosing CommentCard may unmount on scroll-out. */
-  draftKey?: CommentDraftKey;
+  /** Defaults to the issue/thread key so drafts survive virtualized unmounts. */
+  draftKey?: `reply:${string}:${string}`;
 }
 
 // ---------------------------------------------------------------------------
 // ReplyInput
 // ---------------------------------------------------------------------------
 
-function ReplyInput({
+function ReplyInput(props: ReplyInputProps) {
+  return <ReplyInputComposer key={JSON.stringify([props.issueId, props.parentId, props.draftKey])} {...props} />;
+}
+
+function ReplyInputComposer({
   issueId,
+  issue,
+  agents = [],
   parentId,
   placeholder,
   avatarType,
@@ -52,12 +62,17 @@ function ReplyInput({
   onSubmit,
   onAccepted,
   size = "default",
-  draftKey,
+  draftKey = `reply:${issueId}:${parentId}`,
 }: ReplyInputProps) {
   const { t } = useT("issues");
   const { t: tEditor } = useT("editor");
   const sendShortcut = useShortcut("send");
-  const placeholderText = placeholder ?? t(($) => $.reply.placeholder);
+  const designRequest = useCommentDraftStore((s) => s.drafts[draftKey]?.designRequest);
+  const [deliveryValid, setDeliveryValid] = useState(false);
+  const setDesignRequest = useCallback((request: CommentDesignRequest | undefined) => {
+    useCommentDraftStore.getState().setDesignRequest(draftKey, request);
+  }, [draftKey]);
+  const placeholderText = designRequest?.operation === "design" ? t(($) => $.design_delivery.requirements) : placeholder ?? t(($) => $.reply.placeholder);
   const editorRef = useRef<ContentEditorRef>(null);
   const composerRef = useRef<HTMLDivElement>(null);
   // See CommentInput — replying mid-upload posts without the file.
@@ -66,23 +81,22 @@ function ReplyInput({
   // behavior as the top-level composer. A reply posts to the same issue, so
   // `/` has to offer the same thing here (MUL-5588).
   const quickActionMenu = useQuickActionMenu(issueId);
-  // If a draft key is provided, hydrate from store on mount (defaultValue is
-  // the only injection point on ContentEditorRef) and flush on every onUpdate.
+  // Hydrate once per thread; the keyed composer remounts when its context changes.
   const [initialDraft] = useState(() =>
-    draftKey ? useCommentDraftStore.getState().getDraft(draftKey) : undefined,
+    useCommentDraftStore.getState().getDraft(draftKey),
   );
   const [content, setContent] = useState(initialDraft ?? "");
+  const [editorDefault, setEditorDefault] = useState(initialDraft ?? "");
+  const [editorKey, setEditorKey] = useState(0);
+  const [appliedInjection, setAppliedInjection] = useState(0);
   const setDraft = useCommentDraftStore((s) => s.setDraft);
   const [isEmpty, setIsEmpty] = useState(!initialDraft?.trim());
   const [suppressedAgentIds, setSuppressedAgentIds] = useState<Set<string>>(() => new Set());
   const triggerPreview = useCommentTriggerPreview({ issueId, parentId, content });
-  // Uploads for this reply session (MUL-5181) — owned by the coordinator. With
-  // a draftKey they persist in the draft store so scroll-out/close no longer
-  // drops an in-flight upload; without one (no persistence context) they fall
-  // back to session-local state inside the hook.
+  // Coordinator-owned uploads survive thread unmounts in the same draft entry.
   // `gate` widens the editor gate with coordinator-owned placeholders — see
   // CommentInput.
-  const { uploads, attachments: pendingAttachments, handleUpload, removeUpload, gate } =
+  const { attachments: pendingAttachments, handleUpload, gate } =
     useCommentUploads(draftKey, { issueId }, uploadGate, editorRef);
 
   // Readonly-first: static shell until intent; an unsent draft mounts the
@@ -93,16 +107,27 @@ function ReplyInput({
   const lazy = useLazyEditor({
     initialActive:
       !!initialDraft?.trim() ||
-      (draftKey ? useCommentDraftStore.getState().getUploads(draftKey).length > 0 : false),
+      useCommentDraftStore.getState().getUploads(draftKey).length > 0,
     editorRef,
   });
   const { isDragOver, dropZoneProps } = useFileDropZone({
     onDrop: lazy.uploadOrQueue,
   });
 
+  const injectedNonce = useCommentDraftStore((s) => s.draftInjections[draftKey] ?? 0);
+  useEffect(() => {
+    if (injectedNonce === appliedInjection) return;
+    const next = useCommentDraftStore.getState().getDraft(draftKey) ?? "";
+    setEditorDefault(next);
+    setContent(next);
+    setIsEmpty(!next.trim());
+    setEditorKey((key) => key + 1);
+    setAppliedInjection(injectedNonce);
+    lazy.activate();
+  }, [appliedInjection, draftKey, injectedNonce, lazy.activate]);
+
   // Flush on tab close / mobile background — same rationale as CommentInput.
   useEffect(() => {
-    if (!draftKey) return;
     const flush = () => {
       const md = editorRef.current?.getMarkdown();
       if (md && md.trim().length > 0) setDraft(draftKey, md);
@@ -164,13 +189,14 @@ function ReplyInput({
     // if the user moved to another composer while the reply was in flight.
     afterAccepted: () => (editorScrubbedRef.current ? "refocus" : "none"),
     onSubmit: (content) => {
+      const delivery = useCommentDraftStore.getState().drafts[draftKey]?.designRequest;
+      if (delivery && (!issue || !deliveryValid)) return Promise.resolve(false);
       editorScrubbedRef.current = false;
-      if (draftKey) {
-        // Flush pending debounce before snapshotting — see CommentInput.
-        const pending = editorRef.current?.flushPendingUpdate?.();
-        if (pending != null) setDraft(draftKey, pending);
-        submittedEntryRef.current = useCommentDraftStore.getState().drafts[draftKey];
-      }
+      // Flush pending debounce before snapshotting — see CommentInput.
+      const pending = editorRef.current?.flushPendingUpdate?.();
+      if (pending != null) setDraft(draftKey, pending);
+      submittedEntryRef.current = useCommentDraftStore.getState().drafts[draftKey];
+      const submittedDesignRequest = useCommentDraftStore.getState().drafts[draftKey]?.designRequest;
       // Bind only uploads the body still references (see CommentInput):
       // deleting an inline image really unbinds it; close-surviving uploads
       // are written back into the body by the settle handler.
@@ -180,30 +206,42 @@ function ReplyInput({
       const suppressAgentIds = triggerPreview.agents
         .filter((agent) => suppressedAgentIds.has(agent.id))
         .map((agent) => agent.id);
-      return onSubmit(
-        content,
-        activeIds.length > 0 ? activeIds : undefined,
-        suppressAgentIds.length > 0 ? suppressAgentIds : undefined,
-        useCommentComposerStore.getState().concise || undefined,
-      ).then((commentId) => {
+      const conciseMode = useCommentComposerStore.getState().concise || undefined;
+      const result = submittedDesignRequest
+        ? conciseMode === undefined
+          ? onSubmit(
+              content,
+              activeIds.length > 0 ? activeIds : undefined,
+              suppressAgentIds.length > 0 ? suppressAgentIds : undefined,
+              submittedDesignRequest,
+            )
+          : onSubmit(
+              content,
+              activeIds.length > 0 ? activeIds : undefined,
+              suppressAgentIds.length > 0 ? suppressAgentIds : undefined,
+              submittedDesignRequest,
+              conciseMode,
+            )
+        : onSubmit(
+            content,
+            activeIds.length > 0 ? activeIds : undefined,
+            suppressAgentIds.length > 0 ? suppressAgentIds : undefined,
+            conciseMode,
+          );
+      return result.then((commentId) => {
         acceptedCommentIdRef.current = typeof commentId === "string" ? commentId : null;
         return !!commentId;
       });
     },
     onAccepted: () => {
       // Success may only consume the entry it submitted — see CommentInput.
-      if (draftKey) {
-        const lateMd = editorRef.current?.flushPendingUpdate?.();
-        if (lateMd != null) setDraft(draftKey, lateMd);
-        const store = useCommentDraftStore.getState();
-        const live = store.drafts[draftKey];
-        const untouched = live === undefined || live === submittedEntryRef.current;
-        if (untouched) store.clearDraft(draftKey);
-        if (!mountedRef.current || !untouched) return;
-      } else {
-        if (!mountedRef.current) return;
-        uploads.forEach((u) => removeUpload(u.clientUploadId));
-      }
+      const lateMd = editorRef.current?.flushPendingUpdate?.();
+      if (lateMd != null) setDraft(draftKey, lateMd);
+      const store = useCommentDraftStore.getState();
+      const live = store.drafts[draftKey];
+      const untouched = live === undefined || live === submittedEntryRef.current;
+      if (untouched) store.clearDraft(draftKey);
+      if (!mountedRef.current || !untouched) return;
       editorRef.current?.clearContent();
       setContent("");
       setIsEmpty(true);
@@ -228,9 +266,22 @@ function ReplyInput({
         ref={composerRef}
         className={cn(
           "relative min-w-0 flex-1 flex flex-col",
-          !isEmpty && "pb-9",
+          (!isEmpty || !!designRequest) && "pb-9",
         )}
       >
+        {designRequest && issue ? (
+          <CommentDesignDeliveryComposer issue={issue} agents={agents} request={designRequest} disabled={submitting}
+            onChange={setDesignRequest} onValidityChange={setDeliveryValid}
+            onPrepared={(prompt, request, sourceRequestId) => {
+              if (!mountedRef.current) return;
+              const pending = editorRef.current?.flushPendingUpdate?.();
+              if (pending != null) setDraft(draftKey, pending);
+              const store = useCommentDraftStore.getState();
+              if (store.drafts[draftKey]?.designRequest?.request_id !== sourceRequestId) return;
+              store.injectDraft(draftKey, prompt);
+              store.setDesignRequest(draftKey, request);
+            }} />
+        ) : null}
         {/* Lock the editor while the reply is in flight — see CommentInput. */}
         {lazy.active && (
         <div
@@ -242,16 +293,16 @@ function ReplyInput({
           aria-busy={submitting || undefined}
         >
           <ContentEditor
+            key={editorKey}
             ref={editorRef}
-            defaultValue={initialDraft}
+            defaultValue={editorDefault}
             onReady={lazy.onReady}
             placeholder={placeholderText}
             onUpdate={(md) => {
               setContent(md);
               setIsEmpty(!md.trim());
-              // setDraft keeps any pending attachments and drops the entry only
-              // when text AND attachments are both empty.
-              if (draftKey) setDraft(draftKey, md);
+              // Keep delivery settings and pending uploads when the body changes.
+              setDraft(draftKey, md);
             }}
             onSubmit={submit}
             onUploadFile={handleUpload}
@@ -287,7 +338,7 @@ function ReplyInput({
             <p className="text-muted-foreground">{placeholderText}</p>
           </div>
         )}
-        <div className="absolute bottom-0 left-0 right-24 min-w-0">
+        <div className="absolute bottom-0 left-0 right-32 min-w-0" hidden={!!designRequest}>
           <CommentTriggerChips
             agents={triggerPreview.agents}
             blocked={triggerPreview.blocked}
@@ -297,6 +348,11 @@ function ReplyInput({
           />
         </div>
         <div className="absolute bottom-0 right-0 flex items-center gap-1">
+          {issue && !designRequest ? <Button type="button" variant="ghost" size="icon-sm" aria-label={t(($) => $.design_delivery.title)} title={t(($) => $.design_delivery.title)} disabled={submitting}
+            onClick={() => {
+              setDesignRequest({ request_id: crypto.randomUUID(), operation: "design", agent_id: issue.assignee_type === "agent" ? issue.assignee_id ?? "" : "", project_resource_id: "" });
+              lazy.activate();
+            }}><Palette className="size-4" /></Button> : null}
           <FileUploadButton
             size="sm"
             multiple
@@ -305,7 +361,7 @@ function ReplyInput({
           {triggerPreview.agents.length > 0 && <ConciseModeToggle disabled={submitting} />}
           <SubmitButton
             onClick={submit}
-            disabled={isEmpty}
+            disabled={isEmpty || (!!designRequest && (!issue || !deliveryValid))}
             loading={submitting}
             busy={gate.uploading}
             tooltip={gate.uploading

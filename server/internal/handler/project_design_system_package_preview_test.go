@@ -23,7 +23,10 @@ func TestNativePackagePreviewCSPTrustsOnlyTheBridge(t *testing.T) {
 	if !strings.Contains(csp, "script-src 'sha256-") {
 		t.Fatalf("CSP does not pin the preview bridge: %q", csp)
 	}
-	for _, forbidden := range []string{"'unsafe-inline'", "connect-src 'self'", "object-src 'self'"} {
+	if !strings.Contains(csp, "style-src 'self' 'unsafe-inline'") {
+		t.Fatalf("CSP blocks audited inline styles: %q", csp)
+	}
+	for _, forbidden := range []string{"script-src 'unsafe-inline'", "connect-src 'self'", "object-src 'self'"} {
 		if strings.Contains(csp, forbidden) {
 			t.Fatalf("CSP includes forbidden directive %q: %q", forbidden, csp)
 		}
@@ -40,6 +43,7 @@ func TestNativePackagePreviewFileServesMediaTypeAndNoStore(t *testing.T) {
 		contentType string
 	}{
 		{path: "ui-kit/index.html", contentType: "text/html; charset=utf-8"},
+		{path: "tokens.css", contentType: "text/css; charset=utf-8"},
 		{path: "assets/crm-mark.svg", contentType: "image/svg+xml"},
 	} {
 		t.Run(tt.path, func(t *testing.T) {
@@ -55,6 +59,14 @@ func TestNativePackagePreviewFileServesMediaTypeAndNoStore(t *testing.T) {
 			}
 			if got := response.Header().Get("X-Content-Type-Options"); got != "nosniff" {
 				t.Fatalf("X-Content-Type-Options = %q, want nosniff", got)
+			}
+			if tt.path == "ui-kit/index.html" {
+				if csp := response.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "style-src 'self' 'unsafe-inline'") {
+					t.Fatalf("user-facing preview CSP blocks audited styles: %q", csp)
+				}
+				if !strings.Contains(response.Body.String(), `<link rel="stylesheet" href="../tokens.css">`) {
+					t.Fatalf("user-facing preview does not resolve package-root tokens.css: %s", response.Body.String())
+				}
 			}
 		})
 	}
@@ -122,7 +134,7 @@ func TestInjectNativePackagePreviewBridgeKeepsTrustedAssetsInDocument(t *testing
 	html := injectNativePackagePreviewBridge([]byte("<html><head></head><body><main>UI Kit</main></body></html>"), "resource-capability")
 	value := string(html)
 	bridge := nativePackagePreviewBridgeScript("resource-capability")
-	if !strings.Contains(value, `<link rel="stylesheet" href="tokens.css">`) || !strings.Contains(value, bridge) {
+	if !strings.Contains(value, `<link rel="stylesheet" href="../tokens.css">`) || !strings.Contains(value, bridge) {
 		t.Fatalf("injected preview = %q", value)
 	}
 	if !strings.Contains(value, "resource-capability") {
@@ -283,11 +295,11 @@ func TestAdjustProjectDesignSystemUsesImmutableV2BaseReference(t *testing.T) {
 	if err := testPool.QueryRow(context.Background(), `SELECT context FROM agent_task_queue WHERE id = $1`, adjusted.ActiveTask.ID).Scan(&rawContext); err != nil || json.Unmarshal(rawContext, &taskContext) != nil {
 		t.Fatalf("load adjustment context: %v", err)
 	}
-	var base nativeBasePackageReference
+	var base projectdesignsystem.BasePackageReference
 	if err := json.Unmarshal(taskContext.BasePackage, &base); err != nil {
 		t.Fatalf("decode native base reference: %v", err)
 	}
-	if base.Schema != projectdesignsystem.PackageSchemaV2 || base.Slot != "draft" || base.SourceTaskID != fixture.Completion.TaskID || base.IntegritySHA256 != strings.TrimPrefix(fixture.Collected.Manifest.ContentDigest, "sha256:") || taskContext.BasePackageSHA256 != fixture.Collected.Manifest.ContentDigest {
+	if base.Schema != projectdesignsystem.BasePackageReferenceSchema || base.Slot != "draft" || base.SourceTaskID != fixture.Completion.TaskID || base.ContentDigest != fixture.Collected.Manifest.ContentDigest || base.Binding != fixture.Collected.Manifest.Binding || taskContext.BasePackageSHA256 != fixture.Collected.Manifest.ContentDigest {
 		t.Fatalf("immutable V2 base context = %+v, task = %+v", base, taskContext)
 	}
 

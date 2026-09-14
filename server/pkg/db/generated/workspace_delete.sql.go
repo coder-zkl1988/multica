@@ -271,6 +271,9 @@ deleted_drafts AS (
 deleted_open_design_runs AS (
     DELETE FROM open_design_run WHERE open_design_run.workspace_id = $1
 ),
+deleted_design_document_live_previews AS (
+    DELETE FROM design_document_live_preview WHERE workspace_id = $1
+),
 deleted_design_document_revisions AS (
     DELETE FROM design_document_revision WHERE design_document_revision.workspace_id = $1
 ),

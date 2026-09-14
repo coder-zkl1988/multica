@@ -6,10 +6,24 @@
  */
 export const PROJECT_LEVEL_DESIGN_SCOPE = "project-level";
 
+import type { DesignAssetScope } from "../types/design";
+
 export const designKeys = {
   all: (wsId: string) => ["designs", wsId] as const,
   folders: (wsId: string) => ["designs", wsId, "folders"] as const,
-  files: (wsId: string) => ["designs", wsId, "files"] as const,
+  files: (wsId: string, scope?: DesignAssetScope) =>
+    scope
+      ? scope.kind === "workspace_repository"
+        ? ["designs", wsId, "files", scope.kind, scope.workspaceRepositoryId] as const
+        : [
+            "designs",
+            wsId,
+            "files",
+            scope.kind,
+            scope.projectId,
+            scope.kind === "repository" ? scope.projectResourceId : "",
+          ] as const
+      : ["designs", wsId, "files"] as const,
   file: (wsId: string, id: string) => ["designs", wsId, "files", id] as const,
   fileContext: (wsId: string, id: string, revisionId?: string) => ["designs", wsId, "files", id, "context", revisionId ?? "current"] as const,
   frameContext: (wsId: string, fileId: string, frameId: string, revisionId?: string) => ["designs", wsId, "files", fileId, "frames", frameId, "context", revisionId ?? "current"] as const,
@@ -23,6 +37,7 @@ export const designKeys = {
   projectDesignSystems: (wsId: string) => ["designs", wsId, "project-design-systems"] as const,
   projectDesignSystemProjectScopes: (wsId: string, projectId: string) => ["designs", wsId, "project-design-systems", "project", projectId] as const,
   projectDesignSystemByProject: (wsId: string, projectId: string, projectResourceId?: string | null) => ["designs", wsId, "project-design-systems", "project", projectId, projectResourceId ? projectResourceId : PROJECT_LEVEL_DESIGN_SCOPE] as const,
+  projectDesignSystemByWorkspaceRepository: (wsId: string, repositoryId: string) => ["designs", wsId, "project-design-systems", "workspace-repository", repositoryId] as const,
   projectDesignSystem: (wsId: string, id: string) => ["designs", wsId, "project-design-systems", "system", id] as const,
   projectDesignSystemPackagePreview: (wsId: string, id: string) => ["designs", wsId, "project-design-systems", "system", id, "package-preview"] as const,
   // Copy sources are workspace-wide, not per project: a system in one project
@@ -39,6 +54,15 @@ export const designKeys = {
   // issue's view of it along with the project's.
   documentsByIssue: (wsId: string, issueId: string) =>
     ["designs", wsId, "documents", "issue", issueId] as const,
+  documentsByRepository: (wsId: string, projectId: string, projectResourceId: string) =>
+    ["designs", wsId, "documents", "repository", projectId, projectResourceId] as const,
+  assetsByRepository: (wsId: string, projectId: string, projectResourceId: string) =>
+    ["designs", wsId, "assets", "repository", projectId, projectResourceId] as const,
+  assetsByProject: (wsId: string, projectId: string) =>
+    ["designs", wsId, "assets", "project", projectId] as const,
+  assetFrames: (wsId: string, designRef: string) =>
+    ["designs", wsId, "assets", "frames", designRef] as const,
+  designRepositories: (wsId: string) => ["designs", wsId, "repositories"] as const,
   // One document and its revisions live under the same "documents" prefix so
   // the task-lifecycle invalidation of that prefix refreshes them too. The
   // literal "document" segment cannot collide with a project id.

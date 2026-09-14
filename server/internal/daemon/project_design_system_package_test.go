@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chromedp/chromedp"
 	"github.com/multica-ai/multica/server/internal/designpreview"
 	"github.com/multica-ai/multica/server/internal/opendesign"
 	"github.com/multica-ai/multica/server/internal/projectdesignsystem"
@@ -64,8 +65,7 @@ func stageProjectDesignSystemV2Package(t *testing.T, envRoot string) string {
 	if err := os.WriteFile(filepath.Join(outputDir, "source", "index.json"), sourceJSON, 0o644); err != nil {
 		t.Fatalf("write source index: %v", err)
 	}
-	uiKit := `<main data-design-node-id="overview" data-design-node-kind="block" data-design-node-label="Overview"><button data-design-node-id="btn-primary" data-design-node-kind="component" data-design-node-label="Primary button">Go</button></main>
-<style>.root { color: var(--color-primary); font-family: var(--font-stack); }</style>`
+	uiKit := `<!doctype html><html><body><nav><a href="#components">Components</a></nav><main class="root" data-design-node-id="overview" data-design-node-kind="block" data-design-node-label="Overview"><section id="components" class="hero" data-design-node-id="components" data-design-node-kind="block" data-design-node-label="Components"><button class="button-primary" data-design-node-id="btn-primary" data-design-node-kind="component" data-design-node-label="Primary button">Go</button></section></main><style>.root { color: var(--color-primary); font-family: var(--font-stack); }.hero { padding-top: 24px; }.button-primary { background: var(--color-primary); }</style></body></html>`
 	if err := os.WriteFile(filepath.Join(outputDir, "ui-kit", "index.html"), []byte(uiKit), 0o644); err != nil {
 		t.Fatalf("write ui-kit: %v", err)
 	}
@@ -108,21 +108,44 @@ func decodeV2PackageArchive(t *testing.T, archive []byte) map[string][]byte {
 func stageProjectDesignSystemV2TaskContext(t *testing.T, taskID string) json.RawMessage {
 	t.Helper()
 	ctx := map[string]any{
-		"type":                  "project_design_system_task",
-		"operation":             "generate",
-		"package_schema":        projectdesignsystem.PackageSchemaV2,
-		"input_snapshot_sha256": "sha256:" + strings.Repeat("a", 64),
-		"design_system_id":      "11111111-1111-1111-1111-111111111111",
-		"project_id":            "22222222-2222-2222-2222-222222222222",
-		"workspace_id":          "33333333-3333-3333-3333-333333333333",
-		"task_id":               taskID,
-		"agent_id":              "44444444-4444-4444-4444-444444444444",
+		"type":                     "project_design_system_task",
+		"operation":                "generate",
+		"package_schema":           projectdesignsystem.PackageSchemaV2,
+		"input_snapshot_sha256":    "sha256:" + strings.Repeat("a", 64),
+		"project_design_system_id": "11111111-1111-1111-1111-111111111111",
+		"project_id":               "22222222-2222-2222-2222-222222222222",
+		"workspace_id":             "33333333-3333-3333-3333-333333333333",
+		"task_id":                  taskID,
+		"agent_id":                 "44444444-4444-4444-4444-444444444444",
 	}
 	raw, err := json.Marshal(ctx)
 	if err != nil {
 		t.Fatalf("marshal task context: %v", err)
 	}
 	return raw
+}
+
+func TestDecodeV2TaskBindingUsesProjectDesignSystemID(t *testing.T) {
+	task := Task{
+		ID: "task-1",
+		ProjectDesignSystemContext: json.RawMessage(`{
+			"workspace_id":"workspace-1",
+			"project_id":"project-1",
+			"project_design_system_id":"system-1",
+			"task_id":"task-1",
+			"agent_id":"agent-1",
+			"operation":"generate",
+			"input_snapshot_sha256":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+		}`),
+	}
+
+	binding, err := decodeV2TaskBinding(task)
+	if err != nil {
+		t.Fatalf("decode V2 task binding: %v", err)
+	}
+	if binding.DesignSystemID != "system-1" {
+		t.Fatalf("design system ID = %q, want project design system ID", binding.DesignSystemID)
+	}
 }
 
 // finalizingClient is a stand-in for the daemon's API client. It records the
@@ -620,6 +643,20 @@ func (recordingSupervisor) Run(context.Context, opendesign.SupervisorRunRequest)
 	panic("recordingSupervisor.Run called: V2 task must not invoke the open design supervisor")
 }
 
+func TestBuildPreviewTargetURLsPreservesManifestOrder(t *testing.T) {
+	targets := []projectdesignsystem.PreviewTarget{
+		{ID: "ui-kit", Kind: "ui_kit", Path: "ui-kit/index.html"},
+		{ID: "page-patterns", Kind: "preview", Path: "preview/page-patterns.html"},
+	}
+	urls, err := buildPreviewTargetURLs(targets, "http://127.0.0.1:3000", "prefix")
+	if err != nil {
+		t.Fatalf("buildPreviewTargetURLs() error = %v", err)
+	}
+	if len(urls) != 2 || urls[0].Target.ID != "ui-kit" || urls[1].Target.ID != "page-patterns" {
+		t.Fatalf("target order = %+v, want manifest order", urls)
+	}
+}
+
 // TestLoopbackPreviewServerAppliesCSPAndInjectionToValidatedHTMLTargets asserts
 // that the loopback server sets the brief's CSP header and injects tokens.css
 // + the trusted bridge ONLY for paths in the package's PreviewTargets list.
@@ -690,7 +727,7 @@ func TestLoopbackPreviewServerAppliesCSPAndInjectionToValidatedHTMLTargets(t *te
 			if !strings.Contains(csp, "'sha256-"+wantHash+"'") {
 				t.Fatalf("CSP script-src hash mismatch: want sha256-%s, got %q", wantHash, csp)
 			}
-			if !strings.Contains(body, `<link rel="stylesheet" href="/`+prefix+`/tokens.css">`) {
+			if !strings.Contains(body, `<link rel="stylesheet" href="../tokens.css">`) {
 				t.Fatalf("body missing tokens.css link: %q", body)
 			}
 			if !strings.Contains(body, selectionBridgeScript) {
@@ -725,13 +762,60 @@ func TestLoopbackPreviewServerAppliesCSPAndInjectionToValidatedHTMLTargets(t *te
 			if csp != "" {
 				t.Fatalf("non-HTML response carries CSP header: %q", csp)
 			}
-			if target.wantNoLink && strings.Contains(body, `<link rel="stylesheet" href="/`+prefix+`/tokens.css">`) {
+			if target.wantNoLink && strings.Contains(body, `<link rel="stylesheet" href="../tokens.css">`) {
 				t.Fatalf("non-HTML response carries tokens.css link injection: %q", body)
 			}
 			if target.wantNoBrdg && strings.Contains(body, selectionBridgeScript) {
 				t.Fatalf("non-HTML response carries bridge injection: %q", body)
 			}
 		})
+	}
+}
+
+func TestProjectDesignSystemUIKitLoadsTokensAndComputedStylesInBrowser(t *testing.T) {
+	browserPath, err := designpreview.ResolveBrowserPath("")
+	if err != nil {
+		t.Skipf("real browser unavailable: %v", err)
+	}
+	envRoot := t.TempDir()
+	stageProjectDesignSystemV2Package(t, envRoot)
+	collected, err := collectV2ForTest(t, envRoot)
+	if err != nil {
+		t.Fatalf("collect programmatic package: %v", err)
+	}
+	baseURL, prefix, cleanup := startLoopbackPreviewServerForTest(t, collected)
+	defer cleanup()
+
+	allocatorOptions := append([]chromedp.ExecAllocatorOption{}, chromedp.DefaultExecAllocatorOptions[:]...)
+	allocatorOptions = append(allocatorOptions, chromedp.ExecPath(browserPath), chromedp.Flag("headless", true))
+	allocatorCtx, cancelAllocator := chromedp.NewExecAllocator(context.Background(), allocatorOptions...)
+	defer cancelAllocator()
+	browserCtx, cancelBrowser := chromedp.NewContext(allocatorCtx)
+	defer cancelBrowser()
+	browserCtx, cancelTimeout := context.WithTimeout(browserCtx, 20*time.Second)
+	defer cancelTimeout()
+
+	var metrics struct {
+		Primary     string `json:"primary"`
+		HeroPadding string `json:"heroPadding"`
+		ButtonColor string `json:"buttonColor"`
+	}
+	expression := `(() => {
+		return {
+			primary: getComputedStyle(document.documentElement).getPropertyValue('--color-primary').trim(),
+			heroPadding: getComputedStyle(document.querySelector('.hero')).paddingTop,
+			buttonColor: getComputedStyle(document.querySelector('.button-primary')).backgroundColor,
+		};
+	})()`
+	if err := chromedp.Run(browserCtx,
+		chromedp.Navigate(baseURL+"/"+prefix+"/ui-kit/index.html"),
+		chromedp.WaitVisible(".button-primary", chromedp.ByQuery),
+		chromedp.Evaluate(expression, &metrics),
+	); err != nil {
+		t.Fatalf("render UI Kit: %v", err)
+	}
+	if metrics.Primary != "#1677ff" || metrics.HeroPadding == "0px" || metrics.ButtonColor == "rgba(0, 0, 0, 0)" {
+		t.Fatalf("UI Kit styles did not apply: %+v", metrics)
 	}
 }
 
@@ -747,7 +831,7 @@ func TestLoopbackPreviewServerBridgeInjectionRespectsDocumentStructure(t *testin
 	injected := injectBridgeAndTokens([]byte(html), "testprefix")
 
 	got := string(injected)
-	linkIdx := strings.Index(got, `<link rel="stylesheet" href="/testprefix/tokens.css">`)
+	linkIdx := strings.Index(got, `<link rel="stylesheet" href="../tokens.css">`)
 	bodyOpenIdx := strings.Index(got, "<body>")
 	bodyCloseIdx := strings.Index(got, "</body>")
 	bridgeIdx := strings.Index(got, selectionBridgeScript)
@@ -785,13 +869,13 @@ func TestLoopbackPreviewServerBridgeInjectionWorksOnFragmentHTML(t *testing.T) {
 	injected := injectBridgeAndTokens([]byte(fragment), "testprefix")
 
 	got := string(injected)
-	if !strings.Contains(got, `<link rel="stylesheet" href="/testprefix/tokens.css">`) {
+	if !strings.Contains(got, `<link rel="stylesheet" href="../tokens.css">`) {
 		t.Fatalf("fragment missing tokens.css link: %q", got)
 	}
 	if !strings.Contains(got, selectionBridgeScript) {
 		t.Fatalf("fragment missing bridge: %q", got)
 	}
-	if !strings.HasPrefix(got, `<link rel="stylesheet" href="/testprefix/tokens.css">`) {
+	if !strings.HasPrefix(got, `<link rel="stylesheet" href="../tokens.css">`) {
 		t.Fatalf("fragment link not prepended: %q", got)
 	}
 	if !strings.HasSuffix(got, "</script>") {

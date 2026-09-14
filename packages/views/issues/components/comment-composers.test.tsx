@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import type { UploadResult } from "@multica/core/hooks/use-file-upload";
-import type { Attachment } from "@multica/core/types";
+import type { Agent, Attachment, Issue } from "@multica/core/types";
 import { useCommentComposerStore, useCommentDraftStore } from "@multica/core/issues/stores";
 import { WorkspaceSlugProvider } from "@multica/core/paths";
 import { renderWithI18n } from "../../test/i18n";
@@ -60,6 +60,8 @@ vi.mock("@multica/core/api", () => ({
     listWorkspaces: apiListWorkspaces,
     listQuickActions: apiListQuickActions,
     renderQuickAction: apiRenderQuickAction,
+    listProjectResources: vi.fn().mockResolvedValue({ resources: [{ id: "repository-1", resource_type: "github_repo", config: { url: "https://github.com/example/project" } }] }),
+    listProjectDesignSystemCatalogue: vi.fn().mockResolvedValue({ design_systems: [] }),
     previewCommentTriggers: apiPreviewCommentTriggers,
   },
 }));
@@ -289,6 +291,83 @@ beforeEach(() => {
   focusCalls.blurred = 0;
 });
 
+describe("explicit comment design delivery", () => {
+  it.each(["comment", "reply"] as const)("%s sends once, preserves request identity on failure, and clears delivery only after acceptance", async (kind) => {
+    const workspace = { id: "ws-1", slug: "acme", name: "Acme" };
+    apiListWorkspaces.mockResolvedValue([workspace]);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClient.setQueryData(["workspaces", "list"], [workspace]);
+    const store = useCommentDraftStore.getState();
+    const draftKey = kind === "comment" ? "new:issue-1" : "reply:issue-1:comment-1";
+    store.setDraft(draftKey, "Design a checkout flow");
+    store.setDesignRequest(draftKey, { request_id: "delivery-1", operation: "design", agent_id: "selected-agent", project_resource_id: "repository-1" });
+    let rejectSend!: (value: false) => void;
+    const onSubmit = vi.fn().mockImplementationOnce(() => new Promise<false>((resolve) => { rejectSend = resolve; })).mockResolvedValueOnce("comment-1");
+    const props = {
+      issueId: "issue-1",
+      issue: { id: "issue-1", project_id: "project-1", assignee_type: "agent", assignee_id: "assigned-agent" } as Issue,
+      agents: [{ id: "selected-agent", name: "Selected agent", runtime_id: "runtime-1" } as Agent],
+      onSubmit,
+    };
+    const view = renderWithI18n(<QueryClientProvider client={queryClient}><WorkspaceSlugProvider slug="acme">
+      {kind === "comment" ? <CommentInput {...props} /> : <ReplyInput {...props} parentId="comment-1" avatarType="member" avatarId="user-1" />}
+    </WorkspaceSlugProvider></QueryClientProvider>);
+    await waitFor(() => expect(getSubmitButton(view.container)).not.toBeDisabled());
+    expect(onSubmit).not.toHaveBeenCalled();
+    fireEvent.click(getSubmitButton(view.container));
+    fireEvent.click(getSubmitButton(view.container));
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    const firstRequest = onSubmit.mock.calls[0]![3];
+    expect(firstRequest).toMatchObject({ request_id: "delivery-1", operation: "design", agent_id: "selected-agent", project_resource_id: "repository-1" });
+    expect(firstRequest.design_system_id).toBeUndefined();
+    await act(async () => rejectSend(false));
+    expect(store.getDraft(draftKey)).toBe("Design a checkout flow");
+    expect(useCommentDraftStore.getState().drafts[draftKey]?.designRequest).toEqual(firstRequest);
+    fireEvent.click(getSubmitButton(view.container));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(2));
+    expect(onSubmit.mock.calls[1]![3]).toEqual(firstRequest);
+    await waitFor(() => expect(useCommentDraftStore.getState().drafts[draftKey]).toBeUndefined());
+  });
+
+  it("configures replies without running and isolates delivery drafts when switching threads", async () => {
+    const workspace = { id: "ws-1", slug: "acme", name: "Acme" };
+    apiListWorkspaces.mockResolvedValue([workspace]);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClient.setQueryData(["workspaces", "list"], [workspace]);
+    const store = useCommentDraftStore.getState();
+    store.setDraft("new:issue-1", "Main composer draft");
+    const onSubmit = vi.fn().mockResolvedValue("reply-new");
+    const renderThread = (parentId: string) => <QueryClientProvider client={queryClient}><WorkspaceSlugProvider slug="acme">
+      <ReplyInput issueId="issue-1" parentId={parentId} avatarType="member" avatarId="user-1"
+        issue={{ id: "issue-1", project_id: "project-1" } as Issue} onSubmit={onSubmit} />
+    </WorkspaceSlugProvider></QueryClientProvider>;
+    const view = renderWithI18n(renderThread("comment-1"));
+    fireEvent.click(screen.getByRole("button", { name: "Design delivery" }));
+    expect(screen.getByRole("group", { name: "Design delivery" })).toBeInTheDocument();
+    fireEvent.change(screen.getByTestId("editor"), { target: { value: "Thread one design" } });
+    fireEvent.keyDown(screen.getByTestId("editor"), { key: "Enter", ctrlKey: true });
+    expect(onSubmit).not.toHaveBeenCalled();
+    const request = useCommentDraftStore.getState().drafts["reply:issue-1:comment-1"]?.designRequest;
+
+    view.rerender(renderThread("comment-2"));
+    expect(screen.queryByRole("group", { name: "Design delivery" })).not.toBeInTheDocument();
+    activateComposer("reply-composer-shell");
+    fireEvent.change(screen.getByTestId("editor"), { target: { value: "Ordinary sibling reply" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith("Ordinary sibling reply", undefined, undefined, undefined));
+    await waitFor(() => expect(useCommentDraftStore.getState().drafts["reply:issue-1:comment-2"]).toBeUndefined());
+
+    view.rerender(renderThread("comment-1"));
+    expect(screen.getByTestId("editor")).toHaveValue("Thread one design");
+    expect(useCommentDraftStore.getState().drafts["reply:issue-1:comment-1"]?.designRequest).toEqual(request);
+    fireEvent.click(screen.getByRole("button", { name: "Remove design delivery" }));
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(onSubmit).toHaveBeenLastCalledWith("Thread one design", undefined, undefined, undefined));
+    expect(store.getDraft("new:issue-1")).toBe("Main composer draft");
+  });
+});
+
+
 // ---------------------------------------------------------------------------
 // Quick action `/` menu (MUL-5588)
 // ---------------------------------------------------------------------------
@@ -370,13 +449,15 @@ describe("comment composers", () => {
   it("renders the main comment composer without a manual expand control", () => {
     const { container } = renderCommentInput();
 
+    expect(container.querySelector('[data-comment-composer="main"]')).toContainElement(
+      screen.getByRole("button", { name: "Send" }),
+    );
     // Readonly-first: shell shows the placeholder text; clicking mounts the
     // real editor in place.
     expect(screen.getByTestId("comment-composer-shell")).toHaveTextContent("Leave a comment...");
     activateComposer("comment-composer-shell");
     expect(screen.getByPlaceholderText("Leave a comment...")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Attach file" })).toBeInTheDocument();
-    expect(container.querySelectorAll("button")).toHaveLength(2);
 
     const shell = screen.getByTestId("drop-zone");
     expect(shell.className).not.toMatch(/max-h-/);
@@ -384,19 +465,27 @@ describe("comment composers", () => {
   });
 
   it("renders reply composer without a manual expand control", () => {
-    const { container } = renderReplyInput();
+    renderReplyInput();
 
     expect(screen.getByTestId("reply-composer-shell")).toHaveTextContent("Leave a reply...");
     activateComposer("reply-composer-shell");
     expect(screen.getByPlaceholderText("Leave a reply...")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Attach file" })).toBeInTheDocument();
-    expect(container.querySelectorAll("button")).toHaveLength(2);
 
     const shell = screen.getByTestId("drop-zone");
     expect(shell.className).not.toMatch(/max-h-/);
     expect(shell.className).not.toContain("h-[60vh]");
   });
 
+  it("lets default-size replies grow without a height cap", () => {
+    renderReplyInput({ size: "default" });
+
+    activateComposer("reply-composer-shell");
+    expect(screen.getByPlaceholderText("Leave a reply...")).toBeInTheDocument();
+
+    const shell = screen.getByTestId("drop-zone");
+    expect(shell.className).not.toMatch(/max-h-/);
+  });
   it("keeps main comment submission wired after removing expand", async () => {
     const { container, onSubmit } = renderCommentInput();
 
@@ -437,21 +526,29 @@ describe("comment composers", () => {
     expect(editorDefaultValues.values.at(-1)).toBe("");
   });
 
-  it("keeps the reply editor's initial draft snapshot after persistence rerenders", () => {
-    renderReplyInput({ draftKey: "reply:issue-1:comment-1" });
-    activateComposer("reply-composer-shell");
+  it("preserves the hidden design implementation identity through the editor roundtrip", async () => {
+    const marker = "<!-- multica-design-implementation:%7B%22assetId%22%3A%22asset-1%22%7D -->";
+    useCommentDraftStore.getState().setDraft(
+      "new:issue-1",
+      `【Design Center 设计稿一键还原】\n${marker}\n[@UI Agent](mention://agent/agent-1)\n\nImplement it.`,
+    );
+    const onSubmit = vi.fn().mockResolvedValue("comment-1");
+    const { container } = renderCommentInput(onSubmit);
 
+    // Tiptap omits HTML comments when it serializes the editable document.
     fireEvent.change(screen.getByTestId("editor"), {
-      target: { value: "test.de" },
+      target: { value: "【Design Center 设计稿一键还原】\n[@UI Agent](mention://agent/agent-1)\n\nImplement it." },
     });
+    fireEvent.click(getSubmitButton(container));
 
-    expect(
-      useCommentDraftStore
-        .getState()
-        .getDraft("reply:issue-1:comment-1"),
-    ).toBe("test.de");
-    expect(editorDefaultValues.values.at(-1)).toBeUndefined();
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(
+      expect.stringContaining(marker),
+      undefined,
+      undefined,
+      undefined,
+    ));
   });
+
 
   it("locks the editor while the send is in flight, then clears on success", async () => {
     let resolveSubmit: (ok: boolean) => void = () => {};

@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/multica-ai/multica/server/internal/designimplementation"
 	"github.com/multica-ai/multica/server/internal/opendesign"
 	"github.com/multica-ai/multica/server/internal/projectdesignsystem"
 	skillpkg "github.com/multica-ai/multica/server/internal/skill"
@@ -28,10 +29,12 @@ const TaskContextMarkerRelPath = ".multica/daemon_task_context.json"
 const TaskContextMarkerManagedBy = "multica-daemon-task"
 
 type taskContextMarkerFile struct {
-	ManagedBy     string `json:"managed_by"`
-	AgentID       string `json:"agent_id,omitempty"`
-	IssueID       string `json:"issue_id,omitempty"`
-	ChatSessionID string `json:"chat_session_id,omitempty"`
+	ManagedBy            string                             `json:"managed_by"`
+	TaskID               string                             `json:"task_id,omitempty"`
+	AgentID              string                             `json:"agent_id,omitempty"`
+	IssueID              string                             `json:"issue_id,omitempty"`
+	ChatSessionID        string                             `json:"chat_session_id,omitempty"`
+	DesignImplementation *designimplementation.TaskIdentity `json:"design_implementation,omitempty"`
 }
 
 // EnsureWorkspacesRootMarker writes a persistent daemon-task marker at
@@ -351,13 +354,28 @@ func isV2ProjectDesignSystemTask(task map[string]json.RawMessage) bool {
 	return schema == projectdesignsystem.PackageSchemaV2
 }
 
+func v2ProjectDesignSystemHasRepository(task map[string]json.RawMessage) bool {
+	for _, field := range []string{"project_resource_id", "workspace_repository_id"} {
+		raw, ok := task[field]
+		if !ok {
+			continue
+		}
+		var value string
+		if json.Unmarshal(raw, &value) == nil && strings.TrimSpace(value) != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // writeV2ProjectDesignSystemContext materializes the V2 native agent
 // workspace under {root}: a read-only context/task.json + optional
 // context/repository-analysis.json, a read-only reference/index.json
-// summarising the brief and references, and an optional read-only
-// base/ tree populated for adjust / regenerate tasks. All three
-// sub-directories are stamped 0o555; all files are stamped 0o444 so
-// the agent can read but not mutate the inputs. The output area
+// summarising the brief and references, a repository/ directory reserved for
+// the daemon's immutable Open Design evidence snapshot, and an optional
+// read-only base/ tree populated for adjust / regenerate tasks. Context and
+// reference are stamped here; repository and base are stamped after their
+// verified bytes arrive. The output area
 // (envRoot/output/project-design-system) is intentionally not touched
 // here — it stays writable for the agent's final package.
 func writeV2ProjectDesignSystemContext(root string, task map[string]json.RawMessage, operation string, manifest *sidecarManifest) error {
@@ -375,6 +393,15 @@ func writeV2ProjectDesignSystemContext(root string, task map[string]json.RawMess
 	referenceDir := filepath.Join(root, "reference")
 	if err := recordMkdirAll(referenceDir, 0o755, manifest); err != nil {
 		return err
+	}
+	// Repository-scoped tasks reserve a separate evidence tree. The daemon
+	// fills and stamps it read-only only after the exact default-branch checkout
+	// has been prepared, so execenv must not freeze this directory yet.
+	if v2ProjectDesignSystemHasRepository(task) {
+		repositoryDir := filepath.Join(root, "repository")
+		if err := recordMkdirAll(repositoryDir, 0o755, manifest); err != nil {
+			return err
+		}
 	}
 
 	taskJSON, err := json.MarshalIndent(task, "", "  ")
@@ -479,7 +506,7 @@ func stampV2ReadOnly(dirs ...string) error {
 // {workdir}/.agent_context/project_design_system/. Keep this in sync
 // with the directory names written by writeV2ProjectDesignSystemContext
 // and writeV2BaseDirectory.
-var v2SidecarDirNames = []string{"context", "reference", "base"}
+var v2SidecarDirNames = []string{"context", "reference", "repository", "base"}
 
 // v2SidecarRootNames are the read-only sidecar roots a native task can
 // materialize under .agent_context. A task has exactly one of them.
@@ -578,10 +605,12 @@ func writeTaskContextMarker(workDir string, ctx TaskContextForEnv, manifest *sid
 	// cleanup. If a crash leaves it behind, the CLI intentionally treats it
 	// as daemon context and fails closed instead of using a user PAT.
 	payload := taskContextMarkerFile{
-		ManagedBy:     TaskContextMarkerManagedBy,
-		AgentID:       ctx.AgentID,
-		IssueID:       ctx.IssueID,
-		ChatSessionID: ctx.ChatSessionID,
+		ManagedBy:            TaskContextMarkerManagedBy,
+		TaskID:               ctx.TaskID,
+		AgentID:              ctx.AgentID,
+		IssueID:              ctx.IssueID,
+		ChatSessionID:        ctx.ChatSessionID,
+		DesignImplementation: ctx.DesignImplementation,
 	}
 	data, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
@@ -689,6 +718,20 @@ func buildV2ReferenceIndex(task map[string]json.RawMessage) ([]byte, error) {
 // SHA-256 carried in the base must match the base_package_sha256
 // stamped onto the task context, otherwise the task context and the
 // on-disk base disagree and we refuse the workspace.
+func normalizedV2SHA256(value string) (string, bool) {
+	value = strings.TrimSpace(value)
+	value = strings.TrimPrefix(value, "sha256:")
+	if len(value) != 64 {
+		return "", false
+	}
+	for _, character := range value {
+		if !((character >= '0' && character <= '9') || (character >= 'a' && character <= 'f') || (character >= 'A' && character <= 'F')) {
+			return "", false
+		}
+	}
+	return strings.ToLower(value), true
+}
+
 func writeV2BaseDirectory(root string, task map[string]json.RawMessage, manifest *sidecarManifest) error {
 	rawBase, ok := task["base_package"]
 	if !ok {
@@ -700,7 +743,30 @@ func writeV2BaseDirectory(root string, task map[string]json.RawMessage, manifest
 	}
 	if rawSchema, ok := base["schema"]; ok {
 		var schema string
-		if err := json.Unmarshal(rawSchema, &schema); err == nil && schema == opendesign.BasePackageReferenceSchema {
+		if err := json.Unmarshal(rawSchema, &schema); err != nil {
+			return fmt.Errorf("decode V2 base package schema: %w", err)
+		}
+		if schema == projectdesignsystem.BasePackageReferenceSchema {
+			var reference projectdesignsystem.BasePackageReference
+			if err := json.Unmarshal(rawBase, &reference); err != nil {
+				return fmt.Errorf("decode V2 base package reference: %w", err)
+			}
+			if err := projectdesignsystem.ValidateBasePackageReference(reference); err != nil {
+				return fmt.Errorf("validate V2 base package reference: %w", err)
+			}
+			if rawDeclared, ok := task["base_package_sha256"]; ok {
+				var declared string
+				if err := json.Unmarshal(rawDeclared, &declared); err != nil || declared != reference.ContentDigest {
+					return fmt.Errorf("V2 base package reference digest does not match task context")
+				}
+			}
+			baseDir := filepath.Join(root, "base")
+			if err := recordMkdirAll(baseDir, 0o755, manifest); err != nil {
+				return err
+			}
+			return nil
+		}
+		if schema == opendesign.BasePackageReferenceSchema {
 			return fmt.Errorf("V2 base package uses Open Design reference schema; V2 adjust / regenerate requires a native base package")
 		}
 	}
@@ -715,8 +781,12 @@ func writeV2BaseDirectory(root string, task map[string]json.RawMessage, manifest
 		if err := json.Unmarshal(rawDeclared, &declared); err != nil {
 			return fmt.Errorf("decode V2 base_package_sha256: %w", err)
 		}
-		if declared != "" && baseDigest != "" && declared != baseDigest {
-			return fmt.Errorf("V2 base package digest mismatch: task context claims %q, base integrity_sha256 is %q", declared, baseDigest)
+		if declared != "" && baseDigest != "" {
+			declaredHex, declaredOK := normalizedV2SHA256(declared)
+			baseHex, baseOK := normalizedV2SHA256(baseDigest)
+			if !declaredOK || !baseOK || declaredHex != baseHex {
+				return fmt.Errorf("V2 base package digest mismatch: task context claims %q, base integrity_sha256 is %q", declared, baseDigest)
+			}
 		}
 	}
 	if baseDigest == "" {

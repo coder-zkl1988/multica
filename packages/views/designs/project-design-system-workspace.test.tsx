@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Agent, Project, ProjectDesignSystem, ProjectResource } from "@multica/core/types";
 
 const apiMocks = vi.hoisted(() => ({
+  adjustProjectDesignSystem: vi.fn(),
   cancelTaskById: vi.fn(),
   listTaskMessages: vi.fn(),
 }));
@@ -15,7 +16,7 @@ vi.mock("@multica/core/hooks", () => ({
 }));
 
 vi.mock("./project-design-system-create", () => ({
-  ProjectDesignSystemCreate: () => <button type="button">生成设计体系</button>,
+  ProjectDesignSystemCreate: () => <button type="button">立即生成</button>,
 }));
 
 vi.mock("./project-design-system-canvas", () => ({
@@ -154,6 +155,7 @@ function makeActiveTask(status: string, overrides: Record<string, unknown> = {})
 
 describe("ProjectDesignSystemWorkspace", () => {
   beforeEach(() => {
+    apiMocks.adjustProjectDesignSystem.mockReset();
     apiMocks.cancelTaskById.mockReset().mockResolvedValue(undefined);
     apiMocks.listTaskMessages.mockReset().mockResolvedValue([]);
   });
@@ -161,7 +163,7 @@ describe("ProjectDesignSystemWorkspace", () => {
   it("renders the creation workbench directly for an unestablished project", () => {
     renderWorkspace(makeSystem());
 
-    expect(screen.getByRole("button", { name: "生成设计体系" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "立即生成" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "创建设计体系" })).not.toBeInTheDocument();
     expect(screen.queryByText("尚未建立设计体系")).not.toBeInTheDocument();
   });
@@ -191,7 +193,7 @@ describe("ProjectDesignSystemWorkspace", () => {
     renderWorkspace(makeSystem(), { repositories: [] });
 
     expect(screen.queryByRole("button", { name: "项目通用" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "生成设计体系" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "立即生成" })).toBeInTheDocument();
   });
 
   it("reports the picked repository and marks the selected scope", () => {
@@ -207,13 +209,15 @@ describe("ProjectDesignSystemWorkspace", () => {
     expect(onSelectRepository).toHaveBeenCalledWith("");
   });
 
-  it("says so when a repository falls back to the project-level system", () => {
+  it("does not label or render a project-level system as the repository system", () => {
     renderWorkspace(makeSystem({ id: "system-1", status: "saved", project_resource_id: "" }), {
       repositories: [makeRepository()],
       selectedRepositoryId: "resource-h5",
     });
 
-    expect(screen.getByText("该仓库还没有自己的设计体系，当前显示项目通用体系。")).toBeInTheDocument();
+    expect(screen.queryByText("该仓库还没有自己的设计体系，当前显示项目通用体系。")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "品牌原则" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "立即生成" })).toBeInTheDocument();
   });
 
   it("stays silent when the repository has its own system", () => {
@@ -253,23 +257,43 @@ describe("ProjectDesignSystemWorkspace", () => {
       status: "generating",
       active_task: activeTask,
     }), {
-      taskMessages: [{
-        task_id: activeTask?.id,
-        issue_id: "",
-        seq: 1,
-        type: "text",
-        content: "正在整理组件状态",
-        created_at: new Date(Date.now() - 15_000).toISOString(),
-      }],
+      taskMessages: [
+        {
+          task_id: activeTask?.id,
+          issue_id: "",
+          seq: 1,
+          type: "tool_use",
+          tool: "todo_write",
+          input: {
+            todos: [
+              { content: "同步主分支并固定快照", status: "completed" },
+              { content: "建立仓库设计证据索引", status: "in_progress" },
+              { content: "形成规则、Token 与组件契约", status: "pending" },
+            ],
+          },
+          created_at: new Date(Date.now() - 20_000).toISOString(),
+        },
+        {
+          task_id: activeTask?.id,
+          issue_id: "",
+          seq: 2,
+          type: "text",
+          content: "正在整理组件状态",
+          created_at: new Date(Date.now() - 15_000).toISOString(),
+        },
+      ],
     });
     const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
 
     expect(screen.getByText("智能体执行中")).toBeInTheDocument();
-    expect(screen.getByText("Local UI Agent")).toBeInTheDocument();
+    expect(screen.getAllByText("Local UI Agent").length).toBeGreaterThan(0);
     expect(screen.getByText("开始时间")).toBeInTheDocument();
     expect(screen.getByText("运行时长")).toBeInTheDocument();
     expect(screen.getByText("最后活动")).toBeInTheDocument();
-    expect(screen.queryByText(/\d+%/)).not.toBeInTheDocument();
+    expect(screen.getByRole("progressbar", { name: /设计体系生成进度/ })).toHaveAttribute("aria-valuetext", "已完成 1 步，第 2 步进行中");
+    expect(screen.getByText("第 2/3 步 · 进行中")).toBeInTheDocument();
+    expect(screen.getAllByText("建立仓库设计证据索引").length).toBeGreaterThan(0);
+    expect(screen.getByRole("region", { name: "生成期间与智能体互动" })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "停止任务" }));
     await waitFor(() => expect(apiMocks.cancelTaskById).toHaveBeenCalledWith(activeTask?.id));
@@ -284,6 +308,82 @@ describe("ProjectDesignSystemWorkspace", () => {
     });
   });
 
+  it("keeps polling messages for an active Agent design task", async () => {
+    const activeTask = makeActiveTask("running");
+    renderWorkspace(makeSystem({
+      id: "system-1",
+      name: "CRM 设计体系",
+      platform: "web",
+      current_agent_id: "agent-1",
+      status: "generating",
+      active_task: activeTask,
+    }));
+
+    await waitFor(() => expect(apiMocks.listTaskMessages).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(apiMocks.listTaskMessages.mock.calls.length).toBeGreaterThan(1), { timeout: 2_500 });
+  });
+
+  it("queues user feedback during generation and sends it as the next Agent adjustment", async () => {
+    const activeTask = makeActiveTask("running");
+    const runningSystem = makeSystem({
+      id: "system-1",
+      name: "CRM 设计体系",
+      platform: "web",
+      current_agent_id: "agent-1",
+      status: "generating",
+      active_task: activeTask,
+    });
+    const completedSystem = makeSystem({
+      id: "system-1",
+      name: "CRM 设计体系",
+      platform: "web",
+      current_agent_id: "agent-1",
+      status: "draft",
+      active_task: null,
+      content: {
+        sections: [{ id: "principles", title: "设计原则", markdown: "清晰" }],
+        token_groups: [],
+        locators: [],
+        preview_html: "<main>CRM</main>",
+        integrity_sha256: "sha-1",
+      },
+    });
+    apiMocks.adjustProjectDesignSystem.mockResolvedValue({
+      ...completedSystem,
+      status: "generating",
+      active_task: makeActiveTask("queued", { id: "22222222-2222-4222-8222-222222222222", operation: "adjust" }),
+    });
+    const { queryClient, rerender } = renderWorkspace(runningSystem);
+
+    fireEvent.change(screen.getByLabelText("给智能体的下一轮要求"), {
+      target: { value: "医疗能力单独放到 HIS 扩展层" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "排队给 Agent" }));
+    expect(screen.getByText("医疗能力单独放到 HIS 扩展层")).toBeInTheDocument();
+
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <ProjectDesignSystemWorkspace
+          project={project}
+          agents={[agent]}
+          designFiles={[]}
+          legacyProfiles={[]}
+          system={completedSystem}
+          isLoading={false}
+          repositories={[]}
+          selectedRepositoryId=""
+          onSelectRepository={() => {}}
+        />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => expect(apiMocks.adjustProjectDesignSystem).toHaveBeenCalledWith("system-1", {
+      agent_id: "agent-1",
+      instruction: "医疗能力单独放到 HIS 扩展层",
+      scope: { kind: "all" },
+    }));
+  });
+
   it("locks the workbench while repository analysis runs and exposes only the stop action", () => {
     renderWorkspace(makeSystem({
       id: "system-1",
@@ -294,8 +394,35 @@ describe("ProjectDesignSystemWorkspace", () => {
     expect(screen.getByRole("heading", { name: "正在分析项目仓库" })).toBeInTheDocument();
     expect(screen.getByText("仓库分析")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "停止分析" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "生成设计体系" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "立即生成" })).not.toBeInTheDocument();
     expect(screen.queryByText("repository_analysis")).not.toBeInTheDocument();
+  });
+
+  it("keeps the existing UI Kit visible while repository regeneration runs", () => {
+    renderWorkspace(makeSystem({
+      id: "system-1",
+      name: "CRM 设计体系",
+      platform: "web",
+      status: "generating",
+      active_task: makeActiveTask("running", { operation: "regenerate" }),
+      input_snapshot: {
+        workspace_repository_id: "repository-1",
+        workspace_repository_label: "CRM",
+        workspace_repository_ref: "master",
+      },
+      content: {
+        sections: [{ id: "principles", title: "品牌原则", markdown: "清晰" }],
+        token_groups: [],
+        locators: [],
+        preview_html: "<main>CRM</main>",
+        integrity_sha256: "sha-1",
+      },
+    }));
+
+    expect(screen.getByRole("heading", { name: "品牌原则" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "品牌原则" }).parentElement).toHaveAttribute("data-active-task-id", "11111111-1111-4111-8111-111111111111");
+    expect(screen.queryByRole("heading", { name: "Agent 正在生成完整设计体系" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "生成期间与智能体互动" })).not.toBeInTheDocument();
   });
 
   it("warns when a running task has no activity for three minutes", () => {

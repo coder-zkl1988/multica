@@ -10,6 +10,7 @@ import type {
 } from "@multica/core/types";
 
 const SELECTION_MESSAGE = "multica:project-design-system-select";
+const SELECTION_MODE_MESSAGE = "multica:project-design-system-selection-mode";
 const VERIFICATION_MESSAGE = "multica:project-design-system-preview";
 const VERIFICATION_TIMEOUT_MS = 7_000;
 const PREVIEW_CANVAS_LABEL = "UI Kit 预览画布";
@@ -110,6 +111,7 @@ export function ProjectDesignSystemPreview({
   locators,
   integritySha256,
   selectionEnabled = true,
+  selectionActive = false,
   packageSchema = "",
   verificationAttempt = 0,
   onVerification,
@@ -121,6 +123,7 @@ export function ProjectDesignSystemPreview({
   locators: ProjectDesignSystemLocator[];
   integritySha256: string;
   selectionEnabled?: boolean;
+  selectionActive?: boolean;
   packageSchema?: string;
   verificationAttempt?: number;
   onVerification: (receipt: ProjectDesignSystemPreviewVerificationReceipt) => void;
@@ -148,6 +151,18 @@ export function ProjectDesignSystemPreview({
   );
   const activeArchiveKey = selectedArchiveTarget ? archiveTargetKey(selectedArchiveTarget) : "";
   const archiveCapability = archiveTargetCapability(selectedArchiveTarget);
+  const notifySelectionMode = useCallback(() => {
+    const message: { type: string; enabled: boolean; capability?: string } = {
+      type: SELECTION_MODE_MESSAGE,
+      enabled: selectionEnabled && selectionActive,
+    };
+    if (archiveCapability) message.capability = archiveCapability;
+    frameRef.current?.contentWindow?.postMessage(message, "*");
+  }, [archiveCapability, selectionActive, selectionEnabled]);
+
+  useEffect(() => {
+    notifySelectionMode();
+  }, [notifySelectionMode]);
 
   const verificationKey = `${integritySha256}:${verificationAttempt}`;
   const finishVerification = useCallback((receipt: ProjectDesignSystemPreviewVerificationReceipt) => {
@@ -206,6 +221,7 @@ export function ProjectDesignSystemPreview({
       const message = event.data as { type?: unknown; id?: unknown; capability?: unknown };
       if (
         selectionEnabled &&
+        selectionActive &&
         archiveCapability &&
         message.type === SELECTION_MESSAGE &&
         typeof message.id === "string" &&
@@ -223,7 +239,7 @@ export function ProjectDesignSystemPreview({
 
     window.addEventListener("message", handleMessage);
     return () => window.removeEventListener("message", handleMessage);
-  }, [archiveCapability, finishVerification, integritySha256, locatorById, onSelect, packageSchema, selectedArchiveTarget, selectionEnabled]);
+  }, [archiveCapability, finishVerification, integritySha256, locatorById, onSelect, packageSchema, selectedArchiveTarget, selectionActive, selectionEnabled]);
 
   if ((!selectedArchiveTarget && !previewHtml.trim()) || loadFailed) {
     return (
@@ -297,6 +313,7 @@ export function ProjectDesignSystemPreview({
             sandbox="allow-scripts"
             title="项目设计体系 UI Kit"
             className="h-[680px] w-full border-0 bg-white shadow-sm"
+            onLoad={notifySelectionMode}
             onError={() => setLoadFailed(true)}
           />
         </div>

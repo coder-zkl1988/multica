@@ -4,9 +4,40 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/multica-ai/multica/server/internal/designimplementation"
 )
+
+func TestWriteTaskContextMarkerIncludesBoundDesignImplementationIdentity(t *testing.T) {
+	root := t.TempDir()
+	identity := designimplementation.TaskIdentity{
+		AssetID: "asset-1", DesignRef: "design_v1_authoritative", RevisionID: "revision-1",
+		ContentDigest: "sha256:digest", FrameRefs: []string{"frame_v1_authoritative", "frame_v1_detail"}, ProjectResourceID: "repository-1",
+	}
+	if err := writeTaskContextMarker(root, TaskContextForEnv{
+		TaskID: "task-1", AgentID: "agent-1", IssueID: "issue-1", DesignImplementation: &identity,
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(root, TaskContextMarkerRelPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var marker struct {
+		TaskID               string                             `json:"task_id"`
+		DesignImplementation *designimplementation.TaskIdentity `json:"design_implementation"`
+	}
+	if err := json.Unmarshal(raw, &marker); err != nil {
+		t.Fatal(err)
+	}
+	if marker.TaskID != "task-1" || marker.DesignImplementation == nil || !reflect.DeepEqual(*marker.DesignImplementation, identity) {
+		t.Fatalf("task marker identity = %+v", marker)
+	}
+}
 
 // TestEnsureWorkspacesRootMarker covers the root-level daemon marker that
 // protects the whole workspaces tree. Regression for the confirmed escape

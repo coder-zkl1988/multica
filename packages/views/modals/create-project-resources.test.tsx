@@ -78,9 +78,13 @@ vi.mock("@tanstack/react-query", () => ({
   useQuery: (options: { queryKey?: unknown[] }) => {
     const key = options?.queryKey?.[0];
     if (key === "designs") {
-      // Only the workspace-wide picker query is enabled in this suite; the
-      // per-project list keys carry a project UUID segment we don't serve.
+      // Serve the workspace picker and its exact saved cover revision.
       const segment = options?.queryKey?.[3];
+      if (segment === "document" && options.queryKey?.[6] === "rev-1") {
+        return { data: { id: "rev-1", pages: [
+          { id: "home", title: "首页", entry: "prototype/index.html", parent_id: "", state_ids: [] },
+        ], files: [], preview_targets: [], prototype_entry: "prototype/index.html", resource_base_path: "" } };
+      }
       return { data: segment === "workspace" ? DESIGN_DOCS : [] };
     }
     if (key === "projects") return { data: PROJECTS };
@@ -226,6 +230,8 @@ describe("CreateProjectModal — document and design resources", () => {
     await user.click(addButtons[addButtons.length - 1]!);
 
     // One design reference, toggled from the picker list.
+    expect(screen.getByText("1 个页面")).toBeInTheDocument();
+    expect(screen.getByText("暂无已保存版本")).toBeInTheDocument();
     await user.click(screen.getByText("首页改版 v3"));
 
     await submit(user);

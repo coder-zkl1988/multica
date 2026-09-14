@@ -6,6 +6,10 @@ import { ContentEditor, type ContentEditorRef, useFileDropZone, FileDropOverlay,
 import { FileUploadButton } from "@multica/ui/components/common/file-upload-button";
 import { SubmitButton } from "@multica/ui/components/common/submit-button";
 import { contentReferencesAttachment } from "@multica/core/types";
+import type { Agent, CommentDesignRequest, Issue } from "@multica/core/types";
+import { Button } from "@multica/ui/components/ui/button";
+import { Palette } from "lucide-react";
+import { CommentDesignDeliveryComposer } from "./comment-design-delivery-composer";
 import { formatShortcut, useShortcut } from "@multica/core/shortcuts";
 import { useCommentDraftStore, useCommentComposerStore } from "@multica/core/issues/stores";
 import { useT } from "../../i18n";
@@ -18,15 +22,31 @@ import { useStickyComposer } from "../hooks/use-sticky-composer";
 
 interface CommentInputProps {
   issueId: string;
+  issue?: Issue;
+  agents?: Agent[];
   /** Resolves true on success, false on failure. The composer keeps the text
    *  (editor locked + button spinning) until this settles, then clears only on
    *  success — a failed send must not silently discard the user's draft. */
-  onSubmit: (content: string, attachmentIds?: string[], suppressAgentIds?: string[], conciseMode?: boolean) => Promise<string | boolean>;
+  onSubmit: (content: string, attachmentIds?: string[], suppressAgentIds?: string[], designRequest?: CommentDesignRequest | boolean, conciseMode?: boolean) => Promise<string | boolean>;
   /** Called after the server accepts the comment and the composer is cleared. */
   onAccepted?: (commentId: string) => void;
 }
 
-function CommentInput({ issueId, onSubmit, onAccepted }: CommentInputProps) {
+const designImplementationTrigger = "【Design Center 设计稿一键还原】";
+const designImplementationMarkerPattern = /<!-- multica-design-implementation:[^\n]*-->/;
+
+function designImplementationMarker(content: string) {
+  return content.match(designImplementationMarkerPattern)?.[0] ?? "";
+}
+
+function restoreDesignImplementationMarker(content: string, marker: string) {
+  if (!marker || !content.includes(designImplementationTrigger) || designImplementationMarkerPattern.test(content)) {
+    return content;
+  }
+  return `${content.trimEnd()}\n${marker}`;
+}
+
+function CommentInput({ issueId, issue, agents = [], onSubmit, onAccepted }: CommentInputProps) {
   const { t } = useT("issues");
   const { t: tEditor } = useT("editor");
   const sendShortcut = useShortcut("send");
@@ -42,9 +62,15 @@ function CommentInput({ issueId, onSubmit, onAccepted }: CommentInputProps) {
   // body so the user can edit before sending, instead of firing immediately.
   const quickActionMenu = useQuickActionMenu(issueId);
   const draftKey = `new:${issueId}` as const;
+  const designRequest = useCommentDraftStore((s) => s.drafts[draftKey]?.designRequest);
+  const [deliveryValid, setDeliveryValid] = useState(false);
+  const setDesignRequest = useCallback((request: CommentDesignRequest | undefined) => {
+    useCommentDraftStore.getState().setDesignRequest(draftKey, request);
+  }, [draftKey]);
   const [initialDraft] = useState(() =>
     useCommentDraftStore.getState().getDraft(draftKey),
   );
+  const designImplementationMarkerRef = useRef(designImplementationMarker(initialDraft ?? ""));
   const [content, setContent] = useState(initialDraft ?? "");
   const [editorDefault, setEditorDefault] = useState(initialDraft ?? "");
   const [editorKey, setEditorKey] = useState(0);
@@ -90,6 +116,7 @@ function CommentInput({ issueId, onSubmit, onAccepted }: CommentInputProps) {
   useEffect(() => {
     if (injectedNonce === appliedInjection) return;
     const next = useCommentDraftStore.getState().getDraft(draftKey) ?? "";
+    designImplementationMarkerRef.current = designImplementationMarker(next);
     setEditorDefault(next);
     setContent(next);
     setIsEmpty(!next.trim());
@@ -157,17 +184,21 @@ function CommentInput({ issueId, onSubmit, onAccepted }: CommentInputProps) {
   const { submitting, submit } = useComposerSubmit({
     editorRef,
     uploadGate: gate,
+    normalize: (raw) => restoreDesignImplementationMarker(raw, designImplementationMarkerRef.current),
     // A top-level comment ends a turn: the caret is dropped rather than kept,
     // so the composer stops reading as "still writing" once the comment is
     // posted above it. Thread replies are the opposite — see ReplyInput.
     afterAccepted: () => (editorScrubbedRef.current ? "blur" : "none"),
     onSubmit: (content) => {
+      const delivery = useCommentDraftStore.getState().drafts[draftKey]?.designRequest;
+      if (delivery && !deliveryValid) return Promise.resolve(false);
       editorScrubbedRef.current = false;
       // Flush the editor's pending debounce before snapshotting — a late flush
       // of pre-submit typing must not read as an edit made during the request.
       const pending = editorRef.current?.flushPendingUpdate?.();
       if (pending != null) setDraft(draftKey, pending);
       submittedEntryRef.current = useCommentDraftStore.getState().drafts[draftKey];
+      const submittedDesignRequest = useCommentDraftStore.getState().drafts[draftKey]?.designRequest;
       // Bind only uploads the BODY still references (MUL-5181): deleting an
       // inline image really unbinds it. Uploads that finished after a close
       // are written back into the body by the settle handler, so surviving
@@ -178,12 +209,29 @@ function CommentInput({ issueId, onSubmit, onAccepted }: CommentInputProps) {
       const suppressAgentIds = triggerPreview.agents
         .filter((agent) => suppressedAgentIds.has(agent.id))
         .map((agent) => agent.id);
-      return onSubmit(
-        content,
-        activeIds.length > 0 ? activeIds : undefined,
-        suppressAgentIds.length > 0 ? suppressAgentIds : undefined,
-        useCommentComposerStore.getState().concise || undefined,
-      ).then((commentId) => {
+      const conciseMode = useCommentComposerStore.getState().concise || undefined;
+      const result = submittedDesignRequest
+        ? conciseMode === undefined
+          ? onSubmit(
+              content,
+              activeIds.length > 0 ? activeIds : undefined,
+              suppressAgentIds.length > 0 ? suppressAgentIds : undefined,
+              submittedDesignRequest,
+            )
+          : onSubmit(
+              content,
+              activeIds.length > 0 ? activeIds : undefined,
+              suppressAgentIds.length > 0 ? suppressAgentIds : undefined,
+              submittedDesignRequest,
+              conciseMode,
+            )
+        : onSubmit(
+            content,
+            activeIds.length > 0 ? activeIds : undefined,
+            suppressAgentIds.length > 0 ? suppressAgentIds : undefined,
+            conciseMode,
+          );
+      return result.then((commentId) => {
         acceptedCommentIdRef.current = typeof commentId === "string" ? commentId : null;
         return !!commentId;
       });
@@ -204,6 +252,7 @@ function CommentInput({ issueId, onSubmit, onAccepted }: CommentInputProps) {
       editorRef.current?.clearContent();
       setContent("");
       setIsEmpty(true);
+      designImplementationMarkerRef.current = "";
       setSuppressedAgentIds(new Set());
       editorScrubbedRef.current = true;
       if (acceptedCommentIdRef.current) onAccepted?.(acceptedCommentIdRef.current);
@@ -213,8 +262,19 @@ function CommentInput({ issueId, onSubmit, onAccepted }: CommentInputProps) {
   return (
     <div
       {...dropZoneProps}
+      data-comment-composer="main"
       className="relative flex flex-col rounded-lg bg-card pb-8 ring-1 ring-border"
     >
+      {designRequest && issue ? (
+        <CommentDesignDeliveryComposer issue={issue} agents={agents} request={designRequest} disabled={submitting}
+          onChange={setDesignRequest} onValidityChange={setDeliveryValid}
+          onPrepared={(prompt, request, sourceRequestId) => {
+            const store = useCommentDraftStore.getState();
+            if (store.drafts[draftKey]?.designRequest?.request_id !== sourceRequestId) return;
+            store.injectDraft(draftKey, prompt);
+            store.setDesignRequest(draftKey, request);
+          }} />
+      ) : null}
       {/* Lock the editor while the send is in flight. ContentEditor can't
           toggle Tiptap's `editable` post-mount (see its docstring), so the
           documented way to make it non-interactive is a pointer-events-none +
@@ -237,7 +297,7 @@ function CommentInput({ issueId, onSubmit, onAccepted }: CommentInputProps) {
           ref={editorRef}
           defaultValue={editorDefault}
           onReady={lazy.onReady}
-          placeholder={t(($) => $.comment.leave_comment_placeholder)}
+          placeholder={designRequest?.operation === "design" ? t(($) => $.design_delivery.requirements) : t(($) => $.comment.leave_comment_placeholder)}
           onUpdate={(md) => {
             setContent(md);
             setIsEmpty(!md.trim());
@@ -285,7 +345,7 @@ function CommentInput({ issueId, onSubmit, onAccepted }: CommentInputProps) {
           </div>
         </div>
       )}
-      <div className="absolute bottom-1 left-2 right-28 min-w-0">
+      <div className="absolute bottom-1 left-2 right-40 min-w-0" hidden={!!designRequest}>
         <CommentTriggerChips
           agents={triggerPreview.agents}
           blocked={triggerPreview.blocked}
@@ -295,6 +355,11 @@ function CommentInput({ issueId, onSubmit, onAccepted }: CommentInputProps) {
         />
       </div>
       <div className="absolute bottom-1 right-1.5 flex items-center gap-1">
+        {issue && !designRequest ? <Button type="button" variant="ghost" size="icon-sm" aria-label={t(($) => $.design_delivery.title)} title={t(($) => $.design_delivery.title)} disabled={submitting}
+          onClick={() => {
+            setDesignRequest({ request_id: crypto.randomUUID(), operation: "design", agent_id: issue.assignee_type === "agent" ? issue.assignee_id ?? "" : "", project_resource_id: "" });
+            lazy.activate();
+          }}><Palette className="size-4" /></Button> : null}
         <FileUploadButton
           size="sm"
           multiple
@@ -303,7 +368,7 @@ function CommentInput({ issueId, onSubmit, onAccepted }: CommentInputProps) {
         {triggerPreview.agents.length > 0 && <ConciseModeToggle disabled={submitting} />}
         <SubmitButton
           onClick={submit}
-          disabled={isEmpty}
+          disabled={isEmpty || (!!designRequest && !deliveryValid)}
           loading={submitting}
           busy={gate.uploading}
           tooltip={gate.uploading

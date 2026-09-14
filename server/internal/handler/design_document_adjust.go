@@ -145,7 +145,7 @@ func (h *Handler) AdjustDesignDocument(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.TaskService.NotifyTaskEnqueued(r.Context(), task)
-	writeJSON(w, http.StatusAccepted, designDocumentResponse(updated, &task))
+	writeJSON(w, http.StatusAccepted, designDocumentResponse(updated, &task, h.designDocumentRepositoryGrounded(r.Context(), updated)))
 }
 
 // createDesignDocumentAdjustTask enqueues the adjustment and attaches it to the
@@ -319,23 +319,19 @@ func (h *Handler) designDocumentBaseBoundTaskContext(
 		return nil, projectDesignSystemInternalError("context_failed", "failed to build agent task context")
 	}
 
-	// Re-resolved rather than copied from the base revision: the design system
-	// is the project's live contract, and a package produced under a system the
-	// project has since replaced would drift from everything else in it. The
-	// digest is pinned into the task so the run itself stays deterministic.
-	designContext, err := (service.ProjectDesignContextResolver{
-		Store:        queries,
-		AllowedHosts: h.projectDesignSystemAllowedHosts(),
-	}).Resolve(ctx, service.ResolveProjectDesignContextParams{
-		WorkspaceID:       document.WorkspaceID,
-		ProjectID:         document.ProjectID,
-		ProjectResourceID: document.ProjectResourceID,
-	})
-	if err != nil {
-		if errors.Is(err, service.ErrSavedDesignContextInvalid) {
-			return nil, &projectDesignSystemRequestError{status: http.StatusUnprocessableEntity, code: "design_context_invalid", message: "saved design system is invalid"}
+	// The design context is server-derived at creation and frozen in the input
+	// snapshot. Adjustments use those exact bytes so a later save cannot retarget
+	// the run; repository-bound legacy snapshots fail closed instead of falling
+	// back to mutable current state.
+	var input designDocumentInputSnapshot
+	if len(document.InputSnapshot) > 0 {
+		if err := json.Unmarshal(document.InputSnapshot, &input); err != nil {
+			return nil, projectDesignSystemInternalError("input_snapshot_invalid", "the stored design inputs could not be read")
 		}
-		return nil, projectDesignSystemInternalError("design_context_failed", "failed to resolve design context")
+	}
+	designContext, err := designDocumentPinnedContext(document, input)
+	if err != nil {
+		return nil, err
 	}
 	designContextJSON, err := json.Marshal(designContext)
 	if err != nil {
@@ -345,13 +341,6 @@ func (h *Handler) designDocumentBaseBoundTaskContext(
 	// Brief and attachments are the frozen composer request. They are read back
 	// out of the document's own snapshot so the agent still sees what the
 	// document is FOR while it applies a local change to it.
-	var input designDocumentInputSnapshot
-	if len(document.InputSnapshot) > 0 {
-		if err := json.Unmarshal(document.InputSnapshot, &input); err != nil {
-			return nil, projectDesignSystemInternalError("input_snapshot_invalid", "the stored design inputs could not be read")
-		}
-	}
-
 	// The document's own references, then this turn's. One directory, because
 	// that is the one the prompt names and the daemon writes; the ordering is
 	// what tells the agent which is the standing context and which is the ask.

@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { LoaderCircle, Palette } from "lucide-react";
+import { LoaderCircle, Palette, Plus } from "lucide-react";
 import { issueDesignDocumentsOptions } from "@multica/core/designs/queries";
 import { useWorkspacePaths } from "@multica/core/paths";
 import type { DesignDocument, Issue } from "@multica/core/types";
@@ -29,11 +29,12 @@ export function IssueDesignDocumentsSection({ issue }: { issue: Issue }) {
   const { data: documents = [], isPending } = useQuery(
     issueDesignDocumentsOptions(issue.workspace_id, issue.id),
   );
-
-  // Nothing to show when no design points here. Nothing while the first fetch
-  // is in flight either: a header that appears empty and then fills is noisier
-  // than one that arrives complete.
-  if (isPending || documents.length === 0) return null;
+  const params = new URLSearchParams({ create_issue_id: issue.id });
+  if (issue.project_id) params.set("create_project_id", issue.project_id);
+  if (issue.assignee_type === "agent" && issue.assignee_id) {
+    params.set("create_agent_id", issue.assignee_id);
+  }
+  const createHref = `${paths.designs()}?${params.toString()}`;
 
   return (
     <div>
@@ -42,7 +43,31 @@ export function IssueDesignDocumentsSection({ issue }: { issue: Issue }) {
         {t(($) => $.detail.section_design_documents)}
       </div>
       <div className="pl-2">
-        {documents.map((document) => (
+        {issue.project_id ? (
+          <AppLink
+            href={createHref}
+            className="-mx-2 flex items-center gap-1.5 rounded-md px-2 py-1.5 text-caption font-medium text-primary transition-colors hover:bg-accent/50"
+          >
+            <Plus className="size-3.5 shrink-0" />
+            <span>{t(($) => $.detail.create_multica_design)}</span>
+          </AppLink>
+        ) : (
+          <button
+            type="button"
+            disabled
+            title={t(($) => $.detail.design_requires_project)}
+            className="-mx-2 flex items-center gap-1.5 px-2 py-1.5 text-caption text-faint-foreground"
+          >
+            <Plus className="size-3.5 shrink-0" />
+            <span>{t(($) => $.detail.create_multica_design)}</span>
+          </button>
+        )}
+        {isPending ? (
+          <div className="-mx-2 flex items-center gap-1.5 px-2 py-1.5 text-caption text-muted-foreground">
+            <LoaderCircle className="size-3.5 shrink-0 animate-spin" />
+            <span>{t(($) => $.detail.design_documents_loading)}</span>
+          </div>
+        ) : documents.map((document) => (
           <AppLink
             key={document.id}
             href={paths.designDocumentDetail(document.id)}

@@ -350,12 +350,10 @@ func copyInstruction(instruction string) string {
 // specific slot — the existing loader prefers draft over saved, which is right
 // when adjusting your own system and wrong when another system copies from you.
 //
-// It deliberately does NOT reuse decodeProjectDesignSystemBasePackage. That
-// function returns a reference for V2 packages (schema, slot, digest), and the
-// sidecar writer materializes base/ from inline artifact text, so a reference
-// produces a task that dies writing its own workspace. The stored artifact
-// columns are populated for V2 packages too — completion extracts them from
-// the archive — so the inline shape is available and is what actually works.
+// It deliberately reads the named saved slot rather than the ordinary base
+// loader, which prefers draft over saved. Both paths use the same inline
+// artifact shape because the sidecar writer materializes an immutable base/
+// directory before the Agent starts.
 func (h *Handler) loadCopyBasePackage(
 	ctx context.Context,
 	queries *db.Queries,
@@ -399,10 +397,11 @@ type designSystemCatalogueEntry struct {
 	ProjectID string `json:"project_id"`
 	// Empty for a standalone system: it belongs to the workspace itself
 	// and no project stands behind it.
-	ProjectTitle      string `json:"project_title,omitempty"`
-	ProjectResourceID string `json:"project_resource_id,omitempty"`
-	Name              string `json:"name"`
-	Platform          string `json:"platform"`
+	ProjectTitle          string `json:"project_title,omitempty"`
+	ProjectResourceID     string `json:"project_resource_id,omitempty"`
+	WorkspaceRepositoryID string `json:"workspace_repository_id,omitempty"`
+	Name                  string `json:"name"`
+	Platform              string `json:"platform"`
 	// Summary is the first line of the frozen creation brief, the way OD's
 	// rows lead with the system's own summary before anything else. Empty
 	// when the brief carries no usable line.
@@ -410,6 +409,7 @@ type designSystemCatalogueEntry struct {
 	// HasDraftPackage: a draft sits beside the saved package — the system is
 	// being adjusted. The library row shows OD's draft marker for it.
 	HasDraftPackage bool   `json:"has_draft_package"`
+	OwnershipScope  string `json:"ownership_scope"`
 	SavedAt         string `json:"saved_at"`
 }
 
@@ -447,7 +447,7 @@ func catalogueSummary(inputSnapshot []byte) string {
 // expose package contents — a caller that wants to look at a system opens it
 // in its own project.
 func (h *Handler) ListWorkspaceDesignSystemCatalogue(w http.ResponseWriter, r *http.Request) {
-	workspaceUUID, _, ok := h.projectDesignSystemRequestScope(w, r)
+	workspaceUUID, requesterUUID, ok := h.projectDesignSystemRequestScope(w, r)
 	if !ok {
 		return
 	}
@@ -458,15 +458,21 @@ func (h *Handler) ListWorkspaceDesignSystemCatalogue(w http.ResponseWriter, r *h
 	}
 	entries := make([]designSystemCatalogueEntry, 0, len(rows))
 	for _, row := range rows {
+		ownershipScope := "team"
+		if row.CreatedBy.Valid && uuidToString(row.CreatedBy) == uuidToString(requesterUUID) {
+			ownershipScope = "mine"
+		}
 		entry := designSystemCatalogueEntry{
-			ID:                uuidToString(row.ID),
-			ProjectID:         uuidToString(row.ProjectID),
-			ProjectTitle:      textToString(row.ProjectTitle),
-			ProjectResourceID: uuidToString(row.ProjectResourceID),
-			Name:              row.Name,
-			Platform:          row.Platform,
-			Summary:           catalogueSummary(row.InputSnapshot),
-			HasDraftPackage:   row.HasDraftPackage,
+			ID:                    uuidToString(row.ID),
+			ProjectID:             uuidToString(row.ProjectID),
+			ProjectTitle:          textToString(row.ProjectTitle),
+			ProjectResourceID:     uuidToString(row.ProjectResourceID),
+			WorkspaceRepositoryID: uuidToString(row.WorkspaceRepositoryID),
+			Name:                  row.Name,
+			Platform:              row.Platform,
+			Summary:               catalogueSummary(row.InputSnapshot),
+			HasDraftPackage:       row.HasDraftPackage,
+			OwnershipScope:        ownershipScope,
 		}
 		if row.SavedAt.Valid {
 			entry.SavedAt = row.SavedAt.Time.UTC().Format(time.RFC3339Nano)

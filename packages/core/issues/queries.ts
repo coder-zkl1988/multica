@@ -607,6 +607,14 @@ export function issueTimelineOptions(issueId: string) {
   });
 }
 
+export function issueTasksOptions(wsId: string, issueId: string) {
+  return queryOptions({
+    queryKey: [...issueKeys.tasks(issueId), wsId],
+    queryFn: () => api.listTasksByIssue(issueId),
+    enabled: !!wsId && !!issueId,
+  });
+}
+
 export function issueReactionsOptions(issueId: string) {
   return queryOptions({
     queryKey: issueKeys.reactions(issueId),

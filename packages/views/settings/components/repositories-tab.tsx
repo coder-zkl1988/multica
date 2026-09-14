@@ -273,7 +273,7 @@ export function RepositoriesTab() {
   };
 
   const addRepository = () => {
-    setRepositories((current) => [...current, { url: "" }]);
+    setRepositories((current) => [...current, { id: crypto.randomUUID(), url: "" }]);
   };
 
   const openGitHubPicker = () => {
@@ -337,7 +337,9 @@ export function RepositoriesTab() {
       if (!identity || known.has(identity) || repository.archived) continue;
       known.add(identity);
       additions.push({
+        id: crypto.randomUUID(),
         url: repository.clone_url,
+        ...(repository.default_branch ? { default_branch_hint: repository.default_branch } : {}),
         ...(repository.description?.trim()
           ? { description: repository.description.trim() }
           : {}),

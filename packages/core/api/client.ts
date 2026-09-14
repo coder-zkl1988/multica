@@ -1,6 +1,7 @@
 import { configStore } from "../config";
 import type {
   Issue,
+  CommentDesignRequest,
   IssuePriority,
   IssueMetadata,
   BatchUpdateIssuesResponse,
@@ -223,10 +224,14 @@ import type {
   ManualEditDesignDocumentRequest,
   RegenerateDesignDocumentRequest,
   SaveDesignDocumentRequest,
+  SetDesignAssetRepositoryAssociationRequest,
+  SetDesignAssetRepositoryAssociationResponse,
   DesignDocument,
   DesignDocumentRevision,
+  DesignDocumentLivePreview,
   ListDesignDocumentRevisionsResponse,
   ListDesignDocumentsResponse,
+  ListDesignRepositoriesResponse,
   DesignDocumentShare,
   ListDesignDocumentSharesResponse,
   DesignDocumentShareExchange,
@@ -248,6 +253,9 @@ import type {
   DesignDraft,
   DesignDraftMaterializeResponse,
   DesignFileDetailResponse,
+  DesignAssetFramesResponse,
+  BuildDesignImplementationPromptRequest,
+  BuildDesignImplementationPromptResponse,
   DesignFolder,
   DesignFrameContext,
   DesignLayerLightweightEditRequest,
@@ -552,6 +560,7 @@ import {
   EMPTY_RESOURCE_LABELS_RESPONSE,
   DesignDeliverySchema,
   DesignDocumentSchema,
+  DesignDocumentLivePreviewSchema,
   DesignDocumentRevisionSchema,
   EMPTY_DESIGN_DOCUMENT_REVISION,
   ListDesignDocumentRevisionsResponseSchema,
@@ -584,6 +593,12 @@ import {
   EMPTY_DISPATCH_DESIGN_RESTORE_TASK_RESPONSE,
   ListDesignDeliveriesResponseSchema,
   ListDesignDocumentsResponseSchema,
+  ListDesignRepositoriesResponseSchema,
+  EMPTY_LIST_DESIGN_REPOSITORIES_RESPONSE,
+  SetDesignAssetRepositoryAssociationResponseSchema,
+  DesignAssetFramesResponseSchema,
+  EMPTY_DESIGN_ASSET_FRAMES_RESPONSE,
+  BuildDesignImplementationPromptResponseSchema,
   ListDesignDraftsResponseSchema,
   BuiltinDesignSystemDetailSchema,
   ListBuiltinDesignSystemsResponseSchema,
@@ -1561,9 +1576,9 @@ export class ApiClient {
     parentId?: string,
     attachmentIds?: string[],
     suppressAgentIds?: string[],
-    options?: { conciseMode?: boolean },
+    options?: { conciseMode?: boolean; designRequest?: CommentDesignRequest },
   ): Promise<Comment> {
-    return this.fetch(`/api/issues/${issueId}/comments`, {
+    const raw = await this.fetch<unknown>(`/api/issues/${issueId}/comments`, {
       method: "POST",
       body: JSON.stringify({
         content,
@@ -1571,10 +1586,14 @@ export class ApiClient {
         ...(parentId ? { parent_id: parentId } : {}),
         ...(attachmentIds?.length ? { attachment_ids: attachmentIds } : {}),
         ...(suppressAgentIds?.length ? { suppress_agent_ids: suppressAgentIds } : {}),
+        ...(options?.designRequest ? { design_request: options.designRequest } : {}),
         // Tri-state on the wire: omitted key keeps the standard workflow
         // prompt so older servers (and standard sends) are untouched.
         ...(options?.conciseMode !== undefined ? { concise_mode: options.conciseMode } : {}),
       }),
+    });
+    return parseWithFallback(raw, CommentSchema, EMPTY_COMMENT, {
+      endpoint: "POST /api/issues/:id/comments",
     });
   }
 
@@ -4240,8 +4259,73 @@ export class ApiClient {
   }
 
   // Gallery Native design files
-  async listDesignFiles(): Promise<ListDesignFilesResponse> {
-    return this.fetch("/api/design-files");
+  async listDesignFiles(params?: {
+    projectId?: string;
+    projectResourceId?: string;
+    workspaceRepositoryId?: string;
+  }): Promise<ListDesignFilesResponse> {
+    const search = new URLSearchParams();
+    if (params?.projectId) search.set("project_id", params.projectId);
+    if (params?.projectResourceId) search.set("project_resource_id", params.projectResourceId);
+    if (params?.workspaceRepositoryId) search.set("workspace_repository_id", params.workspaceRepositoryId);
+    const suffix = search.toString();
+    return this.fetch(`/api/design-files${suffix ? `?${suffix}` : ""}`);
+  }
+  async getDesignAssetFrames(designRef: string): Promise<DesignAssetFramesResponse> {
+    const raw = await this.fetch<unknown>(
+      `/api/design-assets/${encodeURIComponent(designRef)}/frames`,
+    );
+    return parseWithFallback(raw, DesignAssetFramesResponseSchema, EMPTY_DESIGN_ASSET_FRAMES_RESPONSE, {
+      endpoint: "GET /api/design-assets/:designRef/frames",
+    });
+  }
+
+  async buildDesignImplementationPrompt(
+    designRef: string,
+    data: BuildDesignImplementationPromptRequest,
+  ): Promise<BuildDesignImplementationPromptResponse> {
+    const raw = await this.fetch<unknown>(
+      `/api/design-assets/${encodeURIComponent(designRef)}/implementation-prompt`,
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      },
+    );
+    const parsed = BuildDesignImplementationPromptResponseSchema.safeParse(raw);
+    if (!parsed.success) {
+      throw new Error(`POST /api/design-assets/:designRef/implementation-prompt returned a malformed response: ${parsed.error.message}`);
+    }
+    return parsed.data;
+  }
+
+
+  async listDesignRepositories(): Promise<ListDesignRepositoriesResponse> {
+    const raw = await this.fetch<unknown>("/api/design-repositories");
+    return parseWithFallback(
+      raw,
+      ListDesignRepositoriesResponseSchema,
+      EMPTY_LIST_DESIGN_REPOSITORIES_RESPONSE,
+      { endpoint: "GET /api/design-repositories" },
+    );
+  }
+
+  /**
+   * Set the repository link for a mixed batch of Design Files and Design
+   * Documents. The success response is intentionally strict: a malformed
+   * server acknowledgement must fail the mutation rather than look successful.
+   */
+  async setDesignAssetRepositoryAssociation(
+    data: SetDesignAssetRepositoryAssociationRequest,
+  ): Promise<SetDesignAssetRepositoryAssociationResponse> {
+    const raw = await this.fetch<unknown>("/api/design-assets/repository-association", {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+    const parsed = SetDesignAssetRepositoryAssociationResponseSchema.safeParse(raw);
+    if (!parsed.success) {
+      throw new Error(`PUT /api/design-assets/repository-association returned a malformed response: ${parsed.error.message}`);
+    }
+    return parsed.data;
   }
 
   async listDesignFolders(projectId?: string): Promise<ListDesignFoldersResponse> {
@@ -4397,6 +4481,18 @@ export class ApiClient {
     );
   }
 
+  async getProjectDesignSystemForWorkspaceRepository(repositoryId: string): Promise<ProjectDesignSystem> {
+    const raw = await this.fetch<unknown>(
+      `/api/project-design-systems?workspace_repository_id=${encodeURIComponent(repositoryId)}`,
+    );
+    return parseWithFallback(
+      raw,
+      ProjectDesignSystemSchema,
+      { ...EMPTY_PROJECT_DESIGN_SYSTEM, workspace_repository_id: repositoryId },
+      { endpoint: "GET /api/project-design-systems?workspace_repository_id" },
+    );
+  }
+
   async getProjectDesignSystem(id: string): Promise<ProjectDesignSystem> {
     const raw = await this.fetch<unknown>(
       `/api/project-design-systems/${encodeURIComponent(id)}`,
@@ -4446,6 +4542,7 @@ export class ApiClient {
       {
         ...EMPTY_PROJECT_DESIGN_SYSTEM,
         project_id: data.project_id,
+        workspace_repository_id: data.workspace_repository_id ?? "",
         platform: data.platform,
         current_agent_id: data.agent_id,
       },
@@ -4481,7 +4578,7 @@ export class ApiClient {
       ProjectDesignSystemSchema,
       {
         ...EMPTY_PROJECT_DESIGN_SYSTEM,
-        project_id: data.project_id,
+        project_id: data.project_id ?? "",
         project_resource_id: data.project_resource_id ?? "",
         platform: data.platform,
         current_agent_id: data.agent_id,
@@ -4587,9 +4684,14 @@ export class ApiClient {
   // Design documents are the page-design artifact the design centre home
   // composer produces (DC-042). Creating one also enqueues its first
   // generation task server-side.
-  async listDesignDocuments(projectId: string): Promise<ListDesignDocumentsResponse> {
+  async listDesignDocuments(
+    projectId: string,
+    projectResourceId?: string,
+  ): Promise<ListDesignDocumentsResponse> {
+    const search = new URLSearchParams({ project_id: projectId });
+    if (projectResourceId) search.set("project_resource_id", projectResourceId);
     const raw = await this.fetch<unknown>(
-      `/api/design-documents?project_id=${encodeURIComponent(projectId)}`,
+      `/api/design-documents?${search.toString()}`,
     );
     return parseWithFallback(raw, ListDesignDocumentsResponseSchema, EMPTY_LIST_DESIGN_DOCUMENTS_RESPONSE, {
       endpoint: "GET /api/design-documents",
@@ -4602,6 +4704,15 @@ export class ApiClient {
    * same shape as the project listing; the issue form is what lets a task card
    * show the design being made for it.
    */
+  async listDesignDocumentsForWorkspaceRepository(repositoryId: string): Promise<ListDesignDocumentsResponse> {
+    const raw = await this.fetch<unknown>(
+      `/api/design-documents?workspace_repository_id=${encodeURIComponent(repositoryId)}`,
+    );
+    return parseWithFallback(raw, ListDesignDocumentsResponseSchema, EMPTY_LIST_DESIGN_DOCUMENTS_RESPONSE, {
+      endpoint: "GET /api/design-documents?workspace_repository_id",
+    });
+  }
+
   async listDesignDocumentsForIssue(issueId: string): Promise<ListDesignDocumentsResponse> {
     const raw = await this.fetch<unknown>(
       `/api/design-documents?issue_id=${encodeURIComponent(issueId)}`,
@@ -4713,6 +4824,17 @@ export class ApiClient {
     return parseWithFallback(raw, DesignDocumentSchema, { ...EMPTY_DESIGN_DOCUMENT, id: documentId }, {
       endpoint: "GET /api/design-documents/{id}",
     });
+  }
+
+  async getDesignDocumentLivePreview(documentId: string, taskId: string): Promise<DesignDocumentLivePreview | null> {
+    const raw = await this.fetch<unknown>(
+      `/api/design-documents/${encodeURIComponent(documentId)}/live-preview?task_id=${encodeURIComponent(taskId)}`,
+    );
+    if (raw == null) return null;
+    const preview = parseWithFallback<DesignDocumentLivePreview | null>(raw, DesignDocumentLivePreviewSchema, null, {
+      endpoint: "GET /api/design-documents/{id}/live-preview",
+    });
+    return preview?.task_id === taskId && preview.document_id === documentId ? preview : null;
   }
 
   async listDesignDocumentRevisions(documentId: string): Promise<ListDesignDocumentRevisionsResponse> {

@@ -114,7 +114,7 @@ func (h *Handler) ManualEditDesignDocument(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	h.TaskService.NotifyTaskEnqueued(r.Context(), task)
-	writeJSON(w, http.StatusAccepted, designDocumentResponse(updated, &task))
+	writeJSON(w, http.StatusAccepted, designDocumentResponse(updated, &task, h.designDocumentRepositoryGrounded(r.Context(), updated)))
 }
 
 // manualEditInstruction is what the revision timeline shows for this run. It

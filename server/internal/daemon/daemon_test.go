@@ -4282,6 +4282,71 @@ func TestRegisterTaskReposAllowsProjectOnlyURL(t *testing.T) {
 	}
 }
 
+func TestEnsureRepoReadyWaitsForColdProjectOnlyRepository(t *testing.T) {
+	t.Parallel()
+
+	sourceRepo := createDaemonTestRepo(t)
+	d := newRepoReadyTestDaemon(t, func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(WorkspaceReposResponse{
+			WorkspaceID:  "ws-1",
+			Repos:        []RepoData{},
+			ReposVersion: "v1",
+		})
+	})
+	d.workspaces["ws-1"] = newWorkspaceState("ws-1", nil, "", nil, nil)
+
+	barePath := d.repoCache.BarePath("ws-1", sourceRepo)
+	lockHeld := make(chan struct{})
+	releaseLock := make(chan struct{})
+	lockDone := make(chan error, 1)
+	go func() {
+		lockDone <- d.repoCache.WithRepoLock(barePath, func() error {
+			close(lockHeld)
+			<-releaseLock
+			return nil
+		})
+	}()
+	select {
+	case <-lockHeld:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting to hold the cold repository lock")
+	}
+
+	d.registerTaskRepos("ws-1", "task-cold-project-only", []RepoData{{URL: sourceRepo}})
+	ready := make(chan error, 1)
+	go func() {
+		ready <- d.ensureRepoReady(context.Background(), "ws-1", sourceRepo)
+	}()
+
+	select {
+	case err := <-ready:
+		close(releaseLock)
+		t.Fatalf("ensureRepoReady returned before the project-only clone completed: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(releaseLock)
+
+	select {
+	case err := <-lockDone:
+		if err != nil {
+			t.Fatalf("release cold repository lock: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out releasing the cold repository lock")
+	}
+	select {
+	case err := <-ready:
+		if err != nil {
+			t.Fatalf("ensureRepoReady after cold project-only sync: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the cold project-only repository")
+	}
+	if d.repoCache.Lookup("ws-1", sourceRepo) == "" {
+		t.Fatal("project-only repository was not cached after the foreground wait")
+	}
+}
+
 // Confirms that a workspace refresh wiping allowedRepoURLs does not also wipe
 // task-scoped URLs (project repos). Without the separate taskRepoURLs map a
 // concurrent refresh would silently revoke project-only URLs and the next

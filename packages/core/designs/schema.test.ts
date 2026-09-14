@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import {
   designKeys,
@@ -5,6 +6,20 @@ import {
   validateRequirementCore,
   validateSlotValues,
 } from "./index";
+import {
+  DesignFileSchema,
+  EMPTY_DESIGN_FILE_DETAIL_RESPONSE,
+} from "../api/schemas";
+
+describe("Design File repository schema compatibility", () => {
+  it("parses a repository id and falls back to null when it is missing or malformed", () => {
+    const base = EMPTY_DESIGN_FILE_DETAIL_RESPONSE.file;
+
+    expect(DesignFileSchema.parse({ ...base, project_resource_id: "repo-1" }).project_resource_id).toBe("repo-1");
+    expect(DesignFileSchema.parse(base).project_resource_id).toBe(null);
+    expect(DesignFileSchema.parse({ ...base, project_resource_id: 7 }).project_resource_id).toBe(null);
+  });
+});
 
 describe("Gallery Native schema helpers", () => {
   it("accepts a valid RequirementCore", () => {

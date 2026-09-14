@@ -1,12 +1,24 @@
 import { queryOptions } from "@tanstack/react-query";
 import { api } from "../api";
-import type { DesignSelectionInput } from "../types";
+import type { DesignAssetScope, DesignSelectionInput } from "../types";
+import { toDesignAssetItems } from "./asset-projection";
 import { designKeys } from "./keys";
 
-export function designFileListOptions(wsId: string) {
+export function designFileListOptions(wsId: string, scope?: DesignAssetScope) {
   return queryOptions({
-    queryKey: designKeys.files(wsId),
-    queryFn: () => api.listDesignFiles(),
+    queryKey: designKeys.files(wsId, scope),
+    queryFn: () =>
+      api.listDesignFiles(
+        scope
+          ? scope.kind === "workspace_repository"
+            ? { workspaceRepositoryId: scope.workspaceRepositoryId }
+            : {
+                projectId: scope.projectId,
+                projectResourceId:
+                  scope.kind === "repository" ? scope.projectResourceId : undefined,
+              }
+          : undefined,
+      ),
     select: (data) => data.design_files,
   });
 }
@@ -174,6 +186,14 @@ export function projectDesignSystemCatalogueOptions(wsId: string) {
   });
 }
 
+export function projectDesignSystemByWorkspaceRepositoryOptions(wsId: string, repositoryId: string) {
+  return queryOptions({
+    queryKey: designKeys.projectDesignSystemByWorkspaceRepository(wsId, repositoryId),
+    queryFn: () => api.getProjectDesignSystemForWorkspaceRepository(repositoryId),
+    enabled: Boolean(wsId && repositoryId),
+  });
+}
+
 export function projectDesignSystemDetailOptions(wsId: string, id: string) {
   return queryOptions({
     queryKey: designKeys.projectDesignSystem(wsId, id),
@@ -193,6 +213,98 @@ export function designDocumentListOptions(wsId: string, projectId: string) {
     queryFn: () => api.listDesignDocuments(projectId),
     select: (data) => data.documents,
     enabled: !!projectId,
+  });
+}
+
+/**
+ * Design documents associated with one repository. Unlike the project view,
+ * this read is exact server filtering: no workspace fallback and no browser-side
+ * repository inference.
+ */
+export function designDocumentListByWorkspaceRepositoryOptions(wsId: string, repositoryId: string) {
+  return queryOptions({
+    queryKey: ["designs", wsId, "documents", "workspace-repository", repositoryId] as const,
+    queryFn: () => api.listDesignDocumentsForWorkspaceRepository(repositoryId),
+    select: (data) => data.documents,
+    enabled: Boolean(wsId && repositoryId),
+  });
+}
+
+export function designDocumentListByRepositoryOptions(
+  wsId: string,
+  projectId: string,
+  projectResourceId: string,
+) {
+  return queryOptions({
+    queryKey: designKeys.documentsByRepository(wsId, projectId, projectResourceId),
+    queryFn: () => api.listDesignDocuments(projectId, projectResourceId),
+    select: (data) => data.documents,
+    enabled: Boolean(wsId && projectId && projectResourceId),
+  });
+}
+
+/**
+ * Unified read model for repository-scoped Design Files and Design Documents.
+ * The server performs exact repository filtering; Core only projects and mixes.
+ */
+export function repositoryDesignAssetListOptions(
+  wsId: string,
+  projectId: string,
+  projectResourceId: string,
+) {
+  return queryOptions({
+    queryKey: designKeys.assetsByRepository(wsId, projectId, projectResourceId),
+    queryFn: async () => {
+      const [files, documents] = await Promise.all([
+        api.listDesignFiles({ projectId, projectResourceId }),
+        api.listDesignDocuments(projectId, projectResourceId),
+      ]);
+      return toDesignAssetItems(files.design_files, documents.documents);
+    },
+    enabled: Boolean(wsId && projectId && projectResourceId),
+  });
+}
+
+/**
+ * Unified read model for all project Design Files and Design Documents. The
+ * server owns project filtering; Core only projects and mixes the two sources.
+ */
+export function projectDesignAssetListOptions(wsId: string, projectId: string) {
+  return queryOptions({
+    queryKey: designKeys.assetsByProject(wsId, projectId),
+    queryFn: async () => {
+      const [files, documents] = await Promise.all([
+        api.listDesignFiles({ projectId }),
+        api.listDesignDocuments(projectId),
+      ]);
+      return toDesignAssetItems(files.design_files, documents.documents);
+    },
+    enabled: Boolean(wsId && projectId),
+  });
+}
+
+export function designAssetFramesOptions(wsId: string, designRef: string) {
+  return queryOptions({
+    queryKey: designKeys.assetFrames(wsId, designRef),
+    queryFn: () => api.getDesignAssetFrames(designRef),
+    enabled: Boolean(wsId && designRef),
+  });
+}
+
+/** Workspace catalogue of GitHub repositories usable as design targets. */
+export function designRepositoryCatalogueOptions(wsId: string) {
+  return queryOptions({
+    queryKey: designKeys.designRepositories(wsId),
+    queryFn: () => api.listDesignRepositories(),
+    select: (data) => data.repositories.map((repository) => ({
+      id: repository.id,
+      projectId: repository.project_id,
+      projectTitle: repository.project_title,
+      label: repository.label,
+      repositoryUrl: repository.repository_url,
+      defaultBranchHint: repository.default_branch_hint,
+    })),
+    enabled: Boolean(wsId),
   });
 }
 
@@ -231,6 +343,15 @@ export function designDocumentDetailOptions(wsId: string, documentId: string) {
     queryKey: designKeys.document(wsId, documentId),
     queryFn: () => api.getDesignDocument(documentId),
     enabled: !!documentId,
+  });
+}
+
+export function designDocumentLivePreviewOptions(wsId: string, documentId: string, taskId: string) {
+  return queryOptions({
+    queryKey: [...designKeys.document(wsId, documentId), "live-preview", taskId],
+    queryFn: () => api.getDesignDocumentLivePreview(documentId, taskId),
+    enabled: !!wsId && !!documentId && !!taskId,
+    refetchInterval: 3000,
   });
 }
 

@@ -2090,6 +2090,11 @@ func worktreeDirName(url string, peerURLs []string) string {
 	return base
 }
 
+// CheckoutDirName returns the directory used by the managed checkout API.
+func CheckoutDirName(url string, peerURLs []string) string {
+	return worktreeDirName(url, peerURLs)
+}
+
 var nonAlphanumeric = regexp.MustCompile(`[^a-z0-9]+`)
 
 // sanitizeName produces a git-branch-safe name from a human-readable string.

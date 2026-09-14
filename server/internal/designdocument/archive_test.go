@@ -106,6 +106,24 @@ func TestCollectDirectoryBuildsDeterministicManifestAndArchive(t *testing.T) {
 	}
 }
 
+func TestReadBaseArchiveAcceptsSafeDOMQueryHelpers(t *testing.T) {
+	root := copyFixture(t)
+	writeFixtureFile(t, root, "prototype/app.js", []byte(`
+const $ = (selector, root = document) => root.querySelector(selector);
+const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
+
+const rows = $$("#orders-body tr");
+$("#orders-body").dataset.rowCount = String(rows.length);
+`))
+	collected, err := CollectDirectory(root, validBinding())
+	if err != nil {
+		t.Fatalf("CollectDirectory() rejected safe DOM query helpers: %v (%#v)", err, collected.Audit.Diagnostics)
+	}
+	if _, _, err := ReadBaseArchive(collected.Archive, collected.Manifest.ContentDigest); err != nil {
+		t.Fatalf("ReadBaseArchive() rejected safe DOM query helper archive: %v", err)
+	}
+}
+
 func TestCollectDirectoryRequiresContractFiles(t *testing.T) {
 	for _, name := range []string{"brief.json", "coverage.json", "prototype/index.html"} {
 		t.Run(name, func(t *testing.T) {

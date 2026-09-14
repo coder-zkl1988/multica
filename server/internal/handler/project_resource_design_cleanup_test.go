@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/multica-ai/multica/server/internal/testutil"
 )
 
 func TestDeleteProjectResourceCleansDesignRepoAnalysisInWorkspace(t *testing.T) {
@@ -99,6 +100,103 @@ func TestDeleteProjectResourceCleansDesignRepoAnalysisInWorkspace(t *testing.T) 
 	requireProjectResourceCleanupRowCount(t, "design_repo_analysis", targetAnalysisID, 0)
 	requireProjectResourceCleanupRowCount(t, "design_repo_analysis", unrelatedAnalysisID, 1)
 	requireProjectResourceCleanupRowCount(t, "design_repo_analysis", foreignAnalysisID, 1)
+}
+
+func TestDeleteProjectResourceDetachesDesignFileRepository(t *testing.T) {
+	projectID, resourceID, fileID, documentID := seedProjectResourceDesignRepository(t, "design-file-detach")
+
+	deleteProjectResourceForCleanupTest(t, projectID, resourceID)
+
+	requireProjectResourceCleanupRowCount(t, "project_resource", resourceID, 0)
+	requireProjectResourceCleanupRowCount(t, "design_file", fileID, 1)
+	requireProjectResourceCleanupRowCount(t, "design_document", documentID, 1)
+	requireProjectResourceCleanupDesignRepositoryID(t, "design_file", fileID, "")
+	requireProjectResourceCleanupDesignRepositoryID(t, "design_document", documentID, "")
+}
+
+func TestDeleteProjectResourceDetachesDesignDocumentRepository(t *testing.T) {
+	projectID, resourceID, fileID, documentID := seedProjectResourceDesignRepository(t, "design-document-detach")
+
+	deleteProjectResourceForCleanupTest(t, projectID, resourceID)
+
+	requireProjectResourceCleanupRowCount(t, "project_resource", resourceID, 0)
+	requireProjectResourceCleanupRowCount(t, "design_file", fileID, 1)
+	requireProjectResourceCleanupRowCount(t, "design_document", documentID, 1)
+	requireProjectResourceCleanupDesignRepositoryID(t, "design_file", fileID, "")
+	requireProjectResourceCleanupDesignRepositoryID(t, "design_document", documentID, "")
+}
+
+func TestDeleteProjectResourceKeepsDesignRows(t *testing.T) {
+	projectID, resourceID, fileID, documentID := seedProjectResourceDesignRepository(t, "design-row-preservation")
+
+	deleteProjectResourceForCleanupTest(t, projectID, resourceID)
+
+	if got := dbfx.Count(t, `SELECT count(*) FROM design_file WHERE id = $1`, fileID); got != 1 {
+		t.Fatalf("design_file row count = %d, want 1", got)
+	}
+	if got := dbfx.Count(t, `SELECT count(*) FROM design_document WHERE id = $1`, documentID); got != 1 {
+		t.Fatalf("design_document row count = %d, want 1", got)
+	}
+	requireProjectResourceCleanupDesignRepositoryID(t, "design_file", fileID, "")
+	requireProjectResourceCleanupDesignRepositoryID(t, "design_document", documentID, "")
+}
+
+func seedProjectResourceDesignRepository(t *testing.T, title string) (projectID, resourceID, fileID, documentID string) {
+	t.Helper()
+
+	projectID = dbfx.Project(t, "project-resource-"+title+"-"+uuid.NewString())
+	resourceID = dbfx.Insert(t, "project_resource", testutil.Cols{
+		"project_id":    projectID,
+		"workspace_id":  testWorkspaceID,
+		"resource_type": "github_repo",
+		"resource_ref":  testutil.Raw(`'{}'::jsonb`),
+		"created_by":    testUserID,
+	})
+	fileID = dbfx.Insert(t, "design_file", testutil.Cols{
+		"workspace_id":        testWorkspaceID,
+		"project_id":          projectID,
+		"title":               title + " file",
+		"source_type":         "upload",
+		"source_ref":          testutil.Raw(`'{}'::jsonb`),
+		"project_resource_id": resourceID,
+		"created_by":          testUserID,
+	})
+	documentID = dbfx.Insert(t, "design_document", testutil.Cols{
+		"workspace_id":        testWorkspaceID,
+		"project_id":          projectID,
+		"project_resource_id": resourceID,
+		"title":               title + " document",
+		"platform":            "web",
+		"recipe":              "default",
+		"active_task_id":      uuid.NewString(),
+		"input_snapshot":      testutil.Raw(`'{}'::jsonb`),
+		"created_by":          testUserID,
+	})
+	return projectID, resourceID, fileID, documentID
+}
+
+func deleteProjectResourceForCleanupTest(t *testing.T, projectID, resourceID string) {
+	t.Helper()
+
+	req := newRequest(http.MethodDelete, "/api/projects/"+projectID+"/resources/"+resourceID, nil)
+	req = withURLParams(req, "id", projectID, "resourceId", resourceID)
+	testutil.Call(t, testHandler.DeleteProjectResource, req).Want(http.StatusNoContent)
+}
+
+func requireProjectResourceCleanupDesignRepositoryID(t *testing.T, table, id, want string) {
+	t.Helper()
+
+	var got *string
+	dbfx.QueryRow(t, "SELECT project_resource_id::text FROM "+table+" WHERE id = $1", id).Scan(&got)
+	if want == "" {
+		if got != nil {
+			t.Fatalf("%s %s project_resource_id = %q, want NULL", table, id, *got)
+		}
+		return
+	}
+	if got == nil || *got != want {
+		t.Fatalf("%s %s project_resource_id = %v, want %q", table, id, got, want)
+	}
 }
 
 func requireProjectResourceCleanupRowCount(t *testing.T, table, id string, want int) {

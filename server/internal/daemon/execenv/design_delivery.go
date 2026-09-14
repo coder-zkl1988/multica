@@ -1,7 +1,9 @@
 package execenv
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -83,7 +85,16 @@ func ExtractDesignDeliveryPackage(envRoot, workDir string, files map[string][]by
 		if err := recordMkdirAll(filepath.Dir(target), 0o755, extracted); err != nil {
 			return fmt.Errorf("create delivered design directory for %q: %w", name, err)
 		}
-		if err := recordWriteFile(target, files[name], 0o444, extracted); err != nil {
+		if err := recordWriteFile(target, files[name], 0o444, extracted); errors.Is(err, errPathPreExists) {
+			info, statErr := os.Lstat(target)
+			if statErr == nil && info.Mode().IsRegular() {
+				existing, readErr := os.ReadFile(target)
+				if readErr == nil && bytes.Equal(existing, files[name]) {
+					continue
+				}
+			}
+			return fmt.Errorf("write delivered design entry %q: %w", name, err)
+		} else if err != nil {
 			return fmt.Errorf("write delivered design entry %q: %w", name, err)
 		}
 	}

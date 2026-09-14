@@ -1549,9 +1549,11 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Post("/tasks/{taskId}/progress", h.ReportTaskProgress)
 		r.Post("/tasks/{taskId}/project-design-system/package", h.UploadProjectDesignSystemPackage)
 		r.Post("/tasks/{taskId}/design-document/package", h.UploadDesignDocumentPackage)
+		r.Post("/tasks/{taskId}/design-document-live-preview", h.UploadDesignDocumentLivePreview)
 		r.Get("/tasks/{taskId}/project-design-system/base-package", h.DownloadProjectDesignSystemBasePackage)
 		r.Get("/tasks/{taskId}/open-design/base-archive", h.DownloadOpenDesignBaseArchive)
 		r.Get("/tasks/{taskId}/design-document/base-archive", h.DownloadDesignDocumentBaseArchive)
+		r.Get("/tasks/{taskId}/design-document/design-system", h.DownloadDesignDocumentDesignSystem)
 		r.Get("/tasks/{taskId}/design-delivery/archive", h.DownloadDesignDeliveryArchive)
 		// Reference attachments the daemon materializes into reference/attachments
 		// before a design document session starts; pinned by digest in the
@@ -2203,6 +2205,10 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			r.Post("/api/runtimes/{id}/capabilities", h.RequestRuntimeCapabilityScan)
 			r.Get("/api/runtimes/{id}/device-hub", h.GetRuntimeDeviceHub)
 
+			r.Put("/api/design-assets/repository-association", h.SetDesignAssetRepositoryAssociation)
+			r.Get("/api/design-assets/{designRef}/frames", h.GetDesignAssetFrames)
+			r.Post("/api/design-assets/{designRef}/implementation-prompt", h.BuildDesignImplementationPrompt)
+			r.Post("/api/design-assets/{designRef}/implementation-context", h.GetDesignImplementationContext)
 			// Gallery Native design files
 			r.Get("/api/design-folders", h.ListDesignFolders)
 			r.Post("/api/design-folders", h.CreateDesignFolder)
@@ -2241,6 +2247,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			r.Get("/api/design-systems/builtin/{slug}", h.GetBuiltinDesignSystem)
 			r.Post("/api/design-documents", h.CreateDesignDocument)
 			r.Get("/api/design-documents/{id}", h.GetDesignDocument)
+			r.Get("/api/design-documents/{id}/live-preview", h.GetDesignDocumentLivePreview)
 			r.Get("/api/design-documents/{id}/revisions", h.ListDesignDocumentRevisions)
 			r.Get("/api/design-documents/{id}/revisions/{revisionId}", h.GetDesignDocumentRevision)
 			r.Post("/api/design-documents/{id}/revisions/{revisionId}/restore", h.RestoreDesignDocumentRevision)
@@ -2265,6 +2272,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			r.Post("/api/project-design-systems/{id}/save", h.SaveProjectDesignSystem)
 			r.Delete("/api/project-design-systems/{id}/draft", h.DiscardProjectDesignSystemDraft)
 			r.Get("/api/project-design-systems/{id}/open-design-runs/{runId}/evidence", h.DownloadOpenDesignRunEvidence)
+			r.Get("/api/design-repositories", h.ListDesignRepositories)
 			r.Post("/api/design-repo-analysis", h.CreateDesignRepoAnalysis)
 			r.Get("/api/design-repo-analysis", h.ListDesignRepoAnalyses)
 			r.Get("/api/design-repo-analysis/{id}", h.GetDesignRepoAnalysis)
