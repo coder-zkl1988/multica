@@ -2591,6 +2591,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// thread (?id for a specific one, else the thread the session is in).
 			r.Get("/api/chat/history", h.GetChatChannelHistory)
 			r.Get("/api/chat/thread", h.GetChatThread)
+			r.Get("/api/chat/document", h.GetChatDocument)
 			r.Get("/api/chat/prd", h.GetChatPRD)
 			r.Get("/api/chat/prd/template", h.GetChatPRDTemplate)
 			r.Post("/api/chat/prd/draft", h.SaveChatPRDDraft)
