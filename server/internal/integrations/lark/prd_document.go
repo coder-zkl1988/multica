@@ -302,6 +302,11 @@ type prdBlock struct {
 	Heading7 *prdText `json:"heading7"`
 	Heading8 *prdText `json:"heading8"`
 	Heading9 *prdText `json:"heading9"`
+	Bullet   *prdText `json:"bullet"`
+	Ordered  *prdText `json:"ordered"`
+	Quote    *prdText `json:"quote"`
+	Code     *prdText `json:"code"`
+	Todo     *prdText `json:"todo"`
 }
 
 func (b prdBlock) heading() (string, bool) {
@@ -310,6 +315,15 @@ func (b prdBlock) heading() (string, bool) {
 	}
 	headings := [...]*prdText{b.Heading1, b.Heading2, b.Heading3, b.Heading4, b.Heading5, b.Heading6, b.Heading7, b.Heading8, b.Heading9}
 	return headings[b.Type-3].plain()
+}
+
+func (b prdBlock) plainText() (string, bool) {
+	for _, text := range []*prdText{b.Text, b.Bullet, b.Ordered, b.Quote, b.Code, b.Todo} {
+		if value, ok := text.plain(); ok {
+			return value, true
+		}
+	}
+	return "", false
 }
 
 type prdSnapshot struct {
