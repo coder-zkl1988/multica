@@ -269,6 +269,7 @@ export type {
   DispatchTestRunBlockedResponse,
   TestCapabilityRequirement,
   RuntimeCapabilityScanResponse,
+  RuntimeArtemis,
   RuntimeDeviceHub,
   IssueTestSummary,
   IssueTestRunSummary,

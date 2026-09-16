@@ -1256,20 +1256,26 @@ func activeAgentSetMatches(current []db.Agent, expected map[string]struct{}) boo
 }
 
 // runtimeDeviceHubResponse is GET /api/runtimes/{id}/device-hub: what the
-// daemon last reported about the multica-device-mcp hub on the machine.
-// Pairing fields are only filled for people who may edit the runtime; the
-// code lets anyone on the LAN pair a phone into that hub.
+// daemon last reported about the phones on its machine — the multica-device-mcp
+// hub that serves iPhones and Artemis that serves Android phones.
 type runtimeDeviceHubResponse struct {
-	Reachable   bool    `json:"reachable"`
-	URL         string  `json:"url"`
-	Version     string  `json:"version"`
-	Adb         bool    `json:"adb"`
-	Devices     int     `json:"devices"`
-	Phones      int     `json:"phones"`
-	Leases      int     `json:"leases"`
-	PairingURL  *string `json:"pairing_url"`
-	PairingCode *string `json:"pairing_code"`
-	ReportedAt  *string `json:"reported_at"`
+	Reachable  bool                   `json:"reachable"`
+	URL        string                 `json:"url"`
+	Version    string                 `json:"version"`
+	IPhones    int                    `json:"iphones"`
+	Leases     int                    `json:"leases"`
+	Artemis    runtimeArtemisResponse `json:"artemis"`
+	ReportedAt *string                `json:"reported_at"`
+}
+
+// runtimeArtemisResponse is the Android half. Home, a path on the test host,
+// is only filled for people who may edit the runtime.
+type runtimeArtemisResponse struct {
+	Installed    bool    `json:"installed"`
+	Home         *string `json:"home"`
+	ADB          bool    `json:"adb"`
+	Phones       int     `json:"phones"`
+	Unauthorized int     `json:"unauthorized"`
 }
 
 func (h *Handler) GetRuntimeDeviceHub(w http.ResponseWriter, r *http.Request) {
@@ -1288,17 +1294,21 @@ func (h *Handler) GetRuntimeDeviceHub(w http.ResponseWriter, r *http.Request) {
 		resp.Reachable = report.Reachable
 		resp.URL = report.URL
 		resp.Version = report.Version
-		resp.Adb = report.Adb
-		resp.Devices = report.Devices
-		resp.Phones = report.Phones
+		resp.IPhones = report.IPhones
 		resp.Leases = report.Leases
 		reportedAt := report.ReportedAt.UTC().Format(time.RFC3339)
 		resp.ReportedAt = &reportedAt
-		if canEditRuntime(member, rt) && report.PairingURL != "" {
-			pairingURL := report.PairingURL
-			pairingCode := report.PairingCode
-			resp.PairingURL = &pairingURL
-			resp.PairingCode = &pairingCode
+		if a := report.Artemis; a != nil {
+			resp.Artemis = runtimeArtemisResponse{
+				Installed:    a.Installed,
+				ADB:          a.ADB,
+				Phones:       a.Phones,
+				Unauthorized: a.Unauthorized,
+			}
+			if canEditRuntime(member, rt) && a.Home != "" {
+				home := a.Home
+				resp.Artemis.Home = &home
+			}
 		}
 	}
 	writeJSON(w, http.StatusOK, resp)

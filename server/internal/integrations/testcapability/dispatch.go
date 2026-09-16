@@ -42,10 +42,13 @@ const (
 	// MCPBrowserServerName is the stable key under mcpServers for the
 	// browser-automation MCP server (playwright or chrome-devtools-mcp).
 	MCPBrowserServerName = "multica-browser"
-	// MCPDeviceServerName is the stable key for the phone-control MCP: the
+	// MCPDeviceServerName is the stable key for the iPhone-control MCP: the
 	// multica-device-mcp stdio connector, which leases a phone from the device
-	// hub running on the agent's own machine (TS-020, TS-023).
+	// hub running on the agent's own machine (TS-020, TS-023, TS-031).
 	MCPDeviceServerName = "multica-device"
+	// MCPArtemisServerName is the stable key for Android phones: Artemis's
+	// MCP server behind the multica CLI's pinning proxy (TS-035).
+	MCPArtemisServerName = "artemis"
 
 	// defaultDeviceHubURL is where the connector finds the hub when the daemon
 	// did not report a connector path (loopback on the test host).
@@ -72,7 +75,8 @@ type mcpOverlayPayload struct {
 type TestRunCapabilityEntry struct {
 	// Kind is the capability kind ("browser", "android_device", …).
 	Kind string
-	// Key is the resolved capability_key from test_capability.capability_key.
+	// Key is the capability_key this task drives. For a pooled kind it is the
+	// phone the case was assigned, not necessarily the binding's first match.
 	Key string
 	// Target is the capability's target JSONB, already decoded to a map so
 	// BuildTaskOverlay can read provider/browser/etc. without re-parsing.
@@ -133,7 +137,7 @@ func BuildTaskOverlay(ctx context.Context, originatorUserID pgtype.UUID, agent d
 	var apps []runtimeapps.ConnectedApp
 
 	for _, cap := range caps {
-		entries := capabilityMCPServers(cap.Kind, cap.Target, cap.Match, cap.Label, cap.Tags)
+		entries := capabilityMCPServers(cap.Kind, cap.Key, cap.Target, cap.Match, cap.Label, cap.Tags)
 		for name, srv := range entries {
 			servers[name] = srv
 			apps = append(apps, runtimeapps.ConnectedApp{
@@ -160,13 +164,14 @@ func BuildTaskOverlay(ctx context.Context, originatorUserID pgtype.UUID, agent d
 
 // capabilityMCPServers returns the MCP server entry for a resolved capability.
 // Browser returns a stdio entry (playwright by default, chrome-devtools-mcp when
-// target["provider"] says so). android_device returns the multica-device-mcp
-// connector: the daemon reported where the hub's CLI lives (target
-// connector_command / connector_cli / hub_url, none of them secret), and the
-// connector leases a phone matching the case's constraint under the case's
-// label. Without a reported path it falls back to npx, which needs the package
-// published or cached on the host.
-func capabilityMCPServers(kind string, target map[string]json.RawMessage, match map[string]string, label string, tags map[string]string) map[string]capabilityMCPServer {
+// target["provider"] says so). android_device returns Artemis's MCP server
+// pinned to the case's phone (artemis.go). ios_device returns the
+// multica-device-mcp connector: the daemon reported where the hub's CLI lives
+// (target connector_command / connector_cli / hub_url, none of them secret),
+// and the connector leases an iPhone matching the case's constraint under the
+// case's label. Without a reported path it falls back to npx, which needs the
+// package published or cached on the host.
+func capabilityMCPServers(kind, key string, target map[string]json.RawMessage, match map[string]string, label string, tags map[string]string) map[string]capabilityMCPServer {
 	switch kind {
 	case "browser":
 		provider := "playwright"
@@ -189,12 +194,18 @@ func capabilityMCPServers(kind string, target map[string]json.RawMessage, match 
 		}
 
 	case "android_device":
-		return map[string]capabilityMCPServer{MCPDeviceServerName: deviceConnectorServer(target, withPlatform(match, "android"), label, tags)}
+		// Only Artemis drives Android phones. A binding frozen before the hub's
+		// Android track was retired has no Artemis paths and mounts nothing.
+		srv, ok := artemisServer(key, target)
+		if !ok {
+			return nil
+		}
+		return map[string]capabilityMCPServer{MCPArtemisServerName: srv}
 
 	case "ios_device":
-		// An iPhone on the same hub (driven by PulsePhone on the test host):
-		// the same connector, pinned to the ios platform so an Android phone
-		// is never leased for an iOS case.
+		// An iPhone on the test host's hub (driven by PulsePhone): the
+		// connector's lease is pinned to the ios platform so it can never
+		// pick up anything else the hub lists.
 		return map[string]capabilityMCPServer{MCPDeviceServerName: deviceConnectorServer(target, withPlatform(match, "ios"), label, tags)}
 
 	case "computer_use":
@@ -208,8 +219,8 @@ func capabilityMCPServers(kind string, target map[string]json.RawMessage, match 
 }
 
 // withPlatform pins the lease match to the capability kind's platform. The
-// kind is authoritative: a case constraint naming the other platform would
-// bind an android_device round to an iPhone, so it is overwritten, not merged.
+// kind is authoritative: a case constraint naming another platform would lease
+// the wrong kind of phone, so it is overwritten, not merged.
 func withPlatform(match map[string]string, platform string) map[string]string {
 	out := make(map[string]string, len(match)+1)
 	for k, v := range match {
@@ -221,17 +232,7 @@ func withPlatform(match map[string]string, platform string) map[string]string {
 
 // deviceConnectorServer builds the `multica-device` stdio entry.
 func deviceConnectorServer(target map[string]json.RawMessage, match map[string]string, label string, tags map[string]string) capabilityMCPServer {
-	str := func(key string) string {
-		raw, ok := target[key]
-		if !ok {
-			return ""
-		}
-		var v string
-		if json.Unmarshal(raw, &v) != nil {
-			return ""
-		}
-		return v
-	}
+	str := func(key string) string { return targetString(target, key) }
 	hub := str("hub_url")
 	if hub == "" {
 		hub = defaultDeviceHubURL

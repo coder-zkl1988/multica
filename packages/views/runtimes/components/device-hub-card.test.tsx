@@ -8,9 +8,10 @@ import enCommon from "../../locales/en/common.json";
 import enRuntimes from "../../locales/en/runtimes.json";
 import { DeviceHubCard } from "./device-hub-card";
 
-// Canonical parsing for the hub shape lives in
+// Canonical parsing for the report shape lives in
 // packages/core/api/runtime-device-hub-schema.test.ts; this suite keeps the
-// wiring: what the owner sees, what a reader sees, and the switch.
+// wiring: what the owner sees, what a reader sees, what is missing, and the
+// switch.
 
 const TEST_RESOURCES = { en: { common: enCommon, runtimes: enRuntimes } };
 
@@ -44,17 +45,14 @@ const RUNTIME = {
   test_host_enabled: false,
 } as unknown as AgentRuntime;
 
-function hub(over: Partial<RuntimeDeviceHub> = {}): RuntimeDeviceHub {
+function report(over: Partial<RuntimeDeviceHub> = {}): RuntimeDeviceHub {
   return {
     reachable: true,
     url: "http://127.0.0.1:18801",
     version: "0.1.0",
-    adb: true,
-    devices: 2,
-    phones: 1,
+    iphones: 1,
     leases: 0,
-    pairing_url: "ws://10.0.0.5:18800/phone?code=ABCD2345",
-    pairing_code: "ABCD2345",
+    artemis: { installed: true, home: "/opt/artemis", adb: true, phones: 5, unauthorized: 0 },
     reported_at: new Date().toISOString(),
     ...over,
   };
@@ -75,21 +73,20 @@ afterEach(() => {
 });
 
 describe("DeviceHubCard", () => {
-  it("shows the hub summary and lets an editor reveal the pairing code", () => {
-    mocks.hub = hub();
+  it("shows both halves and the checkout path to an editor", () => {
+    mocks.hub = report();
     renderCard(true);
+    expect(screen.getByText("Artemis ready · 5 phones")).toBeTruthy();
+    expect(screen.getByText("Checkout: /opt/artemis")).toBeTruthy();
     expect(screen.getByText("Hub 0.1.0 online")).toBeTruthy();
-    expect(screen.getByText("2 devices · 1 apps · 0 leases")).toBeTruthy();
-    expect(screen.queryByText("ABCD2345")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: /show pairing code/i }));
-    expect(screen.getByText("ABCD2345")).toBeTruthy();
-    expect(screen.getByText("ws://10.0.0.5:18800/phone?code=ABCD2345")).toBeTruthy();
+    expect(screen.getByText("1 iPhones · 0 leases")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /pairing/i })).toBeNull();
   });
 
-  it("offers no pairing to a reader and disables the test-host switch", () => {
-    mocks.hub = hub({ pairing_url: null, pairing_code: null });
+  it("hides the checkout path from a reader and disables the test-host switch", () => {
+    mocks.hub = report({ artemis: { installed: true, home: "/opt/artemis", adb: true, phones: 5, unauthorized: 0 } });
     renderCard(false);
-    expect(screen.queryByRole("button", { name: /pairing code/i })).toBeNull();
+    expect(screen.queryByText(/Checkout:/)).toBeNull();
     const toggle = screen.getByRole("switch", { name: "Test host" });
     // Base UI marks a disabled switch with aria-disabled / data-disabled rather
     // than the native attribute on every render path; accept any of them.
@@ -100,15 +97,30 @@ describe("DeviceHubCard", () => {
     expect(disabled).toBe(true);
   });
 
-  it("explains a missing hub", () => {
-    mocks.hub = hub({ reachable: false, pairing_url: null, pairing_code: null, reported_at: null });
+  it("names what is missing: Artemis, adb, an authorization, the hub", () => {
+    mocks.hub = report({
+      reachable: false,
+      artemis: { installed: false, home: null, adb: true, phones: 5, unauthorized: 0 },
+      reported_at: null,
+    });
     renderCard(true);
+    expect(screen.getByText("Artemis is not set up on this machine")).toBeTruthy();
     expect(screen.getByText("No device hub on this machine")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /pairing code/i })).toBeNull();
+    cleanup();
+
+    mocks.hub = report({ artemis: { installed: true, home: null, adb: false, phones: 0, unauthorized: 0 } });
+    renderCard(true);
+    expect(screen.getByText("adb not found")).toBeTruthy();
+    cleanup();
+
+    mocks.hub = report({ artemis: { installed: true, home: null, adb: true, phones: 4, unauthorized: 1 } });
+    renderCard(true);
+    expect(screen.getByText("Artemis ready · 4 phones")).toBeTruthy();
+    expect(screen.getByText(/1 phone is attached but not authorized/)).toBeTruthy();
   });
 
   it("patches test_host_enabled when the owner flips the switch", () => {
-    mocks.hub = hub();
+    mocks.hub = report();
     renderCard(true);
     fireEvent.click(screen.getByRole("switch", { name: "Test host" }));
     expect(mocks.mutate).toHaveBeenCalledWith(

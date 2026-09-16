@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"errors"
+	"path/filepath"
 	"testing"
 )
 
@@ -155,7 +156,10 @@ func TestCapabilitySummary_NoSecretFields(t *testing.T) {
 // withoutDeviceHub points the probe at a closed port: a multica-device-mcp hub
 // running on the developer's machine must not leak real phones into these
 // inventories.
+// withoutDeviceHub keeps a probe away from whatever phones this machine has:
+// no hub at the default address, and no Artemis checkout.
 func withoutDeviceHub(t *testing.T) {
 	t.Helper()
 	t.Setenv(DeviceHubURLEnv, "http://127.0.0.1:1")
+	t.Setenv(ArtemisHomeEnv, filepath.Join(t.TempDir(), "no-artemis"))
 }

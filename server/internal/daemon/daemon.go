@@ -585,6 +585,11 @@ type Daemon struct {
 	activeTaskMu      sync.Mutex
 	activeTaskCancels map[string]context.CancelCauseFunc
 
+	// artemisCases are the running test-run cases pinned to an Android phone,
+	// by task id; the Artemis frame relay reads them (artemis.go).
+	artemisCasesMu sync.Mutex
+	artemisCases   map[string]artemisLiveCase
+
 	// claimMu guards pauseClaims and claimsInFlight. It is held only for the
 	// microseconds it takes to make a decision; ClaimTask itself runs without
 	// the lock so a slow per-runtime claim cannot stall auto-update or any
@@ -2109,8 +2114,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 	taskWakeups := make(chan taskWakeup, 256)
 	go d.taskWakeupLoop(ctx, taskWakeups)
 	go d.heartbeatLoop(ctx)
-	go d.deviceHubWatchLoop(ctx)
+	go d.testHostDeviceWatchLoop(ctx)
 	go d.deviceHubFrameLoop(ctx)
+	go d.artemisFrameLoop(ctx)
 	go d.gcLoop(ctx)
 	go d.autoUpdateLoop(ctx)
 	if strings.HasPrefix(d.client.Token(), "mul_") {
@@ -4769,6 +4775,7 @@ func (d *Daemon) reportRuntimeCapabilities(ctx context.Context, rt Runtime, requ
 	payload := map[string]any{
 		"capabilities": caps,
 		"device_hub":   probeDeviceHubSummary(ctx, deviceHubURL()),
+		"artemis":      probeArtemisSummary(ctx),
 	}
 	if requestID != "" {
 		payload["request_id"] = requestID
@@ -5613,6 +5620,9 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 		return
 	}
 	provider := rt.Provider
+	if untrack := d.trackArtemisCase(task); untrack != nil {
+		defer untrack()
+	}
 
 	// Task-scoped logger. The task id goes in whole: it is the key every
 	// other surface prints (task JSON, env-root ownership manifest, server

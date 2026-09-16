@@ -129,7 +129,8 @@ A round may carry a parallelism cap: the server queues only that many case tasks
 ```json
 {"type": "test_run", "run_id": "…", "run_case_id": "…", "case_key": "TC-42",
  "case_snapshot": {"steps": [...], "preconditions": "…", "expected_result": "…"},
- "capability_binding": {"resolved": {"android_device": "android:…"}}}
+ "capability_binding": {"resolved": {"android_device": "android:…"}},
+ "assigned_capabilities": {"android_device": "android:<your phone's serial>"}}
 ```
 
 - Execute `case_snapshot` and nothing else. Sibling cases run in their own
@@ -140,50 +141,90 @@ A round may carry a parallelism cap: the server queues only that many case tasks
   The CLI write is the record; the line only settles the case if the write
   never happened.
 
-## 8. Driving a phone: the `multica-device` MCP server
+## 8. Driving a phone
 
-When the binding resolves `android_device`, the task mounts `multica-device`
-(the multica-device-mcp connector, leased to a phone on the test host's
-device hub). Its tools and rules:
+A case bound to a phone mounts one phone server, chosen by the kind. The task
+context names your phone in `assigned_capabilities` (`android:<serial>` for an
+Android phone).
+
+| Kind | MCP server | Who reads the screen and acts |
+| --- | --- | --- |
+| `android_device` | `artemis` | Artemis's own agent, on a task you write |
+| `ios_device` | `multica-device` | you, frame by frame |
+
+Never type into a password field, complete a payment, install from outside
+the store, or change system settings the case does not ask for — and never ask
+Artemis to.
+
+### Android: hand the steps to Artemis
+
+`artemis` is [Artemis](https://github.com/google/artemis) on the test host,
+behind a proxy that pins every call to your phone: `device_serial` is fixed
+whatever you pass, and `mobile_diagnose` cannot restart adb or boot an
+emulator.
 
 | Tool | Use |
 | --- | --- |
-| `device_info` | first call: model, Android version, screen, current app, serving track |
+| `mobile_get_device_state` | `view_type: "screenshot"` returns a screenshot file path — read the image; `"hierarchy"` returns the element list Artemis sees |
+| `mobile_run_task` | start Artemis on a task; returns a `trace_id` at once |
+| `mobile_manage_task` | `status` (poll about once a minute), `inject_instruction`, `stop` |
+| `mobile_inspect_trace` | `view_summary`, `search`, `view_step_screenshots`, `view_step_details` of a task |
+| `mobile_diagnose` | once, when a tool errors or a task never starts |
+
+1. Look first: take a screenshot.
+2. One `mobile_run_task` per case. `task_desc` must stand on its own — Artemis
+   never sees the case JSON: preconditions, every step's action in order, test
+   data, and the screen to stop on. Set `locked_app_package` when the case
+   names its app. A case is a known path, so `model: "Flash"` (seconds per
+   step) is the default; `"Pro"` (tens of seconds per step, with
+   `verification_level` and `expected_output_desc`) is for branches, long
+   waits, polling or logs from the phone.
+3. Poll `status` until `completed`, `failed` or `cancelled`. Steer with
+   `inject_instruction`, or `stop` the task, if it leaves the case's path.
+4. **Artemis finishing is not a pass.** Its `test_summary` is evidence, not
+   the verdict. Judge every step against its `expected` from
+   `mobile_inspect_trace` and a final screenshot. A step Artemis could not do
+   is `failed` when the product stopped it and `blocked` when the environment
+   did.
+5. Copy the screenshot files you relied on into `./evidence/` and upload them
+   with `multica test evidence add`.
+
+A phone that is gone or unauthorized, or Artemis without model credentials,
+is `blocked`: record what `mobile_diagnose` said and stop. Your phone may still
+be finishing another case's Artemis task; yours then waits in Artemis's queue.
+
+### iPhone: drive it through `multica-device`
+
+`multica-device` leases an iPhone on the test host's device hub, driven by
+PulsePhone on that Mac.
+
+| Tool | Use |
+| --- | --- |
+| `device_info` | first call: model, iOS version, screen, serving track |
 | `screenshot` | before every decision; coordinates you send afterwards are pixels of THIS frame |
 | `tap` `double_tap` `long_press` `swipe` `scroll` | gestures; `scroll` takes the direction you want to see |
 | `type_text` | after tapping the field; refused on password fields |
-| `press_key` `launch_app` `stop_app` `open_url` `wait` | the rest |
+| `press_key` `launch_app` `wait` | `launch_app` needs the bundle id in `package` |
 | `a11y_tree` | optional cross-check when the frame does not settle a label or a control's exact bounds; bounds are physical pixels — divide by `scale_factor` |
 | `save_screenshot` | write the last frame to a file, then `multica test evidence add` |
 
 **You are the one who reads the screen.** The frame comes back as an image on
 the tool result: look at it and decide the next action from what you see.
-Nothing else recognises the UI for you — no model runs on the phone, in the
-hub, or behind the device tracks — so never make a case depend on an outside
-recogniser, and never block one because `a11y_tree` came back thin.
-`screenshot` takes `full_res: true` when the default 728-pixel-wide frame is
-too small to read.
+Nothing else recognises the UI for you, so never block a case because
+`a11y_tree` came back thin — on an iPhone it is on-device recognition of the
+visible viewport (`cls` `text` or `controlCandidate`, often `degraded`), not an
+accessibility tree. `screenshot` takes `full_res: true` when the default
+728-pixel-wide frame is too small to read.
 
 Every action returns `effect`: `changed` (read the new frame), `unchanged`
 (the action did nothing visible — try one other target; three unchanged
 actions on one screen means stuck: stop and report), `unknown` (screenshot).
-Budget about 30 actions per case. `no_device`, `device_offline`,
-`approval_denied`, `approval_timeout`, `approval_requires_app` mean the phone
-is not available: record `blocked` with the code and stop.
-
-Never type into a password field, complete a payment, install from outside
-the store, or change system settings the case does not ask for.
-
-`ios_device` mounts the same connector, leased to an iPhone on the test host
-(driven by PulsePhone on that Mac). Same tools, with these differences:
-`launch_app` needs the bundle id in `package` (`stop_app` and `open_url` are
-unavailable); `press_key` has `home`, `recents` (app switcher), volume,
-`power` (lock) and `enter` but no `back` (tap the app's own Back or Close
-control on screen, or `home` to leave an unknown state); `a11y_tree` is
-on-device recognition of the visible viewport (`cls` `text` or
-`controlCandidate`, often `degraded`), not an accessibility tree, so on iOS
-the frame is the only reliable read of the screen; touch needs iOS 17+. Take
-a screenshot before the first tap: the frame fixes the coordinate space.
+Budget about 30 actions per case. There is no back key: tap the app's own Back
+or Close control, or `press_key` `home` to leave an unknown state; `stop_app`
+and `open_url` are unavailable; touch needs iOS 17+. `no_device`,
+`device_offline`, `approval_denied`, `approval_timeout`,
+`approval_requires_app` mean the phone is not available: record `blocked` with
+the code and stop.
 
 ## 9. Test plans (informational)
 
