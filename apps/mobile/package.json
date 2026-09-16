@@ -50,7 +50,6 @@
     "expo": "~55.0.27",
     "expo-auth-session": "~55.0.17",
     "expo-build-properties": "~55.0.15",
-    "expo-camera": "~55.0.23",
     "expo-clipboard": "~55.0.14",
     "expo-constants": "~55.0.16",
     "expo-dev-client": "^55.0.36",

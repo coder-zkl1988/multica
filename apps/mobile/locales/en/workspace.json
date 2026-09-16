@@ -41,8 +41,7 @@
       "projects": "Projects",
       "skills": "Skills",
       "runtimes": "Runtimes",
-      "usage": "Usage",
-      "device_executor": "Device executor"
+      "usage": "Usage"
     },
     "account_settings_a11y": "Account settings",
     "switch_workspace_a11y": "Switch workspace",

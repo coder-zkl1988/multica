@@ -116,7 +116,6 @@ export default function WorkspaceLayout() {
   const { t: tWorkspace } = useTranslation("workspace");
   const { t: tChat } = useTranslation("chat");
   const { t: tCommon } = useTranslation("common");
-  const { t: tDeviceExecutor } = useTranslation("device-executor");
 
   const matched = workspaces?.find((w) => w.slug === slug);
 
@@ -371,21 +370,6 @@ export default function WorkspaceLayout() {
           options={{
             title: tUsage("list.header_title"),
             headerBackTitle: tCommon("nav.back"),
-          }}
-        />
-        <Stack.Screen
-          name="more/device-executor"
-          options={{
-            title: tDeviceExecutor("header_title"),
-            headerBackTitle: tCommon("nav.back"),
-          }}
-        />
-        <Stack.Screen
-          name="more/device-executor/scan"
-          options={{
-            title: tDeviceExecutor("scan.header_title"),
-            presentation: "modal",
-            headerLeft: () => <ModalCloseButton />,
           }}
         />
         <Stack.Screen

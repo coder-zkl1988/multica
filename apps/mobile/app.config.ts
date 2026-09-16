@@ -107,17 +107,6 @@ export default ({ config }: ConfigContext): ExpoConfig => {
         },
       ],
       [
-        "expo-camera",
-        {
-          // Only the device executor's QR pairing uses the camera; the
-          // permission is requested on that screen, never at launch.
-          cameraPermission:
-            "Allow Multica to scan the pairing code shown by a test host.",
-          microphonePermission: false,
-          recordAudioAndroid: false,
-        },
-      ],
-      [
         "expo-build-properties",
         {
           ios: {
