@@ -314,7 +314,7 @@
 - 实时画面：守护进程对“钉了 Android 手机且正在跑”的用例每 2 秒 `adb exec-out screencap -p`，变化时缩到 728 宽 JPEG 上报（`track: artemis`），沿用轮次页现有的实时画面接口。
 - 运行时页：设备卡片分 Android（Artemis 是否就绪、手机数、未授权数、检出路径仅编辑者可见）与 iPhone（中枢）两半；中枢配对码与二维码随执行器移除。
 - 移除：移动端设备执行器（TS-015）、中枢 Android 轨道在 Multica 中的用途（TS-022 / TS-026 的 Android 部分）、运行时页配对。iPhone 不变：仍是中枢 + PulsePhone（TS-031），逐帧由 Multica 智能体读屏（TS-034）。
-- 测试机的运维前提（代码不负责）：Artemis 需要模型 API 密钥（`.env`，默认 Gemini，逐帧定位默认要 Gemini ER 模型）；首次任务会往手机装无障碍助手 APK——小米 HyperOS 默认禁止 USB 安装，要么由机主打开“USB 安装”，要么在 Artemis `.env` 设 `ARTEMIS_HELPER_AUTO_INSTALL=false` 与 `ARTEMIS_HIERARCHY_BACKEND=uiautomator`；Artemis 默认保持被占用手机亮屏；Artemis 的调度守护进程默认占 8000 端口，测试机上若有开发服务占着（本机就是），在守护进程环境里设 `MULTICA_ARTEMIS_DAEMON_PORT`，它随能力 target 传给每条用例的代理（`--daemon-port` → `ARTEMIS_DAEMON_PORT`），所有用例共用同一个 Artemis 守护进程；录屏回放需要 scrcpy（可选）。
+- 测试机的运维前提（代码不负责）：Artemis 需要模型 API 密钥（`.env`，默认 Gemini，逐帧定位默认要 Gemini ER 模型）；首次任务会往手机装无障碍助手 APK——小米 HyperOS 默认禁止 USB 安装，要么由机主打开“USB 安装”，要么在 Artemis `.env` 设 `ARTEMIS_HELPER_AUTO_INSTALL=false` 与 `ARTEMIS_HIERARCHY_BACKEND=uiautomator`；Artemis 默认保持被占用手机亮屏；Artemis 的调度守护进程默认占 8000 端口，测试机上若有开发服务占着（本机就是），在守护进程环境里设 `MULTICA_ARTEMIS_DAEMON_PORT`，它随能力 target 传给每条用例的代理（`--daemon-port` → `ARTEMIS_DAEMON_PORT`），所有用例共用同一个 Artemis 守护进程；录屏回放需要 scrcpy（可选，本机已用 Homebrew 装在 `/opt/homebrew/bin/scrcpy`）。adb 只解析一次：守护进程按 Artemis 自己的顺序（`ARTEMIS_ADB_PATH` → `ANDROID_HOME` / `ANDROID_SDK_ROOT` → SDK 默认位置 → Homebrew → PATH，PATH 放最后，桌面 App 拉起与终端启动选中同一个）找到 adb，作为 `adb_path` 随能力下发，代理以 `--adb` 设进 `ARTEMIS_ADB_PATH` 与 `ADB`，Artemis 和它调用的 scrcpy 都用这一个——scrcpy 否则只在 PATH 里找 adb，桌面 App 拉起的智能体没有登录 shell 的 PATH 时录屏会失败。
 - 未做：真机端到端（缺模型密钥与机主对安装的许可）；`mobile_manage_task` / `mobile_inspect_trace` 以 trace id 为界（只有启动它的用例拿得到这个 UUID），代理未额外校验 trace 归属。
 
 ## 开放问题

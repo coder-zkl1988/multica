@@ -15,7 +15,7 @@ import (
 // agent runtime from the task's MCP overlay, not typed by people, so it stays
 // out of the help listing.
 var testArtemisMCPCmd = &cobra.Command{
-	Use:    "artemis-mcp --serial <adb-serial> [--daemon-port <port>] -- <artemis-python> <artemis-mcp-server.py>",
+	Use:    "artemis-mcp --serial <adb-serial> [--daemon-port <port>] [--adb <path>] -- <artemis-python> <artemis-mcp-server.py>",
 	Short:  "Run Artemis's MCP server pinned to one Android phone",
 	Hidden: true,
 	Args:   cobra.MinimumNArgs(1),
@@ -25,13 +25,15 @@ var testArtemisMCPCmd = &cobra.Command{
 func init() {
 	testArtemisMCPCmd.Flags().String("serial", "", "adb serial of the phone every device call is pinned to")
 	testArtemisMCPCmd.Flags().String("daemon-port", "", "port of the Artemis daemon shared by every case on this host (ARTEMIS_DAEMON_PORT)")
+	testArtemisMCPCmd.Flags().String("adb", "", "absolute path of the adb Artemis and its scrcpy recorder use (ARTEMIS_ADB_PATH, ADB)")
 	testRunGroupCmd.AddCommand(testArtemisMCPCmd)
 }
 
 func runTestArtemisMCP(cmd *cobra.Command, args []string) error {
 	serial, _ := cmd.Flags().GetString("serial")
 	port, _ := cmd.Flags().GetString("daemon-port")
+	adb, _ := cmd.Flags().GetString("adb")
 	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return testcapability.RunArtemisProxy(ctx, testcapability.ArtemisProxyOptions{Serial: serial, DaemonPort: port}, args, os.Stdin, os.Stdout, os.Stderr)
+	return testcapability.RunArtemisProxy(ctx, testcapability.ArtemisProxyOptions{Serial: serial, DaemonPort: port, ADB: adb}, args, os.Stdin, os.Stdout, os.Stderr)
 }

@@ -174,6 +174,25 @@ func TestBuildTaskOverlay_AndroidDeviceMountsPinnedArtemis(t *testing.T) {
 	if strings.Join(withPort, " ") != "test artemis-mcp --serial MVXK9T59J7BY7TL7 --daemon-port 18765 -- /opt/artemis/.venv/bin/python /opt/artemis/mcp_server/server.py" {
 		t.Errorf("args with a daemon port = %q", withPort)
 	}
+
+	// The adb the daemon resolved rides along so Artemis and its scrcpy
+	// recorder use it instead of searching a PATH the agent may not have; a
+	// relative path is not a resolution and is dropped.
+	for adb, want := range map[string]string{
+		"/opt/homebrew/bin/adb": "test artemis-mcp --serial MVXK9T59J7BY7TL7 --adb /opt/homebrew/bin/adb -- /opt/artemis/.venv/bin/python /opt/artemis/mcp_server/server.py",
+		"adb":                   "test artemis-mcp --serial MVXK9T59J7BY7TL7 -- /opt/artemis/.venv/bin/python /opt/artemis/mcp_server/server.py",
+	} {
+		target := artemisTarget()
+		target["adb_path"] = json.RawMessage(`"` + adb + `"`)
+		ctx = testcapability.WithResolvedCapabilities(context.Background(), []testcapability.TestRunCapabilityEntry{{Kind: "android_device", Key: "android:MVXK9T59J7BY7TL7", Target: target}})
+		result, err = testcapability.BuildTaskOverlay(ctx, pgtype.UUID{}, db.Agent{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.Join(decodeOverlay(t, result.MCPOverlay).Servers[testcapability.MCPArtemisServerName].Args, " "); got != want {
+			t.Errorf("adb_path %q: args = %q, want %q", adb, got, want)
+		}
+	}
 	if len(result.ConnectedApps) != 1 || result.ConnectedApps[0].ServerName != testcapability.MCPArtemisServerName {
 		t.Errorf("connected apps = %+v", result.ConnectedApps)
 	}

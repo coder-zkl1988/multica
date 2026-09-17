@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -74,6 +75,9 @@ func artemisServer(key string, target map[string]json.RawMessage) (capabilityMCP
 	args := []string{"test", "artemis-mcp", "--serial", serial}
 	if port := targetString(target, "artemis_daemon_port"); validPort(port) {
 		args = append(args, "--daemon-port", port)
+	}
+	if adb := targetString(target, "adb_path"); filepath.IsAbs(adb) {
+		args = append(args, "--adb", adb)
 	}
 	return capabilityMCPServer{
 		Command: cli,
@@ -236,6 +240,11 @@ type ArtemisProxyOptions struct {
 	// a dev server on the test host often holds; the daemon's operator picks
 	// another once, and every case's proxy passes the same one.
 	DaemonPort string
+	// ADB, when set, is the absolute path of the adb the daemon resolved. It
+	// is handed to Artemis (ARTEMIS_ADB_PATH) and to the scrcpy it records
+	// with (ADB), which otherwise looks for adb on a PATH that an agent
+	// started by the desktop app may not have.
+	ADB string
 }
 
 // RunArtemisProxy runs argv (Artemis's MCP server) as a child process and
@@ -256,6 +265,12 @@ func RunArtemisProxy(ctx context.Context, opts ArtemisProxyOptions, argv []strin
 			return fmt.Errorf("artemis-mcp: --daemon-port %q is not a port", port)
 		}
 		env = append(env, "ARTEMIS_DAEMON_PORT="+port)
+	}
+	if adb := strings.TrimSpace(opts.ADB); adb != "" {
+		if !filepath.IsAbs(adb) {
+			return fmt.Errorf("artemis-mcp: --adb %q is not an absolute path", adb)
+		}
+		env = append(env, "ADB="+adb, "ARTEMIS_ADB_PATH="+adb)
 	}
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Env = env

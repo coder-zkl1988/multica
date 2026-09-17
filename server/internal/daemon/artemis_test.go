@@ -31,10 +31,12 @@ func fakeArtemisHost(t *testing.T, devicesOut string, props map[string]string) (
 	t.Setenv(ArtemisHomeEnv, home)
 	t.Setenv("ANDROID_HOME", "")
 	t.Setenv("ANDROID_SDK_ROOT", "")
+	t.Setenv("ARTEMIS_ADB_PATH", "")
 
-	oldLook, oldADB, oldExe, oldHome := capabilitiesLookPath, artemisADB, artemisExecutable, artemisUserHomeDir
+	oldLook, oldADB, oldExe, oldHome, oldDirs := capabilitiesLookPath, artemisADB, artemisExecutable, artemisUserHomeDir, artemisSystemADBDirs
+	artemisSystemADBDirs = nil
 	t.Cleanup(func() {
-		capabilitiesLookPath, artemisADB, artemisExecutable, artemisUserHomeDir = oldLook, oldADB, oldExe, oldHome
+		capabilitiesLookPath, artemisADB, artemisExecutable, artemisUserHomeDir, artemisSystemADBDirs = oldLook, oldADB, oldExe, oldHome, oldDirs
 		androidPropsCache.Range(func(k, _ any) bool { androidPropsCache.Delete(k); return true })
 	})
 	capabilitiesLookPath = func(name string) (string, error) {
@@ -117,6 +119,7 @@ func TestProbeArtemisCapabilities_ReportsAuthorizedPhones(t *testing.T) {
 		"artemis_python": filepath.Join(home, ".venv", "bin", "python"),
 		"artemis_server": filepath.Join(home, "mcp_server", "server.py"),
 		"multica_cli":    "/usr/local/bin/multica",
+		"adb_path":       "/sdk/platform-tools/adb",
 	} {
 		if redmi[key] != want {
 			t.Errorf("target[%s] = %q, want %q", key, redmi[key], want)
@@ -161,6 +164,62 @@ func TestProbeArtemisCapabilities_NeedsAnInstalledCheckout(t *testing.T) {
 	summary := probeArtemisSummary(context.Background())
 	if summary.Installed || summary.Home != home || !summary.ADB || summary.Phones != 2 || summary.Unauthorized != 1 {
 		t.Errorf("summary = %+v, want not installed but adb seeing 2 phones and 1 unauthorized", summary)
+	}
+}
+
+// The daemon, Artemis and scrcpy must agree on one adb, so the daemon looks
+// where Artemis does and in the same order — with PATH last, so a daemon the
+// desktop app starts without a login shell picks the same binary as one
+// started from a terminal.
+func TestFindADB_FollowsArtemisOrder(t *testing.T) {
+	root := t.TempDir()
+	touch := func(parts ...string) string {
+		p := filepath.Join(append([]string{root}, parts...)...)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("#"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	explicit := touch("explicit", "adb")
+	sdkEnv := touch("sdk-env", "platform-tools", "adb")
+	homeSDK := touch("home", "Library", "Android", "sdk", "platform-tools", "adb")
+	brew := touch("brew", "adb")
+
+	oldLook, oldHome, oldDirs := capabilitiesLookPath, artemisUserHomeDir, artemisSystemADBDirs
+	t.Cleanup(func() { capabilitiesLookPath, artemisUserHomeDir, artemisSystemADBDirs = oldLook, oldHome, oldDirs })
+	capabilitiesLookPath = func(string) (string, error) { return "/on/path/adb", nil }
+	artemisUserHomeDir = func() (string, error) { return filepath.Join(root, "home"), nil }
+	artemisSystemADBDirs = []string{filepath.Join(root, "brew")}
+	t.Setenv("ANDROID_SDK_ROOT", "")
+
+	steps := []struct {
+		name  string
+		setup func()
+		want  string
+	}{
+		{"ARTEMIS_ADB_PATH", func() {
+			t.Setenv("ARTEMIS_ADB_PATH", explicit)
+			t.Setenv("ANDROID_HOME", filepath.Join(root, "sdk-env"))
+		}, explicit},
+		{"ANDROID_HOME", func() { t.Setenv("ARTEMIS_ADB_PATH", "") }, sdkEnv},
+		{"SDK default", func() { t.Setenv("ANDROID_HOME", "") }, homeSDK},
+		{"Homebrew", func() { _ = os.Remove(homeSDK) }, brew},
+		{"PATH last", func() { artemisSystemADBDirs = nil }, "/on/path/adb"},
+	}
+	for _, step := range steps {
+		step.setup()
+		if got, ok := findADB(); !ok || got != step.want {
+			t.Errorf("%s: findADB() = %q, %v; want %q", step.name, got, ok, step.want)
+		}
+	}
+
+	// A relative or missing ARTEMIS_ADB_PATH is not trusted.
+	t.Setenv("ARTEMIS_ADB_PATH", "adb")
+	if got, _ := findADB(); got != "/on/path/adb" {
+		t.Errorf("relative ARTEMIS_ADB_PATH was used: %q", got)
 	}
 }
 

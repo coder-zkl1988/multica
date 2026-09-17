@@ -59,7 +59,10 @@ var (
 	artemisUserHomeDir = os.UserHomeDir
 	artemisExecutable  = os.Executable
 	artemisStat        = os.Stat
-	artemisADB         = func(ctx context.Context, adb string, args ...string) ([]byte, error) {
+	// artemisSystemADBDirs are the package-manager locations Artemis checks
+	// for adb on macOS and Linux (Homebrew's android-platform-tools).
+	artemisSystemADBDirs = []string{"/opt/homebrew/bin", "/usr/local/bin"}
+	artemisADB           = func(ctx context.Context, adb string, args ...string) ([]byte, error) {
 		ctx, cancel := context.WithTimeout(ctx, artemisADBTimeout)
 		defer cancel()
 		return exec.CommandContext(ctx, adb, args...).Output()
@@ -97,33 +100,49 @@ func findArtemis() (artemisInstall, bool) {
 	return artemisInstall{Home: home, Python: python, Server: server}, true
 }
 
-// findADB looks where Artemis itself would: the SDK named by ANDROID_HOME /
-// ANDROID_SDK_ROOT, PATH, then Android Studio's default SDK location.
+// findADB picks the adb every piece of an Android case uses — this daemon,
+// Artemis, and the scrcpy Artemis records with — in the order Artemis itself
+// resolves it: ARTEMIS_ADB_PATH, the SDK named by ANDROID_HOME /
+// ANDROID_SDK_ROOT, the SDK's default location, Homebrew, then PATH. PATH
+// comes last so a daemon started from a terminal and one started by the
+// desktop app (without the login shell's PATH) pick the same binary. The
+// path travels to each case (adb_path), so nothing downstream looks again.
 func findADB() (string, bool) {
 	name := "adb"
 	if runtime.GOOS == "windows" {
 		name = "adb.exe"
 	}
+	exists := func(p string) bool {
+		_, err := artemisStat(p)
+		return err == nil
+	}
+	if p := strings.TrimSpace(os.Getenv("ARTEMIS_ADB_PATH")); p != "" && filepath.IsAbs(p) && exists(p) {
+		return p, true
+	}
 	for _, env := range []string{"ANDROID_HOME", "ANDROID_SDK_ROOT"} {
 		if root := strings.TrimSpace(os.Getenv(env)); root != "" {
-			p := filepath.Join(root, "platform-tools", name)
-			if _, err := artemisStat(p); err == nil {
+			if p := filepath.Join(root, "platform-tools", name); exists(p) {
 				return p, true
 			}
 		}
-	}
-	if p, err := capabilitiesLookPath("adb"); err == nil {
-		return p, true
 	}
 	if dir, err := artemisUserHomeDir(); err == nil && dir != "" {
 		for _, p := range []string{
 			filepath.Join(dir, "Library", "Android", "sdk", "platform-tools", name),
 			filepath.Join(dir, "Android", "Sdk", "platform-tools", name),
 		} {
-			if _, err := artemisStat(p); err == nil {
+			if exists(p) {
 				return p, true
 			}
 		}
+	}
+	for _, dir := range artemisSystemADBDirs {
+		if p := filepath.Join(dir, name); exists(p) {
+			return p, true
+		}
+	}
+	if p, err := capabilitiesLookPath("adb"); err == nil {
+		return p, true
 	}
 	return "", false
 }
@@ -238,6 +257,7 @@ func probeArtemisCapabilities(ctx context.Context) []runtimeCapabilitySummary {
 			"artemis_python": install.Python,
 			"artemis_server": install.Server,
 			"multica_cli":    cli,
+			"adb_path":       adb,
 		}
 		if port := strings.TrimSpace(os.Getenv(ArtemisDaemonPortEnv)); port != "" {
 			if n, err := strconv.Atoi(port); err == nil && n > 0 && n < 65536 {

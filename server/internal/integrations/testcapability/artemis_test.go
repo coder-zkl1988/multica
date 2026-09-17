@@ -155,7 +155,13 @@ func TestHelperArtemisServer(t *testing.T) {
 				"inputSchema": map[string]any{"type": "object", "properties": map[string]any{"device_serial": map[string]any{"type": "string"}}},
 			}}}
 		default:
-			result = map[string]any{"arguments": req.Params.Arguments, "notify": os.Getenv("ARTEMIS_DESKTOP_NOTIFY"), "port": os.Getenv("ARTEMIS_DAEMON_PORT")}
+			result = map[string]any{
+				"arguments":        req.Params.Arguments,
+				"notify":           os.Getenv("ARTEMIS_DESKTOP_NOTIFY"),
+				"port":             os.Getenv("ARTEMIS_DAEMON_PORT"),
+				"adb":              os.Getenv("ADB"),
+				"artemis_adb_path": os.Getenv("ARTEMIS_ADB_PATH"),
+			}
 		}
 		out, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": result})
 		fmt.Println(string(out))
@@ -172,7 +178,7 @@ func TestRunArtemisProxy_RelaysAndPins(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- testcapability.RunArtemisProxy(ctx, testcapability.ArtemisProxyOptions{Serial: "e8e779fa0822", DaemonPort: "18765"}, []string{os.Args[0], "-test.run=^TestHelperArtemisServer$"}, stdinReader, &stdout, io.Discard)
+		errCh <- testcapability.RunArtemisProxy(ctx, testcapability.ArtemisProxyOptions{Serial: "e8e779fa0822", DaemonPort: "18765", ADB: "/opt/homebrew/bin/adb"}, []string{os.Args[0], "-test.run=^TestHelperArtemisServer$"}, stdinReader, &stdout, io.Discard)
 	}()
 	requests := []string{
 		`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`,
@@ -197,9 +203,11 @@ func TestRunArtemisProxy_RelaysAndPins(t *testing.T) {
 	}
 	var call struct {
 		Result struct {
-			Arguments map[string]any `json:"arguments"`
-			Notify    string         `json:"notify"`
-			Port      string         `json:"port"`
+			Arguments      map[string]any `json:"arguments"`
+			Notify         string         `json:"notify"`
+			Port           string         `json:"port"`
+			ADB            string         `json:"adb"`
+			ArtemisADBPath string         `json:"artemis_adb_path"`
 		} `json:"result"`
 	}
 	if err := json.Unmarshal([]byte(lines[1]), &call); err != nil {
@@ -214,6 +222,9 @@ func TestRunArtemisProxy_RelaysAndPins(t *testing.T) {
 	if call.Result.Port != "18765" {
 		t.Errorf("Artemis must share the configured daemon port, got %q", call.Result.Port)
 	}
+	if call.Result.ADB != "/opt/homebrew/bin/adb" || call.Result.ArtemisADBPath != "/opt/homebrew/bin/adb" {
+		t.Errorf("Artemis and its scrcpy must get the daemon's adb: ADB=%q ARTEMIS_ADB_PATH=%q", call.Result.ADB, call.Result.ArtemisADBPath)
+	}
 }
 
 func TestRunArtemisProxy_RequiresSerialAndCommand(t *testing.T) {
@@ -225,5 +236,8 @@ func TestRunArtemisProxy_RequiresSerialAndCommand(t *testing.T) {
 	}
 	if err := testcapability.RunArtemisProxy(context.Background(), testcapability.ArtemisProxyOptions{Serial: "e8e779fa0822", DaemonPort: "80a"}, []string{"python"}, strings.NewReader(""), io.Discard, io.Discard); err == nil {
 		t.Error("a malformed daemon port must be refused rather than handed to Artemis")
+	}
+	if err := testcapability.RunArtemisProxy(context.Background(), testcapability.ArtemisProxyOptions{Serial: "e8e779fa0822", ADB: "adb"}, []string{"python"}, strings.NewReader(""), io.Discard, io.Discard); err == nil {
+		t.Error("a relative adb path must be refused: it would be searched on PATH again")
 	}
 }
