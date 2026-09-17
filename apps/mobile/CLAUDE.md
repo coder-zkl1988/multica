@@ -89,9 +89,6 @@ Start minimal. Add to this list when actually adopted — do NOT pre-list librar
 - **TanStack Query 5** — mobile owns its `QueryClient` with `AppState` focus listener + `NetInfo` online listener.
 - **Zustand** — mobile-local state only.
 - **expo-secure-store** — auth token persistence + theme preference (`light` / `dark` / `system`).
-- **Expo local modules** (`modules/<name>/`, Kotlin, Android only so far) — the
-  device executor (`modules/device-executor`). See §Build & release for the
-  manifest-merge / gitignore rules.
 - **@expo/react-native-action-sheet** — cross-platform action sheet (iOS
   native-styled sheet + Android Material bottom drawer). Replaces direct
   `ActionSheetIOS` calls now that mobile targets both platforms; every
@@ -185,26 +182,21 @@ Mobile release cadence is decoupled from main `v*.*.*` tags (server / CLI / desk
 ### Android native code lives in local Expo modules (`modules/<name>/`)
 
 `android/` and `ios/` are prebuild output and gitignored, so hand-written native
-code cannot live there. The pattern is an Expo **local module**:
-`modules/device-executor/` (Kotlin, Android-only) is autolinked from
-`expo-module.config.json`, and its `android/src/main/AndroidManifest.xml`
-declares the permissions, `<queries>` and services it needs — AGP merges
-library manifests, so no config plugin in `app.config.ts` is required. The
-repo `.gitignore` rule `android/` matches at any depth; `!modules/*/android/`
-in `apps/mobile/.gitignore` rescues the module source. Run
-`git check-ignore -v` on any new file under `modules/` (Lesson 2 below).
+code cannot live there. The pattern is an Expo **local module**: a
+`modules/<name>/` directory autolinked from its `expo-module.config.json`, whose
+`android/src/main/AndroidManifest.xml` declares the permissions, `<queries>`
+and services it needs — AGP merges library manifests, so no config plugin in
+`app.config.ts` is required. The repo `.gitignore` rule `android/` matches at
+any depth; `!modules/*/android/` in `apps/mobile/.gitignore` rescues the
+module source. Run `git check-ignore -v` on any new file under `modules/`
+(Lesson 2 below).
 
-The same module also declares the ADB keyboard (`DeviceExecutorIme`, an
-`InputMethodService` the hub switches to for non-ASCII typing over adb) and
-the connected-state wake lock (`KeepAwake`); both are plain Android services
-and objects inside the module, not extra packages.
-
-The JS binding is `modules/device-executor/index.ts` and uses
-`requireOptionalNativeModule`, so iOS, tests and builds without the module
-get `null` rather than a crash. After changing Kotlin, rebuild the app
-(`pnpm exec expo prebuild -p android` then Gradle, or `expo run:android`);
-Metro reloads only JS. Release builds run `lintVitalRelease`, so any API
-30+ call must sit behind a `Build.VERSION.SDK_INT` guard or `@RequiresApi`.
+Bind the JS side with `requireOptionalNativeModule`, so iOS, tests and builds
+without the module get `null` rather than a crash. After changing Kotlin,
+rebuild the app (`pnpm exec expo prebuild -p android` then Gradle, or
+`expo run:android`); Metro reloads only JS. Release builds run
+`lintVitalRelease`, so any API 30+ call must sit behind a
+`Build.VERSION.SDK_INT` guard or `@RequiresApi`.
 
 ### Local iOS builds go through `scripts/ios-run.sh`
 

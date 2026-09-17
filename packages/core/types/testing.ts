@@ -384,18 +384,32 @@ export interface TestCapabilityRequirement {
   optional?: boolean;
 }
 
-/** 202 body of `POST /api/runtimes/{id}/capabilities`: the queued scan. */
+/**
+ * Android phones on a test host are driven by Artemis: whether its checkout
+ * is installed, whether adb is there, and how many phones adb reaches.
+ */
+export interface RuntimeArtemis {
+  installed: boolean;
+  /** The checkout path; only for the runtime's owner / workspace admins, null otherwise. */
+  home: string | null;
+  adb: boolean;
+  phones: number;
+  /** Attached but not authorized (or offline): the USB debugging prompt is still open. */
+  unauthorized: number;
+}
+
+/**
+ * `GET /api/runtimes/{id}/device-hub`: the phones on a test host as its daemon
+ * last reported them — the device hub serving iPhones, and Artemis serving
+ * Android phones.
+ */
 export interface RuntimeDeviceHub {
   reachable: boolean;
   url: string;
   version: string;
-  adb: boolean;
-  devices: number;
-  phones: number;
+  iphones: number;
   leases: number;
-  /** Only for the runtime's owner / workspace admins; null otherwise. */
-  pairing_url: string | null;
-  pairing_code: string | null;
+  artemis: RuntimeArtemis;
   reported_at: string | null;
 }
 

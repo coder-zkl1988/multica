@@ -1093,6 +1093,21 @@ type testRunCaseRef struct {
 	RunID     string `json:"run_id"`
 	RunCaseID string `json:"run_case_id"`
 	CaseKey   string `json:"case_key"`
+	// Assigned is the binding as it applies to this case (kind -> capability
+	// key); Binding.Resolved is the round's, for contexts written before
+	// per-case assignment.
+	Assigned map[string]string `json:"assigned_capabilities"`
+	Binding  struct {
+		Resolved map[string]string `json:"resolved"`
+	} `json:"capability_binding"`
+}
+
+// boundKey is the capability key this case drives for kind, if any.
+func (ref testRunCaseRef) boundKey(kind string) string {
+	if key := strings.TrimSpace(ref.Assigned[kind]); key != "" {
+		return key
+	}
+	return strings.TrimSpace(ref.Binding.Resolved[kind])
 }
 
 func testRunCaseFromContext(raw string) testRunCaseRef {
@@ -1105,11 +1120,12 @@ func testRunCaseFromContext(raw string) testRunCaseRef {
 }
 
 // buildTestRunCasePrompt drives ONE case of a round. The snapshot is inlined
-// in the context JSON, so the agent needs no lookup before its first
-// screenshot; results and evidence still go through the authenticated CLI.
-// The phone rules restate what the hub enforces (frame-pixel coordinates,
-// effect verdicts, budgets) because a model that knows the contract wastes
-// fewer actions discovering it.
+// in the context JSON, so the agent needs no lookup before it starts; results
+// and evidence still go through the authenticated CLI. Only the phone kinds
+// the case was bound to get their driving rules: an Android phone is handed
+// to Artemis's own agent (TS-035), an iPhone is driven frame by frame through
+// the hub (TS-031, TS-034). The rules restate what each backend enforces
+// because a model that knows the contract wastes fewer turns discovering it.
 func buildTestRunCasePrompt(task Task, ref testRunCaseRef) string {
 	label := ref.CaseKey
 	if label == "" {
@@ -1121,14 +1137,14 @@ func buildTestRunCasePrompt(task Task, ref testRunCaseRef) string {
 	b.WriteString("What you have:\n")
 	b.WriteString("- The frozen case is `case_snapshot` in the context JSON below: `steps[]` with `action` and `expected`, `preconditions`, `expected_result`, `test_data`. Execute the SNAPSHOT, not the live case.\n")
 	b.WriteString("- `run_case_id` is the id you record against. `run_id` is the round; other cases of the round run in parallel in their own tasks — do not touch them.\n")
-	b.WriteString("- The MCP servers mounted for this task are the only devices you may drive: `multica-browser` for a browser, `multica-device` for an Android phone. `multica test capability list --run <run_id> --output json` shows what was bound.\n\n")
+	b.WriteString("- The MCP servers mounted for this task are the only devices you may drive: `multica-browser` for a browser, `artemis` for an Android phone, `multica-device` for an iPhone. `multica test capability list --run <run_id> --output json` shows what was bound.\n\n")
 
-	b.WriteString("Driving a phone through `multica-device`:\n")
-	b.WriteString("- Call `device_info` first, then `screenshot`. Every coordinate you send is in pixels of the LAST screenshot you received; take a new one after anything that could have moved the UI.\n")
-	b.WriteString("- Every action returns `effect`: `changed` (read the new frame), `unchanged` (the tap did nothing visible — pick a different target once; three unchanged actions on the same screen means you are stuck: stop and report where), `unknown` (take a screenshot).\n")
-	b.WriteString("- Prefer `launch_app` with a package name, `press_key` for back/home, `scroll` with the direction you want to SEE, `type_text` after tapping the field. Budget: about 30 actions for this case.\n")
-	b.WriteString("- Keep evidence with `save_screenshot` into ./evidence/, then `multica test evidence add <run_case_id> --file <path> --kind screenshot`.\n")
-	b.WriteString("- Never type into a password field, complete a payment, install from outside the store, or change system settings the case does not ask for. If the phone is unavailable (`no_device`, `device_offline`, `approval_*`), record `blocked` with the code and stop.\n\n")
+	if serial, ok := strings.CutPrefix(ref.boundKey("android_device"), "android:"); ok && serial != "" {
+		writeArtemisCaseRules(&b, serial)
+	}
+	if ref.boundKey("ios_device") != "" {
+		writeIPhoneCaseRules(&b)
+	}
 
 	b.WriteString("Recording:\n")
 	b.WriteString("```\n")
@@ -1137,7 +1153,7 @@ func buildTestRunCasePrompt(task Task, ref testRunCaseRef) string {
 	b.WriteString("multica test defect open <run_case_id> --title \"…\"\n")
 	b.WriteString("```\n")
 	b.WriteString("- `failed` means the product behaved differently from `expected`; open a defect for it. `blocked` means the case could not run (no device, missing precondition, login wall); it is NOT a synonym for failed. `skipped` means it did not apply.\n")
-	b.WriteString("- Do NOT record `passed` unless you observed every step's expected result on a frame. Attach at least one screenshot for `failed` and `blocked`, and the final frame for `passed`.\n")
+	b.WriteString("- Do NOT record `passed` unless you observed every step's expected result yourself — on a screenshot, a trace step, or the browser. Attach at least one screenshot for `failed` and `blocked`, and the final one for `passed`.\n")
 	b.WriteString("- Do NOT modify product code or open pull requests; you are observing behaviour. Use the `multica` CLI for every Multica read and write.\n\n")
 
 	b.WriteString("Context JSON:\n")
@@ -1145,9 +1161,35 @@ func buildTestRunCasePrompt(task Task, ref testRunCaseRef) string {
 	b.WriteString("\n\n")
 
 	b.WriteString("End your final response with a machine-readable line prefixed by exactly `TEST_RUN_CASE_RESULT_JSON:`:\n")
-	b.WriteString("{\"result\":\"passed|failed|blocked|skipped\",\"summary\":\"one paragraph: what you observed on the final frame and why that is the verdict\"}\n")
+	b.WriteString("{\"result\":\"passed|failed|blocked|skipped\",\"summary\":\"one paragraph: what you observed at the end and why that is the verdict\"}\n")
 	b.WriteString("The CLI write above is the record; this line only lets the platform settle the case if the write never happened.\n")
 	return b.String()
+}
+
+// writeArtemisCaseRules is how a case drives its Android phone: Artemis's own
+// agent performs the steps; this agent writes the task, watches it and
+// decides the verdict.
+func writeArtemisCaseRules(b *strings.Builder, serial string) {
+	b.WriteString("Driving the Android phone through `artemis` (Artemis runs its own agent on the phone; you do not tap):\n")
+	b.WriteString("- Your phone is `" + serial + "`. Every Artemis call is pinned to it, whatever `device_serial` you pass. It may still be finishing another case's Artemis task: yours then waits in Artemis's queue.\n")
+	b.WriteString("- Look first: `mobile_get_device_state` with `view_type: \"screenshot\"` returns the path of a screenshot file — read that image.\n")
+	b.WriteString("- Hand the case over with ONE `mobile_run_task`. `task_desc` must stand on its own (Artemis never sees the case JSON): the preconditions, every step's action in order, the test data, and the screen to stop on. Set `locked_app_package` when the case names its app. A case is a known path, so `model: \"Flash\"` (a few seconds a step) is the default; use `\"Pro\"` (tens of seconds a step, with `verification_level: \"checkpoints\"` and an `expected_output_desc` naming what to report at each expected result) only when the case needs recovery from branches, long waits or polling, or logs from the phone.\n")
+	b.WriteString("- It returns a `trace_id` at once. Poll `mobile_manage_task` with `action: \"status\"` about once a minute until the status is `completed`, `failed` or `cancelled`. If it heads somewhere the case does not go, correct it with `action: \"inject_instruction\"`, or `\"stop\"` it.\n")
+	b.WriteString("- Artemis saying it finished is NOT a pass, and its own `test_summary` is evidence, not the verdict. Judge every step yourself: `mobile_inspect_trace` (`view_summary`, then `view_step_screenshots` / `view_step_details` for the steps that carry an expected result) and a last `mobile_get_device_state` screenshot, compared with each step's `expected`. A step Artemis could not do is `failed` when the product stopped it and `blocked` when the environment did.\n")
+	b.WriteString("- Evidence: copy the screenshot files you relied on into ./evidence/, then `multica test evidence add <run_case_id> --file ./evidence/<name>.jpg --kind screenshot`.\n")
+	b.WriteString("- If a tool errors or the task never starts, call `mobile_diagnose` once. A phone that is gone or unauthorized, or Artemis without model credentials, is `blocked`: record what the diagnosis said and stop.\n")
+	b.WriteString("- Never have Artemis enter a password, complete a payment, install from outside the store, or change system settings the case does not ask for.\n\n")
+}
+
+// writeIPhoneCaseRules is how a case drives its iPhone: frame by frame
+// through the hub's connector, deciding every action from the screenshot.
+func writeIPhoneCaseRules(b *strings.Builder) {
+	b.WriteString("Driving the iPhone through `multica-device`:\n")
+	b.WriteString("- Call `device_info` first, then `screenshot`. You read the screen: decide every action from the frame. Every coordinate you send is in pixels of the LAST screenshot you received; take a new one after anything that could have moved the UI.\n")
+	b.WriteString("- Every action returns `effect`: `changed` (read the new frame), `unchanged` (the tap did nothing visible — pick a different target once; three unchanged actions on the same screen means you are stuck: stop and report where), `unknown` (take a screenshot).\n")
+	b.WriteString("- `launch_app` takes the bundle id in `package`. There is no back key: tap the app's own Back or Close control, or `press_key` `home`. `scroll` takes the direction you want to SEE; `type_text` after tapping the field. Budget: about 30 actions for this case.\n")
+	b.WriteString("- Keep evidence with `save_screenshot` into ./evidence/, then `multica test evidence add <run_case_id> --file <path> --kind screenshot`.\n")
+	b.WriteString("- Never type into a password field, complete a payment, install from outside the store, or change system settings the case does not ask for. If the phone is unavailable (`no_device`, `device_offline`, `approval_*`), record `blocked` with the code and stop.\n\n")
 }
 
 func buildTestGenerationPrompt(task Task) string {

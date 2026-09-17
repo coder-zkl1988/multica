@@ -13,6 +13,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/integrations/testcapability"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -42,6 +43,13 @@ type TestRunCapabilityBinding struct {
 	// capped round can queue its later cases from the frozen resolution
 	// instead of re-resolving against whatever is online by then.
 	Targets map[string]map[string]json.RawMessage `json:"targets,omitempty"`
+	// Pools lists, per device kind whose controller has no leases of its own
+	// (Android through Artemis), every capability on the bound daemon that
+	// satisfies the requirement, sorted by key. Each case is pinned to one of
+	// them (caseCapabilityKeys), so a round's parallel cases spread over the
+	// matching phones instead of queueing on the first one. Frozen with the
+	// binding, like Targets: a capped round's later cases use the same pool.
+	Pools map[string][]string `json:"pools,omitempty"`
 }
 
 // resolveRunCapabilities picks one daemon that can satisfy every required
@@ -141,6 +149,7 @@ func (h *Handler) resolveRunCapabilities(
 		kinds := daemonKinds[daemonID]
 		resolved := make(map[string]string, len(required))
 		targets := make(map[string]map[string]json.RawMessage, len(required))
+		pools := map[string][]string{}
 		var runtimeID pgtype.UUID
 		allSatisfied := true
 
@@ -148,14 +157,19 @@ func (h *Handler) resolveRunCapabilities(
 			candidates := kinds[req.Kind]
 			matched := false
 			for _, c := range candidates {
-				if matchCapabilityTarget(req.Match, c.target) {
+				if !matchCapabilityTarget(req.Match, c.target) {
+					continue
+				}
+				if !matched {
 					resolved[req.Kind] = c.capabilityKey
 					targets[req.Kind] = c.rawTarget
 					if c.runtimeID.Valid {
 						runtimeID = c.runtimeID
 					}
 					matched = true
-					break
+				}
+				if c.target["provider"] == testcapability.ArtemisProvider {
+					pools[req.Kind] = append(pools[req.Kind], c.capabilityKey)
 				}
 			}
 			if !matched {
@@ -169,6 +183,13 @@ func (h *Handler) resolveRunCapabilities(
 				DaemonID: daemonID,
 				Resolved: resolved,
 				Targets:  targets,
+			}
+			for kind, keys := range pools {
+				sort.Strings(keys)
+				if b.Pools == nil {
+					b.Pools = map[string][]string{}
+				}
+				b.Pools[kind] = keys
 			}
 			if runtimeID.Valid {
 				b.RuntimeID = uuidToString(runtimeID)
@@ -563,8 +584,10 @@ func (h *Handler) ReportRuntimeCapabilities(w http.ResponseWriter, r *http.Reque
 		RequestID    string                   `json:"request_id,omitempty"`
 		Capabilities []reportedCapabilityBody `json:"capabilities"`
 		// DeviceHub is the daemon's view of the multica-device-mcp hub on its
-		// machine; absent from daemons that predate it.
+		// machine and Artemis its view of Android phones; absent from daemons
+		// that predate them.
 		DeviceHub *RuntimeDeviceHubReport `json:"device_hub,omitempty"`
+		Artemis   *RuntimeArtemisReport   `json:"artemis,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -576,8 +599,12 @@ func (h *Handler) ReportRuntimeCapabilities(w http.ResponseWriter, r *http.Reque
 
 	effectiveDaemonID := effectiveDaemonIDForRuntime(rt)
 
-	if body.DeviceHub != nil {
-		report := *body.DeviceHub
+	if body.DeviceHub != nil || body.Artemis != nil {
+		var report RuntimeDeviceHubReport
+		if body.DeviceHub != nil {
+			report = *body.DeviceHub
+		}
+		report.Artemis = body.Artemis
 		report.ReportedAt = time.Now()
 		if err := h.DeviceHubStore.Set(r.Context(), effectiveDaemonID, report); err != nil {
 			slog.Warn("ReportRuntimeCapabilities: device hub store failed", "daemon_id", effectiveDaemonID, "error", err)

@@ -13,10 +13,13 @@ import (
 	"time"
 )
 
-// The device hub (multica-device-mcp) is the machine-level phone pool of a
-// test host: adb devices plus apps paired over the LAN. The daemon does not
-// drive phones itself; it reports what the hub has so runs can be bound to
-// this machine, and the per-task overlay mounts the hub's connector.
+// The device hub (multica-device-mcp) is how a test host drives iPhones,
+// through PulsePhone (TS-031). Android phones are Artemis's (artemis.go,
+// TS-035): the hub may still list them when it runs with adb, but they are
+// never reported from here, so no case can reach a phone through both. The
+// daemon does not drive phones itself; it reports what the hub has so runs can
+// be bound to this machine, and the per-task overlay mounts the hub's
+// connector.
 
 // DeviceHubURLEnv overrides where the daemon looks for the hub.
 const DeviceHubURLEnv = "MULTICA_DEVICE_HUB_URL"
@@ -38,12 +41,9 @@ func deviceHubURL() string {
 var deviceHubClient = &http.Client{Timeout: 3 * time.Second}
 
 type deviceHubHealth struct {
-	OK        bool     `json:"ok"`
-	Version   string   `json:"version"`
-	Devices   int      `json:"devices"`
-	Leases    int      `json:"leases"`
-	Adb       bool     `json:"adb"`
-	Phones    []string `json:"phones"`
+	OK        bool   `json:"ok"`
+	Version   string `json:"version"`
+	Leases    int    `json:"leases"`
 	Connector *struct {
 		Command string `json:"command"`
 		CLI     string `json:"cli"`
@@ -51,17 +51,13 @@ type deviceHubHealth struct {
 }
 
 // deviceHubSummary is the `device_hub` block of a capability report: enough
-// for the runtime page to show the hub and hand out the pairing QR.
+// for the runtime page to say whether this machine can run iPhone cases.
 type deviceHubSummary struct {
-	Reachable   bool   `json:"reachable"`
-	URL         string `json:"url"`
-	Version     string `json:"version,omitempty"`
-	Adb         bool   `json:"adb"`
-	Devices     int    `json:"devices"`
-	Phones      int    `json:"phones"`
-	Leases      int    `json:"leases"`
-	PairingURL  string `json:"pairing_url,omitempty"`
-	PairingCode string `json:"pairing_code,omitempty"`
+	Reachable bool   `json:"reachable"`
+	URL       string `json:"url"`
+	Version   string `json:"version,omitempty"`
+	IPhones   int    `json:"iphones"`
+	Leases    int    `json:"leases"`
 }
 
 // probeDeviceHubSummary describes the hub for the runtime page. An
@@ -75,17 +71,16 @@ func probeDeviceHubSummary(ctx context.Context, hubURL string) deviceHubSummary 
 	}
 	summary.Reachable = true
 	summary.Version = health.Version
-	summary.Adb = health.Adb
-	summary.Devices = health.Devices
-	summary.Phones = len(health.Phones)
 	summary.Leases = health.Leases
-	var pairing struct {
-		URL  string `json:"url"`
-		Code string `json:"code"`
+	var listing struct {
+		Devices []deviceHubDevice `json:"devices"`
 	}
-	if err := deviceHubGet(ctx, hubURL+"/api/pair", &pairing); err == nil {
-		summary.PairingURL = pairing.URL
-		summary.PairingCode = pairing.Code
+	if err := deviceHubGet(ctx, hubURL+"/api/devices", &listing); err == nil {
+		for _, d := range listing.Devices {
+			if d.Platform == "ios" && d.Status != "offline" {
+				summary.IPhones++
+			}
+		}
 	}
 	return summary
 }
@@ -208,7 +203,7 @@ func deviceHubGet(ctx context.Context, url string, out any) error {
 	return json.NewDecoder(resp.Body).Decode(out)
 }
 
-// probeDeviceHubCapabilities lists the hub's online phones as android_device
+// probeDeviceHubCapabilities lists the hub's online iPhones as ios_device
 // capabilities. An unreachable hub is not an error: most daemons are not test
 // hosts, and they simply report no devices.
 //
@@ -228,21 +223,13 @@ func probeDeviceHubCapabilities(ctx context.Context, hubURL string) []runtimeCap
 	}
 	out := make([]runtimeCapabilitySummary, 0, len(listing.Devices))
 	for _, d := range listing.Devices {
-		if d.Status == "offline" || len(d.Tracks) == 0 {
+		// Android phones the hub lists belong to Artemis on this host.
+		if d.Platform != "ios" || d.Status == "offline" || len(d.Tracks) == 0 {
 			continue
 		}
-		// The hub reports both platforms; an iPhone driven through PulsePhone
-		// on the test host is an ios_device capability of the same runtime.
-		platform := "android"
-		kind := "android_device"
-		keyPrefix := "android:"
-		if d.Platform == "ios" {
-			platform = "ios"
-			kind = "ios_device"
-			keyPrefix = "ios:"
-		}
+		const kind, keyPrefix = "ios_device", "ios:"
 		target := map[string]string{
-			"platform":     platform,
+			"platform":     "ios",
 			"model":        d.Model,
 			"manufacturer": d.Manufacturer,
 			"os_version":   d.OSVersion,
@@ -277,7 +264,7 @@ func probeDeviceHubCapabilities(ctx context.Context, hubURL string) []runtimeCap
 }
 
 // deviceHubSignature reduces a listing to a string that changes exactly when
-// the bindable set would: ids, tracks and busy/available.
+// the bindable set would: iPhone ids, tracks and busy/available.
 func deviceHubSignature(ctx context.Context, hubURL string) string {
 	var listing struct {
 		Devices []deviceHubDevice `json:"devices"`
@@ -287,32 +274,39 @@ func deviceHubSignature(ctx context.Context, hubURL string) string {
 	}
 	parts := make([]string, 0, len(listing.Devices))
 	for _, d := range listing.Devices {
+		if d.Platform != "ios" {
+			continue
+		}
 		parts = append(parts, d.ID+":"+strings.Join(d.Tracks, "+")+":"+d.Status)
 	}
 	sort.Strings(parts)
 	return strings.Join(parts, "|")
 }
 
-// deviceHubWatchLoop re-reports capabilities whenever the hub's device set
-// changes, so a phone that appears after registration becomes bindable in
-// seconds rather than at the next manual scan.
-func (d *Daemon) deviceHubWatchLoop(ctx context.Context) {
+// testHostDeviceWatchLoop re-reports capabilities whenever the phones this
+// host can drive change — an Android phone plugged in or authorized for
+// Artemis, an iPhone appearing on the hub — so it becomes bindable in seconds
+// rather than at the next manual scan.
+func (d *Daemon) testHostDeviceWatchLoop(ctx context.Context) {
 	hub := deviceHubURL()
+	signature := func() string {
+		return "hub=" + deviceHubSignature(ctx, hub) + "#artemis=" + artemisSignature(ctx)
+	}
 	ticker := time.NewTicker(deviceHubWatchInterval)
 	defer ticker.Stop()
-	last := deviceHubSignature(ctx, hub)
+	last := signature()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 		}
-		sig := deviceHubSignature(ctx, hub)
+		sig := signature()
 		if sig == last {
 			continue
 		}
 		last = sig
-		d.logger.Info("device hub changed; reporting capabilities", "hub", hub)
+		d.logger.Info("test host phones changed; reporting capabilities", "hub", hub)
 		for _, rid := range d.allRuntimeIDs() {
 			if rt := d.findRuntime(rid); rt != nil {
 				d.reportRuntimeCapabilities(ctx, *rt, "")

@@ -31,8 +31,10 @@ var capabilitiesLookPath = exec.LookPath
 func listRuntimeCapabilities() ([]runtimeCapabilitySummary, error) {
 	var out []runtimeCapabilitySummary
 	out = append(out, probeBrowserCapabilities()...)
-	// Phones come from the device hub when one runs on this host; an absent
-	// hub simply contributes nothing (device_hub.go).
+	// Android phones come from Artemis and iPhones from the device hub, when
+	// this host has them; a host with neither contributes nothing
+	// (artemis.go, device_hub.go).
+	out = append(out, probeArtemisCapabilities(context.Background())...)
 	out = append(out, probeDeviceHubCapabilities(context.Background(), deviceHubURL())...)
 	return out, nil
 }

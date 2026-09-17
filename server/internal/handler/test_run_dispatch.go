@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -333,18 +334,20 @@ type testRunCaseTaskInput struct {
 // daemon later relays the case's live frame.
 func (h *Handler) createTestRunCaseTask(ctx context.Context, q *db.Queries, in testRunCaseTaskInput, rc db.TestRunCase) (db.AgentTaskQueue, error) {
 	label := runCaseLabel(rc)
+	assigned := caseCapabilityKeys(in.binding, uuidToString(in.run.ID), rc.Position)
 	contextPayload := service.TestRunContext{
-		Type:              service.TestRunContextType,
-		Prompt:            in.prompt,
-		RequesterID:       in.requesterID,
-		WorkspaceID:       in.workspaceID,
-		ProjectID:         uuidToString(in.run.ProjectID),
-		AgentID:           uuidToString(in.agent.ID),
-		RunID:             uuidToString(in.run.ID),
-		CapabilityBinding: json.RawMessage(marshalJSONColumn(in.binding, "{}")),
-		RunCaseID:         uuidToString(rc.ID),
-		CaseKey:           label,
-		CaseSnapshot:      json.RawMessage(rc.CaseSnapshot),
+		Type:                 service.TestRunContextType,
+		Prompt:               in.prompt,
+		RequesterID:          in.requesterID,
+		WorkspaceID:          in.workspaceID,
+		ProjectID:            uuidToString(in.run.ProjectID),
+		AgentID:              uuidToString(in.agent.ID),
+		RunID:                uuidToString(in.run.ID),
+		CapabilityBinding:    json.RawMessage(marshalJSONColumn(in.binding, "{}")),
+		AssignedCapabilities: assigned,
+		RunCaseID:            uuidToString(rc.ID),
+		CaseKey:              label,
+		CaseSnapshot:         json.RawMessage(rc.CaseSnapshot),
 	}
 	contextJSON, err := json.Marshal(contextPayload)
 	if err != nil {
@@ -356,7 +359,7 @@ func (h *Handler) createTestRunCaseTask(ctx context.Context, q *db.Queries, in t
 		"runtime_id":   uuidToString(in.agent.RuntimeID),
 		"workspace_id": in.workspaceID,
 	}
-	octx := testcapability.WithResolvedCapabilities(ctx, capabilityEntriesForOverlay(in.binding, in.requirements, label, tags))
+	octx := testcapability.WithResolvedCapabilities(ctx, capabilityEntriesForOverlay(in.binding, assigned, in.requirements, label, tags))
 	overlay, connectedApps := h.TaskService.BuildRuntimeMCPOverlayForMerge(octx, in.originator, in.agent)
 	agentTask, err := q.CreateQuickCreateTask(octx, db.CreateQuickCreateTaskParams{
 		ID:                   dbid.NewV7(),
@@ -487,10 +490,37 @@ func runCaseLabel(rc db.TestRunCase) string {
 	return uuidToString(rc.ID)
 }
 
+// caseCapabilityKeys is the capability each kind of the binding means for one
+// case. A pooled kind (Android through Artemis, which has no leases) pins the
+// case to one phone of the pool: rotating by position spreads a round's cases
+// over the phones, and offsetting by the run keeps two rounds dispatched
+// together from starting on the same phone. A collision is still correct —
+// Artemis queues a phone's tasks — only slower.
+func caseCapabilityKeys(binding TestRunCapabilityBinding, runID string, position int32) map[string]string {
+	keys := make(map[string]string, len(binding.Resolved))
+	for kind, key := range binding.Resolved {
+		keys[kind] = key
+	}
+	for kind, pool := range binding.Pools {
+		if len(pool) == 0 {
+			continue
+		}
+		h := fnv.New32a()
+		_, _ = h.Write([]byte(runID))
+		pos := int(position)
+		if pos < 0 {
+			pos = -pos
+		}
+		keys[kind] = pool[(int(h.Sum32()%uint32(len(pool)))+pos)%len(pool)]
+	}
+	return keys
+}
+
 // capabilityEntriesForOverlay turns the frozen binding into the shape the MCP
-// overlay provider consumes.
+// overlay provider consumes, with each kind's key as assigned to the case.
 func capabilityEntriesForOverlay(
 	binding TestRunCapabilityBinding,
+	assigned map[string]string,
 	requirements []TestCapabilityRequirement,
 	label string,
 	tags map[string]string,
@@ -500,6 +530,9 @@ func capabilityEntriesForOverlay(
 		key, bound := binding.Resolved[req.Kind]
 		if !bound {
 			continue
+		}
+		if pinned := assigned[req.Kind]; pinned != "" {
+			key = pinned
 		}
 		entries = append(entries, testcapability.TestRunCapabilityEntry{
 			Kind:   req.Kind,

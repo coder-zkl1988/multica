@@ -1,6 +1,6 @@
 # Multica 测试中心决策台账
 
-> 最后更新：2026-09-06
+> 最后更新：2026-09-16
 > 规则：保留历史，通过状态变化表达推翻或替代，不删除旧决策
 
 ## 状态说明
@@ -127,6 +127,7 @@
 - 依据：`apps/mobile/android` 与 `ios` 被 gitignore；设计 §5。
 - 2026-09-06 修订：执行器改为配对到测试机上的设备中枢（扫码，局域网），角色是无障碍降级通道与可选的 ADB 输入法；adb 轨道由测试机 host adb 提供（TS-022、TS-026）。
 - 2026-09-07 落地：M3a 已实现（见 README §5.1）。两处与建议不同：（1）不需要配置插件——Expo 本地模块自己的 `AndroidManifest.xml` 由 AGP 合并进应用清单，权限、`<queries>` 与两个服务都声明在模块内，`app.config.ts` 未改；（2）配对先做“粘贴中枢打印的 URL / 手填地址 + 配对码”，扫码（expo-camera）留作可选项，未引入相机权限。
+- 2026-09-16：`superseded`（TS-035）——Android 改由 Artemis 驱动，Artemis 自带手机侧无障碍助手；执行器页面、扫码配对、Kotlin 本地模块与 `expo-camera` 依赖一并从 `apps/mobile` 移除。
 
 ### TS-016 动作后自动回传截图与生效判定，坐标只用截图像素
 
@@ -194,6 +195,7 @@
 - 日期：2026-09-06
 - 决策：执行采用无障碍与 adb 双轨制，adb 优先，降级无障碍。
 - 影响：TabbyApp 的“无障碍为主、LADB 回退”顺序反转；执行器抽象为按动作的降级矩阵（TS-026）。
+- 2026-09-16：Android 部分 `superseded`（TS-035）——Android 的读屏与动作都交给 Artemis（adb + 它自己的无障碍助手，失败时回退 UIAutomator2），Multica 不再维护双轨与降级矩阵。
 
 ### TS-023 手机控制抽象为平台无关的 MCP
 
@@ -219,6 +221,7 @@
 - 建议：`DispatchTestRun` 为每条 `test_run_case` 创建一个 agent task（新列 `test_run_case.agent_task_id`，fork 迁移 910 起）；能力绑定只到测试机，具体手机由中枢在任务开始时租用；轮次状态由用例任务收敛；并行度 = min(守护进程 `MaxConcurrentTasks`，可用手机数，轮次设置)。
 - 依据：`server/internal/daemon/daemon.go` 的任务槽信号量；2026-09-06 设计 §5。
 - 确认：2026-09-06。
+- 2026-09-16 修订（TS-035）：Android 没有中枢租约，派发时把满足约束的全部手机冻结进 `capability_binding.pools`，每条用例按位置轮转钉到其中一台（`assigned_capabilities`）；iPhone 仍由中枢在任务开始时租用。
 
 ### TS-026 双轨的落法
 
@@ -227,6 +230,7 @@
 - 建议：adb 轨道由测试机 host adb 提供，USB 或无线调试（配对一次，`adb mdns services` 自动重连）；中文与非 ASCII 输入靠 App 内置的 ADB 输入法（ADBKeyBoard 方式）；无障碍轨道由 App 的无障碍服务经局域网 WebSocket 提供；降级按动作矩阵：adb 不可达时整机降级，adb 可达但某动作弱（无惯性滑动、密码框、非 ASCII 输入）时单动作降级。
 - 依据：TabbyApp `LadbDeviceController` 与 `AccessibilityDeviceController` 的经验；2026-09-06 设计 §3。
 - 确认：2026-09-06。
+- 2026-09-16：`superseded`（TS-035）——Android 不再经中枢的 adb / 无障碍轨道与 App 内 ADB 输入法；中枢只剩 iPhone（PulsePhone）轨道对 Multica 有效。
 
 ## 2026-09-07 落地记录：M4 的三处取舍（由实现者定，用户可推翻）
 
@@ -293,11 +297,25 @@
 
 ### TS-034 识图与下一步都由 Multica 侧的智能体做，设备平面不放识别器
 
-- 状态：`confirmed`（用户指定：“还是采用 multica 端的智能体进行识别图片和进行下一步”）
+- 状态：`confirmed`（用户指定：“还是采用 multica 端的智能体进行识别图片和进行下一步”）；2026-09-16 起只约束 iPhone，Android 部分 `superseded`（TS-035）
 - 决定：设备平面只做两件事——执行动作、回传当前帧；屏幕上有什么、下一步点哪里，由执行该用例的 Multica 智能体依据帧与用例快照判断。这是 09-02 设计 T-004“手机端只做执行器，不放模型”的同一条线，本次把它补齐到 iOS 轨道与第三方识别器。
 - 因此：`a11y_tree` 是可选的交叉验证（帧上读不出的文案、控件的精确 bounds），不是决策前置；iOS 的 `element snapshot`（Apple Vision，可选 OmniParser 端点）只是提示，常带 `degraded`，用例不得因为它为空而判 `blocked`；OmniParser 不进安装步骤，中枢与 Multica 都不依赖它可达（它是 PulsePhone 自己的配置，接不上只会让提示变少）。
 - 帧不够看时的做法是 `screenshot { full_res: true }` 取原分辨率，而不是引入外部识别服务。
 - 影响面：技能 `multica-running-tests` §8、中枢 README 与工具描述改成同一口径；动作链路无需改动——Android 与 iOS 轨道本来就把帧作为图片块随工具结果返回，只有 iOS “没有 back 键”的提示语原先指向 `a11y_tree`，改为指向屏幕上的返回控件。
+
+## 2026-09-16 决策：Android 手机控制改用 Artemis
+
+### TS-035 Android 由 google/artemis 驱动：Artemis 的智能体读屏并执行，Multica 智能体写任务、判结果
+
+- 状态：`confirmed` / `implemented`（用户指定：“将测试页面关联的手机端控制方案改成这个开源项目方案”，https://github.com/google/artemis；分支 `feat/testing-artemis-android`）
+- 决定：`android_device` 用例不再经设备中枢逐帧操控，改为挂载测试机上的 [Artemis](https://github.com/google/artemis)（Apache-2.0，Python，adb + 手机侧无障碍助手 + 自带多模态智能体，Flash / Pro 两种模式）。Artemis 的 MCP 是任务级的——`mobile_run_task` 接一段自然语言任务、由它自己的模型读屏和动作——不提供点按原语，所以 **Android 上识图与下一步归 Artemis 的智能体**（推翻 TS-034 的 Android 部分）；Multica 智能体负责把冻结的用例写成自足的任务描述、轮询与纠偏、并**独立判定**每一步是否符合 `expected`（`mobile_inspect_trace` 的逐步截图 + 最后一张截图），Artemis 说完成不等于通过。手机端仍然不跑模型（TS-007 / TS-R01 不变），模型跑在测试机上的 Artemis 里。
+- 隔离：Artemis 没有租约，工具接受任意 serial、缺省时挑任意空闲手机。所以派发不直接挂 Artemis，而是挂 `multica test artemis-mcp --serial <serial> -- <artemis python> <mcp_server/server.py>`：一个 stdio 代理，把 `mobile_run_task` / `mobile_get_device_state` / `mobile_diagnose` 的 `device_serial` 一律改写成该用例的手机，`mobile_diagnose` 去掉会影响整机的 `attempt_fix` / `launch_avd`，并把工具说明里“先问用户用哪台”改成“已固定”。服务器名 `artemis`。
+- 设备池：守护进程在找到 Artemis 检出（`MULTICA_ARTEMIS_HOME`，默认 `~/artemis`，要求 `uv sync` 建好的 `.venv`）与 adb 时，把 `adb devices -l` 中已授权的手机报成 `android_device`（键 `android:<serial>`，target 带 `provider: artemis`、`os_version` / `sdk` / `manufacturer` / `model` 与启动路径）；解析时把满足约束的全部手机冻结进 `capability_binding.pools`，每条用例按（轮次哈希 + 位置）轮转钉一台，写进 `assigned_capabilities`。撞车时 Artemis 按手机 FIFO 排队，只慢不错。中枢若仍在用 adb，它列出的 Android 手机不再上报，避免同一台手机两条路。
+- 实时画面：守护进程对“钉了 Android 手机且正在跑”的用例每 2 秒 `adb exec-out screencap -p`，变化时缩到 728 宽 JPEG 上报（`track: artemis`），沿用轮次页现有的实时画面接口。
+- 运行时页：设备卡片分 Android（Artemis 是否就绪、手机数、未授权数、检出路径仅编辑者可见）与 iPhone（中枢）两半；中枢配对码与二维码随执行器移除。
+- 移除：移动端设备执行器（TS-015）、中枢 Android 轨道在 Multica 中的用途（TS-022 / TS-026 的 Android 部分）、运行时页配对。iPhone 不变：仍是中枢 + PulsePhone（TS-031），逐帧由 Multica 智能体读屏（TS-034）。
+- 测试机的运维前提（代码不负责）：Artemis 需要模型 API 密钥（`.env`，默认 Gemini，逐帧定位默认要 Gemini ER 模型）；首次任务会往手机装无障碍助手 APK——小米 HyperOS 默认禁止 USB 安装，要么由机主打开“USB 安装”，要么在 Artemis `.env` 设 `ARTEMIS_HELPER_AUTO_INSTALL=false` 与 `ARTEMIS_HIERARCHY_BACKEND=uiautomator`；Artemis 默认保持被占用手机亮屏；Artemis 的调度守护进程默认占 8000 端口，测试机上若有开发服务占着（本机就是），在守护进程环境里设 `MULTICA_ARTEMIS_DAEMON_PORT`，它随能力 target 传给每条用例的代理（`--daemon-port` → `ARTEMIS_DAEMON_PORT`），所有用例共用同一个 Artemis 守护进程；录屏回放需要 scrcpy（可选，本机已用 Homebrew 装在 `/opt/homebrew/bin/scrcpy`）。adb 只解析一次：守护进程按 Artemis 自己的顺序（`ARTEMIS_ADB_PATH` → `ANDROID_HOME` / `ANDROID_SDK_ROOT` → SDK 默认位置 → Homebrew → PATH，PATH 放最后，桌面 App 拉起与终端启动选中同一个）找到 adb，作为 `adb_path` 随能力下发，代理以 `--adb` 设进 `ARTEMIS_ADB_PATH` 与 `ADB`，Artemis 和它调用的 scrcpy 都用这一个——scrcpy 否则只在 PATH 里找 adb，桌面 App 拉起的智能体没有登录 shell 的 PATH 时录屏会失败。
+- 未做：真机端到端（缺模型密钥与机主对安装的许可）；`mobile_manage_task` / `mobile_inspect_trace` 以 trace id 为界（只有启动它的用例拿得到这个 UUID），代理未额外校验 trace 归属。
 
 ## 开放问题
 

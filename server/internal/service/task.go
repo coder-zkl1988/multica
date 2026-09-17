@@ -1867,6 +1867,10 @@ type TestRunContext struct {
 	AgentID           string          `json:"agent_id"`
 	RunID             string          `json:"run_id"`
 	CapabilityBinding json.RawMessage `json:"capability_binding,omitempty"`
+	// AssignedCapabilities is the binding as it applies to this case, kind ->
+	// capability key: a kind with a pool of phones (Android through Artemis)
+	// names the one phone this case was pinned to.
+	AssignedCapabilities map[string]string `json:"assigned_capabilities,omitempty"`
 	// Per-case dispatch (TS-021): one task executes exactly one run case. The
 	// frozen snapshot rides along so the prompt can inline the steps, and
 	// CaseKey (TC-42) labels the device lease and the audit trail. A task with

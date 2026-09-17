@@ -5207,21 +5207,31 @@ export const ListTestCapabilitiesResponseSchema = z.object({
 }).loose();
 
 /**
- * What the daemon on a test host last reported about its device hub
- * (multica-device-mcp). Pairing fields come back only for people who may
- * edit the runtime; kept in memory on the server, so `reported_at` says how
- * fresh the rest is.
+ * Android phones on a test host are driven by Artemis. `home` comes back only
+ * for people who may edit the runtime.
+ */
+export const RuntimeArtemisSchema = z.object({
+  installed: z.boolean().default(false),
+  home: z.string().nullable().default(null),
+  adb: z.boolean().default(false),
+  phones: z.number().int().nonnegative().default(0),
+  unauthorized: z.number().int().nonnegative().default(0),
+}).loose();
+
+/**
+ * What the daemon on a test host last reported about its phones: the device
+ * hub (multica-device-mcp) that serves iPhones, and Artemis for Android. Kept
+ * in memory on the server, so `reported_at` says how fresh the rest is. A
+ * daemon from before Artemis sends no `artemis` block; it reads as not
+ * installed.
  */
 export const RuntimeDeviceHubSchema = z.object({
   reachable: z.boolean().default(false),
   url: z.string().default(""),
   version: z.string().default(""),
-  adb: z.boolean().default(false),
-  devices: z.number().int().nonnegative().default(0),
-  phones: z.number().int().nonnegative().default(0),
+  iphones: z.number().int().nonnegative().default(0),
   leases: z.number().int().nonnegative().default(0),
-  pairing_url: z.string().nullable().default(null),
-  pairing_code: z.string().nullable().default(null),
+  artemis: RuntimeArtemisSchema.prefault({}),
   reported_at: z.string().nullable().default(null),
 }).loose();
 
@@ -5439,12 +5449,9 @@ export const EMPTY_RUNTIME_DEVICE_HUB: RuntimeDeviceHub = {
   reachable: false,
   url: "",
   version: "",
-  adb: false,
-  devices: 0,
-  phones: 0,
+  iphones: 0,
   leases: 0,
-  pairing_url: null,
-  pairing_code: null,
+  artemis: { installed: false, home: null, adb: false, phones: 0, unauthorized: 0 },
   reported_at: null,
 };
 

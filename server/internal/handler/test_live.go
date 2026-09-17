@@ -21,21 +21,29 @@ import (
 // a running case. Both are reported by the daemon and kept only in memory
 // (or Redis with a short TTL when the API runs on several nodes).
 
-// RuntimeDeviceHubReport is the daemon's summary of the multica-device-mcp
-// hub on its machine, sent with every capability report. PairingURL and
-// PairingCode let a tester pair a phone from the runtime page; they are only
-// handed to people who may edit the runtime.
+// RuntimeDeviceHubReport is the daemon's summary of the phones its machine
+// can drive, sent with every capability report: the multica-device-mcp hub,
+// which serves iPhones (TS-031), and Artemis, which serves Android phones
+// (TS-035).
 type RuntimeDeviceHubReport struct {
-	Reachable   bool      `json:"reachable"`
-	URL         string    `json:"url"`
-	Version     string    `json:"version"`
-	Adb         bool      `json:"adb"`
-	Devices     int       `json:"devices"`
-	Phones      int       `json:"phones"`
-	Leases      int       `json:"leases"`
-	PairingURL  string    `json:"pairing_url,omitempty"`
-	PairingCode string    `json:"pairing_code,omitempty"`
-	ReportedAt  time.Time `json:"reported_at"`
+	Reachable  bool                  `json:"reachable"`
+	URL        string                `json:"url"`
+	Version    string                `json:"version"`
+	IPhones    int                   `json:"iphones"`
+	Leases     int                   `json:"leases"`
+	Artemis    *RuntimeArtemisReport `json:"artemis,omitempty"`
+	ReportedAt time.Time             `json:"reported_at"`
+}
+
+// RuntimeArtemisReport says whether the machine can run Android cases: an
+// Artemis checkout with its venv built, adb, and how many phones adb reaches
+// authorized or not. Home is only shown to people who may edit the runtime.
+type RuntimeArtemisReport struct {
+	Installed    bool   `json:"installed"`
+	Home         string `json:"home"`
+	ADB          bool   `json:"adb"`
+	Phones       int    `json:"phones"`
+	Unauthorized int    `json:"unauthorized"`
 }
 
 // deviceHubReportRetention bounds how long a report answers for a daemon that

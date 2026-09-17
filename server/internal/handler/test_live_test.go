@@ -13,49 +13,68 @@ import (
 )
 
 // The two pieces of live test-host state the server keeps only in memory:
-// the daemon's device hub summary and the last frame of a running case.
+// the daemon's summary of its phones and the last frame of a running case.
 
-func TestDeviceHubReportIsServedToTheRuntimeOwnerWithPairing(t *testing.T) {
+func TestDeviceHubReportIsServedWithArtemis(t *testing.T) {
 	runtimeID := dbfx.Runtime(t, "hub-runtime", testutil.Cols{"daemon_id": "daemon-hub-report"})
 
-	report := newDaemonTokenRequest("POST", "/api/daemon/runtimes/"+runtimeID+"/capabilities", map[string]any{
+	var accepted struct {
+		Capabilities []any `json:"capabilities"`
+	}
+	testutil.Call(t, testHandler.ReportRuntimeCapabilities, withURLParam(newDaemonTokenRequest("POST", "/api/daemon/runtimes/"+runtimeID+"/capabilities", map[string]any{
 		"capabilities": []any{},
 		"device_hub": map[string]any{
-			"reachable":    true,
-			"url":          "http://127.0.0.1:18801",
-			"version":      "0.1.0",
-			"adb":          true,
-			"devices":      2,
-			"phones":       1,
-			"leases":       0,
-			"pairing_url":  "ws://10.0.0.5:18800/phone?code=ABCD2345",
-			"pairing_code": "ABCD2345",
+			"reachable": true,
+			"url":       "http://127.0.0.1:18801",
+			"version":   "0.1.0",
+			"iphones":   1,
+			"leases":    0,
 		},
-	}, testWorkspaceID, "daemon-hub-report")
-	w := httptest.NewRecorder()
-	testHandler.ReportRuntimeCapabilities(w, withURLParam(report, "runtimeId", runtimeID))
-	if w.Code != http.StatusOK {
-		t.Fatalf("report: got %d: %s", w.Code, w.Body.String())
-	}
+		"artemis": map[string]any{
+			"installed":    true,
+			"home":         "/opt/artemis",
+			"adb":          true,
+			"phones":       5,
+			"unauthorized": 1,
+		},
+	}, testWorkspaceID, "daemon-hub-report"), "runtimeId", runtimeID)).Want(http.StatusOK).JSON(&accepted)
 
-	w = httptest.NewRecorder()
-	testHandler.GetRuntimeDeviceHub(w, withURLParam(newRequest("GET", "/api/runtimes/"+runtimeID+"/device-hub", nil), "id", runtimeID))
-	if w.Code != http.StatusOK {
-		t.Fatalf("get device hub: got %d: %s", w.Code, w.Body.String())
-	}
 	var resp runtimeDeviceHubResponse
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
-		t.Fatal(err)
+	testutil.Call(t, testHandler.GetRuntimeDeviceHub, withURLParam(newRequest("GET", "/api/runtimes/"+runtimeID+"/device-hub", nil), "id", runtimeID)).Want(http.StatusOK).JSON(&resp)
+	if !resp.Reachable || resp.IPhones != 1 || resp.Version != "0.1.0" {
+		t.Errorf("device hub response = %+v, want the reported hub summary", resp)
 	}
-	if !resp.Reachable || resp.Phones != 1 || resp.Devices != 2 || resp.Version != "0.1.0" {
-		t.Errorf("device hub response = %+v, want the reported summary", resp)
+	a := resp.Artemis
+	if !a.Installed || !a.ADB || a.Phones != 5 || a.Unauthorized != 1 {
+		t.Errorf("artemis = %+v, want the reported Android summary", a)
 	}
-	// The test user owns the runtime, so the pairing code is included.
-	if resp.PairingCode == nil || *resp.PairingCode != "ABCD2345" || resp.PairingURL == nil {
-		t.Errorf("pairing for the owner = (%v, %v), want the reported code and URL", resp.PairingURL, resp.PairingCode)
+	// The test user owns the runtime, so the checkout path is included.
+	if a.Home == nil || *a.Home != "/opt/artemis" {
+		t.Errorf("artemis home for the owner = %v, want the reported path", a.Home)
 	}
 	if resp.ReportedAt == nil {
 		t.Error("reported_at missing")
+	}
+}
+
+// A daemon from before Artemis reports only the hub: the response still has
+// an artemis block, all false, so the page says Android is not set up.
+func TestDeviceHubReportWithoutArtemisReadsAsNotInstalled(t *testing.T) {
+	runtimeID := dbfx.Runtime(t, "hub-only-runtime", testutil.Cols{"daemon_id": "daemon-hub-only"})
+	testutil.Call(t, testHandler.ReportRuntimeCapabilities, withURLParam(newDaemonTokenRequest("POST", "/api/daemon/runtimes/"+runtimeID+"/capabilities", map[string]any{
+		"capabilities": []any{},
+		"device_hub":   map[string]any{"reachable": false, "url": "http://127.0.0.1:18801"},
+	}, testWorkspaceID, "daemon-hub-only"), "runtimeId", runtimeID)).Want(http.StatusOK)
+
+	var wire map[string]json.RawMessage
+	testutil.Call(t, testHandler.GetRuntimeDeviceHub, withURLParam(newRequest("GET", "/api/runtimes/"+runtimeID+"/device-hub", nil), "id", runtimeID)).Want(http.StatusOK).JSON(&wire)
+	if string(wire["artemis"]) != `{"installed":false,"home":null,"adb":false,"phones":0,"unauthorized":0}` {
+		t.Errorf("artemis = %s", wire["artemis"])
+	}
+	for _, gone := range []string{"pairing_url", "pairing_code", "phones", "adb"} {
+		if _, ok := wire[gone]; ok {
+			t.Errorf("response still carries %q", gone)
+		}
 	}
 }
 
