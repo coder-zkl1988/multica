@@ -146,8 +146,8 @@ function DesignFileCard({ file, projectName, folderName, onContextMenu }: { file
               <span className="h-16 rounded-md bg-primary/10" />
             </div>
             <div className="space-y-2 px-3">
-              <span className="block h-2 w-3/4 rounded bg-muted" />
-              <span className="block h-2 w-1/2 rounded bg-muted" />
+              <span className="block h-2 w-3/4 rounded-sm bg-muted" />
+              <span className="block h-2 w-1/2 rounded-sm bg-muted" />
             </div>
           </div>
         )}
@@ -787,7 +787,7 @@ export function DesignsPage({ figmaPluginDownloadUrl }: { figmaPluginDownloadUrl
                     type="button"
                     aria-label={`关闭项目 ${project.title}`}
                     title={`关闭项目 ${project.title}`}
-                    className="flex size-6 shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity hover:bg-muted hover:text-foreground focus-visible:opacity-100 group-hover/project-tab:opacity-100"
+                    className="flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground opacity-0 transition-opacity hover:bg-muted hover:text-foreground focus-visible:opacity-100 group-hover/project-tab:opacity-100"
                     onClick={() => closeProjectTab(project.id)}
                   >
                     <X className="h-3 w-3" />
@@ -818,7 +818,7 @@ export function DesignsPage({ figmaPluginDownloadUrl }: { figmaPluginDownloadUrl
                     type="button"
                     aria-label={`关闭仓库 ${title}`}
                     title={`关闭仓库 ${title}`}
-                    className="flex size-6 shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity hover:bg-muted hover:text-foreground focus-visible:opacity-100 group-hover/repository-tab:opacity-100"
+                    className="flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground opacity-0 transition-opacity hover:bg-muted hover:text-foreground focus-visible:opacity-100 group-hover/repository-tab:opacity-100"
                     onClick={() => closeRepositoryTab(repository.id)}
                   >
                     <X className="h-3 w-3" />

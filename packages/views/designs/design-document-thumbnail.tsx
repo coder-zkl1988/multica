@@ -90,7 +90,7 @@ export function DesignDocumentCover({ document, variant }: {
           : !revision ? <ThumbnailStatus>正在加载版本…</ThumbnailStatus>
             : !firstPage ? <ThumbnailStatus>此版本没有可预览的页面</ThumbnailStatus>
               : <DesignDocumentThumbnail revision={revision} entryPath={firstPage.entry} title={`${document.title} · ${firstPage.title}`} />}
-      {revision ? <span className="absolute right-2 bottom-2 rounded bg-background/90 px-2 py-1 text-caption text-foreground">{entries.length} 个页面</span> : null}
+      {revision ? <span className="absolute right-2 bottom-2 rounded-sm bg-background/90 px-2 py-1 text-caption text-foreground">{entries.length} 个页面</span> : null}
     </div>
   );
 }

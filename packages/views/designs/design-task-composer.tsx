@@ -1085,7 +1085,7 @@ export function DesignTaskComposer({
                 type="button"
                 aria-label="取消从 Figma 导入"
                 title="取消从 Figma 导入"
-                className="flex size-5 shrink-0 cursor-pointer items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                className="flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                 onClick={() => setRecipe("default")}
               >
                 <X className="size-3" />
@@ -1289,7 +1289,7 @@ export function DesignTaskComposer({
                 type="button"
                 aria-label="不使用该社区配方"
                 title="不使用该社区配方"
-                className="flex size-5 shrink-0 cursor-pointer items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                className="flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                 onClick={() => {
                   setAppliedRecipe(null);
                   setRecipe("default");

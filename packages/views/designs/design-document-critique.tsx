@@ -162,7 +162,7 @@ export function DesignDocumentCritique({ critique }: { critique: Critique }) {
         <ul className="mt-2.5 space-y-1.5 border-t pt-2.5">
           {open.map((finding, index) => (
             <li key={`${finding.lens}-${index}`} className="text-caption leading-5">
-              <span className={cn("mr-1.5 rounded px-1 text-micro", finding.severity === "must_fix" ? "bg-destructive/10 text-destructive" : "bg-muted text-muted-foreground")}>
+              <span className={cn("mr-1.5 rounded-sm px-1 text-micro", finding.severity === "must_fix" ? "bg-destructive/10 text-destructive" : "bg-muted text-muted-foreground")}>
                 {severityLabel(finding.severity)}
               </span>
               <span className="text-muted-foreground">{lensLabel(finding.lens)} · </span>

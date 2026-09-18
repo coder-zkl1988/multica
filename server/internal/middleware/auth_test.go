@@ -358,7 +358,9 @@ func TestAuth_PATCacheHit(t *testing.T) {
 	cache.Set(context.Background(), hash, "cached-user-id", auth.AuthCacheTTL)
 
 	var gotUserID string
-	mw := Auth(nil, cache, nil, nil, true) // nil queries — only safe on cache hit
+	// Legacy mode: this fork only accepts `mul_` PATs when SSO is off, so the
+	// cache path this test pins exists only there.
+	mw := Auth(nil, cache, nil, nil, false) // nil queries — only safe on cache hit
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotUserID = r.Header.Get("X-User-ID")
 		w.WriteHeader(http.StatusOK)

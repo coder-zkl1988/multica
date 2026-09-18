@@ -160,7 +160,7 @@ export function IssueDesignRestoreSection({ issue, request, onChange, onPrepared
       <div role="listbox" aria-label={t(($) => $.design_delivery.asset)} className="max-h-44 space-y-1 overflow-y-auto rounded-md border p-1">
         {assets.map((asset) => (
           <button key={asset.designRef} type="button" role="option" aria-selected={asset.designRef === request.design_ref}
-            className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-caption ${asset.designRef === request.design_ref ? "bg-muted font-medium text-foreground" : "text-muted-foreground hover:bg-muted/60"}`}
+            className={`flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-caption ${asset.designRef === request.design_ref ? "bg-muted font-medium text-foreground" : "text-muted-foreground hover:bg-muted/60"}`}
             onClick={() => onChange({ ...request, request_id: crypto.randomUUID(), design_ref: asset.designRef, revision_id: undefined, frame_refs: [] })}>
             <Badge variant="outline">{asset.sourceLabel}</Badge>
             <span className="min-w-0 flex-1 truncate">{asset.title}</span>
@@ -175,7 +175,7 @@ export function IssueDesignRestoreSection({ issue, request, onChange, onPrepared
             {frames.map((frame) => {
               const checked = frameRefs.includes(frame.frame_ref);
               return (
-                <label key={frame.frame_ref} className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 hover:bg-muted/60">
+                <label key={frame.frame_ref} className="flex cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 hover:bg-muted/60">
                   <Checkbox checked={checked} onCheckedChange={(value) => {
                     const next = selectedAsset.kind === "figma_file"
                       ? (value === true ? [frame.frame_ref] : [])

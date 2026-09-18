@@ -366,7 +366,7 @@ function DistanceLines({ lines }: { lines: DistanceLine[] }) {
             className={`absolute bg-[#f33155] ${vertical ? "w-px" : "h-px"}`}
             style={{ left: line.x, top: line.y, width: vertical ? 1 : line.width, height: vertical ? line.height : 1 }}
           >
-            <span className={`absolute rounded bg-[#f33155] px-1.5 py-0.5 text-micro font-medium leading-3 text-white shadow-sm ${vertical ? "left-1.5 top-1/2 -translate-y-1/2" : "left-1/2 top-1.5 -translate-x-1/2"}`}>{line.label}</span>
+            <span className={`absolute rounded-sm bg-[#f33155] px-1.5 py-0.5 text-micro font-medium leading-3 text-white shadow-sm ${vertical ? "left-1.5 top-1/2 -translate-y-1/2" : "left-1/2 top-1.5 -translate-x-1/2"}`}>{line.label}</span>
             <i className={`absolute bg-[#f33155] ${vertical ? "-left-0.5 top-0 h-px w-1.5" : "left-0 -top-0.5 h-1.5 w-px"}`} />
             <i className={`absolute bg-[#f33155] ${vertical ? "-left-0.5 bottom-0 h-px w-1.5" : "right-0 -top-0.5 h-1.5 w-px"}`} />
           </div>
@@ -398,9 +398,9 @@ function LayerOverlay({ frame, layers, selectedLayerId, selectedLayerIds, hovere
       <DistanceLines lines={lines} />
       {selectedLayer && selectedLayer.id !== frame.rootLayerId ? (
         <div className="absolute border border-[#f33155]" style={{ left: selectedLayer.x, top: selectedLayer.y, width: selectedLayer.width, height: selectedLayer.height }}>
-          {showSelectionSize ? <div className="absolute left-1/2 top-0 -translate-x-1/2 -translate-y-[calc(100%+6px)] rounded bg-[#f33155] px-1.5 py-0.5 text-micro font-medium text-white shadow-sm">{unitText(selectedLayer.width, "px")}</div> : null}
-          {showSelectionSize ? <div className="absolute right-0 top-1/2 translate-x-[calc(100%+6px)] -translate-y-1/2 rounded bg-[#f33155] px-1.5 py-0.5 text-micro font-medium text-white shadow-sm">{unitText(selectedLayer.height, "px")}</div> : null}
-          {showSelectionSize ? <div className="absolute left-0 bottom-0 translate-y-[calc(100%+6px)] rounded bg-background/95 px-1.5 py-0.5 text-micro font-medium text-foreground shadow-sm ring-1 ring-border">x {unitText(selectedLayer.x, "px")} · y {unitText(selectedLayer.y, "px")}</div> : null}
+          {showSelectionSize ? <div className="absolute left-1/2 top-0 -translate-x-1/2 -translate-y-[calc(100%+6px)] rounded-sm bg-[#f33155] px-1.5 py-0.5 text-micro font-medium text-white shadow-sm">{unitText(selectedLayer.width, "px")}</div> : null}
+          {showSelectionSize ? <div className="absolute right-0 top-1/2 translate-x-[calc(100%+6px)] -translate-y-1/2 rounded-sm bg-[#f33155] px-1.5 py-0.5 text-micro font-medium text-white shadow-sm">{unitText(selectedLayer.height, "px")}</div> : null}
+          {showSelectionSize ? <div className="absolute left-0 bottom-0 translate-y-[calc(100%+6px)] rounded-sm bg-background/95 px-1.5 py-0.5 text-micro font-medium text-foreground shadow-sm ring-1 ring-border">x {unitText(selectedLayer.x, "px")} · y {unitText(selectedLayer.y, "px")}</div> : null}
           {[["-3px", "-3px"], ["calc(100% - 3px)", "-3px"], ["-3px", "calc(100% - 3px)"], ["calc(100% - 3px)", "calc(100% - 3px)"]].map(([left, top], index) => <i key={index} className="absolute h-1.5 w-1.5 rounded-full border border-[#f33155] bg-background" style={{ left, top }} />)}
         </div>
       ) : null}
@@ -500,7 +500,7 @@ function SideDrawer({ drawer, nativeJson, revisions, colors, slices, selectedLay
                 <div className="font-medium">{layer.name}</div>
                 <div className="mt-1 text-caption text-muted-foreground">{unitText(layer.width, "px")} × {unitText(layer.height, "px")}</div>
               </button>
-              {url ? <div className="mt-3 flex items-center gap-3"><div className="grid h-16 w-16 shrink-0 place-items-center rounded border bg-[linear-gradient(45deg,rgba(0,0,0,.08)_25%,transparent_25%,transparent_75%,rgba(0,0,0,.08)_75%),linear-gradient(45deg,rgba(0,0,0,.08)_25%,transparent_25%,transparent_75%,rgba(0,0,0,.08)_75%)] bg-[length:10px_10px] bg-[position:0_0,5px_5px]"><img src={url} alt={layer.name} className="max-h-14 max-w-14 object-contain" /></div><div className="min-w-0 flex-1"><div className="truncate font-mono text-caption text-muted-foreground">{url}</div><Button size="sm" variant="outline" className="mt-2 h-7" onClick={() => copyWithToast(url)}><Copy className="h-3.5 w-3.5" />复制链接</Button></div></div> : <p className="mt-2 text-caption text-muted-foreground">暂无 CDN URL。</p>}
+              {url ? <div className="mt-3 flex items-center gap-3"><div className="grid h-16 w-16 shrink-0 place-items-center rounded-sm border bg-[linear-gradient(45deg,rgba(0,0,0,.08)_25%,transparent_25%,transparent_75%,rgba(0,0,0,.08)_75%),linear-gradient(45deg,rgba(0,0,0,.08)_25%,transparent_25%,transparent_75%,rgba(0,0,0,.08)_75%)] bg-[length:10px_10px] bg-[position:0_0,5px_5px]"><img src={url} alt={layer.name} className="max-h-14 max-w-14 object-contain" /></div><div className="min-w-0 flex-1"><div className="truncate font-mono text-caption text-muted-foreground">{url}</div><Button size="sm" variant="outline" className="mt-2 h-7" onClick={() => copyWithToast(url)}><Copy className="h-3.5 w-3.5" />复制链接</Button></div></div> : <p className="mt-2 text-caption text-muted-foreground">暂无 CDN URL。</p>}
             </div>
           );
         }) : <p className="text-body text-muted-foreground">该画板暂无切片，若有需要，请联系 UI</p>}</div> : null}
@@ -517,8 +517,8 @@ function ExportableRows({ nativeJson, exportables }: { nativeJson: GalleryNative
         const url = exportableUrl(nativeJson, item);
         return (
           <div key={index} className="rounded-lg border p-2">
-            {url ? <div className="mb-2 flex items-center gap-3"><div className="grid h-14 w-14 shrink-0 place-items-center rounded border bg-muted"><img src={url} alt="slice" className="max-h-12 max-w-12 object-contain" /></div><div className="min-w-0 flex-1"><div className="truncate font-mono text-caption text-muted-foreground">{url}</div><Button size="sm" variant="outline" className="mt-2 h-7" onClick={() => copyWithToast(url)}><Copy className="h-3.5 w-3.5" />复制链接</Button></div></div> : null}
-            <pre className="max-h-28 overflow-auto rounded bg-muted p-2 text-caption">{JSON.stringify(item, null, 2)}</pre>
+            {url ? <div className="mb-2 flex items-center gap-3"><div className="grid h-14 w-14 shrink-0 place-items-center rounded-sm border bg-muted"><img src={url} alt="slice" className="max-h-12 max-w-12 object-contain" /></div><div className="min-w-0 flex-1"><div className="truncate font-mono text-caption text-muted-foreground">{url}</div><Button size="sm" variant="outline" className="mt-2 h-7" onClick={() => copyWithToast(url)}><Copy className="h-3.5 w-3.5" />复制链接</Button></div></div> : null}
+            <pre className="max-h-28 overflow-auto rounded-sm bg-muted p-2 text-caption">{JSON.stringify(item, null, 2)}</pre>
           </div>
         );
       })}
@@ -530,7 +530,7 @@ function ColorRow({ label, color, extra }: { label: string; color: string | null
   return (
     <div className="flex items-center gap-2 rounded-lg bg-muted px-2 py-2 text-caption">
       <span className="w-16 shrink-0 text-muted-foreground">{label}</span>
-      <span className="h-5 w-5 shrink-0 rounded border shadow-inner" style={{ background: color ?? "transparent" }} />
+      <span className="h-5 w-5 shrink-0 rounded-sm border shadow-inner" style={{ background: color ?? "transparent" }} />
       <span className="min-w-0 flex-1 truncate font-mono">{color ?? "—"}</span>
       {extra ? <span className="text-muted-foreground">{extra}</span> : null}
     </div>
@@ -1090,7 +1090,7 @@ export function DesignFramePage({ designId, frameId }: { designId: string; frame
                     <label className="space-y-1.5 rounded-lg border p-2 text-caption">
                       <span className="font-medium text-muted-foreground">填充色</span>
                       <div className="flex items-center gap-2">
-                        <input type="color" value={editFillColor || "#000000"} disabled={layerEditDisabled} className="h-7 w-9 rounded border bg-transparent" onChange={(event) => setEditFillColor(event.target.value.toUpperCase())} />
+                        <input type="color" value={editFillColor || "#000000"} disabled={layerEditDisabled} className="h-7 w-9 rounded-sm border bg-transparent" onChange={(event) => setEditFillColor(event.target.value.toUpperCase())} />
                         <span className="font-mono text-micro text-muted-foreground">{editFillColor || "—"}</span>
                       </div>
                     </label>
@@ -1098,7 +1098,7 @@ export function DesignFramePage({ designId, frameId }: { designId: string; frame
                       <label className="space-y-1.5 rounded-lg border p-2 text-caption">
                         <span className="font-medium text-muted-foreground">文本色</span>
                         <div className="flex items-center gap-2">
-                          <input type="color" value={editTextColor || "#000000"} disabled={layerEditDisabled} className="h-7 w-9 rounded border bg-transparent" onChange={(event) => setEditTextColor(event.target.value.toUpperCase())} />
+                          <input type="color" value={editTextColor || "#000000"} disabled={layerEditDisabled} className="h-7 w-9 rounded-sm border bg-transparent" onChange={(event) => setEditTextColor(event.target.value.toUpperCase())} />
                           <span className="font-mono text-micro text-muted-foreground">{editTextColor || "—"}</span>
                         </div>
                       </label>
@@ -1108,7 +1108,7 @@ export function DesignFramePage({ designId, frameId }: { designId: string; frame
                     <label className="space-y-1.5 rounded-lg border p-2 text-caption">
                       <span className="font-medium text-muted-foreground">描边色</span>
                       <div className="flex items-center gap-2">
-                        <input type="color" value={editStrokeColor || "#000000"} disabled={layerEditDisabled} className="h-7 w-9 rounded border bg-transparent" onChange={(event) => setEditStrokeColor(event.target.value.toUpperCase())} />
+                        <input type="color" value={editStrokeColor || "#000000"} disabled={layerEditDisabled} className="h-7 w-9 rounded-sm border bg-transparent" onChange={(event) => setEditStrokeColor(event.target.value.toUpperCase())} />
                         <span className="font-mono text-micro text-muted-foreground">{editStrokeColor || "—"}</span>
                       </div>
                     </label>

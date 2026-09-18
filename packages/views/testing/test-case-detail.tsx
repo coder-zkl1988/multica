@@ -358,7 +358,7 @@ export function TestCaseDetail({ refId }: TestCaseDetailProps) {
           <Field label={t(($) => $.timeline.title)}>
             {isFlakyHistory(timeline.map((entry) => entry.result)) ? (
               <span
-                className="mb-1.5 inline-flex items-center gap-1 rounded bg-warning/15 px-1.5 text-micro font-medium text-warning"
+                className="mb-1.5 inline-flex items-center gap-1 rounded-sm bg-warning/15 px-1.5 text-micro font-medium text-warning"
                 title={t(($) => $.timeline.flakyHint, { count: FLAKY_WINDOW })}
               >
                 <Activity className="h-3 w-3" />
@@ -499,7 +499,7 @@ function ProposalCard({
     <div className="rounded-md border bg-muted/30 p-2 text-caption">
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-1.5">
-          <span className="rounded bg-muted px-1.5 py-0.5 font-medium">
+          <span className="rounded-sm bg-muted px-1.5 py-0.5 font-medium">
             {t(($) => $.proposals.kind[proposal.kind as keyof typeof $.proposals.kind]) ?? proposal.kind}
           </span>
           {!isPending ? (
@@ -514,7 +514,7 @@ function ProposalCard({
               type="button"
               disabled={busy}
               onClick={onAccept}
-              className="inline-flex items-center gap-1 rounded px-2 py-1 text-caption font-medium hover:bg-accent disabled:opacity-50"
+              className="inline-flex items-center gap-1 rounded-sm px-2 py-1 text-caption font-medium hover:bg-accent disabled:opacity-50"
             >
               <CheckCircle2 className="h-3 w-3" />
               {t(($) => $.proposals.accept)}
@@ -523,7 +523,7 @@ function ProposalCard({
               type="button"
               disabled={busy}
               onClick={onReject}
-              className="inline-flex items-center gap-1 rounded px-2 py-1 text-caption hover:bg-accent disabled:opacity-50"
+              className="inline-flex items-center gap-1 rounded-sm px-2 py-1 text-caption hover:bg-accent disabled:opacity-50"
             >
               <XCircle className="h-3 w-3" />
               {t(($) => $.proposals.reject)}
