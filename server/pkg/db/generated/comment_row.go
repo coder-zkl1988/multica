@@ -23,6 +23,7 @@ func (r CreateCommentRow) Comment() Comment {
 		ViaPluginID:    r.ViaPluginID,
 		Revision:       r.Revision,
 		DesignDelivery: r.DesignDelivery,
+		DeletedAt:      r.DeletedAt,
 	}
 }
 
@@ -49,5 +50,6 @@ func (r UpdateCommentRow) Comment() Comment {
 		ViaPluginID:    r.ViaPluginID,
 		Revision:       r.Revision,
 		DesignDelivery: r.DesignDelivery,
+		DeletedAt:      r.DeletedAt,
 	}
 }

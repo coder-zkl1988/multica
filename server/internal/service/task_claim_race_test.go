@@ -16,22 +16,7 @@ import (
 
 func newTaskClaimRacePool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-
-	dbURL := testDatabaseURL(t)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	pool, err := pgxpool.New(ctx, dbURL)
-	if err != nil {
-		t.Skipf("database unavailable: %v", err)
-	}
-	if err := pool.Ping(ctx); err != nil {
-		pool.Close()
-		t.Skipf("database unreachable: %v", err)
-	}
-	t.Cleanup(pool.Close)
-	return pool
+	return sharedTestPool(t)
 }
 
 func TestClaimTaskConcurrentCapacityRespected(t *testing.T) {
@@ -109,7 +94,7 @@ func createSleepTrigger(t *testing.T, ctx context.Context, pool *pgxpool.Pool, t
 		LANGUAGE plpgsql
 		AS $$
 		BEGIN
-			PERFORM pg_sleep(0.2);
+			PERFORM pg_sleep(0.1);
 			RETURN NEW;
 		END;
 		$$;

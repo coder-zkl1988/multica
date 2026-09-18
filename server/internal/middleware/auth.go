@@ -37,10 +37,28 @@ func rejectTemporarilyDisabledUser(w http.ResponseWriter, r *http.Request, userI
 //
 // Sets X-User-ID and X-User-Email headers on the request for downstream handlers.
 //
+// patCache is optional; when non-nil, PAT lookups are cached with a short
+// TTL (auth.AuthCacheTTL). On cache hit the middleware skips both the DB
+// SELECT and the last_used_at UPDATE — last_used_at is therefore refreshed
+// at most once per TTL window per token, not per request.
+//
+// cfSigner is optional; when non-nil, a session renewed here also gets fresh
+// CloudFront cookies. It is wired into THIS middleware rather than left to
+// RefreshCloudFrontCookies because renewal is what makes the two clocks
+// diverge: every route group that can renew must re-sign, and only the
+// renewer knows it renewed. A group that mounts Auth without the CDN
+// middleware (the plugin bridge) would otherwise slide the session forward
+// while leaving the CDN policy pinned to the original login.
+//
 // cloudPAT is optional; when non-nil, tokens with the mcn_ prefix are
 // validated by calling the Multica Cloud Fleet service rather than the
-// local DB. When nil (Fleet URL unset) mcn_ tokens are rejected.
-func Auth(queries *db.Queries, patCache *auth.PATCache, cloudPAT *auth.CloudPATVerifier, useSySSO bool) func(http.Handler) http.Handler {
+// local DB. When nil (Fleet URL unset) mcn_ tokens are rejected at the
+// prefix branch — we don't fall through to the mul_ / JWT paths, since
+// an mcn_ string is by construction not a valid mul_ PAT or JWT.
+//
+// useSySSO reports whether this deployment signs in through the corporate SSO
+// provider; the fork's SSO branches read it.
+func Auth(queries *db.Queries, patCache *auth.PATCache, cloudPAT *auth.CloudPATVerifier, cfSigner *auth.CloudFrontSigner, useSySSO bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// X-Actor-Source is server-set only — any value supplied by
@@ -263,6 +281,12 @@ func Auth(queries *db.Queries, patCache *auth.PATCache, cloudPAT *auth.CloudPATV
 			if identity.Email != "" {
 				r.Header.Set("X-User-Email", identity.Email)
 			}
+
+			// Sliding session: a browser that keeps using the app keeps its
+			// cookie, instead of being logged out on the anniversary of its
+			// login. No-op until the session drops below half its TTL
+			// (MUL-7436).
+			r = renewCookieSession(w, r, identity.Claims, fromCookie, cfSigner)
 
 			next.ServeHTTP(w, r)
 		})

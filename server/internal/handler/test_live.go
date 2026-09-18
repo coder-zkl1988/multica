@@ -88,10 +88,10 @@ func (s *InMemoryDeviceHubStore) Get(_ context.Context, daemonID string) (*Runti
 const deviceHubRedisPrefix = "mul:" + runtimePendingRedisHashTag + ":device_hub:"
 
 type RedisDeviceHubStore struct {
-	rdb *redis.Client
+	rdb redis.UniversalClient
 }
 
-func NewRedisDeviceHubStore(rdb *redis.Client) *RedisDeviceHubStore {
+func NewRedisDeviceHubStore(rdb redis.UniversalClient) *RedisDeviceHubStore {
 	return &RedisDeviceHubStore{rdb: rdb}
 }
 
@@ -176,10 +176,10 @@ func (s *InMemoryLiveFrameStore) Get(_ context.Context, runCaseID string) (*Test
 }
 
 type RedisLiveFrameStore struct {
-	rdb *redis.Client
+	rdb redis.UniversalClient
 }
 
-func NewRedisLiveFrameStore(rdb *redis.Client) *RedisLiveFrameStore {
+func NewRedisLiveFrameStore(rdb redis.UniversalClient) *RedisLiveFrameStore {
 	return &RedisLiveFrameStore{rdb: rdb}
 }
 

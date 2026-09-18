@@ -26,6 +26,7 @@ import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
+import { useQuery } from "@tanstack/react-query";
 import type { Reaction, TimelineEntry } from "@multica/core/types";
 import { useAuthStore } from "@/data/auth-store";
 import { useWorkspaceStore } from "@/data/workspace-store";
@@ -33,10 +34,12 @@ import { useCommentSelectStore } from "@/data/comment-select-store";
 import { useReplyTargetStore } from "@/data/stores/reply-target-store";
 import { useActorLookup } from "@/data/use-actor-name";
 import {
+  commentDeleteKeepsReplies,
   useDeleteComment,
   useResolveComment,
   useToggleCommentReaction,
 } from "@/data/mutations/issues";
+import { appConfigOptions } from "@/data/queries/billing";
 import { QUICK_EMOJIS } from "@/lib/quick-emojis";
 
 const QUICK_ROW_SIZE = 5;
@@ -56,6 +59,12 @@ export function useCommentLongPress(
   const { showActionSheetWithOptions } = useActionSheet();
   const { t } = useTranslation("issues");
   const { t: tCommon } = useTranslation("common");
+  // Same config cache useDeleteComment reads when it runs, so the copy and
+  // the delete route agree.
+  const { data: keepReplies = false } = useQuery({
+    ...appConfigOptions(),
+    select: commentDeleteKeepsReplies,
+  });
 
   const onLongPress = useCallback(() => {
     const isOwn = entry.actor_type === "member" && entry.actor_id === userId;
@@ -191,7 +200,11 @@ export function useCommentLongPress(
           case "delete":
             Alert.alert(
               t("comment.menu.delete_confirm.title"),
-              t("comment.menu.delete_confirm.message"),
+              // Promise kept replies only when the server declares it (#8296);
+              // older servers delete the replies too.
+              keepReplies
+                ? t("comment.menu.delete_confirm.message_keep_replies")
+                : t("comment.menu.delete_confirm.message"),
               [
                 {
                   text: t("comment.menu.delete_confirm.cancel"),
@@ -221,6 +234,7 @@ export function useCommentLongPress(
     t,
     tCommon,
     getName,
+    keepReplies,
   ]);
 
   return { onLongPress, isPressed };

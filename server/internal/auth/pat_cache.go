@@ -12,10 +12,12 @@ import (
 const patCachePrefix = "mul:auth:pat:"
 
 type PATCache struct {
-	rdb *redis.Client
+	rdb redis.UniversalClient
 }
 
-func NewPATCache(rdb *redis.Client) *PATCache {
+// NewPATCache returns a cache backed by rdb. Pass nil to disable caching;
+// the returned *PATCache is safe to call but never hits Redis.
+func NewPATCache(rdb redis.UniversalClient) *PATCache {
 	if rdb == nil {
 		return nil
 	}

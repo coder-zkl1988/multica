@@ -42,6 +42,10 @@ interface ConfigState {
   // Older handlers accepted the unknown field and returned success while
   // dropping it, so absent must fail closed.
   agentConversationStartersSupported: boolean;
+  // Whether deleting a comment keeps its replies (#8296). Older servers
+  // deleted the replies too, so absent must fail closed: the client then
+  // promises nothing about replies and uses the legacy delete route.
+  commentDeleteKeepRepliesSupported: boolean;
   setCdnConfig: (config: { cdnDomain: string; cdnSigned?: boolean }) => void;
   setAuthConfig: (config: {
     allowSignup: boolean;
@@ -60,6 +64,7 @@ interface ConfigState {
   loadConfig: (request: () => Promise<AppConfigResponse>) => Promise<AppConfigResponse>;
   setLocalWorktreeSupported: (supported?: boolean) => void;
   setAgentConversationStartersSupported: (supported?: boolean) => void;
+  setCommentDeleteKeepRepliesSupported: (supported?: boolean) => void;
 }
 
 export const configStore = createStore<ConfigState>((set) => ({
@@ -78,6 +83,7 @@ export const configStore = createStore<ConfigState>((set) => ({
   upstreamVersion: "",
   localWorktreeSupported: false,
   agentConversationStartersSupported: false,
+  commentDeleteKeepRepliesSupported: false,
   setCdnConfig: ({ cdnDomain, cdnSigned = false }) => set({ cdnDomain, cdnSigned }),
   setAuthConfig: ({
     allowSignup,
@@ -131,6 +137,8 @@ export const configStore = createStore<ConfigState>((set) => ({
     set({ localWorktreeSupported: supported === true }),
   setAgentConversationStartersSupported: (supported = false) =>
     set({ agentConversationStartersSupported: supported === true }),
+  setCommentDeleteKeepRepliesSupported: (supported = false) =>
+    set({ commentDeleteKeepRepliesSupported: supported === true }),
 }));
 
 export function useConfigStore(): ConfigState;

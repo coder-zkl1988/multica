@@ -120,7 +120,10 @@ func TestBuildPromptFreshSnapshotPreservesIncrementalCommentRead(t *testing.T) {
 	if strings.Contains(prompt, "multica issue get issue-1 --output json") {
 		t.Fatalf("fresh comment prompt reloaded the issue:\n%s", prompt)
 	}
-	want := "multica issue comment list issue-1 --thread thread-1 --since " + since + " --compact --output json"
+	// MUL-7344 (upstream): the incremental read is one issue-wide `--since`
+	// call. `--thread` combined with `--since` drops the thread root, so the
+	// thread read stays on `--tail 30` and is offered separately.
+	want := "multica issue comment list issue-1 --since " + since + " --compact --output json"
 	if !strings.Contains(prompt, want) {
 		t.Fatalf("fresh comment prompt lost incremental read %q:\n%s", want, prompt)
 	}

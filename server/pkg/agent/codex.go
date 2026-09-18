@@ -69,6 +69,19 @@ const (
 	// while keeping the fast-fail value (MUL-5542).
 	defaultCodexFirstTurnNoProgressTimeout = 60 * time.Second
 	defaultCodexHandshakeTimeout           = 30 * time.Second
+	// defaultCodexTurnInterruptTimeout gives app-server a short, bounded window to
+	// finish an interrupted turn and report its final token usage before the
+	// process is torn down. This mirrors the native Codex stop flow without
+	// letting a wedged interrupt delay replacement executions indefinitely. The
+	// value is independently configurable per execution; lifecycle logs record
+	// the observed acknowledgement/completion latency so deployments can tune it
+	// from their own app-server evidence. On 2026-09-01, the reproducible real-
+	// agent probe in codex_interrupt_latency_integration_test.go measured 20
+	// interrupted generations and 20 interrupted active tools on WSL/Linux with
+	// codex-cli 0.147.0: turn/completed P99/max were 15ms/15ms and 13ms/13ms.
+	// Two seconds deliberately keeps more than 130x headroom over the observed
+	// worst protocol completion for host load and cross-platform scheduling.
+	defaultCodexTurnInterruptTimeout = 2 * time.Second
 	// thread/start and thread/resume may refresh the model catalog, initialize
 	// MCP integrations, and restore persisted history. Field evidence shows
 	// healthy calls crossing the 30s budget used for local initialize, so keep
@@ -96,6 +109,12 @@ var codexProcessWaitDelayNanos atomic.Int64
 var activeCodexLaunches atomic.Int64
 var maxActiveCodexLaunchesObserved atomic.Int64
 var codexCleanupConfirmationOverride atomic.Int32
+
+// codexCatalogRetryBackoff is the floor of the delay before retrying a model
+// catalog refresh failure. Jitter below twice the floor is added on top, in
+// steps of floor/500 (1ms at the production value). Package tests shorten it;
+// production never reassigns it.
+var codexCatalogRetryBackoff = 500 * time.Millisecond
 
 func sanitizeCodexDiagnostic(value string) string {
 	return sanitizeAgentDiagnostic(value)
@@ -1120,7 +1139,7 @@ func (b *codexBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 			// ctx.Done() below keeps the retry from extending it.
 			backoff := 75*time.Millisecond + time.Duration(time.Now().UnixNano()%50)*time.Millisecond
 			if retryReason == "model_catalog_refresh" {
-				backoff = 500*time.Millisecond + time.Duration(time.Now().UnixNano()%1000)*time.Millisecond
+				backoff = codexCatalogRetryBackoff + time.Duration(time.Now().UnixNano()%1000)*(2*codexCatalogRetryBackoff/1000)
 				// The stalled attempt already reached turn/started, so the prior
 				// thread may hold the submitted input or an unfinished turn.
 				// Resuming it again could duplicate that input; start a fresh
@@ -1255,7 +1274,11 @@ func (b *codexBackend) executeOnce(ctx context.Context, prompt string, opts Exec
 		// Names and false only. Never place inherited plugin configuration in argv.
 		codexArgs = append(codexArgs, opts.codexPluginMCP.launchOverrides()...)
 	}
-	cmd := runtimeCmd.exec(runCtx, codexArgs...)
+	// Keep the app-server alive long enough to handle turn/interrupt when the
+	// task context is cancelled. The lifecycle goroutine remains governed by
+	// runCtx and explicitly stops this process context during bounded cleanup.
+	processCtx, stopProcess := context.WithCancel(context.WithoutCancel(runCtx))
+	cmd := runtimeCmd.exec(processCtx, codexArgs...)
 	hideAgentWindow(cmd)
 	// Run codex in its own process group so a cancel-on-stuck cleanup
 	// reaches the whole tree — the codex Node wrapper plus the native
@@ -1294,11 +1317,13 @@ func (b *codexBackend) executeOnce(ctx context.Context, prompt string, opts Exec
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		cancel()
+		stopProcess()
 		return nil, fmt.Errorf("codex stdout pipe: %w", err)
 	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		cancel()
+		stopProcess()
 		return nil, fmt.Errorf("codex stdin pipe: %w", err)
 	}
 	// Codex stderr can contain auth/provider diagnostics. Capture a bounded
@@ -1322,6 +1347,7 @@ func (b *codexBackend) executeOnce(ctx context.Context, prompt string, opts Exec
 	// cannot be resumed is killed and reported here.
 	if err := startOwnedProcessTree(cmd, b.cfg.Logger); err != nil {
 		cancel()
+		stopProcess()
 		return nil, fmt.Errorf("start codex: %w", err)
 	}
 	activeLaunches := activeCodexLaunches.Add(1)
@@ -1519,7 +1545,7 @@ func (b *codexBackend) executeOnce(ctx context.Context, prompt string, opts Exec
 	//  2. Wait for cmd.Wait() to return, capped by another
 	//     codexGracefulShutdownTimeout. Normally this returns immediately
 	//     because the process has already exited. In the stuck-child case
-	//     the process is still alive — we cancel the runCtx, which fires
+	//     the process is still alive — we cancel the process context, which fires
 	//     cmd.Cancel (the group-SIGKILL helper installed above), and
 	//     cmd.WaitDelay then guarantees cmd.Wait() returns even if pipes
 	//     stay open.
@@ -1558,7 +1584,7 @@ func (b *codexBackend) executeOnce(ctx context.Context, prompt string, opts Exec
 					"pid", cmd.Process.Pid,
 					"grace", grace.String(),
 				)
-				cancel()
+				stopProcess()
 				// On Windows, Cancel terminates only the direct child. A
 				// descendant may keep inherited stdout open indefinitely. Start
 				// Wait now so os/exec's WaitDelay closes the pipe after its
@@ -1588,7 +1614,7 @@ func (b *codexBackend) executeOnce(ctx context.Context, prompt string, opts Exec
 					"pid", cmd.Process.Pid,
 					"grace", grace.String(),
 				)
-				cancel()
+				stopProcess()
 				// WaitDelay (10s) is the final backstop: even if the
 				// group-kill races with an open pipe held by a
 				// descendant, cmd.Wait() returns within WaitDelay of the
@@ -1641,6 +1667,8 @@ func (b *codexBackend) executeOnce(ctx context.Context, prompt string, opts Exec
 		var result Result
 		pluginPolicyVerified := false
 		defer activeCodexLaunches.Add(-1)
+		defer cancel()
+		defer stopProcess()
 		defer close(resCh)
 		defer close(msgCh)
 		defer func() {
@@ -1684,6 +1712,11 @@ func (b *codexBackend) executeOnce(ctx context.Context, prompt string, opts Exec
 				// Kill the whole process group before waiting so a leader that exits
 				// on stdin EOF cannot leave detached-stdio descendants behind.
 				signalProcessGroup(cmd, syscall.SIGKILL)
+			} else if runCtx.Err() != nil {
+				// processCtx deliberately outlives runCtx so active turns can use
+				// turn/interrupt. Initialize has no interruptible turn, so a parent
+				// cancellation must take the fast process-tree cleanup path.
+				stopProcess()
 			}
 			drainAndWait() // flush os/exec stderr goroutine before sampling Tail
 			finalStatus = "failed"
@@ -1802,6 +1835,10 @@ func (b *codexBackend) executeOnce(ctx context.Context, prompt string, opts Exec
 				// the whole process group before waiting so a leader that exits on
 				// EOF cannot leave detached-stdio descendants behind.
 				signalProcessGroup(cmd, syscall.SIGKILL)
+			} else if runCtx.Err() != nil {
+				// No turn exists during thread start/resume, so there is nothing to
+				// interrupt and no reason to spend the graceful shutdown budget.
+				stopProcess()
 			}
 			drainAndWait() // flush os/exec stderr goroutine before sampling Tail
 			finalStatus = "failed"
@@ -1837,7 +1874,7 @@ func (b *codexBackend) executeOnce(ctx context.Context, prompt string, opts Exec
 			}
 			return
 		}
-		c.threadID = threadID
+		c.setThreadID(threadID)
 		if resumed {
 			b.cfg.Logger.Info("codex thread resumed", "thread_id", threadID)
 		} else {
@@ -1900,18 +1937,37 @@ func (b *codexBackend) executeOnce(ctx context.Context, prompt string, opts Exec
 				}
 			}
 		}
+		finishRunContextDone := func() {
+			waitingForTurn = false
+			if runCtx.Err() == context.DeadlineExceeded {
+				finishFirstItemWait("execution_timeout")
+				finalStatus = "timeout"
+				finalError = fmt.Sprintf("codex timed out after %s", timeout)
+			} else {
+				finishFirstItemWait("cancelled")
+				finalStatus = "aborted"
+				finalError = "execution cancelled"
+			}
+		}
 		turnNotificationGate.arm()
 		_, err = c.request(runCtx, "turn/start", turnParams)
 		if err != nil {
-			select {
-			case aborted := <-turnDone:
-				finishTurn(aborted)
-			default:
-				drainAndWait() // flush os/exec stderr goroutine before sampling Tail
-				finalStatus = "failed"
-				finalError = withAgentStderr(fmt.Sprintf("codex turn/start failed: %v", err), "codex", sanitizeCodexDiagnostic(stderrBuf.Tail()))
-				result = Result{Status: finalStatus, Error: finalError, DurationMs: time.Since(startTime).Milliseconds()}
-				return
+			if runCtx.Err() != nil {
+				finishRunContextDone()
+				if !interruptCodexTurn(c, threadID, turnDone, opts.TurnInterruptTimeout, b.cfg.Logger) {
+					stopProcess()
+				}
+			} else {
+				select {
+				case aborted := <-turnDone:
+					finishTurn(aborted)
+				default:
+					drainAndWait() // flush os/exec stderr goroutine before sampling Tail
+					finalStatus = "failed"
+					finalError = withAgentStderr(fmt.Sprintf("codex turn/start failed: %v", err), "codex", sanitizeCodexDiagnostic(stderrBuf.Tail()))
+					result = Result{Status: finalStatus, Error: finalError, DurationMs: time.Since(startTime).Milliseconds()}
+					return
+				}
 			}
 		}
 
@@ -1996,18 +2052,6 @@ func (b *codexBackend) executeOnce(ctx context.Context, prompt string, opts Exec
 			return true
 		}
 
-		finishRunContextDone := func() {
-			waitingForTurn = false
-			if runCtx.Err() == context.DeadlineExceeded {
-				finishFirstItemWait("execution_timeout")
-				finalStatus = "timeout"
-				finalError = fmt.Sprintf("codex timed out after %s", timeout)
-			} else {
-				finishFirstItemWait("cancelled")
-				finalStatus = "aborted"
-				finalError = "execution cancelled"
-			}
-		}
 		for waitingForTurn {
 			select {
 			case aborted := <-turnDone:
@@ -2094,18 +2138,19 @@ func (b *codexBackend) executeOnce(ctx context.Context, prompt string, opts Exec
 				waitingForTurn = false
 				finishFirstItemWait("no_progress_timeout")
 				finalStatus = "timeout"
+				turnID := c.activeTurnID()
 				timeoutDiagnostic = codexTimeoutDiagnostic{
 					Kind:         codexTimeoutFirstTurnNoProgress,
 					Timeout:      firstTurnNoProgressTimeout,
 					LastActivity: lastSemanticActivityDescription,
 					ThreadID:     threadID,
-					TurnID:       c.turnID,
+					TurnID:       turnID,
 					Model:        opts.Model,
 				}
 				b.cfg.Logger.Warn(CodexFirstTurnNoProgressMarker,
 					"pid", cmd.Process.Pid,
 					"thread_id", threadID,
-					"turn_id", c.turnID,
+					"turn_id", turnID,
 					"timeout", firstTurnNoProgressTimeout.String(),
 					"last_activity", lastSemanticActivityDescription,
 				)
@@ -2119,18 +2164,19 @@ func (b *codexBackend) executeOnce(ctx context.Context, prompt string, opts Exec
 				waitingForTurn = false
 				finishFirstItemWait("semantic_inactivity_timeout")
 				finalStatus = "timeout"
+				turnID := c.activeTurnID()
 				timeoutDiagnostic = codexTimeoutDiagnostic{
 					Kind:         codexTimeoutSemanticInactivity,
 					Timeout:      semanticInactivityTimeout,
 					LastActivity: lastSemanticActivityDescription,
 					ThreadID:     threadID,
-					TurnID:       c.turnID,
+					TurnID:       turnID,
 					Model:        opts.Model,
 				}
 				b.cfg.Logger.Warn(CodexSemanticInactivityMarker,
 					"pid", cmd.Process.Pid,
 					"thread_id", threadID,
-					"turn_id", c.turnID,
+					"turn_id", turnID,
 					"timeout", semanticInactivityTimeout.String(),
 					"last_activity", lastSemanticActivityDescription,
 					"idle_for", time.Since(lastSemanticActivity).Round(time.Millisecond).String(),
@@ -2172,6 +2218,9 @@ func (b *codexBackend) executeOnce(ctx context.Context, prompt string, opts Exec
 				)
 			case <-runCtx.Done():
 				finishRunContextDone()
+				if !interruptCodexTurn(c, threadID, turnDone, opts.TurnInterruptTimeout, b.cfg.Logger) {
+					stopProcess()
+				}
 			case <-c.processDone:
 				select {
 				case aborted := <-turnDone:
@@ -2252,7 +2301,7 @@ func (b *codexBackend) executeOnce(ctx context.Context, prompt string, opts Exec
 				"active_launches", activeLaunches,
 				"method", "turn/start",
 				"thread_id", threadID,
-				"turn_id", c.turnID,
+				"turn_id", c.activeTurnID(),
 				"outcome", outcome,
 				"latency", waitLatency.Round(time.Millisecond).String(),
 				"latency_ms", waitLatency.Milliseconds(),
@@ -2951,7 +3000,9 @@ type codexClient struct {
 	activeLaunches         int64
 	threadSetupMethod      string
 	threadSetupStarted     time.Time
+	threadIDMu             sync.RWMutex
 	threadID               string
+	turnIDMu               sync.RWMutex
 	turnID                 string
 	onMessage              func(Message)
 	onToolTransition       func(codexToolTransition)
@@ -2990,6 +3041,11 @@ type codexClient struct {
 	// executionEvidence retains explicit zeroes and missing buckets. Codex's
 	// configured/thread model is intentionally not provider-reported identity.
 	executionEvidence *ExecutionEvidence
+	// usageTotal is the last accepted cumulative v2 usage snapshot for the
+	// active turn. Comparing later snapshots against it makes replay and
+	// duplicate delivery idempotent while retaining multi-response turns.
+	usageTotal    codexRawTokenUsage
+	usageTotalSet bool
 
 	turnErrorMu sync.Mutex
 	turnError   string // captured from turn/completed status=failed or terminal error notifications
@@ -3048,15 +3104,6 @@ func (g *codexTurnNotificationGate) accept(method string, params map[string]any)
 		}
 		turnID := extractNestedString(params, "turn", "id")
 		return g.turnID == "" || turnID == "" || turnID == g.turnID
-	case method == "thread/tokenUsage/updated":
-		// This v2 notification always carries turnId, so unlike compatibility
-		// streams with no turn identity it can be held until the current turn is
-		// known and matched exactly.
-		if !g.started {
-			return false
-		}
-		turnID, _ := params["turnId"].(string)
-		return g.turnID == "" || turnID == "" || turnID == g.turnID
 	case method == "thread/status/changed" || strings.HasPrefix(method, "item/"):
 		if !g.started {
 			return true
@@ -3085,6 +3132,45 @@ func (c *codexClient) getTurnError() string {
 	c.turnErrorMu.Lock()
 	defer c.turnErrorMu.Unlock()
 	return c.turnError
+}
+
+// setThreadID publishes the thread ID resolved by thread/start or
+// thread/resume. The task goroutine writes it while the stdout goroutine is
+// already dispatching notifications for that same thread, so the field needs
+// the same synchronization as turnID (GH #8422).
+func (c *codexClient) setThreadID(threadID string) {
+	c.threadIDMu.Lock()
+	c.threadID = threadID
+	c.threadIDMu.Unlock()
+}
+
+func (c *codexClient) getThreadID() string {
+	c.threadIDMu.RLock()
+	defer c.threadIDMu.RUnlock()
+	return c.threadID
+}
+
+func (c *codexClient) setActiveTurnID(turnID string) {
+	if turnID == "" {
+		return
+	}
+	c.turnIDMu.Lock()
+	c.turnID = turnID
+	c.turnIDMu.Unlock()
+	// A new turn re-baselines the native cumulative counters. Codex replays the
+	// thread's restored usage after a resume, before any turn exists; that
+	// snapshot is a legitimate baseline for the thread but must never be
+	// charged to this turn, and the first snapshot after turn/started is the
+	// only one that states where this turn began.
+	c.usageMu.Lock()
+	c.nativeUsageBaseline = nil
+	c.usageMu.Unlock()
+}
+
+func (c *codexClient) activeTurnID() string {
+	c.turnIDMu.RLock()
+	defer c.turnIDMu.RUnlock()
+	return c.turnID
 }
 
 type pendingRPC struct {
@@ -3141,6 +3227,55 @@ func codexRequestContextError(ctx context.Context) error {
 		return handshakeErr
 	}
 	return ctx.Err()
+}
+
+// interruptCodexTurn follows the app-server's native stop protocol before the
+// cancelled execution tears down its process. Current app-server versions emit
+// final usage in thread/tokenUsage/updated immediately before turn/completed,
+// so an immediate process-group SIGKILL loses otherwise valid local token
+// accounting for cancelled/replaced tasks. The bool reports whether the turn
+// reached that authoritative completion boundary; callers must force-stop the
+// process tree when it is false.
+func interruptCodexTurn(c *codexClient, threadID string, turnDone <-chan bool, configuredTimeout time.Duration, logger *slog.Logger) bool {
+	select {
+	case <-turnDone:
+		// Completion won the cancellation race; usage has already been captured.
+		return true
+	default:
+	}
+
+	turnID := c.activeTurnID()
+	if threadID == "" || turnID == "" {
+		return false
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
+	interruptTimeout := configuredTimeout
+	if interruptTimeout <= 0 {
+		interruptTimeout = defaultCodexTurnInterruptTimeout
+	}
+	started := time.Now()
+
+	interruptCtx, cancelInterrupt := context.WithTimeout(context.Background(), interruptTimeout)
+	defer cancelInterrupt()
+	_, err := c.request(interruptCtx, "turn/interrupt", map[string]any{
+		"threadId": threadID,
+		"turnId":   turnID,
+	})
+	if err != nil {
+		logger.Warn("codex turn interrupt failed", "thread_id", threadID, "turn_id", turnID, "error", err, "latency", time.Since(started).Round(time.Millisecond).String(), "timeout", interruptTimeout.String())
+		return false
+	}
+
+	select {
+	case <-turnDone:
+		logger.Info("codex turn interrupted", "thread_id", threadID, "turn_id", turnID, "latency", time.Since(started).Round(time.Millisecond).String(), "timeout", interruptTimeout.String())
+		return true
+	case <-interruptCtx.Done():
+		logger.Warn("codex turn interrupt completion timed out", "thread_id", threadID, "turn_id", turnID, "latency", time.Since(started).Round(time.Millisecond).String(), "timeout", interruptTimeout.String())
+		return false
+	}
 }
 
 func (c *codexClient) request(ctx context.Context, method string, params any) (json.RawMessage, error) {
@@ -4070,7 +4205,7 @@ func (c *codexClient) handleEvent(msg map[string]any) {
 	switch msgType {
 	case "task_started":
 		if c.onMessage != nil {
-			c.onMessage(Message{Type: MessageStatus, Status: "running", SessionID: c.threadID})
+			c.onMessage(Message{Type: MessageStatus, Status: "running", SessionID: c.getThreadID()})
 		}
 	case "agent_message":
 		text, _ := msg["message"].(string)
@@ -4162,16 +4297,19 @@ func (c *codexClient) handleRawNotification(method string, params map[string]any
 	}
 
 	switch method {
+	case "thread/tokenUsage/updated":
+		// Upstream's idempotent cumulative snapshot and the fork's native
+		// baseline both read this notification.
+		c.updateThreadTokenUsage(params)
+		c.updateNativeTokenUsage(params)
+
 	case "turn/started":
 		if turnID := extractNestedString(params, "turn", "id"); turnID != "" {
-			c.turnID = turnID
+			c.setActiveTurnID(turnID)
 		}
 		if c.onMessage != nil {
-			c.onMessage(Message{Type: MessageStatus, Status: "running", SessionID: c.threadID})
+			c.onMessage(Message{Type: MessageStatus, Status: "running", SessionID: c.getThreadID()})
 		}
-
-	case "thread/tokenUsage/updated":
-		c.updateNativeTokenUsage(params)
 
 	// The plan is a TURN notification, not a tool call — which is why looking
 	// for an `update_plan` tool found nothing. Normalised to the `todo_write`
@@ -4256,7 +4394,13 @@ func (c *codexClient) handleRawNotification(method string, params map[string]any
 
 func (c *codexClient) isNotificationFromOtherThread(params map[string]any) bool {
 	threadID, ok := params["threadId"].(string)
-	return ok && c.threadID != "" && threadID != c.threadID
+	if !ok {
+		return false
+	}
+	// Compare against one snapshot: this runs on the stdout goroutine, ahead of
+	// the current-turn gate, so the gate's state cannot serialize the read.
+	currentThreadID := c.getThreadID()
+	return currentThreadID != "" && threadID != currentThreadID
 }
 
 func (c *codexClient) handleItemNotification(method string, params map[string]any) {
@@ -4372,6 +4516,57 @@ func (c *codexClient) handleItemNotification(method string, params map[string]an
 			// Keep the stream open until turn/completed. A final answer is the
 			// deliverable, not the authoritative lifecycle boundary.
 		}
+	}
+}
+
+// updateThreadTokenUsage consumes the v2 app-server's real usage notification.
+// Resume can replay a historical snapshot after thread/resume returns, so only
+// notifications attributed to the active turn are eligible. The first current-
+// turn snapshot contributes `last`; later snapshots contribute the monotonic
+// delta from `total`. This retains multi-response tool loops without charging
+// replayed history or duplicate snapshots twice.
+func (c *codexClient) updateThreadTokenUsage(params map[string]any) {
+	turnID, _ := params["turnId"].(string)
+	if turnID == "" || turnID != c.activeTurnID() {
+		return
+	}
+
+	tokenUsage, ok := params["tokenUsage"].(map[string]any)
+	if !ok {
+		return
+	}
+	totalMap, ok := tokenUsage["total"].(map[string]any)
+	if !ok {
+		return
+	}
+	last, ok := tokenUsage["last"].(map[string]any)
+	if !ok {
+		return
+	}
+
+	total := codexRawTokenUsageFromV2(totalMap)
+	delta := codexRawTokenUsageFromV2(last)
+	c.usageMu.Lock()
+	if c.usageTotalSet {
+		delta = subtractCodexRawTokenUsage(total, c.usageTotal)
+	}
+	c.usageTotal = total
+	c.usageTotalSet = true
+	u := codexTokenUsage(delta)
+	c.usage.InputTokens += u.InputTokens
+	c.usage.OutputTokens += u.OutputTokens
+	c.usage.CacheReadTokens += u.CacheReadTokens
+	c.usage.CacheWriteTokens += u.CacheWriteTokens
+	c.usageMu.Unlock()
+}
+
+func codexRawTokenUsageFromV2(usage map[string]any) codexRawTokenUsage {
+	return codexRawTokenUsage{
+		InputTokens:           codexInt64(usage, "inputTokens"),
+		OutputTokens:          codexInt64(usage, "outputTokens"),
+		CachedInputTokens:     codexInt64(usage, "cachedInputTokens"),
+		CacheWriteInputTokens: codexInt64(usage, "cacheWriteInputTokens"),
+		ReasoningOutputTokens: codexInt64(usage, "reasoningOutputTokens"),
 	}
 }
 
@@ -4560,6 +4755,15 @@ func codexUncachedInputTokens(inputTokens, cachedInputTokens int64) int64 {
 		return 0
 	}
 	return uncached
+}
+
+// codexPlainInputTokens removes both cache details from Codex's raw input
+// total, which includes cache-read and cache-write input in v2 and JSONL usage.
+func codexPlainInputTokens(inputTokens, cacheReadTokens, cacheWriteTokens int64) int64 {
+	return codexUncachedInputTokens(
+		codexUncachedInputTokens(inputTokens, cacheReadTokens),
+		cacheWriteTokens,
+	)
 }
 
 // codexInt64 returns the first non-zero int64 value from the map for the given keys.
@@ -4760,6 +4964,9 @@ func codexSessionRoot(codexHome string) string {
 	return ""
 }
 
+// codexRawTokenUsage retains ReasoningOutputTokens to mirror the provider payload
+// and keep resume-baseline subtraction symmetric. No downstream consumer uses
+// this breakdown; normalized usage reads OutputTokens, which already includes it.
 type codexRawTokenUsage struct {
 	InputTokens           int64 `json:"input_tokens"`
 	OutputTokens          int64 `json:"output_tokens"`
@@ -4805,6 +5012,19 @@ func (u *codexRawTokenUsage) UnmarshalJSON(data []byte) error {
 		u.ReasoningOutputTokens = *wire.ReasoningOutputTokens
 	}
 	return nil
+}
+
+// codexTokenUsage converts either event or rollout counters to the shared
+// TokenUsage contract. Codex input includes cache reads/writes; its output
+// already includes reasoning_output_tokens, which is only a breakdown.
+func codexTokenUsage(raw codexRawTokenUsage) TokenUsage {
+	u := normalizeCodexRawTokenUsage(raw)
+	return TokenUsage{
+		InputTokens:      codexPlainInputTokens(u.InputTokens, u.CachedInputTokens, u.CacheWriteInputTokens),
+		OutputTokens:     u.OutputTokens,
+		CacheReadTokens:  u.CachedInputTokens,
+		CacheWriteTokens: u.CacheWriteInputTokens,
+	}
 }
 
 // codexSessionTokenCount represents a token_count event in Codex JSONL.
@@ -4910,13 +5130,7 @@ func parseCodexSessionFileSince(path string, startTime time.Time, resumed bool) 
 	if !finalUsageFound {
 		return nil
 	}
-	cachedTokens := finalUsage.CachedInputTokens
-	result.usage = TokenUsage{
-		InputTokens:      codexUncachedInputTokens(finalUsage.InputTokens, cachedTokens),
-		OutputTokens:     finalUsage.OutputTokens,
-		CacheReadTokens:  cachedTokens,
-		CacheWriteTokens: finalUsage.CacheWriteInputTokens,
-	}
+	result.usage = codexTokenUsage(finalUsage)
 	result.executionEvidence = codexRawUsageExecutionEvidence(finalUsage)
 	return &result
 }

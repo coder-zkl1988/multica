@@ -95,3 +95,4 @@ fengchenDoc/
 __pycache__/
 *.pyc
 .repo_memory/
+perf-report/

@@ -1,0 +1,23 @@
+{
+  "tree_title": "Arbre produit",
+  "empty_tree": "Aucun nœud produit pour l'instant",
+  "select_node_hint": "Sélectionnez un nœud produit à gauche pour voir le détail",
+  "meta_line": "slug : {{slug}} · source du statut : {{source}}",
+  "refs_title": "Projets / exigences liés",
+  "refs_empty": "Aucun lien de traçabilité pour l'instant (rétabli dès que des projets entrent dans l'espace de travail)",
+  "evidence_title": "Preuves",
+  "evidence_pending": "En attente de confirmation — le statut réel n'est jamais déduit du seul statut de tâche sans preuve PMO / dépôt de code",
+  "updated_at": "Mis à jour : {{time}}",
+  "editors_suffix": " · éditeurs : {{ids}}",
+  "status": {
+    "dev": "En développement",
+    "pending_release": "En attente de publication",
+    "pending_confirmation": "En attente de confirmation",
+    "released": "Publié"
+  },
+  "status_source": {
+    "pmo": "Statut de lancement PMO",
+    "code_repo": "Dépôt de code"
+  },
+  "evidence_suffix": " · preuve disponible"
+}

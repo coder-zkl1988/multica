@@ -33,10 +33,10 @@ func capabilityScanPendingKey(runtimeID string) string {
 }
 
 type RedisCapabilityScanStore struct {
-	rdb *redis.Client
+	rdb redis.UniversalClient
 }
 
-func NewRedisCapabilityScanStore(rdb *redis.Client) *RedisCapabilityScanStore {
+func NewRedisCapabilityScanStore(rdb redis.UniversalClient) *RedisCapabilityScanStore {
 	return &RedisCapabilityScanStore{rdb: rdb}
 }
 

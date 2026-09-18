@@ -328,6 +328,7 @@
       "delete_confirm": {
         "title": "Delete comment?",
         "message": "This comment will be permanently deleted. Replies in the thread will also be removed. This cannot be undone.",
+        "message_keep_replies": "This comment will be permanently deleted. Any replies to it stay in the thread. This cannot be undone.",
         "cancel": "Cancel",
         "confirm": "Delete"
       }

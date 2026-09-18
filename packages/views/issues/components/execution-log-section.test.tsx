@@ -345,7 +345,7 @@ describe("execution log failure reasons", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
-    queryClient.setQueryData(issueKeys.tasks("issue-1"), [
+    queryClient.setQueryData([...issueKeys.tasks("issue-1"), "ws-1"], [
       makeTask({
         status: "failed",
         completed_at: "2026-06-08T08:04:00Z",
@@ -375,7 +375,7 @@ describe("execution log failure reasons", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
-    queryClient.setQueryData(issueKeys.tasks("issue-1"), [
+    queryClient.setQueryData([...issueKeys.tasks("issue-1"), "ws-1"], [
       makeTask({
         status: "failed",
         completed_at: "2026-06-08T08:04:00Z",
@@ -422,7 +422,7 @@ describe("run evidence loading", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
-    queryClient.setQueryData(issueKeys.tasks("issue-1"), [
+    queryClient.setQueryData([...issueKeys.tasks("issue-1"), "ws-1"], [
       makeTask({ status: "completed", completed_at: "2026-06-08T08:04:00Z" }),
     ]);
 
@@ -495,13 +495,23 @@ describe("execution log header geometry", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
-    queryClient.setQueryData(issueKeys.tasks("issue-1"), tasks);
+    queryClient.setQueryData([...issueKeys.tasks("issue-1"), "ws-1"], tasks);
     return renderWithI18n(
       <QueryClientProvider client={queryClient}>
         <ExecutionLogSection workspaceId="ws-1" issueId="issue-1" identifier="MUL-1" />
       </QueryClientProvider>,
     );
   }
+
+  it("shows the running task before pending tasks in queue order", () => {
+    renderSection([
+      makeTask({ id: "new", status: "queued", trigger_summary: "Order: second", created_at: "2026-09-08T03:02:00Z" }),
+      makeTask({ id: "old", status: "queued", trigger_summary: "Order: first", created_at: "2026-09-08T03:01:00Z" }),
+      makeTask({ id: "running", status: "running", trigger_summary: "Order: running", created_at: "2026-09-08T03:00:00Z" }),
+    ]);
+    expect(screen.getAllByText(/^Order:/).map((el) => el.textContent))
+      .toEqual(["Order: running", "Order: first", "Order: second"]);
+  });
 
   function headerOf(): HTMLElement {
     const label = screen.getByText("Execution log");

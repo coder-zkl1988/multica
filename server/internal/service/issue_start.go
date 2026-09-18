@@ -62,11 +62,11 @@ func applyIssueStart(ctx context.Context, qtx *db.Queries, task db.AgentTaskQueu
 	if err != nil {
 		return state, err
 	}
-	if status.Category == "in_progress" {
+	if status.Category == issuestatus.CategoryStarted {
 		state.BaselineAccepted = true
 		return captureIssueStartCommentHistory(ctx, qtx, task, start.ClaimGeneration, state)
 	}
-	if status.Category != "todo" {
+	if status.Category != issuestatus.CategoryUnstarted {
 		return state, nil
 	}
 	updated, err := qtx.UpdateIssue(ctx, db.UpdateIssueParams{

@@ -51,7 +51,7 @@ func TestCompleteTaskTypedIssueCompletionAcceptsCustomActiveStatusBaseline(t *te
 	customStatus := "r06_verifying"
 	dbfx.Insert(t, "issue_status", testutil.Cols{
 		"workspace_id": testWorkspaceID, "key": customStatus, "name": "R06 Verifying",
-		"description": "R06 completion contract test", "category": "in_progress",
+		"description": "R06 completion contract test", "category": "started",
 		"color": "#475569", "position": 1,
 	})
 	dbfx.Exec(t, `UPDATE issue SET status=$2 WHERE id=$1`, fx.issueID, customStatus)

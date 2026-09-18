@@ -14,6 +14,9 @@ type InternalTokenIdentity struct {
 	Email     string
 	Source    string
 	ExpiresAt time.Time
+	// Claims is the verified claim set. Sliding session renewal re-signs from
+	// it (MUL-7436), so it has to survive the parse rather than be re-derived.
+	Claims jwt.MapClaims
 }
 
 func ParseInternalToken(raw string) (InternalTokenIdentity, error) {
@@ -40,7 +43,7 @@ func ParseInternalToken(raw string) (InternalTokenIdentity, error) {
 		return InternalTokenIdentity{}, errors.New("invalid internal token expiry")
 	}
 	email, _ := claims["email"].(string)
-	return InternalTokenIdentity{UserID: userID, Email: email, Source: source, ExpiresAt: expiresAt.Time}, nil
+	return InternalTokenIdentity{UserID: userID, Email: email, Source: source, ExpiresAt: expiresAt.Time, Claims: claims}, nil
 }
 
 func ParseLegacyJWT(raw string) (InternalTokenIdentity, error) {
@@ -69,5 +72,5 @@ func ParseLegacyJWT(raw string) (InternalTokenIdentity, error) {
 		return InternalTokenIdentity{}, errors.New("invalid legacy token expiry")
 	}
 	email, _ := claims["email"].(string)
-	return InternalTokenIdentity{UserID: userID, Email: email, ExpiresAt: expiresAt.Time}, nil
+	return InternalTokenIdentity{UserID: userID, Email: email, ExpiresAt: expiresAt.Time, Claims: claims}, nil
 }

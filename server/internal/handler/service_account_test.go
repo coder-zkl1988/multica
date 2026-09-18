@@ -75,7 +75,7 @@ func TestServiceAccountLifecycle(t *testing.T) {
 	assertToken := func(token string, useSySSO bool, wantStatus int) {
 		t.Helper()
 		var actorSource, workspaceID string
-		handler := middleware.Auth(testHandler.Queries, nil, nil, useSySSO)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handler := middleware.Auth(testHandler.Queries, nil, nil, nil, useSySSO)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			actorSource = r.Header.Get("X-Actor-Source")
 			workspaceID = r.Header.Get("X-Service-Workspace-ID")
 			w.WriteHeader(http.StatusOK)

@@ -40,6 +40,16 @@ WHERE p.workspace_id = $1 AND p.issue_id = $2
 ORDER BY p.created_at DESC, p.id DESC
 LIMIT 100;
 
+-- name: ListTaskPendingInputAnswerComments :many
+-- Completion reconciliation: an answer a member posted to THIS run's
+-- clarification question is an input planned for this run, wherever its thread
+-- sits. The reconcile sweep is otherwise scoped to the run's own comment thread
+-- (ListReconcilableCommentsForIssueSince), and a question that opened a new
+-- thread would leave its answer out of reach — the one comment the run is
+-- provably waiting for.
+SELECT answer_comment_id FROM task_pending_input
+WHERE task_id = $1 AND answer_comment_id IS NOT NULL;
+
 -- name: CountTaskPendingInputsForClaim :one
 SELECT
     count(*)::bigint AS total_count,

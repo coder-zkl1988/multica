@@ -62,7 +62,7 @@ func validClaims() jwt.MapClaims {
 
 // authMiddleware returns the Auth middleware with nil queries (JWT-only tests).
 func authMiddleware(next http.Handler) http.Handler {
-	return Auth(nil, nil, nil, true)(next)
+	return Auth(nil, nil, nil, nil, true)(next)
 }
 
 func TestAuth_MissingHeader(t *testing.T) {
@@ -281,7 +281,7 @@ func TestAuth_InvalidPAT(t *testing.T) {
 // boundary MUL-2600 introduces.
 func TestAuth_StripsClientSuppliedActorSource(t *testing.T) {
 	var gotActorSource string
-	mw := Auth(nil, nil, nil, true)
+	mw := Auth(nil, nil, nil, nil, true)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotActorSource = r.Header.Get("X-Actor-Source")
 		w.WriteHeader(http.StatusOK)
@@ -315,7 +315,7 @@ func TestAuth_StripsClientSuppliedActorSource(t *testing.T) {
 // since MUL-6951, act with the authority of that run's originator. MUL-3428.
 func TestAuth_StripsForgedAgentIdentityHeaders(t *testing.T) {
 	var gotAgentID, gotTaskID string
-	mw := Auth(nil, nil, nil, true)
+	mw := Auth(nil, nil, nil, nil, true)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAgentID = r.Header.Get("X-Agent-ID")
 		gotTaskID = r.Header.Get("X-Task-ID")
@@ -339,13 +339,51 @@ func TestAuth_StripsForgedAgentIdentityHeaders(t *testing.T) {
 	}
 }
 
+// TestAuth_PATCacheHit pins the optimization: when the PAT cache already
+// holds an entry for this token, the middleware MUST NOT call into queries
+// — it short-circuits before the DB lookup and the last_used_at update.
+//
+// We exploit that by passing nil queries: a cache miss would dereference
+// the nil and panic; a cache hit must not. Reaching the next handler with
+// the cached user_id therefore proves the short-circuit fired.
+func TestAuth_PATCacheHit(t *testing.T) {
+	rdb := newRedisTestClient(t)
+	cache := auth.NewPATCache(rdb)
+	if cache == nil {
+		t.Fatal("expected non-nil cache")
+	}
+
+	const rawToken = "mul_cache_hit_test_token"
+	hash := auth.HashToken(rawToken)
+	cache.Set(context.Background(), hash, "cached-user-id", auth.AuthCacheTTL)
+
+	var gotUserID string
+	mw := Auth(nil, cache, nil, nil, true) // nil queries — only safe on cache hit
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUserID = r.Header.Get("X-User-ID")
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest("GET", "/api/me", nil)
+	req.Header.Set("Authorization", "Bearer "+rawToken)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 on cache hit, got %d", w.Code)
+	}
+	if gotUserID != "cached-user-id" {
+		t.Fatalf("expected cached X-User-ID, got %q", gotUserID)
+	}
+}
+
 // TestAuth_MCN_NoVerifierConfigured pins the same fail-closed branch
 // as the daemon side: with no MULTICA_CLOUD_URL configured, an
 // mcn_ bearer token must be rejected with 401 at the prefix branch.
 // We don't fall through — an mcn_ string can't be a valid mul_ PAT or
 // JWT, so any fall-through would be wasted work.
 func TestAuth_MCN_NoVerifierConfigured(t *testing.T) {
-	mw := Auth(nil, nil, nil, true)
+	mw := Auth(nil, nil, nil, nil, true)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("next must not be called when verifier is unconfigured")
 	}))
@@ -374,7 +412,7 @@ func TestAuth_MCN_ValidTokenSetsUserID(t *testing.T) {
 	verifier := auth.NewCloudPATVerifier(auth.CloudPATVerifierConfig{FleetBaseURL: srv.URL})
 
 	var gotUser, gotActorSource string
-	mw := Auth(nil, nil, verifier, true)
+	mw := Auth(nil, nil, verifier, nil, true)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotUser = r.Header.Get("X-User-ID")
 		gotActorSource = r.Header.Get("X-Actor-Source")
@@ -412,7 +450,7 @@ func TestAuth_MCN_InvalidReturns401(t *testing.T) {
 	defer srv.Close()
 
 	verifier := auth.NewCloudPATVerifier(auth.CloudPATVerifierConfig{FleetBaseURL: srv.URL})
-	mw := Auth(nil, nil, verifier, true)
+	mw := Auth(nil, nil, verifier, nil, true)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("next must not be called when token is invalid")
 	}))
@@ -436,7 +474,7 @@ func TestAuth_MCN_FleetUnreachableReturns503(t *testing.T) {
 	defer srv.Close()
 
 	verifier := auth.NewCloudPATVerifier(auth.CloudPATVerifierConfig{FleetBaseURL: srv.URL})
-	mw := Auth(nil, nil, verifier, true)
+	mw := Auth(nil, nil, verifier, nil, true)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("next must not be called when fleet is unavailable")
 	}))
@@ -453,7 +491,7 @@ func TestAuth_MCN_FleetUnreachableReturns503(t *testing.T) {
 
 func TestAuth_RejectsPersonalAccessToken(t *testing.T) {
 	const rawToken = "mul_cache_hit_test_token"
-	mw := Auth(nil, nil, nil, true)
+	mw := Auth(nil, nil, nil, nil, true)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("next handler should not be called")
 	}))
@@ -485,7 +523,7 @@ func TestAuthModeJWT(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			handler := Auth(nil, nil, nil, tc.useSySSO)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			handler := Auth(nil, nil, nil, nil, tc.useSySSO)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusOK)
 			}))
 			req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
@@ -513,7 +551,7 @@ func TestAuthModePersonalAccessToken(t *testing.T) {
 		{"SSO", true, http.StatusUnauthorized},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			handler := Auth(nil, cache, nil, tc.useSySSO)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			handler := Auth(nil, cache, nil, nil, tc.useSySSO)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusOK)
 			}))
 			req := httptest.NewRequest(http.MethodGet, "/api/me", nil)

@@ -52,9 +52,13 @@ var repoRemoveCmd = &cobra.Command{
 var repoCheckoutCmd = &cobra.Command{
 	Use:   "checkout [<url>]",
 	Short: "Check out a repository into the working directory",
-	Long: "Creates a git worktree from the daemon's bare clone cache. Used by agents to check out repos on demand.\n" +
+	Long: "Creates a git worktree from the daemon's bare clone cache. Used by agents to check out repos on demand.\n\n" +
 		"Pass a single URL to check out one repository, or --all to check out every github_repo resource " +
-		"listed in .multica/project/resources.json.",
+		"listed in .multica/project/resources.json.\n\n" +
+		"Running it again where the repository is already checked out never silently discards work: a checkout " +
+		"that has uncommitted changes, untracked files, or unpushed commits, or is already on this task's branch, " +
+		"is kept as it is and only its remote refs are fetched. Pass --fresh to discard its uncommitted changes and " +
+		"untracked files and start over on a new branch; commits stay on the old branch, but push any you still need first.",
 	Args: func(cmd *cobra.Command, args []string) error {
 		all, _ := cmd.Flags().GetBool("all")
 		if all {
@@ -68,7 +72,10 @@ var repoCheckoutCmd = &cobra.Command{
 	RunE: runRepoCheckout,
 }
 
-var repoCheckoutRef string
+var (
+	repoCheckoutRef   string
+	repoCheckoutFresh bool
+)
 
 func init() {
 	repoListCmd.Flags().String("output", "table", "Output format: table or json")
@@ -82,6 +89,7 @@ func init() {
 
 	repoCheckoutCmd.Flags().StringVar(&repoCheckoutRef, "ref", "", "branch, tag, or commit to check out instead of the remote default branch")
 	repoCheckoutCmd.Flags().Bool("all", false, "Check out every github_repo resource from .multica/project/resources.json")
+	repoCheckoutCmd.Flags().BoolVar(&repoCheckoutFresh, "fresh", false, "discard an existing checkout's uncommitted changes and untracked files and start over on a new branch from the latest default branch (or --ref); commits stay on the old branch")
 
 	repoCmd.AddCommand(repoListCmd)
 	repoCmd.AddCommand(repoAddCmd)
@@ -346,12 +354,6 @@ func runRepoRemove(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// checkoutResult is the daemon response for a single repository checkout.
-type checkoutResult struct {
-	Path       string `json:"path"`
-	BranchName string `json:"branch_name"`
-}
-
 // doCheckoutRequest sends one checkout request to the daemon and returns the
 // path and branch name on success.
 // doCheckoutRequest posts one checkout to the daemon and decodes the result.
@@ -360,10 +362,10 @@ type checkoutResult struct {
 // loop honors it (bounded by the 5-minute context) instead of failing the
 // checkout — mirrors upstream's retry-aware single-checkout flow so the
 // fork's --all path gets the same behavior per repo.
-func doCheckoutRequest(parentCtx context.Context, daemonPort, taskToken string, reqBody map[string]any) (checkoutResult, error) {
+func doCheckoutRequest(parentCtx context.Context, daemonPort, taskToken string, reqBody map[string]any) (repoCheckoutResult, error) {
 	data, err := json.Marshal(reqBody)
 	if err != nil {
-		return checkoutResult{}, fmt.Errorf("encode request: %w", err)
+		return repoCheckoutResult{}, fmt.Errorf("encode request: %w", err)
 	}
 
 	if parentCtx == nil {
@@ -377,21 +379,21 @@ func doCheckoutRequest(parentCtx context.Context, daemonPort, taskToken string, 
 	for {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, checkoutURL, bytes.NewReader(data))
 		if err != nil {
-			return checkoutResult{}, fmt.Errorf("create daemon checkout request: %w", err)
+			return repoCheckoutResult{}, fmt.Errorf("create daemon checkout request: %w", err)
 		}
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer "+taskToken)
 		resp, err := client.Do(req)
 		if err != nil {
-			return checkoutResult{}, fmt.Errorf("connect to daemon: %w", err)
+			return repoCheckoutResult{}, fmt.Errorf("connect to daemon: %w", err)
 		}
 		body, err = io.ReadAll(resp.Body)
 		closeErr := resp.Body.Close()
 		if err != nil {
-			return checkoutResult{}, fmt.Errorf("read daemon checkout response: %w", err)
+			return repoCheckoutResult{}, fmt.Errorf("read daemon checkout response: %w", err)
 		}
 		if closeErr != nil {
-			return checkoutResult{}, fmt.Errorf("close daemon checkout response: %w", closeErr)
+			return repoCheckoutResult{}, fmt.Errorf("close daemon checkout response: %w", closeErr)
 		}
 		if resp.StatusCode == http.StatusServiceUnavailable && resp.Header.Get("X-Multica-Retryable") == "repo-busy" {
 			delay := repoCheckoutRetryDelay(resp.Header.Get("Retry-After"), time.Now())
@@ -399,20 +401,20 @@ func doCheckoutRequest(parentCtx context.Context, daemonPort, taskToken string, 
 			select {
 			case <-ctx.Done():
 				timer.Stop()
-				return checkoutResult{}, fmt.Errorf("connect to daemon: %w", context.Cause(ctx))
+				return repoCheckoutResult{}, fmt.Errorf("connect to daemon: %w", context.Cause(ctx))
 			case <-timer.C:
 				continue
 			}
 		}
 		if resp.StatusCode != http.StatusOK {
-			return checkoutResult{}, fmt.Errorf("checkout failed: %s", string(body))
+			return repoCheckoutResult{}, fmt.Errorf("checkout failed: %s", string(body))
 		}
 		break
 	}
 
-	var result checkoutResult
+	var result repoCheckoutResult
 	if err := json.Unmarshal(body, &result); err != nil {
-		return checkoutResult{}, fmt.Errorf("parse response: %w", err)
+		return repoCheckoutResult{}, fmt.Errorf("parse response: %w", err)
 	}
 	return result, nil
 }
@@ -457,6 +459,7 @@ func runRepoCheckout(cmd *cobra.Command, args []string) error {
 		"task_id":       taskID,
 		"checkout_mode": strings.TrimSpace(os.Getenv("MULTICA_REPO_CHECKOUT_MODE")),
 		"retry_busy":    true,
+		"fresh":         repoCheckoutFresh,
 	}
 
 	result, err := doCheckoutRequest(cmd.Context(), daemonPort, taskToken, reqBody)
@@ -465,8 +468,41 @@ func runRepoCheckout(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Fprintf(os.Stdout, "%s\n", result.Path)
-	fmt.Fprintf(os.Stderr, "Checked out %s → %s (branch: %s)\n", repoURL, result.Path, result.BranchName)
+	fmt.Fprintln(os.Stderr, repoCheckoutSummary(repoURL, result))
 	return nil
+}
+
+// repoCheckoutResult is the daemon's /repo/checkout response. Daemons older
+// than MUL-7284 never keep an existing checkout and omit Kept and the counts.
+type repoCheckoutResult struct {
+	Path             string `json:"path"`
+	BranchName       string `json:"branch_name"`
+	Kept             string `json:"kept"`
+	UncommittedFiles int    `json:"uncommitted_files"`
+	UnpushedCommits  int    `json:"unpushed_commits"`
+}
+
+// repoCheckoutSummary says what the checkout did. A kept checkout has to read
+// differently from a new branch off the default branch, or the agent works on
+// as if the checkout were fresh and loses track of what it holds.
+func repoCheckoutSummary(repoURL string, result repoCheckoutResult) string {
+	if result.Kept == "" {
+		return fmt.Sprintf("Checked out %s → %s (branch: %s)", repoURL, result.Path, result.BranchName)
+	}
+	branch := result.BranchName
+	if branch == "" {
+		branch = "detached HEAD"
+	}
+	if result.Kept == "task_branch" {
+		branch += ", this task's branch"
+	}
+	return fmt.Sprintf("Kept the existing checkout of %s at %s (branch: %s; %d uncommitted file%s, %d unpushed commit%s): "+
+		"nothing was reset, cleaned, or switched; only remote refs were fetched.\n"+
+		"To discard its uncommitted changes and untracked files and start over on a new branch from the latest default branch (or --ref), "+
+		"re-run with --fresh; commits stay on the old branch, but push any you still need first.",
+		repoURL, result.Path, branch,
+		result.UncommittedFiles, pluralS(result.UncommittedFiles),
+		result.UnpushedCommits, pluralS(result.UnpushedCommits))
 }
 
 func repoCheckoutRetryDelay(value string, now time.Time) time.Duration {
