@@ -195,7 +195,7 @@ func issueCompletionStatusGuardMatches(ctx context.Context, qtx *db.Queries, iss
 	if err != nil {
 		return false, err
 	}
-	return status.Category == "todo" || status.Category == "in_progress", nil
+	return status.Category == issuestatus.CategoryUnstarted || status.Category == issuestatus.CategoryStarted, nil
 }
 
 func completionReplyTargets(ctx context.Context, qtx *db.Queries, task db.AgentTaskQueue, workspaceID pgtype.UUID) ([]completionReplyTarget, error) {
@@ -263,7 +263,6 @@ func (s *TaskService) publishIssueCompletion(ctx context.Context, task db.AgentT
 		s.Bus.Publish(events.Event{Type: protocol.EventCommentCreated, WorkspaceID: util.UUIDToString(issue.WorkspaceID), ActorType: "agent", ActorID: util.UUIDToString(task.AgentID), Payload: map[string]any{
 			"comment": fields, "issue_title": issue.Title, "issue_status": issue.Status, "issue_revision": row.IssueRevision,
 		}})
-		s.CancelDeferredEscalationsForIssueAgent(ctx, task.IssueID, task.AgentID)
 		s.AutoUnresolveThreadOnReply(ctx, committed.roots[util.UUIDToString(comment.ID)], util.UUIDToString(issue.WorkspaceID), "agent", util.UUIDToString(task.AgentID))
 	}
 }

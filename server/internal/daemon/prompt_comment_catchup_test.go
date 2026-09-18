@@ -49,7 +49,10 @@ func TestCommentCatchUpDeltaRequiresResumableHistory(t *testing.T) {
 					}
 					prompt := flow.build(task)
 					roots := "multica issue comment list issue-1 --roots-only --summary --compact --output json"
-					delta := "multica issue comment list issue-1 --thread thread-1 --since " + since + " --compact --output json"
+					// MUL-7344 (upstream): the delta read is one issue-wide
+					// `--since` call, not the triggering thread narrowed by an
+					// anchor — `--thread` with `--since` drops the thread root.
+					delta := "multica issue comment list issue-1 --since " + since + " --compact --output json"
 					if continuation.wantDelta {
 						if !strings.Contains(prompt, delta) || strings.Contains(prompt, roots) {
 							t.Fatal("resumable history must use the comment delta without a repeated roots scan")

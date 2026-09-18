@@ -265,6 +265,7 @@ export function SkillsTab({
 
   return (
     <div className="space-y-8">
+
       <CapabilitySection
         title={t(($) => $.tab_body.skills.assigned_title)}
         description={t(($) => $.tab_body.skills.assigned_hint)}
@@ -286,7 +287,6 @@ export function SkillsTab({
           <EmptyState
             icon={<SkillIcon className="h-6 w-6" />}
             title={t(($) => $.tab_body.skills.empty_title)}
-            hint={t(($) => $.tab_body.skills.empty_hint)}
           />
         ) : (
           <ul className="divide-y rounded-lg border bg-surface-raised/40">
@@ -644,12 +644,12 @@ function CapabilitySection({
   );
 }
 
-function EmptyState({ icon, title, hint }: { icon: React.ReactNode; title: string; hint: string }) {
+function EmptyState({ icon, title, hint }: { icon: React.ReactNode; title: string; hint?: string }) {
   return (
     <div className="flex flex-col items-center justify-center rounded-lg border border-dashed py-10 text-muted-foreground">
       <span className="opacity-50">{icon}</span>
       <p className="mt-3 text-body">{title}</p>
-      <p className="mt-1 max-w-sm text-center text-caption">{hint}</p>
+      {hint && <p className="mt-1 max-w-sm text-center text-caption">{hint}</p>}
     </div>
   );
 }

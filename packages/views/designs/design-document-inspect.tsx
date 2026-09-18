@@ -32,7 +32,7 @@ function Field({ label, value }: { label: string; value: string | undefined }) {
   return <div className="flex items-start justify-between gap-4 border-b py-2 text-caption last:border-0"><span className="shrink-0 text-muted-foreground">{label}</span><span className="min-w-0 break-all text-right">{value || "—"}</span></div>;
 }
 function Color({ label, value }: { label: string; value: string | undefined }) {
-  return <div className="flex items-center justify-between gap-3 py-2 text-caption"><span className="text-muted-foreground">{label}</span><span className="flex items-center gap-2"><i className="h-5 w-5 shrink-0 rounded border" style={{ backgroundColor: value }} /><span className="break-all">{value || "—"}</span></span></div>;
+  return <div className="flex items-center justify-between gap-3 py-2 text-caption"><span className="text-muted-foreground">{label}</span><span className="flex items-center gap-2"><i className="h-5 w-5 shrink-0 rounded-sm border" style={{ backgroundColor: value }} /><span className="break-all">{value || "—"}</span></span></div>;
 }
 const px = (value: number) => `${Math.round(value * 100) / 100}px`;
 

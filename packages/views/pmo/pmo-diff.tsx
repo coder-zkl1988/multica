@@ -282,7 +282,7 @@ export function SummaryChip({
 }) {
   if (!count) return null;
   return (
-    <span className="rounded bg-muted px-1.5 py-0.5 text-caption text-muted-foreground whitespace-nowrap">
+    <span className="rounded-sm bg-muted px-1.5 py-0.5 text-caption text-muted-foreground whitespace-nowrap">
       {label(count)}
     </span>
   );

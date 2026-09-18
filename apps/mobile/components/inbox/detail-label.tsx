@@ -81,7 +81,7 @@ export function InboxDetailLabel({
   const { statusLabel, priorityLabel } = useIssueLabels();
   // `details.to` is a status KEY and may be a custom one, so its colour and
   // glyph resolve through the workspace catalog. (MUL-6243)
-  const { categoryOf, colorOf } = useIssueStatuses();
+  const { categoryOf, colorOf, iconOf } = useIssueStatuses();
   const details = item.details ?? {};
 
   const typeLabel = (type: InboxItemType) =>
@@ -98,7 +98,7 @@ export function InboxDetailLabel({
         <StatusIcon
           status={status}
           category={categoryOf(status)}
-          color={colorOf(status)}
+          icon={iconOf(status)} color={colorOf(status)}
           size={12}
         />
         <Text className="text-xs text-muted-foreground" numberOfLines={1}>

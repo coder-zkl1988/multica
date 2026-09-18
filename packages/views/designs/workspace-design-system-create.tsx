@@ -1032,8 +1032,8 @@ export function WorkspaceDesignSystemCreate({
                       onClick={() => setPlatform(option.value)}
                       className={
                         platform === option.value
-                          ? "rounded-[5px] bg-background px-3 py-1 text-caption font-medium text-foreground shadow-sm"
-                          : "rounded-[5px] px-3 py-1 text-caption text-muted-foreground hover:text-foreground"
+                          ? "rounded-md bg-background px-3 py-1 text-caption font-medium text-foreground shadow-sm"
+                          : "rounded-md px-3 py-1 text-caption text-muted-foreground hover:text-foreground"
                       }
                     >
                       {option.label}
@@ -1071,7 +1071,7 @@ function SourceLinkFavicon({ url }: { url: string }) {
       alt=""
       loading="lazy"
       referrerPolicy="no-referrer"
-      className="size-4 shrink-0 rounded-[3px] object-contain"
+      className="size-4 shrink-0 rounded-xs object-contain"
       onError={() => setFailed(true)}
     />
   );
@@ -1331,7 +1331,7 @@ function BrandPickerDialog({ onClose, onPick }: { onClose: () => void; onPick: (
                         onClick={() => onPick(brand)}
                         className="inline-flex items-center gap-2 rounded-full border bg-card py-1.5 pl-2 pr-3 text-caption font-medium transition-colors hover:border-primary hover:bg-primary/10"
                       >
-                        <BrandFavicon domain={brand.domain} name={brand.name} className="size-[22px] rounded-[4px]" />
+                        <BrandFavicon domain={brand.domain} name={brand.name} className="size-[22px] rounded-sm" />
                         <span className="whitespace-nowrap">{brand.name}</span>
                       </button>
                     ))}

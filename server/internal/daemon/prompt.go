@@ -1501,7 +1501,7 @@ func buildCommentPrompt(task Task, provider string) string {
 			//   - A retry inherits the previous attempt's coalesced_comment_ids
 			//     verbatim (queries/agent.sql RetryTask), while the anchor is
 			//     recomputed from the last STARTED task's started_at
-			//     (GetLastTaskStartedAtForIssueAndAgent). An inherited id can
+			//     (the resumed run, via GetLastTaskSession). An inherited id can
 			//     therefore predate the anchor.
 			//   - The anchor is only populated when some comment landed after it,
 			//     which is independent of where these ids sit.
@@ -1517,11 +1517,20 @@ func buildCommentPrompt(task Task, provider string) string {
 				task.IssueID)
 		}
 	}
+	// Workflow step 1, answered once. A validated claim-time snapshot IS this
+	// turn's issue state, so it replaces every read pointer — that is the whole
+	// point of carrying the body in the message. Without one, the issue-state
+	// hint decides between reporting a compared-and-unchanged issue, naming
+	// what moved, and the unconditional read (MUL-7344).
 	if snapshot := buildAuthoritativeIssueSnapshotBlock(task); snapshot != "" {
 		b.WriteString(snapshot)
 		b.WriteString("Use this snapshot and the comment input above to decide how to proceed.\n\n")
 	} else {
-		fmt.Fprintf(&b, "Start by running `multica issue get %s --output json` to understand your task, then decide how to proceed.\n\n", task.IssueID)
+		b.WriteString(execenv.BuildIssueStateHint(
+			task.IssueID, task.IssueStatus, task.IssueAssigneeType, task.IssueAssigneeID,
+			task.IssueChangedFields, task.IssueStateDeltaKnown,
+			task.PriorSessionID != "" && !task.PriorSessionResumeUnavailable,
+		))
 	}
 	b.WriteString(buildRequiredCommentCatchUpPrompt(task))
 	b.WriteString(issueCodeVerificationPrompt)

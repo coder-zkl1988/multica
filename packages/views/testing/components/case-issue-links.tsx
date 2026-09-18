@@ -125,7 +125,7 @@ function LinkRow({
       {/* An AI-asserted coverage claim is exactly what a reviewer needs to see
           flagged; a hand-drawn link needs no badge. */}
       {link.origin === "ai" ? (
-        <span className="shrink-0 rounded bg-muted px-1 text-micro text-muted-foreground">
+        <span className="shrink-0 rounded-sm bg-muted px-1 text-micro text-muted-foreground">
           {t(($) => $.origin.ai)}
         </span>
       ) : null}
@@ -135,7 +135,7 @@ function LinkRow({
         aria-label={t(($) => $.coverage.unlink)}
         title={t(($) => $.coverage.unlink)}
         onClick={onUnlink}
-        className="shrink-0 rounded p-0.5 text-muted-foreground opacity-0 transition-opacity hover:text-destructive focus-visible:opacity-100 group-hover/link:opacity-100 disabled:opacity-50 [@media(hover:none)]:opacity-100"
+        className="shrink-0 rounded-sm p-0.5 text-muted-foreground opacity-0 transition-opacity hover:text-destructive focus-visible:opacity-100 group-hover/link:opacity-100 disabled:opacity-50 [@media(hover:none)]:opacity-100"
       >
         <Unlink className="size-3" />
       </button>

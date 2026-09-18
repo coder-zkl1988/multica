@@ -36,7 +36,7 @@ func TestCompactIssueBriefDefersReadDecisionsToCurrentTurn(t *testing.T) {
 			{name: "resumed comment", mutate: func(_ *testing.T, task *Task) {
 				compactReadCommentTask(task)
 				task.PriorSessionID = "session-1"
-			}, wantSnapshot: true, wantText: []string{"--thread thread-1 --since", "current request"}},
+			}, wantSnapshot: true, wantText: []string{"multica issue comment list issue-1 --since ", "current request"}},
 			{name: "unavailable continuation", mutate: func(_ *testing.T, task *Task) {
 				compactReadCommentTask(task)
 				task.PriorSessionID = "session-1"

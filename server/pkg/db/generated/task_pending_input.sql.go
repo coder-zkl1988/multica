@@ -390,6 +390,37 @@ func (q *Queries) ListAckedTaskPendingInputIssueRevisionsForClaim(ctx context.Co
 	return items, nil
 }
 
+const listTaskPendingInputAnswerComments = `-- name: ListTaskPendingInputAnswerComments :many
+SELECT answer_comment_id FROM task_pending_input
+WHERE task_id = $1 AND answer_comment_id IS NOT NULL
+`
+
+// Completion reconciliation: an answer a member posted to THIS run's
+// clarification question is an input planned for this run, wherever its thread
+// sits. The reconcile sweep is otherwise scoped to the run's own comment thread
+// (ListReconcilableCommentsForIssueSince), and a question that opened a new
+// thread would leave its answer out of reach — the one comment the run is
+// provably waiting for.
+func (q *Queries) ListTaskPendingInputAnswerComments(ctx context.Context, taskID pgtype.UUID) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, listTaskPendingInputAnswerComments, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var answer_comment_id pgtype.UUID
+		if err := rows.Scan(&answer_comment_id); err != nil {
+			return nil, err
+		}
+		items = append(items, answer_comment_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTaskPendingInputsForIssue = `-- name: ListTaskPendingInputsForIssue :many
 SELECT p.id, p.workspace_id, p.issue_id, p.task_id, p.agent_id, p.runtime_id, p.claim_generation, p.request_key, p.request_sha256, p.version, p.state, p.questions, p.answers, p.question_comment_id, p.answer_comment_id, p.answered_by, p.idempotency_key, p.created_at, p.expires_at, p.answered_at, p.acked_at, p.question_issue_revision, p.answer_issue_revision,
     CASE

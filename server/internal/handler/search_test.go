@@ -5,6 +5,11 @@ import (
 	"testing"
 )
 
+// The assertions below pin `LOWER(column) LIKE` on purpose. Upstream lowers
+// each column once through a lateral join instead; this fork cannot, because
+// its search indexes are pg_bigm GIN indexes built ON LOWER(column), and a
+// lateral-derived column is not the indexed expression — the optimization
+// would cost the index it is meant to help (see buildSearchQuery).
 func TestBuildSearchQuery_SingleTerm(t *testing.T) {
 	query, args := buildSearchQuery("Hello", []string{"Hello"}, 0, false, false, []string{"done", "cancelled"})
 

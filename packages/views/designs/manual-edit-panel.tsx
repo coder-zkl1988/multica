@@ -71,7 +71,7 @@ export function ManualEditPanel({
           type="button"
           aria-label="取消选中"
           title="取消选中"
-          className="flex size-5 shrink-0 cursor-pointer items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          className="flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
           onClick={onDeselect}
         >
           <X className="h-3 w-3" />
@@ -111,7 +111,7 @@ export function ManualEditPanel({
                           type="color"
                           aria-label={control.label}
                           value={computedColorToHex(value) || "#000000"}
-                          className="size-6 shrink-0 cursor-pointer rounded border bg-transparent p-0"
+                          className="size-6 shrink-0 cursor-pointer rounded-sm border bg-transparent p-0"
                           onChange={(event) => onChange(control.property, event.target.value)}
                         />
                         <input
@@ -119,7 +119,7 @@ export function ManualEditPanel({
                           aria-label={`${control.label}（值）`}
                           value={value}
                           placeholder="未设置"
-                          className="min-w-0 flex-1 rounded border bg-background px-1.5 py-0.5 font-mono text-micro outline-none focus:border-primary/60"
+                          className="min-w-0 flex-1 rounded-sm border bg-background px-1.5 py-0.5 font-mono text-micro outline-none focus:border-primary/60"
                           onChange={(event) => onChange(control.property, event.target.value)}
                         />
                       </div>
@@ -128,7 +128,7 @@ export function ManualEditPanel({
                         id={controlId}
                         aria-label={control.label}
                         value={control.options?.some((option) => option.value === value) ? value : ""}
-                        className="min-w-0 flex-1 rounded border bg-background px-1.5 py-0.5 text-caption outline-none focus:border-primary/60"
+                        className="min-w-0 flex-1 rounded-sm border bg-background px-1.5 py-0.5 text-caption outline-none focus:border-primary/60"
                         onChange={(event) => onChange(control.property, event.target.value)}
                       >
                         <option value="">{value || "未设置"}</option>
@@ -143,7 +143,7 @@ export function ManualEditPanel({
                         aria-label={control.label}
                         value={value}
                         placeholder="未设置"
-                        className="min-w-0 flex-1 rounded border bg-background px-1.5 py-0.5 font-mono text-micro outline-none focus:border-primary/60"
+                        className="min-w-0 flex-1 rounded-sm border bg-background px-1.5 py-0.5 font-mono text-micro outline-none focus:border-primary/60"
                         onChange={(event) => onChange(control.property, event.target.value)}
                       />
                     )}

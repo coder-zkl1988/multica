@@ -92,9 +92,17 @@ func TestTaskPendingInputDeliveryReconciliation(t *testing.T) {
 			}
 			var extraID string
 			if tc.extraComment {
-				dbfx.QueryRow(t, `INSERT INTO comment (issue_id, workspace_id, author_type, author_id, content, type)
-					VALUES ($1, $2, 'member', $3, 'Also add a separate regression.', 'comment') RETURNING id::text`,
-					issueID, testWorkspaceID, testUserID).Scan(&extraID)
+				// Posted the way a member posts one, not written straight into
+				// the table: the create path is what registers a comment as
+				// planned input on the run that is already claimed, and the
+				// completion sweep is scoped to the run's own comment thread
+				// plus exactly those planned ids.
+				var created CommentResponse
+				testutil.Call(t, testHandler.CreateComment, withURLParam(newRequest(http.MethodPost,
+					"/api/issues/"+issueID+"/comments",
+					map[string]any{"content": "Also add a separate regression."}), "id", issueID),
+				).Want(http.StatusCreated).JSON(&created)
+				extraID = created.ID
 			}
 			if response := completeTaskViaHandler(t, taskID, "Completed after clarification."); response.Code != http.StatusOK {
 				t.Fatalf("complete task: %d %s", response.Code, response.Body.String())

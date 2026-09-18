@@ -20,6 +20,7 @@ import { Text } from "@/components/ui/text";
 import { ActorAvatar } from "@/components/ui/actor-avatar";
 import { cn } from "@/lib/utils";
 import { isAgentRuntimeBound } from "@/lib/is-agent-runtime-bound";
+import { continuousCorners } from "@/lib/radius";
 
 interface Props {
   visible: boolean;
@@ -47,7 +48,10 @@ export function AgentPickerSheet({
       <Pressable className="flex-1 bg-black/40" onPress={onClose}>
         <View className="flex-1 items-center justify-center px-6">
           <Pressable onPress={() => {}} className="w-full max-w-sm">
-            <View className="bg-popover rounded-2xl overflow-hidden">
+            <View
+              className="bg-popover rounded-xl overflow-hidden"
+              style={continuousCorners}
+            >
               <View className="px-4 py-3 border-b border-border">
                 <Text className="text-base font-semibold text-foreground">
                   {t("agent_picker.title")}

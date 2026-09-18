@@ -169,8 +169,8 @@ export function CommentDesignDeliveryCard({ issueId, delivery }: { issueId: stri
                   })}
                 </ul>
               ) : <p className="text-muted-foreground">{t(($) => $.design_delivery.implementation_preview_unavailable)}</p>}
-              {receipt.target_files.length ? <ul className="max-h-32 overflow-auto rounded bg-muted p-2 font-mono text-micro">{receipt.target_files.map((file) => <li key={file}>{file}</li>)}</ul> : null}
-              <details><summary className="cursor-pointer text-muted-foreground">{t(($) => $.design_delivery.structured_result)}</summary><pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded bg-muted p-2 text-micro">{JSON.stringify(receipt.result, null, 2)}</pre></details>
+              {receipt.target_files.length ? <ul className="max-h-32 overflow-auto rounded-sm bg-muted p-2 font-mono text-micro">{receipt.target_files.map((file) => <li key={file}>{file}</li>)}</ul> : null}
+              <details><summary className="cursor-pointer text-muted-foreground">{t(($) => $.design_delivery.structured_result)}</summary><pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-sm bg-muted p-2 text-micro">{JSON.stringify(receipt.result, null, 2)}</pre></details>
             </>
           ) : <p className="text-muted-foreground">{running ? t(($) => $.design_delivery.pending_result) : t(($) => $.design_delivery.missing_result)}</p>}
         </div>

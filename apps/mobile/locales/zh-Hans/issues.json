@@ -328,6 +328,7 @@
       "delete_confirm": {
         "title": "删除评论？",
         "message": "此评论将被永久删除，话题中的回复也将一并移除，此操作无法撤销。",
+        "message_keep_replies": "此评论将被永久删除，话题中对它的回复会保留，此操作无法撤销。",
         "cancel": "取消",
         "confirm": "删除"
       }

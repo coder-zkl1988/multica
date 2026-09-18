@@ -570,7 +570,7 @@ function RunCaseRow({
               aria-label={t(($) => $.run.result[result as keyof typeof $.run.result])}
               data-active={runCase.result === result || undefined}
               onClick={() => onSetResult(result, notes)}
-              className={`rounded px-2 py-0.5 text-caption transition-colors data-active:font-medium
+              className={`rounded-sm px-2 py-0.5 text-caption transition-colors data-active:font-medium
                 ${result === "passed"
                   ? "text-success hover:bg-success/10 data-active:bg-success/20"
                   : result === "failed"

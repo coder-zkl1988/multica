@@ -129,14 +129,10 @@ function issueIconColor(category: IssueStatusCategory): string {
   // text tint matches the leading status icon visually. Keyed on CATEGORY: a
   // custom status inherits its category's tint, exactly as its glyph does.
   switch (category) {
-    case "in_progress":
+    case "started":
       return "text-warning";
-    case "in_review":
-      return "text-success";
     case "done":
       return "text-info";
-    case "blocked":
-      return "text-destructive";
     default:
       return "text-muted-foreground";
   }
@@ -166,7 +162,7 @@ function SearchIssueRow({ item, query, slug }: SearchIssueRowProps) {
   const showSnippet =
     item.match_source === "comment" && !!item.matched_snippet;
   const { statusLabel } = useIssueLabels();
-  const { colorOf } = useIssueStatuses();
+  const { colorOf, iconOf } = useIssueStatuses();
   const category = issueColumnCategory(item);
   return (
     <Pressable
@@ -177,7 +173,7 @@ function SearchIssueRow({ item, query, slug }: SearchIssueRowProps) {
         <StatusIcon
           status={item.status}
           category={category}
-          color={colorOf(item.status)}
+          icon={iconOf(item.status)} color={colorOf(item.status)}
           size={14}
         />
         <PriorityIcon priority={item.priority} size={14} />
@@ -273,7 +269,7 @@ interface RecentRowProps {
 
 function RecentRow({ item, slug }: RecentRowProps) {
   const { statusLabel } = useIssueLabels();
-  const { colorOf } = useIssueStatuses();
+  const { colorOf, iconOf } = useIssueStatuses();
   const category = issueColumnCategory(item);
   return (
     <Pressable
@@ -284,7 +280,7 @@ function RecentRow({ item, slug }: RecentRowProps) {
         <StatusIcon
           status={item.status}
           category={category}
-          color={colorOf(item.status)}
+          icon={iconOf(item.status)} color={colorOf(item.status)}
           size={14}
         />
         <Text className="text-xs text-muted-foreground shrink-0 w-16">

@@ -216,7 +216,7 @@ function AgentInteractionQueue({
               <p className="text-caption font-medium text-primary">已排队</p>
               <p className="mt-0.5 line-clamp-3 whitespace-pre-wrap break-words text-caption leading-5">{queued.instruction}</p>
             </div>
-            <button type="button" aria-label="取消排队要求" title="取消排队要求" onClick={onCancel} className="flex size-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground">
+            <button type="button" aria-label="取消排队要求" title="取消排队要求" onClick={onCancel} className="flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground">
               <X className="size-3.5" />
             </button>
           </div>

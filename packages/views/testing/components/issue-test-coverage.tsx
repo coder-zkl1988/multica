@@ -139,7 +139,7 @@ export function IssueTestCoverage({
           <span className="text-muted-foreground tabular-nums">{cases.length}</span>
           {summary?.verified === true ? (
             <span
-              className="inline-flex items-center gap-1 rounded bg-success/15 px-1.5 text-micro font-medium text-success"
+              className="inline-flex items-center gap-1 rounded-sm bg-success/15 px-1.5 text-micro font-medium text-success"
               title={t(($) => $.coverage.verifiedHint)}
             >
               <BadgeCheck className="h-3 w-3" />
@@ -218,7 +218,7 @@ function CoverageRow({ link, href }: { link: IssueTestCaseLink; href: string }) 
         {link.case_title}
       </AppLink>
       {link.origin === "ai" ? (
-        <span className="shrink-0 rounded bg-muted px-1 text-micro text-muted-foreground">
+        <span className="shrink-0 rounded-sm bg-muted px-1 text-micro text-muted-foreground">
           {t(($) => $.origin.ai)}
         </span>
       ) : null}

@@ -120,8 +120,8 @@ func TestStartTaskTypedIssueStartUsesCustomStatusCategory(t *testing.T) {
 		name, key, category, wantStatus string
 		wantApplied                     bool
 	}{
-		{name: "custom todo advances", key: "r06_ready_to_begin", category: "todo", wantStatus: "in_progress", wantApplied: true},
-		{name: "custom in progress remains", key: "r06_implementing", category: "in_progress", wantStatus: "r06_implementing"},
+		{name: "custom todo advances", key: "r06_ready_to_begin", category: "unstarted", wantStatus: "in_progress", wantApplied: true},
+		{name: "custom in progress remains", key: "r06_implementing", category: "started", wantStatus: "r06_implementing"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fx := newIssueStartFixture(t, tc.name)

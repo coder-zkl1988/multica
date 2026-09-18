@@ -10,8 +10,12 @@ func TestWorkingOnIssuesSkillKeepsCoreSmallAndDetailsLoadable(t *testing.T) {
 		issuesPath        = "references/issues.md"
 		maxCoreLines      = 110
 		maxCoreBytes      = 6_500
-		maxReferenceLines = 420
-		maxReferenceBytes = 22_000
+		// The reference tracks upstream's own growth: this budget is a guard
+		// against runaway prose, not a freeze. Raise it deliberately, as here
+		// for the reworked PR-linking and comment-editing sections, rather than
+		// trimming contracts to fit.
+		maxReferenceLines = 470
+		maxReferenceBytes = 24_500
 	)
 
 	skill, ok := findSkill(t, PlatformSkillName)
@@ -49,11 +53,11 @@ func TestWorkingOnIssuesSkillKeepsCoreSmallAndDetailsLoadable(t *testing.T) {
 		"do not duplicate it with a CLI comment",
 		"available for deliberate state changes",
 		"successful process exit alone does not establish review readiness",
-		"title, body, OR branch",
+		"the PR **title**, the **branch name**, and the **body right after a closing keyword**",
 		"title or body only",
 		"never the branch",
-		"reference_only",
-		"excluded from `multica issue pull-requests`",
+		"a passing reference and links nothing",
+		"put the key in the title, the branch, or after a closing keyword",
 		"multica issue pull-requests <issue-id> --output json",
 		"snapshot_available == true",
 		"Only then does `checks_rollup == null` mean \"no checks\"",

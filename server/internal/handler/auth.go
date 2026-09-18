@@ -18,6 +18,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/auth"
@@ -56,6 +57,7 @@ var supportedLanguages = map[string]struct{}{
 	"zh-Hans": {},
 	"ko":      {},
 	"ja":      {},
+	"fr":      {},
 }
 
 type UserResponse struct {
@@ -156,10 +158,20 @@ func (h *Handler) issueJWT(user db.User) (string, error) {
 		return "", auth.ErrTemporarilyDisabledUser
 	}
 	now := time.Now()
+	// `sid` identifies this login for as long as it lasts: sliding renewal
+	// copies it forward, so it stays put while `exp` moves. The CSRF token is
+	// bound to it rather than to the token string, which is what lets the
+	// auth cookie be re-issued mid-session without invalidating CSRF tokens
+	// other tabs are already holding (MUL-7436).
+	sid, err := auth.NewSessionID()
+	if err != nil {
+		return "", err
+	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"sub":   uuidToString(user.ID),
 		"email": user.Email,
 		"name":  user.Name,
+		"sid":   sid,
 		"exp":   now.Add(auth.AuthTokenTTL()).Unix(),
 		"iat":   now.Unix(),
 	})
@@ -168,11 +180,18 @@ func (h *Handler) issueJWT(user db.User) (string, error) {
 
 func (h *Handler) issueJWTUntil(user db.User, expiresAt time.Time, source string) (string, error) {
 	now := time.Now()
+	// Its own login, its own `sid`: renewal copies the id forward, so two
+	// sessions must never share one (MUL-7436).
+	sid, err := auth.NewSessionID()
+	if err != nil {
+		return "", err
+	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"sub":         uuidToString(user.ID),
 		"email":       user.Email,
 		"name":        user.Name,
 		"auth_source": source,
+		"sid":         sid,
 		"exp":         expiresAt.Unix(),
 		"iat":         now.Unix(),
 	})
@@ -420,8 +439,14 @@ func (h *Handler) GetMe(w http.ResponseWriter, r *http.Request) {
 	}
 
 	user, err := h.Queries.GetUser(r.Context(), parseUUID(userID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		// The credential no longer identifies an existing user. Return the
+		// same terminal status as an expired token so clients can sign in again.
+		writeError(w, http.StatusUnauthorized, "user not found")
+		return
+	}
 	if err != nil {
-		writeError(w, http.StatusNotFound, "user not found")
+		writeError(w, http.StatusInternalServerError, "failed to load user")
 		return
 	}
 
@@ -491,7 +516,7 @@ func (h *Handler) GoogleLogin(w http.ResponseWriter, r *http.Request) {
 	clientID := os.Getenv("GOOGLE_CLIENT_ID")
 	clientSecret := os.Getenv("GOOGLE_CLIENT_SECRET")
 	if clientID == "" || clientSecret == "" {
-		writeError(w, http.StatusServiceUnavailable, "Google login is not configured")
+		writeFeatureDisabled(w, "google_login_not_configured", "Google login is not configured")
 		return
 	}
 	redirectURI := req.RedirectURI

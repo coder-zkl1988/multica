@@ -1034,7 +1034,7 @@ export function DesignDocumentPage({ documentId }: { documentId: string }) {
                 type="button"
                 title="恢复 100%"
                 aria-label={`缩放 ${Math.round(zoom * 100)}%，点击恢复 100%`}
-                className="min-w-11 rounded px-1 text-center text-micro tabular-nums text-muted-foreground hover:text-foreground"
+                className="min-w-11 rounded-sm px-1 text-center text-micro tabular-nums text-muted-foreground hover:text-foreground"
                 onClick={() => setZoomIndex(ZOOM_DEFAULT_INDEX)}
               >
                 {Math.round(zoom * 100)}%
@@ -1326,7 +1326,7 @@ export function DesignDocumentPage({ documentId }: { documentId: string }) {
             <button
               type="button"
               aria-label="取消选中"
-              className="flex size-5 shrink-0 cursor-pointer items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              className="flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
               onClick={() => {
                 pickedElement.current = null;
                 setPicked(null);
@@ -1826,7 +1826,7 @@ export function DesignDocumentPage({ documentId }: { documentId: string }) {
                             <button
                               type="button"
                               aria-label={`删除标注 ${annotationLabel(annotation)}`}
-                              className="flex size-5 shrink-0 cursor-pointer items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                              className="flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                               onClick={() => setHistory((current) => ({ ...current, marks: current.marks.filter((row) => row.id !== annotation.id) }))}
                             >
                               <X className="h-3 w-3" />
@@ -1855,7 +1855,7 @@ export function DesignDocumentPage({ documentId }: { documentId: string }) {
                         type="button"
                         aria-label="取消排队的调整"
                         title="取消排队的调整"
-                        className="flex size-5 shrink-0 cursor-pointer items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                        className="flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                         onClick={() => setQueuedAdjustment(null)}
                       >
                         <X className="h-3 w-3" />

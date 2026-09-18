@@ -2322,8 +2322,14 @@ func TestGoogleLoginRequiresConfiguration(t *testing.T) {
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/auth/google", strings.NewReader(`{"code":"test"}`))
 	testHandler.GoogleLogin(w, req)
-	if w.Code != http.StatusServiceUnavailable {
-		t.Fatalf("GoogleLogin: expected 503, got %d: %s", w.Code, w.Body.String())
+	// An unconfigured provider is a disabled feature, not a transient outage:
+	// it answers 403 with a machine-readable code so a client can hide the
+	// button instead of retrying (upstream's writeFeatureDisabled).
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("GoogleLogin: expected 403, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "google_login_not_configured") {
+		t.Fatalf("GoogleLogin: response must name the disabled feature, got %s", w.Body.String())
 	}
 }
 

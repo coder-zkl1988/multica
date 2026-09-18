@@ -1,3 +1,4 @@
+import { type ReplyAnnotation, EMPTY_REPLY_ANNOTATIONS, MAX_REPLY_ANNOTATIONS, MAX_ANNOTATION_QUOTE_LENGTH, normalizeReplyAnnotations } from "../../drafts/reply-annotation";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { createWorkspaceAwareStorage, registerForWorkspaceRehydration } from "../../platform/workspace-storage";
@@ -43,6 +44,8 @@ interface CommentDraft {
   designRequest?: CommentDesignRequest;
   /** Uploads (placeholders + completed) for this composer session. */
   attachments: DraftUpload[];
+  annotations?: ReplyAnnotation[];
+  replyTarget?: { commentId: string; actorName: string };
   updatedAt: number;
 }
 
@@ -72,6 +75,10 @@ interface CommentDraftStore {
   failUpload: (key: CommentDraftKey, clientUploadId: string, error?: string) => void;
   /** Drop a placeholder (e.g. a dismissed failure). */
   removeUpload: (key: CommentDraftKey, clientUploadId: string) => void;
+  getAnnotations: (key: CommentDraftKey) => ReplyAnnotation[];
+  addAnnotation: (key: CommentDraftKey, annotation: ReplyAnnotation) => string | undefined;
+  updateAnnotation: (key: CommentDraftKey, id: string, note: string) => void;
+  removeAnnotation: (key: CommentDraftKey, id: string) => void;
   clearDraft: (key: CommentDraftKey) => void;
   /** Non-persisted nonce map used by composers to remount when an external
    *  flow (e.g. the design restore sidebar) injects a draft body. */
@@ -109,8 +116,8 @@ function deriveUploaded(uploads: DraftUpload[]): Attachment[] {
 // upload (in any state). Upload-only drafts (text deleted, a file still pending
 // or failed) are meaningful — pruning or dropping them would silently discard
 // the upload the whole persistence exists to protect.
-function isMeaningful(content: string, uploads: DraftUpload[]): boolean {
-  return content.trim().length > 0 || uploads.length > 0;
+function isMeaningful(content: string, uploads: DraftUpload[], annotations: ReplyAnnotation[] = EMPTY_REPLY_ANNOTATIONS): boolean {
+  return content.trim().length > 0 || uploads.length > 0 || annotations.length > 0;
 }
 
 // Shared writer for setDraft/setAttachments/upload mutations: an entry with
@@ -122,8 +129,10 @@ function writeDraft(
   key: string,
   content: string,
   uploads: DraftUpload[],
+  annotations = drafts[key]?.annotations ?? EMPTY_REPLY_ANNOTATIONS,
+  replyTarget = key.startsWith("reply:") && annotations.length ? drafts[key]?.replyTarget : undefined,
 ): Record<string, CommentDraft> {
-  if (!isMeaningful(content, uploads) && !drafts[key]?.designRequest) {
+  if (!isMeaningful(content, uploads, annotations) && !drafts[key]?.designRequest) {
     if (!(key in drafts)) return drafts;
     const next = { ...drafts };
     delete next[key];
@@ -134,7 +143,7 @@ function writeDraft(
   // guard compares entry identity — a fresh-but-equal entry would read as "the
   // user edited during the request" and wrongly keep a submitted draft alive.
   const existing = drafts[key];
-  if (existing && existing.content === content && existing.attachments === uploads) {
+  if (existing && existing.content === content && existing.replyTarget === replyTarget && (existing.annotations ?? EMPTY_REPLY_ANNOTATIONS) === annotations && existing.attachments === uploads) {
     return drafts;
   }
   const designRequest = existing?.designRequest;
@@ -142,6 +151,8 @@ function writeDraft(
     ...existing,
     content,
     attachments: uploads,
+    annotations,
+    replyTarget,
     designRequest: designRequest && existing.content !== content
       ? { ...designRequest, request_id: crypto.randomUUID() }
       : designRequest,
@@ -161,8 +172,12 @@ function pruneStaleDrafts(drafts: Record<string, CommentDraft>): Record<string, 
     // placeholders, and any placeholder still `uploading` is dropped (the bytes
     // were never persisted, so the upload cannot resume).
     const uploads = normalizeStoredUploads(v.attachments);
-    if (v.updatedAt >= cutoff && (isMeaningful(v.content, uploads) || v.designRequest)) {
-      out[k] = { ...v, attachments: uploads };
+    const annotations = normalizeReplyAnnotations(v.annotations);
+    if (v.updatedAt >= cutoff && (isMeaningful(v.content, uploads, annotations) || v.designRequest)) {
+      const first = annotations[0];
+      const replyTarget = k.startsWith("reply:") && first ? (v.replyTarget && typeof v.replyTarget.commentId === "string" && typeof v.replyTarget.actorName === "string"
+        ? v.replyTarget : { commentId: first.sourceCommentId, actorName: first.sourceActorName }) : undefined;
+      out[k] = { ...v, attachments: uploads, annotations, replyTarget };
     }
   }
   return out;
@@ -257,6 +272,35 @@ export const useCommentDraftStore = create<CommentDraftStore>()(
             drafts: writeDraft(s.drafts, key, s.drafts[key]?.content ?? "", next),
           };
         }),
+      getAnnotations: (key) => get().drafts[key]?.annotations ?? EMPTY_REPLY_ANNOTATIONS,
+      addAnnotation: (key, annotation) => {
+        if ((!key.startsWith("reply:") && !key.startsWith("new:")) || !annotation.note.trim() || !annotation.quote.trim() || annotation.quote.length > MAX_ANNOTATION_QUOTE_LENGTH) return undefined;
+        const current = get().getAnnotations(key);
+        const duplicate = current.find((a) => a.sourceCommentId === annotation.sourceCommentId &&
+          a.start === annotation.start && a.quote === annotation.quote && a.prefix === annotation.prefix && a.suffix === annotation.suffix);
+        if (duplicate) return duplicate.id;
+        if (current.length >= MAX_REPLY_ANNOTATIONS) return undefined;
+        set((s) => {
+          const replyTarget = key.startsWith("reply:")
+            ? s.drafts[key]?.replyTarget ?? { commentId: annotation.sourceCommentId, actorName: annotation.sourceActorName }
+            : undefined;
+          return { drafts: writeDraft(s.drafts, key, s.drafts[key]?.content ?? "", uploadsOf(s.drafts, key), [...current, annotation], replyTarget) };
+        });
+        return annotation.id;
+      },
+      updateAnnotation: (key, id, note) => set((s) => {
+        const current = s.drafts[key]?.annotations ?? EMPTY_REPLY_ANNOTATIONS;
+        if (!current.some((a) => a.id === id && a.note !== note)) return s;
+        const annotations = note.trim()
+          ? current.map((a) => a.id === id ? { ...a, note } : a)
+          : current.filter((a) => a.id !== id);
+        return { drafts: writeDraft(s.drafts, key, s.drafts[key]?.content ?? "", uploadsOf(s.drafts, key), annotations) };
+      }),
+      removeAnnotation: (key, id) => set((s) => {
+        const current = s.drafts[key]?.annotations ?? EMPTY_REPLY_ANNOTATIONS;
+        if (!current.some((a) => a.id === id)) return s;
+        return { drafts: writeDraft(s.drafts, key, s.drafts[key]?.content ?? "", uploadsOf(s.drafts, key), current.filter((a) => a.id !== id)) };
+      }),
       clearDraft: (key) =>
         set((s) => {
           if (!(key in s.drafts)) return s;
@@ -277,6 +321,13 @@ export const useCommentDraftStore = create<CommentDraftStore>()(
       name: "multica_comment_drafts",
       partialize: (state) => ({ drafts: state.drafts }),
       storage: createJSONStorage(() => createWorkspaceAwareStorage(defaultStorage)),
+      // Zustand's default merge keeps the previous workspace's drafts when
+      // the destination has no storage entry. An empty namespace must mean
+      // an empty draft set, including private annotations and reply targets.
+      merge: (persisted, current) => ({
+        ...current,
+        drafts: (persisted as { drafts?: Record<string, CommentDraft> } | undefined)?.drafts ?? {},
+      }),
       onRehydrateStorage: () => (state) => {
         if (state) {
           state.drafts = pruneStaleDrafts(state.drafts);

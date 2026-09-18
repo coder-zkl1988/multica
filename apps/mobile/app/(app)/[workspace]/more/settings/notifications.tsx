@@ -120,9 +120,11 @@ export default function NotificationsSettingsScreen() {
                   <Text className="text-base font-medium text-foreground">
                     {group.label}
                   </Text>
-                  <Text className="text-xs text-muted-foreground mt-0.5">
-                    {group.description}
-                  </Text>
+                  {group.description ? (
+                    <Text className="text-xs text-muted-foreground mt-0.5">
+                      {group.description}
+                    </Text>
+                  ) : null}
                 </View>
                 <Switch
                   checked={enabled}

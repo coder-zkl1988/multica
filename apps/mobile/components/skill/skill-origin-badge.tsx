@@ -9,7 +9,7 @@ export function SkillOriginBadge({ skill }: { skill: SkillSummary }) {
   const origin = readSkillOrigin(skill);
 
   return (
-    <View className="self-start rounded bg-secondary px-1.5 py-0.5">
+    <View className="self-start rounded-sm bg-secondary px-1.5 py-0.5">
       <Text className="text-[10px] text-muted-foreground">
         {t(`origin.${origin.type}`)}
       </Text>

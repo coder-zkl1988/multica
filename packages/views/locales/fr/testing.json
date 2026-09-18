@@ -1,0 +1,528 @@
+{
+  "tabs": {
+    "cases": "Cas",
+    "plans": "Plans",
+    "runs": "Séries",
+    "jobs": "Génération"
+  },
+  "page": {
+    "title": "Cas de test",
+    "empty": "Aucun cas de test",
+    "emptyHint": "Créez-en un, ou choisissez un autre projet",
+    "new": "Nouveau cas",
+    "selectProject": "Sélectionner un projet",
+    "generate": "Générer avec l'IA",
+    "generating": "Démarrage…",
+    "untitled": "Cas sans titre"
+  },
+  "filters": {
+    "all": "Tous",
+    "module": "Module",
+    "status": "Statut",
+    "priority": "Priorité",
+    "type": "Type",
+    "origin": "Origine",
+    "reviewQueue": "À relire",
+    "aiReviewQueue": "IA en attente de relecture",
+    "clear": "Effacer les filtres",
+    "search": "Rechercher des cas…"
+  },
+  "columns": {
+    "key": "Clé",
+    "title": "Titre",
+    "module": "Module",
+    "type": "Type",
+    "priority": "Priorité",
+    "status": "Statut",
+    "origin": "Origine",
+    "repos": "Dépôts",
+    "updated": "Mis à jour"
+  },
+  "status": {
+    "draft": "Brouillon",
+    "active": "Actif",
+    "deprecated": "Obsolète"
+  },
+  "origin": {
+    "ai": "IA",
+    "human": "Manuel"
+  },
+  "priority": {
+    "p0": "P0",
+    "p1": "P1",
+    "p2": "P2",
+    "p3": "P3"
+  },
+  "scope": {
+    "single_repo": "Dépôt unique",
+    "cross_repo": "Multi-dépôts",
+    "no_repo": "Sans dépôt"
+  },
+  "executionMode": {
+    "manual": "Manuelle",
+    "agent": "Agent",
+    "both": "Manuelle ou agent"
+  },
+  "caseType": {
+    "functional": "Fonctionnel",
+    "business_flow": "Flux métier",
+    "api": "API",
+    "ui": "UI",
+    "e2e": "De bout en bout",
+    "regression": "Régression",
+    "boundary": "Limites",
+    "exception": "Exception",
+    "permission": "Permissions",
+    "data_consistency": "Cohérence des données",
+    "compatibility": "Compatibilité",
+    "performance": "Performance",
+    "security": "Sécurité"
+  },
+  "detail": {
+    "preconditions": "Préconditions",
+    "steps": "Étapes",
+    "expected": "Résultat attendu",
+    "testData": "Données de test",
+    "repos": "Dépôts",
+    "revisions": "Historique",
+    "project": "Projet",
+    "module": "Module",
+    "priority": "Priorité",
+    "type": "Type",
+    "scope": "Périmètre",
+    "executionMode": "Exécution",
+    "notFound": "Cas de test introuvable",
+    "untitled": "Cas sans titre"
+  },
+  "steps": {
+    "add": "Ajouter une étape",
+    "action": "Action",
+    "expected": "Attendu",
+    "repo": "Dépôt",
+    "remove": "Supprimer cette étape",
+    "empty": "Aucune étape",
+    "actionPlaceholder": "Décrivez l'action…",
+    "expectedPlaceholder": "Décrivez le résultat attendu…",
+    "noRepo": "Non précisé"
+  },
+  "repos": {
+    "add": "Ajouter un dépôt",
+    "alias": "Alias",
+    "role": "Rôle",
+    "pathGlobs": "Périmètre de chemins",
+    "remove": "Retirer",
+    "empty": "Aucun dépôt lié",
+    "aliasPlaceholder": "Nom court utilisé dans les étapes",
+    "pathGlobsPlaceholder": "src/order/**, séparés par des virgules",
+    "noResources": "Ce projet n'a aucun dépôt rattaché",
+    "crossRepoNeedsRepos": "Un cas multi-dépôts nécessite au moins deux dépôts",
+    "crossRepoNeedsRoles": "Un cas multi-dépôts nécessite plus d'un rôle de dépôt"
+  },
+  "capabilities": {
+    "title": "Capacités requises",
+    "empty": "Ce cas ne nécessite ni navigateur ni appareil.",
+    "add": "Ajouter une capacité",
+    "remove": "Supprimer cette capacité",
+    "kind": "Type",
+    "match": "Critère",
+    "matchPlaceholder": "os_version=>=13, browser=chromium",
+    "optional": "Facultative — un type manquant ne bloque pas l'exécution",
+    "hint": "Un type déclaré ici est lié à un navigateur ou un appareil réel au lancement. Une série dont le runtime ne peut pas le fournir est mise en attente comme bloquée.",
+    "kinds": {
+      "browser": "Navigateur",
+      "android_device": "Appareil Android",
+      "ios_device": "Appareil iOS",
+      "computer_use": "Contrôle de l'ordinateur"
+    }
+  },
+  "role": {
+    "under_test": "Sous test",
+    "driver": "Pilote",
+    "verifier": "Vérificateur",
+    "fixture": "Fixture"
+  },
+  "revisions": {
+    "empty": "Aucun changement enregistré",
+    "version": "Version {{version}}",
+    "separator": " · ",
+    "human_edit": "Modification manuelle",
+    "proposal_accepted": "Suggestion IA acceptée",
+    "status_change": "Changement de statut",
+    "restore": "Restaurer"
+  },
+  "actions": {
+    "approve": "Approuver",
+    "delete": "Supprimer",
+    "save": "Enregistrer",
+    "cancel": "Annuler",
+    "edit": "Modifier",
+    "confirmDelete": "Supprimer ce cas de test ?",
+    "batchApprove": "Approuver la sélection",
+    "selectAll": "Tout sélectionner",
+    "addToPlan": "Ajouter à un plan"
+  },
+  "toast": {
+    "created": "Cas de test créé",
+    "saved": "Modifications enregistrées",
+    "approved": "Cas de test approuvé",
+    "deleted": "Cas de test supprimé",
+    "saveFailed": "Impossible d'enregistrer les modifications",
+    "deleteFailed": "Impossible de supprimer le cas de test",
+    "planGenerated": "Plan généré",
+    "planSaved": "Plan enregistré",
+    "planApproved": "Plan approuvé",
+    "dispatched": "Envoyé à l'agent",
+    "planFailed": "Impossible de générer le plan",
+    "planSaveFailed": "Impossible d'enregistrer le plan",
+    "planApproveFailed": "Impossible d'approuver le plan",
+    "dispatchFailed": "Envoi impossible",
+    "proposalAccepted": "Suggestion acceptée",
+    "proposalRejected": "Suggestion rejetée",
+    "proposalFailed": "Impossible de mettre à jour la suggestion",
+    "batchApproved": "{{count}} cas approuvés",
+    "generationStarted": "Tâche de génération créée. Vérifiez son périmètre avant de l'envoyer.",
+    "generationFailed": "Impossible de démarrer la tâche de génération.",
+    "createFailed": "Impossible de créer le cas de test.",
+    "planCreated": "Plan de test créé",
+    "planDeleted": "Plan de test supprimé",
+    "planCreateFailed": "Impossible de créer le plan de test",
+    "planDeleteFailed": "Impossible de supprimer le plan de test",
+    "runCreated": "Série de tests créée",
+    "runCreateFailed": "Impossible de créer la série de tests",
+    "runStarted": "Série démarrée",
+    "runStartFailed": "Impossible de démarrer la série",
+    "runAborted": "Série interrompue",
+    "runAbortFailed": "Impossible d'interrompre la série",
+    "runDispatched": "Envoyée à l'agent",
+    "runDispatchFailed": "Impossible d'envoyer la série",
+    "runDispatchBlocked": "Capacité manquante : {{kind}}",
+    "runResultSaved": "Résultat enregistré",
+    "runResultFailed": "Impossible d'enregistrer le résultat",
+    "defectOpened": "Tâche d'anomalie créée",
+    "defectFailed": "Impossible d'ouvrir l'anomalie",
+    "batchApproveFailed": "{{count}} cas n'ont pas pu être approuvés",
+    "planCasesAdded": "{{count}} cas ajoutés",
+    "planCasesAlreadyAdded": "Les cas sélectionnés sont déjà dans ce plan",
+    "planCasesAddFailed": "Impossible d'ajouter les cas au plan",
+    "planCaseRemoveFailed": "Impossible de retirer le cas",
+    "planUpdated": "Plan mis à jour",
+    "planUpdateFailed": "Impossible de mettre à jour le plan"
+  },
+  "job": {
+    "title": "Tâche de génération",
+    "back": "Retour",
+    "loading": "Chargement de la tâche…",
+    "error": "Impossible de charger cette tâche",
+    "retry": "Réessayer",
+    "meta": {
+      "status": "Statut",
+      "createdAt": "Créée",
+      "agentTask": "Tâche de l'agent",
+      "notDispatched": "Non envoyée",
+      "proposals": "Suggestions"
+    },
+    "jobStatus": {
+      "queued": "En file",
+      "running": "En cours",
+      "completed": "Terminée",
+      "failed": "Échouée",
+      "cancelled": "Annulée"
+    },
+    "planStatus": {
+      "draft": "Brouillon",
+      "approved": "Approuvé",
+      "dispatched": "Envoyé",
+      "archived": "Archivé"
+    },
+    "stats": {
+      "total": "Total",
+      "pending": "En attente",
+      "accepted": "Acceptées",
+      "rejected": "Rejetées"
+    },
+    "plan": {
+      "title": "Plan de génération",
+      "generate": "Générer le plan",
+      "regenerate": "Regénérer le plan",
+      "save": "Enregistrer le plan",
+      "approve": "Approuver le plan",
+      "reviewNotes": "Notes de relecture",
+      "reviewNotesPlaceholder": "Facultatif : notes du relecteur",
+      "rawJson": "JSON du plan",
+      "editJson": "Modifier le JSON brut",
+      "editJsonHint": "Modifiable avant approbation",
+      "noPlan": "Aucun plan",
+      "noPlanHint": "Générez d'abord un plan, confirmez le périmètre, puis approuvez-le.",
+      "repos": "Dépôts",
+      "modules": "Modules",
+      "instructions": "Instructions",
+      "notSet": "Non défini",
+      "approvedAt": "Approuvé"
+    },
+    "scopeEdit": {
+      "title": "Ajuster le périmètre",
+      "reposLabel": "Dépôts",
+      "reposEmpty": "Générez le plan pour charger les dépôts du projet.",
+      "modulesLabel": "Modules",
+      "modulesPlaceholder": "p. ex. facturation, auth (séparés par des virgules)",
+      "issuesLabel": "Tâches ciblées",
+      "issuesPlaceholder": "p. ex. MUL-123, MUL-456 (séparées par des virgules)",
+      "instructionsLabel": "Instructions",
+      "instructionsPlaceholder": "Chemins à couvrir, comportements à privilégier, tout ce que l'agent doit savoir.",
+      "issuesEmpty": "Aucune tâche dans le périmètre (sans restriction)",
+      "issuesAdd": "Ajouter une tâche",
+      "issuesRemove": "Retirer",
+      "issuesPickerTitle": "Restreindre à une tâche",
+      "issuesPickerDescription": "Choisissez les exigences que cette exécution doit couvrir."
+    },
+    "dispatch": {
+      "title": "Envoyer à un agent",
+      "hint": "Sélectionnez un agent pour exécuter le plan approuvé et générer les cas de test.",
+      "agent": "Agent",
+      "noAgent": "Aucun agent disponible",
+      "button": "Envoyer",
+      "dispatching": "Envoi…",
+      "running": "En cours…",
+      "redispatch": "Renvoyer",
+      "needsPlan": "Approuvez le plan avant de l'envoyer."
+    },
+    "result": {
+      "title": "Résultats",
+      "proposals": "Suggestions de l'IA",
+      "noProposals": "Aucune suggestion pour l'instant"
+    }
+  },
+  "proposals": {
+    "title": "Suggestions de l'IA",
+    "empty": "Aucune suggestion IA pour ce cas",
+    "loading": "Chargement des suggestions…",
+    "accept": "Accepter",
+    "reject": "Rejeter",
+    "rationale": "Justification",
+    "current": "Actuel",
+    "suggested": "Suggéré",
+    "noChange": "Aucun changement",
+    "kind": {
+      "update": "Mise à jour",
+      "obsolete": "Marquer obsolète"
+    },
+    "status": {
+      "pending": "En attente",
+      "accepted": "Acceptée",
+      "rejected": "Rejetée"
+    }
+  },
+  "plans": {
+    "title": "Plans de test",
+    "new": "Nouveau plan",
+    "empty": "Aucun plan de test",
+    "emptyHint": "Créez un plan pour organiser les cas de test d'une version.",
+    "createTitle": "Titre du plan",
+    "run": "Créer une série",
+    "status": {
+      "draft": "Brouillon",
+      "active": "Actif",
+      "archived": "Archivé"
+    },
+    "columns": {
+      "title": "Titre",
+      "status": "Statut",
+      "cases": "Cas",
+      "created": "Créé"
+    },
+    "detail": {
+      "back": "Retour",
+      "cases": "Cas",
+      "empty": "Aucun cas dans ce plan",
+      "emptyHint": "Ajoutez des cas depuis la bibliothèque de tests.",
+      "addCases": "Ajouter des cas",
+      "createRun": "Créer une série",
+      "runTitle": "Titre de la série",
+      "environment": "Environnement",
+      "buildRef": "Référence de build",
+      "remove": "Retirer",
+      "caseCount_one": "{{count}} cas",
+      "caseCount_other": "{{count}} cas",
+      "settings": "Paramètres du plan",
+      "description": "Description",
+      "deletePlan": "Supprimer le plan",
+      "confirmDelete": "Supprimer ce plan de test ?",
+      "unknownCase": "Ce cas n'existe plus",
+      "parallelism": "Parallélisme",
+      "parallelismPlaceholder": "tous à la fois",
+      "board": "Tableau",
+      "boardEmpty": "Aucune série",
+      "passRate": "Taux de réussite",
+      "matrixTitle": "Modules de la dernière série",
+      "moduleColumn": "Module",
+      "moduleUnnamed": "(sans module)"
+    }
+  },
+  "run": {
+    "title": "Série de tests",
+    "back": "Retour",
+    "error": "Impossible de charger cette série",
+    "retry": "Réessayer",
+    "start": "Démarrer",
+    "abort": "Interrompre",
+    "retryAll": "Tout relancer",
+    "retryFailed": "Relancer les échecs",
+    "empty": "Aucun cas dans cette série",
+    "meta": {
+      "status": "Statut",
+      "environment": "Environnement",
+      "buildRef": "Build",
+      "plan": "Plan",
+      "executor": "Exécutant",
+      "started": "Démarrée",
+      "completed": "Terminée",
+      "parallelism": "Parallélisme"
+    },
+    "counts": {
+      "passed": "Réussis",
+      "failed": "Échoués",
+      "pending": "En attente",
+      "blocked": "Bloqués",
+      "skipped": "Ignorés"
+    },
+    "status": {
+      "pending": "En attente",
+      "running": "En cours",
+      "completed": "Terminée",
+      "aborted": "Interrompue",
+      "blocked": "Bloquée"
+    },
+    "result": {
+      "pending": "En attente",
+      "running": "En cours",
+      "passed": "Réussi",
+      "failed": "Échoué",
+      "blocked": "Bloqué",
+      "skipped": "Ignoré"
+    },
+    "dispatch": {
+      "title": "Envoyer à un agent",
+      "hint": "Sélectionnez un agent pour exécuter cette série.",
+      "agent": "Agent",
+      "noAgent": "Aucun agent disponible",
+      "button": "Envoyer",
+      "dispatching": "Envoi…",
+      "running": "En cours…",
+      "blocked": "Capacité manquante : {{kind}}",
+      "prompt": "Instructions",
+      "promptPlaceholder": "Facultatif : contexte supplémentaire pour l'agent"
+    }
+  },
+  "runCase": {
+    "notes": "Notes",
+    "notesPlaceholder": "Notes du testeur…",
+    "defect": "Ouvrir une anomalie",
+    "defectTitle": "Titre de l'anomalie",
+    "defectTitlePlaceholder": "Décrivez l'anomalie…",
+    "defectOpen": "Ouvrir",
+    "evidence": "Preuves",
+    "step": "Étape {{index}}",
+    "columns": {
+      "case": "Cas",
+      "result": "Résultat",
+      "executor": "Exécutant",
+      "duration": "Durée",
+      "defect": "Anomalie"
+    },
+    "saveNotes": "Enregistrer les notes",
+    "notesNeedResult": "Les notes sont enregistrées avec un résultat — choisissez-en un d'abord.",
+    "task": "tâche {{id}}",
+    "liveFrame": "Écran en direct",
+    "liveFrameWaiting": "En attente de la première image du hub d'appareils…"
+  },
+  "timeline": {
+    "title": "Historique des séries",
+    "empty": "Aucune série",
+    "run": "Série",
+    "result": "Résultat",
+    "environment": "Environnement",
+    "buildRef": "Build",
+    "executedAt": "Exécutée",
+    "flaky": "Instable",
+    "flakyHint": "Les résultats ont alterné entre réussite et échec sur les {{count}} dernières séries"
+  },
+  "runs": {
+    "title": "Séries de tests",
+    "empty": "Aucune série de tests",
+    "emptyHint": "Démarrez une série depuis un plan de test.",
+    "columns": {
+      "title": "Titre",
+      "status": "Statut",
+      "executor": "Exécutant",
+      "environment": "Environnement",
+      "buildRef": "Build",
+      "created": "Créée"
+    },
+    "executor": {
+      "member": "Membre",
+      "agent": "Agent"
+    },
+    "truncated": "Affichage des {{count}} séries les plus récentes ; les plus anciennes ne sont pas listées."
+  },
+  "jobs": {
+    "title": "Tâches de génération",
+    "empty": "Aucune tâche de génération",
+    "emptyHint": "Lancez une génération, puis vérifiez son périmètre avant de l'envoyer.",
+    "columns": {
+      "job": "Tâche",
+      "status": "Statut",
+      "created": "Créée"
+    },
+    "truncated": "Affichage des {{count}} tâches les plus récentes ; les plus anciennes ne sont pas listées."
+  },
+  "addToPlan": {
+    "title": "Ajouter à un plan de test",
+    "description": "Ajouter les {{count}} cas sélectionnés à un plan.",
+    "plan": "Plan cible",
+    "newPlan": "Nouveau plan…",
+    "confirm": "Ajouter"
+  },
+  "recommend": {
+    "action": "Recommander selon les changements",
+    "title": "Cas pour un changement",
+    "description": "Collez les chemins modifiés, un par ligne. Les cas dont les liaisons de dépôt les revendiquent sont listés, du plus revendiqué au moins.",
+    "paths": "Chemins modifiés",
+    "pathsPlaceholder": "src/order/checkout.ts\napps/web/app/orders/page.tsx",
+    "repo": "Alias du dépôt (facultatif)",
+    "find": "Chercher des cas",
+    "finding": "Recherche…",
+    "empty": "Aucun cas ne revendique ces chemins. Ajoutez des motifs de chemins aux liaisons de dépôt des cas.",
+    "claimed": "{{count}} chemins revendiqués",
+    "unmatched": "{{count}} chemins revendiqués par aucun cas",
+    "select": "Sélectionner dans la liste",
+    "startRun": "Démarrer une série",
+    "runTitle": "Régression pour {{count}} chemins modifiés",
+    "runFailed": "Impossible de démarrer la série"
+  },
+  "coverage": {
+    "caseSection": "Couvre",
+    "caseEmpty": "Lié à aucune tâche pour l'instant",
+    "issueSection": "Couverture de test",
+    "linkIssue": "Lier une tâche",
+    "unlink": "Délier",
+    "linked": "Tâche liée",
+    "linkFailed": "Impossible de lier la tâche",
+    "unlinkFailed": "Impossible de délier la tâche",
+    "pickerTitle": "Lier une tâche",
+    "pickerDescription": "Choisissez l'exigence que ce cas vérifie.",
+    "neverRun": "Jamais exécuté",
+    "failingCount": "{{count}} en échec",
+    "untestedCount": "{{count}} non exécutés",
+    "verified": "Vérifié",
+    "verifiedHint": "Tous les cas couvrants ont réussi lors de leur dernière série",
+    "latestRun": "Dernière série",
+    "defectsSection": "Anomalies trouvées par les tests",
+    "foundBySection": "Trouvée par une série de tests",
+    "generateCases": "Générer des cas",
+    "newCase": "Nouveau cas",
+    "newCaseTitle": "Vérifier : {{title}}",
+    "noCoverage": "Aucune couverture de test",
+    "generateFailed": "Impossible de démarrer la génération de cas",
+    "newCaseFailed": "Impossible de créer le cas"
+  }
+}

@@ -339,7 +339,7 @@ func TestCancelStandaloneProjectDesignSystemTaskClearsActiveState(t *testing.T) 
 		t.Fatalf("clear standalone task project id: %v", err)
 	}
 
-	if _, err := testHandler.TaskService.CancelTaskByUser(context.Background(), parseUUID(fixture.TaskID)); err != nil {
+	if _, err := testHandler.TaskService.CancelTaskByUser(context.Background(), parseUUID(fixture.TaskID), service.TaskCancellationActor{Type: "member", ID: parseUUID(testUserID), Name: "Test User"}); err != nil {
 		t.Fatalf("cancel standalone design system task: %v", err)
 	}
 

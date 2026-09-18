@@ -40,6 +40,7 @@ import { CLIENT_OS, CLIENT_VERSION } from "@/lib/client-identity";
 import { useAuthStore } from "@/data/auth-store";
 import { useWorkspaceStore } from "@/data/workspace-store";
 import { getToken } from "@/data/secure-storage";
+import { api } from "@/data/api";
 import { WSClient } from "./ws-client";
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL;
@@ -90,6 +91,10 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
       ws = new WSClient({
         url: WS_URL,
         token,
+        // Re-read per connection rather than reusing the token captured
+        // above: a session renewed since this effect ran would otherwise keep
+        // reconnecting with a credential on its way to expiring.
+        getToken: () => api.getToken(),
         workspaceSlug: wsSlug,
         // Same identity the HTTP client sends — see lib/client-identity.ts.
         // Injected rather than imported by ws-client.ts so that layer stays
