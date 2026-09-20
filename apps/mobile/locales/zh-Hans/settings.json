@@ -93,7 +93,7 @@
       },
       "agent_activity": {
         "label": "智能体活动",
-        "description": "当智能体认领、运行或完成一个 task 时。"
+        "description": "当智能体运行失败时。"
       }
     },
     "system_section": {

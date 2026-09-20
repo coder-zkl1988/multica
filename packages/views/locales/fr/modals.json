@@ -155,7 +155,8 @@
     "designs_empty": "Aucun document de design dans cet espace de travail. Créez-en un depuis l'onglet Designs.",
     "designs_selected": "Sélectionnés",
     "designs_untitled": "Design sans titre",
-    "remove_resource": "Retirer {{title}}"
+    "remove_resource": "Retirer {{title}}",
+    "repos_ref_default": "Branche par défaut"
   },
   "create_issue": {
     "sr_manual": "Nouvelle tâche",

@@ -77,8 +77,8 @@ export class TestApiClient {
   private workspaceId: string | null = null;
   private email: string | null = null;
   private createdIssueIds: string[] = [];
-  private seededIssueIds: string[] = [];
   private createdProjectIds: string[] = [];
+  private seededIssueIds: string[] = [];
   private createdTestCaseIds: string[] = [];
 
   async login(email: string, name: string) {
@@ -213,6 +213,35 @@ export class TestApiClient {
     }
   }
 
+  /** Create a project and register it for cleanup. */
+  async createProject(title: string, opts?: Record<string, unknown>) {
+    const res = await this.authedFetch("/api/projects", {
+      method: "POST",
+      body: JSON.stringify({ title, ...opts }),
+    });
+    if (!res.ok) {
+      throw new Error(`create project failed: ${res.status} ${await res.text()}`);
+    }
+    const project = await res.json();
+    this.createdProjectIds.push(project.id);
+    return project as { id: string; title: string; status: string };
+  }
+
+  async updateProject(id: string, updates: Record<string, unknown>) {
+    const res = await this.authedFetch(`/api/projects/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(updates),
+    });
+    if (!res.ok) {
+      throw new Error(`update project failed: ${res.status} ${await res.text()}`);
+    }
+    return res.json();
+  }
+
+  async deleteProject(id: string) {
+    await this.authedFetch(`/api/projects/${id}`, { method: "DELETE" });
+  }
+
   async createIssue(title: string, opts?: Record<string, unknown>) {
     const res = await this.authedFetch("/api/issues", {
       method: "POST",
@@ -345,17 +374,6 @@ export class TestApiClient {
     return res.json();
   }
 
-  /** Clean up all issues created during this test. */
-  async createProject(title: string, opts?: Record<string, unknown>) {
-    const res = await this.authedFetch("/api/projects", {
-      method: "POST",
-      body: JSON.stringify({ title, ...opts }),
-    });
-    const project = await res.json();
-    this.createdProjectIds.push(project.id);
-    return project;
-  }
-
   async createProjectResource(projectId: string, body: Record<string, unknown>) {
     const res = await this.authedFetch(`/api/projects/${projectId}/resources`, {
       method: "POST",
@@ -398,6 +416,7 @@ export class TestApiClient {
     return res.json();
   }
 
+  /** Clean up all issues, test cases, and projects created during this test. */
   async cleanup() {
     if (this.seededIssueIds.length > 0 && this.workspaceId) {
       const client = new pg.Client(DATABASE_URL);

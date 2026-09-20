@@ -1,4 +1,4 @@
-import type { CommentAuthorType, CommentDesignDelivery, Reaction } from "./comment";
+import type { CommentAgentDelivery, CommentAuthorType, CommentDesignDelivery, Reaction } from "./comment";
 import type { Attachment } from "./attachment";
 
 export interface AssigneeFrequencyEntry {
@@ -34,6 +34,7 @@ export interface TimelineEntry {
   resolved_by_id?: string | null;
   source_task_id?: string | null;
   design_delivery?: CommentDesignDelivery;
+  agent_deliveries?: CommentAgentDelivery[];
   /**
    * Set only on a comment deleted while it still had replies: the server keeps
    * it as an empty tombstone so the replies keep their parent. Read it through

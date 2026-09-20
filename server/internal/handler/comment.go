@@ -51,9 +51,10 @@ type CommentResponse struct {
 	// raw prompt body. It is NOT settable through this endpoint — there is no
 	// request field for it — which is exactly why the card keys off this id
 	// rather than a `type` value the client controls.
-	QuickActionID *string              `json:"quick_action_id,omitempty"`
-	Reactions     []ReactionResponse   `json:"reactions"`
-	Attachments   []AttachmentResponse `json:"attachments"`
+	QuickActionID   *string                        `json:"quick_action_id,omitempty"`
+	Reactions       []ReactionResponse             `json:"reactions"`
+	Attachments     []AttachmentResponse           `json:"attachments"`
+	AgentDeliveries []CommentAgentDeliveryResponse `json:"agent_deliveries,omitempty"`
 	// Orientation stats — populated only on the roots_only path and omitted in
 	// every other mode, so the default response shape stays byte-identical for
 	// existing callers. ReplyCount is the number of descendants in the thread;
@@ -84,6 +85,13 @@ type CommentResponse struct {
 	// can show "comment posted, but N targets were not triggered".
 	TriggerOutcomes []CommentTriggerOutcome        `json:"trigger_outcomes,omitempty"`
 	DesignDelivery  *CommentDesignDeliveryResponse `json:"design_delivery,omitempty"`
+}
+
+type CommentAgentDeliveryResponse struct {
+	AgentID     string  `json:"agent_id"`
+	AgentName   string  `json:"agent_name"`
+	Status      string  `json:"status"`
+	DeliveredAt *string `json:"delivered_at,omitempty"`
 }
 
 // CommentTriggerOutcome is the per-target result of an explicit @agent / @squad
@@ -646,11 +654,13 @@ func (h *Handler) ListComments(w http.ResponseWriter, r *http.Request) {
 	}
 	grouped := h.groupReactions(r, commentIDs)
 	groupedAtt := h.groupAttachments(r, commentIDs)
+	deliveries := h.groupCommentAgentDeliveries(r.Context(), commentIDs)
 
 	resp := make([]CommentResponse, len(result.Comments))
 	for i, c := range result.Comments {
 		cid := uuidToString(c.ID)
 		resp[i] = commentToResponse(c, grouped[cid], groupedAtt[cid])
+		resp[i].AgentDeliveries = deliveries[cid]
 		// Attach roots_only orientation stats when present (nil map elsewhere).
 		if st, ok := result.RootStats[cid]; ok {
 			rc := st.ReplyCount
@@ -1514,6 +1524,7 @@ type CommentTriggerAgentResponse struct {
 	AvatarURL *string `json:"avatar_url,omitempty"`
 	Source    string  `json:"source"`
 	Reason    string  `json:"reason"`
+	Delivery  string  `json:"delivery"` // current_run | follow_up
 }
 
 type commentAgentTriggerSource string
@@ -1565,13 +1576,14 @@ func commentAgentTriggerReason(trigger commentAgentTrigger) string {
 	}
 }
 
-func (h *Handler) commentAgentTriggerToResponse(trigger commentAgentTrigger) CommentTriggerAgentResponse {
+func (h *Handler) commentAgentTriggerToResponse(trigger commentAgentTrigger, delivery string) CommentTriggerAgentResponse {
 	return CommentTriggerAgentResponse{
 		ID:        uuidToString(trigger.Agent.ID),
 		Name:      trigger.Agent.Name,
 		AvatarURL: h.resolveAvatarURLPtr(textToPtr(trigger.Agent.AvatarUrl)),
 		Source:    string(trigger.Source),
 		Reason:    commentAgentTriggerReason(trigger),
+		Delivery:  delivery,
 	}
 }
 
@@ -1656,8 +1668,21 @@ func (h *Handler) PreviewCommentTriggers(w http.ResponseWriter, r *http.Request)
 		Agents:  make([]CommentTriggerAgentResponse, 0, len(triggers)),
 		Blocked: commentBlockedTargetOutcomes(targets),
 	}
+	steerHeadSHA := pgtype.Text{}
+	if actorType == "member" && editingComment == nil && parentID.Valid {
+		steerHeadSHA = h.TaskService.ResolveIssueReviewSHAParam(r.Context(), issue.ID)
+	}
 	for _, trigger := range triggers {
-		resp.Agents = append(resp.Agents, h.commentAgentTriggerToResponse(trigger))
+		delivery := "follow_up"
+		if actorType == "member" && editingComment == nil && parentID.Valid {
+			count, err := h.Queries.CountSteerableTasksForComment(r.Context(), db.CountSteerableTasksForCommentParams{
+				IssueID: issue.ID, AgentID: trigger.Agent.ID, CommentID: parentID, HeadSha: steerHeadSHA,
+			})
+			if err == nil && count == 1 {
+				delivery = "current_run"
+			}
+		}
+		resp.Agents = append(resp.Agents, h.commentAgentTriggerToResponse(trigger, delivery))
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -2003,6 +2028,53 @@ func (h *Handler) CreateComment(w http.ResponseWriter, r *http.Request) {
 	resp.TriggerOutcomes = h.triggerTasksForComment(r.Context(), issue, comment, parentComment, authorType, authorID, originatorUserID, suppressAgentIDs, req.ConciseMode)
 
 	writeJSON(w, http.StatusCreated, resp)
+}
+
+func (h *Handler) groupCommentAgentDeliveries(ctx context.Context, commentIDs []pgtype.UUID) map[string][]CommentAgentDeliveryResponse {
+	grouped := make(map[string][]CommentAgentDeliveryResponse)
+	if len(commentIDs) == 0 {
+		return grouped
+	}
+	rows, err := h.Queries.ListCommentAgentDeliveries(ctx, commentIDs)
+	if err != nil {
+		slog.Warn("list comment agent deliveries failed", "error", err)
+		return grouped
+	}
+	for _, row := range rows {
+		status := row.Status
+		if status == "steering" {
+			status = "pending"
+		}
+		grouped[uuidToString(row.CommentID)] = append(grouped[uuidToString(row.CommentID)], CommentAgentDeliveryResponse{
+			AgentID: uuidToString(row.AgentID), AgentName: row.AgentName, Status: status,
+			DeliveredAt: timestampToPtr(row.DeliveredAt),
+		})
+	}
+	return grouped
+}
+
+func (h *Handler) publishCommentDeliveryUpdate(r *http.Request, commentID pgtype.UUID) {
+	comment, err := h.Queries.GetComment(r.Context(), commentID)
+	if err != nil {
+		return
+	}
+	issue, err := h.Queries.GetIssue(r.Context(), comment.IssueID)
+	if err != nil {
+		return
+	}
+	id := uuidToString(comment.ID)
+	resp := commentToResponse(comment, h.groupReactions(r, []pgtype.UUID{comment.ID})[id], h.groupAttachments(r, []pgtype.UUID{comment.ID})[id])
+	resp.IssueRevision = issue.Revision
+	resp.AgentDeliveries = h.groupCommentAgentDeliveries(r.Context(), []pgtype.UUID{comment.ID})[id]
+	h.publish(protocol.EventCommentUpdated, uuidToString(issue.WorkspaceID), "system", "", map[string]any{
+		"comment": resp, "issue_revision": issue.Revision,
+	})
+}
+
+func (h *Handler) publishCommentDeliveryUpdates(r *http.Request, commentIDs []pgtype.UUID) {
+	for _, commentID := range commentIDs {
+		h.publishCommentDeliveryUpdate(r, commentID)
+	}
 }
 
 // clientAuthorableCommentTypes is what POST /comments accepts. `status_change`
@@ -3124,8 +3196,9 @@ type commentMentionTarget struct {
 	ExecAgentID string
 	Status      DispatchStatus
 	ReasonCode  DispatchReasonCode
-	// unusable carries the refused agent and its verdict for the one reason
-	// that needs a durable trace (runtime_unusable). Internal to the handler:
+	// unusable carries the refused agent and its verdict for the reasons that
+	// need a durable trace (runtime_unusable or runtime_access_denied). Internal
+	// to the handler:
 	// the resolver runs for the composer PREVIEW as well, so it only records
 	// what happened — writing the notice is the trigger path's job.
 	unusable *blockedRuntimeNotice
@@ -3181,7 +3254,7 @@ func (h *Handler) resolveMentionedAgentCommentTriggers(ctx context.Context, issu
 	blockTarget := func(targetType, targetID string, reason DispatchReasonCode) {
 		addTarget(commentMentionTarget{TargetType: targetType, TargetID: targetID, Status: DispatchBlocked, ReasonCode: reason})
 	}
-	// blockUnusableTarget is blockTarget for the one verdict that also needs a
+	// blockUnusableTarget is blockTarget for the verdicts that also need a
 	// durable trace. Every author gets it, including a human: the chip and toast
 	// carry the reason code but not the repair command, and an agent-authored
 	// mention has nobody watching a response at all.
@@ -3455,7 +3528,7 @@ func (h *Handler) UpdateComment(w http.ResponseWriter, r *http.Request) {
 		// revision writes defer cancellation until the conditional UPDATE wins,
 		// so a race that returns 409 cannot mutate the task queue.
 		if !strictContentEdit {
-			cancelled, err = h.TaskService.CancelTasksByTriggerComment(r.Context(), existing.ID)
+			cancelled, err = h.TaskService.CancelTasksByEditedComment(r.Context(), existing.ID)
 			if err != nil {
 				slog.Warn("cancel tasks for edited comment failed", "comment_id", uuidToString(existing.ID), "error", err)
 				writeError(w, http.StatusInternalServerError, "failed to prepare comment edit")

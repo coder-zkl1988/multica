@@ -151,7 +151,8 @@
     "designs_empty": "工作区还没有设计稿。可以先到「设计」页创建。",
     "designs_selected": "已选",
     "designs_untitled": "未命名设计稿",
-    "remove_resource": "移除 {{title}}"
+    "remove_resource": "移除 {{title}}",
+    "repos_ref_default": "默认分支"
   },
   "create_issue": {
     "sr_manual": "新建任务",

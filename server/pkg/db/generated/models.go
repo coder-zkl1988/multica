@@ -448,6 +448,25 @@ type ChannelOutboundMessage struct {
 	CreatedAt        pgtype.Timestamptz `json:"created_at"`
 }
 
+type ChannelReplyDelivery struct {
+	TurnID         pgtype.UUID        `json:"turn_id"`
+	TaskID         pgtype.UUID        `json:"task_id"`
+	BindingID      pgtype.UUID        `json:"binding_id"`
+	InstallationID pgtype.UUID        `json:"installation_id"`
+	ChannelType    string             `json:"channel_type"`
+	ChatID         string             `json:"chat_id"`
+	Phase          string             `json:"phase"`
+	SendState      string             `json:"send_state"`
+	MessageID      string             `json:"message_id"`
+	ChunksSent     int32              `json:"chunks_sent"`
+	OwnerToken     pgtype.UUID        `json:"owner_token"`
+	OwnerExpiresAt pgtype.Timestamptz `json:"owner_expires_at"`
+	SettledReason  string             `json:"settled_reason"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+	AttemptDepth   int32              `json:"attempt_depth"`
+}
+
 type ChannelTaskDelivery struct {
 	TaskID           pgtype.UUID        `json:"task_id"`
 	BindingID        pgtype.UUID        `json:"binding_id"`
@@ -619,6 +638,19 @@ type Comment struct {
 	RecoverySettledAt pgtype.Timestamptz `json:"recovery_settled_at"`
 	DeletedAt         pgtype.Timestamptz `json:"deleted_at"`
 	DesignDelivery    []byte             `json:"design_delivery"`
+}
+
+type CommentAgentDelivery struct {
+	CommentID     pgtype.UUID        `json:"comment_id"`
+	AgentID       pgtype.UUID        `json:"agent_id"`
+	TaskID        pgtype.UUID        `json:"task_id"`
+	RuntimeID     pgtype.UUID        `json:"runtime_id"`
+	Status        string             `json:"status"`
+	FailureReason pgtype.Text        `json:"failure_reason"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+	ClaimedAt     pgtype.Timestamptz `json:"claimed_at"`
+	DeliveredAt   pgtype.Timestamptz `json:"delivered_at"`
 }
 
 type CommentReaction struct {
@@ -1894,6 +1926,7 @@ type RuntimeProfile struct {
 	Enabled        bool               `json:"enabled"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+	RuntimeType    string             `json:"runtime_type"`
 }
 
 type SeatCapacityOutbox struct {
@@ -2029,6 +2062,7 @@ type TaskMessage struct {
 	Output          pgtype.Text        `json:"output"`
 	CreatedAt       pgtype.Timestamptz `json:"created_at"`
 	OutputTruncated pgtype.Bool        `json:"output_truncated"`
+	CallID          pgtype.Text        `json:"call_id"`
 }
 
 type TaskPendingInput struct {

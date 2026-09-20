@@ -385,6 +385,8 @@ import {
   EMPTY_LIST_TEST_CASE_MODULES_RESPONSE,
   EMPTY_RECOMMEND_TEST_CASES_RESPONSE,
   EMPTY_LIST_TEST_CASE_REVISIONS_RESPONSE,
+  RuntimeProfileSchema,
+  RuntimeProfileListSchema,
 } from "./schemas";
 import {
   AgentTaskListSchema,
@@ -2483,25 +2485,39 @@ export class ApiClient {
     const res = await this.fetch<{ runtime_profiles?: RuntimeProfile[] }>(
       `/api/workspaces/${workspaceId}/runtime-profiles`,
     );
-    return res.runtime_profiles ?? [];
+    return parseWithFallback(
+      res.runtime_profiles ?? [],
+      RuntimeProfileListSchema,
+      [] as RuntimeProfile[],
+      { endpoint: "listRuntimeProfiles" },
+    );
   }
 
   async getRuntimeProfile(
     workspaceId: string,
     profileId: string,
   ): Promise<RuntimeProfile> {
-    return this.fetch(
+    const result = await this.fetch<RuntimeProfile>(
       `/api/workspaces/${workspaceId}/runtime-profiles/${profileId}`,
     );
+    return parseWithFallback(result, RuntimeProfileSchema, result, {
+      endpoint: "runtimeProfile",
+    });
   }
 
   async createRuntimeProfile(
     workspaceId: string,
     body: CreateRuntimeProfileRequest,
   ): Promise<RuntimeProfile> {
-    return this.fetch(`/api/workspaces/${workspaceId}/runtime-profiles`, {
-      method: "POST",
-      body: JSON.stringify(body),
+    const result = await this.fetch<RuntimeProfile>(
+      `/api/workspaces/${workspaceId}/runtime-profiles`,
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+      },
+    );
+    return parseWithFallback(result, RuntimeProfileSchema, result, {
+      endpoint: "runtimeProfile",
     });
   }
 
@@ -2510,13 +2526,16 @@ export class ApiClient {
     profileId: string,
     patch: UpdateRuntimeProfileRequest,
   ): Promise<RuntimeProfile> {
-    return this.fetch(
+    const result = await this.fetch<RuntimeProfile>(
       `/api/workspaces/${workspaceId}/runtime-profiles/${profileId}`,
       {
         method: "PATCH",
         body: JSON.stringify(patch),
       },
     );
+    return parseWithFallback(result, RuntimeProfileSchema, result, {
+      endpoint: "runtimeProfile",
+    });
   }
 
   async deleteRuntimeProfile(

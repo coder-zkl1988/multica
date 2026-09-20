@@ -151,7 +151,8 @@
     "designs_empty": "이 워크스페이스에는 아직 디자인 문서가 없습니다. 「디자인」 페이지에서 만들 수 있습니다.",
     "designs_selected": "선택됨",
     "designs_untitled": "제목 없는 디자인",
-    "remove_resource": "{{title}} 제거"
+    "remove_resource": "{{title}} 제거",
+    "repos_ref_default": "기본 브랜치"
   },
   "create_issue": {
     "sr_manual": "새 태스크",

@@ -58,6 +58,7 @@ func TestReasonStringWireValues(t *testing.T) {
 		{ReasonEnvironmentPrepareFailed, "environment_prepare_failed"},
 		{ReasonInvalidTaskIdentity, "invalid_task_identity"},
 		{ReasonIssueWindowRestricted, "issue_window_restricted"},
+		{ReasonRuntimeAccessDenied, "runtime_access_denied"},
 		// Agent-side.
 		{ReasonAgentProviderAuthOrAccess, "agent_error.provider_auth_or_access"},
 		{ReasonAgentProviderQuotaLimit, "agent_error.provider_quota_limit"},
@@ -75,7 +76,7 @@ func TestReasonStringWireValues(t *testing.T) {
 		{ReasonAgentUnknown, "agent_error.unknown"},
 	}
 
-	if got, want := len(cases), 30; got != want {
+	if got, want := len(cases), 31; got != want {
 		t.Fatalf("constant count = %d, want %d (canonical taxonomy size)", got, want)
 	}
 
@@ -110,6 +111,7 @@ func TestIsAgentError(t *testing.T) {
 		ReasonEnvironmentPrepareFailed,
 		ReasonInvalidTaskIdentity,
 		ReasonIssueWindowRestricted,
+		ReasonRuntimeAccessDenied,
 		ReasonToolBudgetExceeded,
 	}
 	for _, r := range platformSide {
@@ -151,8 +153,8 @@ func TestAllReasonsContents(t *testing.T) {
 	t.Parallel()
 
 	got := AllReasons()
-	if len(got) != 30 {
-		t.Fatalf("AllReasons() returned %d entries, want 30", len(got))
+	if len(got) != 31 {
+		t.Fatalf("AllReasons() returned %d entries, want 31", len(got))
 	}
 
 	seen := make(map[Reason]bool, len(got))
@@ -169,8 +171,8 @@ func TestAllReasonsContents(t *testing.T) {
 		}
 	}
 
-	if platformCount != 16 {
-		t.Errorf("AllReasons(): platform-side count = %d, want 16", platformCount)
+	if platformCount != 17 {
+		t.Errorf("AllReasons(): platform-side count = %d, want 17", platformCount)
 	}
 	if agentCount != 14 {
 		t.Errorf("AllReasons(): agent-side count = %d, want 14", agentCount)
@@ -189,6 +191,7 @@ func TestAllReasonsContents(t *testing.T) {
 		ReasonAuthenticationExpired,
 		ReasonRuntimeCLITimeout, ReasonEnvironmentPrepareFailed,
 		ReasonInvalidTaskIdentity, ReasonIssueWindowRestricted,
+		ReasonRuntimeAccessDenied,
 		ReasonToolBudgetExceeded,
 		ReasonAgentProviderAuthOrAccess, ReasonAgentProviderQuotaLimit,
 		ReasonAgentProviderCapacityOrRateLimit, ReasonAgentProviderServerError,

@@ -157,6 +157,13 @@ describe("failureReasonLabel", () => {
     );
   });
 
+  it("maps runtime access denial to actionable recovery copy", () => {
+    const label = failureReasonLabel("runtime_access_denied", enT);
+    expect(label).toMatch(/make the runtime public/i);
+    expect(label).toMatch(/rebind\/copy/i);
+    expect(label).not.toBe("Run identity mismatch");
+  });
+
   it("distinguishes the configured run budget from provider account quota", () => {
     const expected: Record<SupportedLocale, string> = {
       en: "Configured run budget exhausted",

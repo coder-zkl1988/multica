@@ -151,7 +151,8 @@
     "designs_empty": "ワークスペースにはまだデザインドキュメントがありません。「デザイン」ページで作成できます。",
     "designs_selected": "選択済み",
     "designs_untitled": "無題のデザイン",
-    "remove_resource": "{{title}} を削除"
+    "remove_resource": "{{title}} を削除",
+    "repos_ref_default": "デフォルトブランチ"
   },
   "create_issue": {
     "sr_manual": "新規タスク",

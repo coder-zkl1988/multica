@@ -111,7 +111,7 @@ vi.mock("@multica/core/projects/queries", () => ({
 // agent is still runnable. Default true so every existing case is unaffected.
 const invokableAgentIds = vi.hoisted(() => ({ current: null as string[] | null }));
 const presenceAvailability = vi.hoisted(() => ({ current: "online" }));
-vi.mock("@multica/views/issues/components", () => ({
+vi.mock("../../issues/components/pickers/assignee-picker", () => ({
   canAssignAgent: (agent: { id: string }) =>
     invokableAgentIds.current === null ||
     invokableAgentIds.current.includes(agent.id),

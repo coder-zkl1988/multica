@@ -71,6 +71,14 @@
       "label": "仓库 URL",
       "placeholder": "https://github.com/owner/repo"
     },
+    "ref_field": {
+      "label": "起始分支（可选）",
+      "hint": "任务将从此分支开始，并以此分支作为 Pull Request 目标；留空则使用仓库默认分支。",
+      "error_commit": "这是一个 commit，不是分支。任务会交付回它开始的分支；如果只需要某次修订，请在 multica repo checkout 中使用 --ref。",
+      "error_too_long": "最多输入 255 个字符。",
+      "error_characters": "分支名不能包含空格或 ~ ^ : ? * [ \\ 这些字符",
+      "error_format": "请输入有效的分支名。"
+    },
     "label_field": {
       "label": "标签（可选）",
       "placeholder": "例如：后端"

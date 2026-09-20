@@ -71,6 +71,14 @@
       "label": "Repository URL",
       "placeholder": "https://github.com/owner/repo"
     },
+    "ref_field": {
+      "label": "Starting branch (optional)",
+      "hint": "Tasks start from this branch and open their pull requests against it. Leave empty to use the repository's default branch.",
+      "error_commit": "That's a commit, not a branch. Tasks deliver back to the branch they start from — for a one-off revision, pass --ref to multica repo checkout.",
+      "error_too_long": "Use at most 255 characters.",
+      "error_characters": "A branch name can't contain spaces or any of ~ ^ : ? * [ \\",
+      "error_format": "Not a valid branch name."
+    },
     "label_field": {
       "label": "Label (optional)",
       "placeholder": "e.g. Backend"

@@ -155,7 +155,8 @@
     "designs_empty": "No design documents in this workspace yet. Create one from the Designs tab.",
     "designs_selected": "Selected",
     "designs_untitled": "Untitled design",
-    "remove_resource": "Remove {{title}}"
+    "remove_resource": "Remove {{title}}",
+    "repos_ref_default": "Default branch"
   },
   "create_issue": {
     "sr_manual": "New Issue",

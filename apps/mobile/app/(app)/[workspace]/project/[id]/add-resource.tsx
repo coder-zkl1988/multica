@@ -6,11 +6,23 @@
  * v1 only supports `github_repo` resource type. Loose client-side
  * validation: URL must look like `https://github.com/owner/repo`. Server
  * is the canonical validator (validateAndNormalizeResourceRef in Go).
+ *
+ * The optional branch is where this project's tasks START and where they open
+ * their pull requests — empty means the repository's default branch, and a
+ * task that passes its own ref still wins. Parity with the web/desktop attach
+ * form in packages/views/projects/components/project-resources-section.tsx,
+ * including declining a full-length commit id: a commit has no branch to
+ * deliver back to, so one-off revisions belong on `repo checkout --ref`.
  */
 import { useCallback, useState } from "react";
 import { Alert, Pressable, View } from "react-native";
 import { useLocalSearchParams, router } from "expo-router";
 import { useTranslation } from "react-i18next";
+import {
+  looksLikeCommitSha,
+  splitGithubUrlRef,
+  validateGitRef,
+} from "@multica/core/github";
 import { Text } from "@/components/ui/text";
 import { TextField } from "@/components/ui/text-field";
 import { useCreateProjectResource } from "@/data/mutations/projects";
@@ -23,17 +35,39 @@ export default function AddResourceRoute() {
   const { t } = useTranslation("projects");
 
   const [url, setUrl] = useState("");
+  const [ref, setRef] = useState("");
   const [label, setLabel] = useState("");
 
-  const valid = GITHUB_PATTERN.test(url.trim());
+  // Someone who wants a branch copies it out of the address bar, and
+  // GITHUB_PATTERN accepts the whole `.../tree/<branch>` string — which used to
+  // be stored as the clone URL, a target that does not exist. Split it into the
+  // two visible fields instead, so a wrong guess is correctable before saving.
+  //
+  // Normalising the URL is unconditional: gating it on the branch field being
+  // empty meant a second pasted browse URL was stored whole. Whether to
+  // overwrite the branch is the separate question, and the pasted pair wins.
+  const onUrlChange = useCallback((next: string) => {
+    const split = splitGithubUrlRef(next);
+    setUrl(split.url);
+    if (split.ref) setRef(split.ref);
+  }, []);
+
+  const refErrorKey = refErrorMessageKey(ref);
+  const refMessage = refErrorKey ? t(refErrorKey) : null;
+  const valid = GITHUB_PATTERN.test(url.trim()) && refMessage === null;
   const submitting = createResource.isPending;
 
   const onSubmit = useCallback(() => {
     if (!valid || submitting) return;
+    const trimmedRef = ref.trim();
     createResource.mutate(
       {
         resource_type: "github_repo",
-        resource_ref: { url: url.trim() },
+        // Omit the key entirely when empty: an absent ref is what "use the
+        // default branch" looks like on the wire.
+        resource_ref: trimmedRef
+          ? { url: url.trim(), ref: trimmedRef }
+          : { url: url.trim() },
         label: label.trim() || undefined,
       },
       {
@@ -48,7 +82,7 @@ export default function AddResourceRoute() {
         },
       },
     );
-  }, [valid, submitting, createResource, url, label, t]);
+  }, [valid, submitting, createResource, url, ref, label, t]);
 
   return (
     <View className="flex-1">
@@ -76,13 +110,30 @@ export default function AddResourceRoute() {
           </Text>
           <TextField
             value={url}
-            onChangeText={setUrl}
+            onChangeText={onUrlChange}
             placeholder={t("add_resource.url_field.placeholder")}
             autoCapitalize="none"
             autoCorrect={false}
             keyboardType="url"
             autoFocus
           />
+        </View>
+        <View className="gap-1">
+          <Text className="text-xs text-muted-foreground">
+            {t("add_resource.ref_field.label")}
+          </Text>
+          <TextField
+            value={ref}
+            onChangeText={setRef}
+            placeholder="main"
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+          <Text
+            className={`text-xs ${refMessage === null ? "text-muted-foreground" : "text-destructive"}`}
+          >
+            {refMessage ?? t("add_resource.ref_field.hint")}
+          </Text>
         </View>
         <View className="gap-1">
           <Text className="text-xs text-muted-foreground">
@@ -97,4 +148,33 @@ export default function AddResourceRoute() {
       </View>
     </View>
   );
+}
+
+/**
+ * The message to show under the branch field, or null when it is acceptable.
+ *
+ * Mirrors refErrorMessageKey in
+ * packages/views/projects/components/github-ref-field.tsx. The commit check
+ * runs first on purpose: a commit id is a perfectly valid ref to store — what
+ * makes it wrong here is that this field names a branch to deliver back to.
+ */
+function refErrorMessageKey(value: string):
+  | "add_resource.ref_field.error_commit"
+  | "add_resource.ref_field.error_too_long"
+  | "add_resource.ref_field.error_characters"
+  | "add_resource.ref_field.error_format"
+  | null {
+  if (looksLikeCommitSha(value)) {
+    return "add_resource.ref_field.error_commit";
+  }
+  const validation = validateGitRef(value);
+  if (validation.ok) return null;
+  switch (validation.reason) {
+    case "too_long":
+      return "add_resource.ref_field.error_too_long";
+    case "invalid_characters":
+      return "add_resource.ref_field.error_characters";
+    default:
+      return "add_resource.ref_field.error_format";
+  }
 }
