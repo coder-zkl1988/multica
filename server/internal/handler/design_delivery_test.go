@@ -617,12 +617,8 @@ func TestGitHubAdvanceUIDesignDoneWithoutActiveDelivery(t *testing.T) {
 	`, uiIssueID); err != nil {
 		t.Fatalf("mark ui issue role: %v", err)
 	}
-	issue, err := testHandler.Queries.GetIssue(context.Background(), parseUUID(uiIssueID))
-	if err != nil {
-		t.Fatalf("load ui issue: %v", err)
-	}
-
-	testHandler.advanceIssueToDone(context.Background(), issue, testWorkspaceID)
+	linkMergedGitHubPRForTest(t, uiIssueID, "ui-design-done")
+	testHandler.maybeAutoCompleteIssue(context.Background(), parseUUID(testWorkspaceID), parseUUID(uiIssueID), nil)
 
 	var issueStatus string
 	if err := testPool.QueryRow(context.Background(), `SELECT status FROM issue WHERE id = $1`, uiIssueID).Scan(&issueStatus); err != nil {

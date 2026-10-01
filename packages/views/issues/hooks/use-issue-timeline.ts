@@ -67,6 +67,11 @@ function commentToTimelineEntry(c: Comment): TimelineEntry {
     resolved_by_id: c.resolved_by_id,
     source_task_id: c.source_task_id,
     design_delivery: c.design_delivery,
+    supplements: c.supplements,
+    supplement_task_id: c.supplement_task_id,
+    supplement_status: c.supplement_status,
+    supplement_failure_reason: c.supplement_failure_reason,
+    supplement_delivered_at: c.supplement_delivered_at,
     deleted_at: c.deleted_at,
   };
 }
@@ -352,12 +357,12 @@ export function useIssueTimeline(issueId: string, userId?: string) {
   // on success — so a slow send no longer leaves the box full next to an
   // already-posted comment, and a failed send keeps the draft.
   const submitComment = useCallback(
-    async (content: string, attachmentIds?: string[], suppressAgentIds?: string[], designRequestOrConcise?: CommentDesignRequest | boolean, conciseMode?: boolean): Promise<string | false> => {
+    async (content: string, attachmentIds?: string[], suppressAgentIds?: string[], designRequestOrConcise?: CommentDesignRequest | boolean, conciseMode?: boolean, steerTaskIds?: string[]): Promise<string | false> => {
       if (!content.trim() || !userId) return false;
       const designRequest = typeof designRequestOrConcise === "boolean" ? undefined : designRequestOrConcise;
       const requestedConciseMode = typeof designRequestOrConcise === "boolean" ? designRequestOrConcise : conciseMode;
       try {
-        const comment = await createComment({ content, attachmentIds, suppressAgentIds, designRequest, conciseMode: requestedConciseMode });
+        const comment = await createComment({ content, attachmentIds, suppressAgentIds, designRequest, conciseMode: requestedConciseMode, steerTaskIds });
         warnUnhandledTriggers(comment?.trigger_outcomes, comment?.content);
         return comment.id;
       } catch (err) {
@@ -373,7 +378,7 @@ export function useIssueTimeline(issueId: string, userId?: string) {
   );
 
   const submitReply = useCallback(
-    async (parentId: string, content: string, attachmentIds?: string[], suppressAgentIds?: string[], designRequestOrConcise?: CommentDesignRequest | boolean, conciseMode?: boolean): Promise<string | false> => {
+    async (parentId: string, content: string, attachmentIds?: string[], suppressAgentIds?: string[], designRequestOrConcise?: CommentDesignRequest | boolean, conciseMode?: boolean, steerTaskIds?: string[]): Promise<string | false> => {
       if (!content.trim() || !userId) return false;
       const designRequest = typeof designRequestOrConcise === "boolean" ? undefined : designRequestOrConcise;
       const requestedConciseMode = typeof designRequestOrConcise === "boolean" ? designRequestOrConcise : conciseMode;
@@ -386,6 +391,7 @@ export function useIssueTimeline(issueId: string, userId?: string) {
           suppressAgentIds,
           designRequest,
           conciseMode: requestedConciseMode,
+          steerTaskIds,
         });
         warnUnhandledTriggers(comment?.trigger_outcomes, comment?.content);
         return comment.id;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { RESOURCES } from "../locales";
+import { resources as RESOURCES } from "./i18n/resources";
 import {
   PROJECT_PRIORITIES,
   PROJECT_STATUSES,

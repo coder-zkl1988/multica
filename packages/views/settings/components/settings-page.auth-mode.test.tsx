@@ -10,8 +10,25 @@ vi.mock("@multica/core/config", () => ({
   useFeatureEnabled: (_key: string, defaultValue = false) => defaultValue,
 }));
 vi.mock("@multica/core/paths", () => ({
-  useCurrentWorkspace: () => ({ name: "Acme" }),
+  useCurrentWorkspace: () => ({ id: "ws-1", name: "Acme" }),
 }));
+vi.mock("@multica/core/auth", () => ({
+  useAuthStore: (selector: (state: { user: null }) => unknown) => selector({ user: null }),
+}));
+vi.mock("@multica/core/permissions", () => ({
+  useCurrentMember: () => ({ role: "owner" }),
+}));
+vi.mock("@multica/core/workspace/avatar-url", () => ({
+  resolvePublicFileUrl: (url: string | null | undefined) => url ?? null,
+}));
+vi.mock("./connected-apps-tab", () => ({
+  ConnectedAppsTab: () => null,
+  useComposioAvailable: () => false,
+}));
+vi.mock("./use-settings-search-index", () => ({ useSettingsSearchIndex: () => [] }));
+vi.mock("./code-tab", () => ({ CodeTab: () => null }));
+vi.mock("./channels-tab", () => ({ ChannelsTab: () => null }));
+vi.mock("./wakeups-tab", () => ({ WakeupsTab: () => null }));
 vi.mock("../../navigation", () => ({
   useNavigation: () => ({
     pathname: "/acme/settings",

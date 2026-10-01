@@ -110,7 +110,7 @@ export default function IssuesFilterRoute() {
                 size={16}
               />
               <Text className="flex-1 text-sm text-foreground">
-                {option.label}
+                {catalog.labelOf(option.key)}
               </Text>
               <CheckMark checked={checked} />
             </Pressable>

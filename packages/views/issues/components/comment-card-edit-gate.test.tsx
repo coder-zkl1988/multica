@@ -40,6 +40,8 @@ vi.mock("@multica/core/workspace/hooks", () => ({
   useActorName: () => ({ getActorName: () => "Ada" }),
 }));
 
+vi.mock("@multica/core/hooks", () => ({ useWorkspaceId: () => "ws-1" }));
+
 vi.mock("../../common/actor-avatar", () => ({
   ActorAvatar: () => null,
 }));
@@ -406,9 +408,8 @@ describe("comment thread — selection reply", () => {
     expect(screen.queryByRole("button", { name: "Preview reply" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
     await waitFor(() => expect(onReply).toHaveBeenCalledTimes(1));
-    // Trailing undefineds are this fork's extra reply arguments (design
-    // request, concise mode); neither is set from a plain selection reply.
-    expect(onReply).toHaveBeenCalledWith("agent-child", "> Selected agent text\n\nReply-specific note", undefined, undefined, undefined, undefined);
+    // Selection replies carry no design request, concise mode, or run supplement.
+    expect(onReply).toHaveBeenCalledWith("agent-child", "> Selected agent text\n\nReply-specific note", undefined, undefined, undefined, undefined, undefined);
     await waitFor(() => {
       expect(useCommentDraftStore.getState().getAnnotations("reply:issue-1:comment-1")).toHaveLength(0);
       expect(document.querySelector("[data-reply-annotation-overlay]")).not.toBeInTheDocument();

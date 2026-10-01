@@ -27,6 +27,37 @@ describe("issue comment design delivery", () => {
     expect(result.id).toBe("comment-1");
     expect(result.design_delivery).toBeUndefined();
   });
+  it("keeps design, concise mode, and run supplements on the same comment request", async () => {
+    const request = { request_id: "request-1", operation: "design" as const, agent_id: "chosen-agent", project_resource_id: "repository-1" };
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      ...comment,
+      supplements: [{ task_id: "run-1", agent_id: "chosen-agent", status: "pending" }],
+    }), { status: 201 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await new ApiClient("https://api.example.test").createComment(
+      "issue-1", comment.content, undefined, "thread-1", undefined, undefined,
+      { designRequest: request, conciseMode: true, steerTaskIds: ["run-1"] },
+    );
+
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
+      content: comment.content, type: "comment", parent_id: "thread-1",
+      design_request: request, concise_mode: true, steer_task_ids: ["run-1"],
+    });
+    expect(result.supplements).toEqual([{ task_id: "run-1", agent_id: "chosen-agent", status: "pending" }]);
+  });
+  it("keeps a comment readable when supplement metadata is malformed", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      ...comment,
+      supplements: [{ task_id: 42, status: "future" }],
+      supplement_status: "future",
+    }), { status: 201 })));
+
+    const result = await new ApiClient("https://api.example.test").createComment("issue-1", comment.content);
+    expect(result.id).toBe("comment-1");
+    expect(result.supplements).toEqual([]);
+    expect(result.supplement_status).toBeUndefined();
+  });
   it("shows no live snapshot for 204, malformed, or another task's preview", async () => {
     const snapshot = { task_id: "task-other", document_id: "document-1", content_digest: "digest", files: { "prototype/index.html": "PGgxPkhlbGxvPC9oMT4=" }, entry_path: "prototype/index.html", updated_at: "2026-09-08" };
     vi.stubGlobal("fetch", vi.fn()
@@ -336,7 +367,53 @@ describe("ApiClient pull-request response schema", () => {
 
     await expect(
       new ApiClient("https://api.example.test").listIssuePullRequests("issue-1"),
-    ).resolves.toEqual({ pull_requests: [] });
+    ).resolves.toEqual({ pull_requests: [], auto_complete: null });
+  });
+
+  function stubPullRequests(body: unknown) {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify(body), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+  }
+
+  it("parses the auto-complete decision and link source", async () => {
+    stubPullRequests({
+      pull_requests: [{ ...validPR, link_source: "title" }],
+      auto_complete: { state: "waiting", pull_request_ids: ["pr-1"], issue_disabled: false, workspace_enabled: true, target_status: "in_review" },
+    });
+    const result = await new ApiClient("https://api.example.test").listIssuePullRequests("issue-1");
+    expect(result.pull_requests[0]?.link_source).toBe("title");
+    expect(result.auto_complete).toEqual({
+      state: "waiting",
+      pull_request_ids: ["pr-1"],
+      issue_disabled: false,
+      workspace_enabled: true,
+      target_status: "in_review",
+    });
+  });
+
+  it("treats a missing auto-complete block (older backend) as null", async () => {
+    stubPullRequests({ pull_requests: [validPR] });
+    const result = await new ApiClient("https://api.example.test").listIssuePullRequests("issue-1");
+    expect(result.auto_complete).toBeNull();
+    expect(result.pull_requests).toHaveLength(1);
+  });
+
+  it("keeps the PR list when only the auto-complete block or link source is malformed", async () => {
+    stubPullRequests({
+      pull_requests: [{ ...validPR, link_source: "psychic" }],
+      auto_complete: { state: 42 },
+    });
+    const result = await new ApiClient("https://api.example.test").listIssuePullRequests("issue-1");
+    expect(result.auto_complete).toBeNull();
+    expect(result.pull_requests).toHaveLength(1);
+    expect(result.pull_requests[0]?.link_source).toBeUndefined();
   });
 });
 
@@ -1541,7 +1618,7 @@ describe("ApiClient", () => {
       { id: "invalid", status: "failed", execution_metrics: "unavailable" },
     ]), { status: 200, headers: { "Content-Type": "application/json" } })));
 
-    const tasks = await new ApiClient("https://api.example.test").listAgentTasks("agent-1");
+    const { tasks } = await new ApiClient("https://api.example.test").listAgentTasksPage("agent-1");
     expect(tasks.map((task) => [task.id, task.status, task.execution_metrics])).toEqual([
       ["legacy", "completed", undefined],
       ["invalid", "failed", undefined],
@@ -1642,13 +1719,41 @@ describe("ApiClient", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const client = new ApiClient("https://api.example.test");
-    const tasks = await client.listAgentTasks("agent-1");
+    const { tasks, nextCursor } = await client.listAgentTasksPage("agent-1");
 
     expect(tasks.map((task) => task.id)).toEqual(["task-1", "task-2"]);
+    expect(nextCursor).toBeNull();
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0]?.[0]).toBe(
-      "https://api.example.test/api/agents/agent-1/tasks",
+      "https://api.example.test/api/agents/agent-1/tasks?limit=200",
     );
+  });
+
+  it("reads a lossless task cursor and passes it to the next bounded request", async () => {
+    const cursor = "2026-09-24T01:02:03.123456Z|00000000-0000-0000-0000-000000000001";
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(new Response(
+      JSON.stringify([{ id: "task-1", status: "completed" }]),
+      { headers: { "X-Agent-Tasks-Next-Cursor": cursor } },
+    )));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+    const page = await client.listAgentTasksPage("agent-1", { limit: 7 });
+    expect(page.nextCursor).toBe(cursor);
+    const controller = new AbortController();
+    await client.listAgentTasksPage("agent-1", { limit: 7, before: page.nextCursor!, signal: controller.signal });
+    const request = new URL(fetchMock.mock.calls[1]![0]);
+    expect(request.searchParams.get("limit")).toBe("7");
+    expect(request.searchParams.get("before")).toBe(cursor);
+    expect(fetchMock.mock.calls[1]![1].signal).toBe(controller.signal);
+  });
+
+  it("drops the continuation when the task page is malformed", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({ tasks: "not-an-array" }),
+      { headers: { "X-Agent-Tasks-Next-Cursor": "cursor" } },
+    )));
+    const client = new ApiClient("https://api.example.test");
+    await expect(client.listAgentTasksPage("agent-1")).resolves.toEqual({ tasks: [], nextCursor: null });
   });
 
   it("falls back to an empty agent task history for a malformed response", async () => {
@@ -1661,7 +1766,7 @@ describe("ApiClient", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const client = new ApiClient("https://api.example.test");
-    await expect(client.listAgentTasks("agent-1")).resolves.toEqual([]);
+    await expect(client.listAgentTasksPage("agent-1")).resolves.toEqual({ tasks: [], nextCursor: null });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
@@ -3399,6 +3504,19 @@ describe("ApiClient workspace MCP servers", () => {
 
     expect(result).toHaveLength(1);
     expect(result[0]?.transport).toBe("websocket");
+  });
+
+  it("keeps the agent count and degrades a malformed one to unknown", async () => {
+    stubJSON([
+      { ...server, id: "srv-1", agent_count: 3 },
+      { ...server, id: "srv-2", agent_count: "many" },
+      { ...server, id: "srv-3" },
+    ]);
+
+    const result = await new ApiClient("https://api.example.test")
+      .listWorkspaceMcpServers("ws-1");
+
+    expect(result.map((item) => item.agent_count)).toEqual([3, undefined, undefined]);
   });
 
   it("POSTs a name and entry when creating a library server", async () => {

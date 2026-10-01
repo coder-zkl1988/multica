@@ -61,7 +61,7 @@ export function StatusPickerBody({ value, onChange }: Props) {
                 size={18}
               />
               <Text className="flex-1 text-base text-foreground">
-                {option.label}
+                {catalog.labelOf(option.key)}
               </Text>
               {selected ? (
                 <Ionicons name="checkmark" size={20} color={checkColor} />

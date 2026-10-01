@@ -2,14 +2,14 @@
 
 import { composeAnnotatedReply, EMPTY_REPLY_ANNOTATIONS, hasReplyIntent } from "@multica/core/drafts/reply-annotation";
 import { ReplyAnnotations } from "./reply-annotations";
-import { useRef, useState, useCallback, useEffect, useMemo } from "react";
+import { useRef, useState, useEffect, useMemo, useCallback } from "react";
 import { ContentEditor, type ContentEditorRef, useFileDropZone, FileDropOverlay, useLazyEditor, useUploadGate, useComposerSubmit } from "../../editor";
 import { FileUploadButton } from "@multica/ui/components/common/file-upload-button";
 import { SubmitButton } from "@multica/ui/components/common/submit-button";
-import { ActorAvatar } from "../../common/actor-avatar";
-import { contentReferencesAttachment } from "@multica/core/types";
-import type { Agent, CommentDesignRequest, Issue } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
+import { ActorAvatar } from "../../common/actor-avatar";
+import { contentReferencesAttachment, type AgentTask } from "@multica/core/types";
+import type { Agent, CommentDesignRequest, Issue } from "@multica/core/types";
 import { Palette } from "lucide-react";
 import { CommentDesignDeliveryComposer } from "./comment-design-delivery-composer";
 import { formatShortcut, useShortcut } from "@multica/core/shortcuts";
@@ -20,6 +20,9 @@ import type { AvatarSize } from "@multica/ui/lib/avatar-size";
 import { useT } from "../../i18n";
 import { CommentTriggerChips } from "./comment-trigger-chips";
 import { useCommentTriggerPreview } from "../hooks/use-comment-trigger-preview";
+import { useRecipientActions } from "../hooks/use-recipient-actions";
+import { SteerAttachmentNotice } from "./steer-attachment-notice";
+import { useStopRunsBeforeSend } from "./use-stop-runs-before-send";
 import { useCommentUploads } from "./use-comment-uploads";
 import { useQuickActionMenu } from "../hooks/use-quick-action-menu";
 
@@ -37,7 +40,7 @@ interface ReplyInputProps {
   avatarId: string;
   /** Resolves true on success, false on failure — the reply box keeps its text
    *  (locked + spinning) until then, clearing only on success. */
-  onSubmit: (content: string, attachmentIds?: string[], suppressAgentIds?: string[], designRequest?: CommentDesignRequest | boolean, conciseMode?: boolean) => Promise<string | boolean>;
+  onSubmit: (content: string, attachmentIds?: string[], suppressAgentIds?: string[], designRequest?: CommentDesignRequest | boolean, conciseMode?: boolean, steerTaskIds?: string[]) => Promise<string | boolean>;
   /** Called after the server accepts the reply and the composer is cleared. */
   onAccepted?: (commentId: string) => void;
   size?: "sm" | "default";
@@ -45,7 +48,12 @@ interface ReplyInputProps {
   draftKey?: `reply:${string}:${string}`;
   targetMissing?: boolean;
   onEditAnnotation?: (id: string) => boolean;
+  /** Whether a running turn takes this reply by default: true for the turn
+   *  that belongs to this thread. Other recipients' turns can still be chosen. */
+  steerByDefault?: (task: AgentTask) => boolean;
 }
+
+const NEVER_STEER_BY_DEFAULT = () => false;
 
 // ---------------------------------------------------------------------------
 // ReplyInput
@@ -69,6 +77,7 @@ function ReplyInputComposer({
   draftKey = `reply:${issueId}:${parentId}`,
   onEditAnnotation,
   targetMissing = false,
+  steerByDefault = NEVER_STEER_BY_DEFAULT,
 }: ReplyInputProps) {
   const { t } = useT("issues");
   const { t: tEditor } = useT("editor");
@@ -97,7 +106,6 @@ function ReplyInputComposer({
   const [appliedInjection, setAppliedInjection] = useState(0);
   const setDraft = useCommentDraftStore((s) => s.setDraft);
   const [isEmpty, setIsEmpty] = useState(!initialDraft?.trim());
-  const [suppressedAgentIds, setSuppressedAgentIds] = useState<Set<string>>(() => new Set());
   const annotations = useCommentDraftStore((s) => draftKey ? s.getAnnotations(draftKey) : EMPTY_REPLY_ANNOTATIONS);
   const composedContent = useMemo(() => composeAnnotatedReply(content, annotations), [content, annotations]);
   const canSend = !targetMissing && (annotations.length ? hasReplyIntent(content, annotations) : !isEmpty);
@@ -110,6 +118,19 @@ function ReplyInputComposer({
   // CommentInput.
   const { attachments: pendingAttachments, handleUpload, gate } =
     useCommentUploads(draftKey, { issueId }, uploadGate, editorRef);
+  const hasAttachments = useMemo(
+    () => pendingAttachments.some((a) => contentReferencesAttachment(content, a)) || gate.uploading,
+    [pendingAttachments, content, gate.uploading],
+  );
+  const { recipients, attachmentsBlockSteer, routing, setAction, reset: resetRecipients } = useRecipientActions({
+    issueId,
+    agents: triggerPreview.agents,
+    allowSteer: true,
+    hasAttachments,
+    steerByDefault,
+    resetKey: `${issueId}:${parentId}`,
+  });
+  const stopRunsBeforeSend = useStopRunsBeforeSend(issueId);
 
   // Readonly-first: static shell until intent; an unsent draft mounts the
   // real editor immediately (see CommentInput). This is also what keeps the
@@ -153,27 +174,6 @@ function ReplyInputComposer({
     };
   }, [draftKey, setDraft]);
 
-  useEffect(() => {
-    setSuppressedAgentIds(new Set());
-  }, [issueId, parentId]);
-
-  useEffect(() => {
-    const visible = new Set(triggerPreview.agents.map((agent) => agent.id));
-    setSuppressedAgentIds((prev) => {
-      const next = new Set([...prev].filter((id) => visible.has(id)));
-      return next.size === prev.size ? prev : next;
-    });
-  }, [triggerPreview.agents]);
-
-  const toggleSuppressedAgent = useCallback((agentId: string) => {
-    setSuppressedAgentIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(agentId)) next.delete(agentId);
-      else next.add(agentId);
-      return next;
-    });
-  }, []);
-
   // Await-then-render send (see CommentInput): the shared hook keeps the text,
   // locks + spins, and clears only once the server accepts it.
   // Stale-submit guard — see CommentInput.
@@ -204,14 +204,21 @@ function ReplyInputComposer({
     // to pull the eye elsewhere. `containerRef` keeps this from stealing focus
     // if the user moved to another composer while the reply was in flight.
     afterAccepted: () => (editorScrubbedRef.current ? "refocus" : "none"),
-    onSubmit: (content) => {
+    onSubmit: async (content) => {
       const delivery = useCommentDraftStore.getState().drafts[draftKey]?.designRequest;
-      if (delivery && (!issue || !deliveryValid)) return Promise.resolve(false);
+      if (delivery && (!issue || !deliveryValid)) return false;
       editorScrubbedRef.current = false;
-      // Flush pending debounce before snapshotting — see CommentInput.
-      const pending = editorRef.current?.flushPendingUpdate?.();
-      if (pending != null) setDraft(draftKey, pending);
-      submittedEntryRef.current = useCommentDraftStore.getState().drafts[draftKey];
+      const { suppressAgentIds, steerTaskIds } = routing;
+      // A preview still catching up with an edited @mention can name a
+      // recipient this comment no longer addresses: never stop a run on it.
+      const restartTaskIds = !delivery && triggerPreview.isCurrent ? routing.restartTaskIds : [];
+      if (restartTaskIds.length > 0 && !(await stopRunsBeforeSend(restartTaskIds))) return false;
+      if (draftKey) {
+        // Flush pending debounce before snapshotting — see CommentInput.
+        const pending = editorRef.current?.flushPendingUpdate?.();
+        if (pending != null) setDraft(draftKey, pending);
+        submittedEntryRef.current = useCommentDraftStore.getState().drafts[draftKey];
+      }
       const submittedDesignRequest = useCommentDraftStore.getState().drafts[draftKey]?.designRequest;
       // Bind only uploads the body still references (see CommentInput):
       // deleting an inline image really unbinds it; close-surviving uploads
@@ -219,31 +226,18 @@ function ReplyInputComposer({
       const activeIds = pendingAttachments
         .filter((a) => contentReferencesAttachment(content, a))
         .map((a) => a.id);
-      const suppressAgentIds = triggerPreview.agents
-        .filter((agent) => suppressedAgentIds.has(agent.id))
-        .map((agent) => agent.id);
       const conciseMode = useCommentComposerStore.getState().concise || undefined;
-      const result = submittedDesignRequest
-        ? conciseMode === undefined
-          ? onSubmit(
-              content,
-              activeIds.length > 0 ? activeIds : undefined,
-              suppressAgentIds.length > 0 ? suppressAgentIds : undefined,
-              submittedDesignRequest,
-            )
-          : onSubmit(
-              content,
-              activeIds.length > 0 ? activeIds : undefined,
-              suppressAgentIds.length > 0 ? suppressAgentIds : undefined,
-              submittedDesignRequest,
-              conciseMode,
-            )
-        : onSubmit(
-            content,
-            activeIds.length > 0 ? activeIds : undefined,
-            suppressAgentIds.length > 0 ? suppressAgentIds : undefined,
-            conciseMode,
-          );
+      const args = [
+        content,
+        activeIds.length > 0 ? activeIds : undefined,
+        suppressAgentIds.length > 0 ? suppressAgentIds : undefined,
+        submittedDesignRequest ?? conciseMode,
+      ] as const;
+      const result = !submittedDesignRequest && steerTaskIds.length > 0
+        ? onSubmit(...args, undefined, steerTaskIds)
+        : submittedDesignRequest && conciseMode !== undefined
+          ? onSubmit(...args, conciseMode)
+          : onSubmit(...args);
       return result.then((commentId) => {
         acceptedCommentIdRef.current = typeof commentId === "string" ? commentId : null;
         return !!commentId;
@@ -261,7 +255,7 @@ function ReplyInputComposer({
       editorRef.current?.clearContent();
       setContent("");
       setIsEmpty(true);
-      setSuppressedAgentIds(new Set());
+      resetRecipients();
       editorScrubbedRef.current = true;
       if (acceptedCommentIdRef.current) onAccepted?.(acceptedCommentIdRef.current);
     },
@@ -285,6 +279,7 @@ function ReplyInputComposer({
           (!isEmpty || annotations.length > 0 || !!designRequest) && "pb-9",
         )}
       >
+        {attachmentsBlockSteer && <SteerAttachmentNotice />}
         {draftKey && annotations.length > 0 && <>
           {targetMissing && <p role="alert" className="mb-2 text-caption text-destructive">{t(($) => $.reply.annotations.target_deleted)}</p>}
           <ReplyAnnotations draftKey={draftKey} annotations={annotations}
@@ -361,12 +356,11 @@ function ReplyInputComposer({
         )}
         <div className="absolute bottom-0 left-0 right-32 min-w-0" hidden={!!designRequest}>
           <CommentTriggerChips
-            agents={triggerPreview.agents}
+            recipients={recipients}
             blocked={triggerPreview.blocked}
             hasAllMembersMention={triggerPreview.hasAllMembersMention}
             draftContent={composedContent}
-            suppressedAgentIds={suppressedAgentIds}
-            onToggle={toggleSuppressedAgent}
+            onActionChange={setAction}
           />
         </div>
         <div className="absolute bottom-0 right-0 flex items-center gap-1">
@@ -381,7 +375,17 @@ function ReplyInputComposer({
             onSelect={(file) => lazy.uploadOrQueue([file])}
           />
           {triggerPreview.agents.length > 0 && <ConciseModeToggle disabled={submitting} />}
-          <SubmitButton
+          {!designRequest && routing.restartTaskIds.length > 0 ? (
+            <Button
+              size="sm"
+              variant="destructive"
+              className="rounded-full"
+              onClick={submit}
+              disabled={!canSend || submitting || gate.uploading}
+            >
+              {t(($) => $.comment.restart_send)}
+            </Button>
+          ) : <SubmitButton
             onClick={submit}
             disabled={!canSend || (!!designRequest && (!issue || !deliveryValid))}
             loading={submitting}
@@ -396,7 +400,7 @@ function ReplyInputComposer({
             ariaLabel={gate.uploading
               ? tEditor(($) => $.upload.in_progress)
               : t(($) => $.comment.send_tooltip)}
-          />
+          />}
         </div>
         {isDragOver && <FileDropOverlay />}
       </div>

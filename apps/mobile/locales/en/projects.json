@@ -1,4 +1,20 @@
 {
+  "list": {
+    "title": "Projects",
+    "empty": {
+      "title": "No projects yet",
+      "message": "Group related issues into a project to track progress and assign a lead.",
+      "create": "Create project"
+    },
+    "search_placeholder": "Search projects...",
+    "header_title": "Projects",
+    "error": {
+      "load_prefix": "Failed to load projects:",
+      "unknown": "unknown error",
+      "retry": "Retry"
+    },
+    "new_project_accessibility_label": "New project"
+  },
   "status": {
     "planned": "Planned",
     "in_progress": "In Progress",
@@ -14,6 +30,12 @@
     "none": "No priority"
   },
   "detail": {
+    "properties": "Properties",
+    "related_issues": "Related issues",
+    "resources": "Resources",
+    "lead": "Lead",
+    "no_resources": "No resources attached.",
+    "add_resource": "Add resource",
     "header_default_title": "Project",
     "header_back_title": "Back",
     "actions_accessibility_label": "Project actions",
@@ -36,6 +58,58 @@
       "cancel": "Cancel",
       "confirm": "Delete"
     }
+  },
+  "form": {
+    "icon_emoji": "Icon (emoji)",
+    "title": "Title",
+    "title_placeholder": "Project title",
+    "description": "Description",
+    "description_placeholder": "What is this project about?",
+    "discard_title": "Discard project?",
+    "discard_message": "Your draft will be lost.",
+    "keep_editing": "Keep editing",
+    "save_failed": "Failed to create project",
+    "save_failed_edit": "Failed to save"
+  },
+  "errors": {
+    "load_failed": "Failed to load project: {{message}}"
+  },
+  "actions": {
+    "creating": "Creating...",
+    "saving": "Saving..."
+  },
+  "menu": {
+    "pin": "Pin",
+    "unpin": "Unpin",
+    "edit_details": "Edit details",
+    "open_web": "Open on web",
+    "project_actions": "Project actions"
+  },
+  "delete": {
+    "title": "Delete project?",
+    "message": "This cannot be undone. Issues in this project will become unassigned from any project."
+  },
+  "properties": {
+    "status": "Status",
+    "priority": "Priority",
+    "lead": "Lead",
+    "unassigned": "Unassigned"
+  },
+  "resources": {
+    "title": "Resources",
+    "add": "Add",
+    "detach_title": "Detach resource?",
+    "detach": "Detach",
+    "empty": "No resources attached.",
+    "detach_confirm": {
+      "title": "Detach resource?",
+      "cancel": "Cancel",
+      "confirm": "Detach"
+    }
+  },
+  "runs": {
+    "working": "Working",
+    "count": "Runs · {{count}}"
   },
   "edit": {
     "header_title": "Edit Project",
@@ -125,29 +199,9 @@
       "search_placeholder": "Search members or agents"
     }
   },
-  "list": {
-    "header_title": "Projects",
-    "error": {
-      "load_prefix": "Failed to load projects:",
-      "unknown": "unknown error",
-      "retry": "Retry"
-    },
-    "new_project_accessibility_label": "New project",
-    "empty": {
-      "title": "No projects yet",
-      "message": "Group related issues into a project to track progress and assign a lead.",
-      "create": "Create project"
-    }
-  },
   "header_card": {
     "add_description": "Add a description",
     "progress": "Progress"
-  },
-  "properties": {
-    "status": "Status",
-    "priority": "Priority",
-    "lead": "Lead",
-    "unassigned": "Unassigned"
   },
   "related_issues": {
     "error": {
@@ -156,16 +210,6 @@
       "retry": "Retry"
     },
     "empty": "No issues yet."
-  },
-  "resources": {
-    "title": "Resources",
-    "add": "Add",
-    "empty": "No resources attached.",
-    "detach_confirm": {
-      "title": "Detach resource?",
-      "cancel": "Cancel",
-      "confirm": "Detach"
-    }
   },
   "picker_body": {
     "lead": {

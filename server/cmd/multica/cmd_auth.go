@@ -417,7 +417,17 @@ func runAuthLoginBrowser(cmd *cobra.Command) error {
 	defer cancel()
 	exchange, err := exchangeSSOCode(ctx, serverURL, code, verifier, callbackURL)
 	if err != nil {
-		return cli.WithUserMessage("Sign-in did not complete: the server could not issue an access token for the CLI. Run `multica login` again.", err)
+		return cli.WithUserMessageUnlessNetwork("Sign-in did not complete: the server could not issue an access token for the CLI. Run `multica login` again.", err)
+	}
+
+	// Verify the exchanged credential before persisting it.
+	patClient := cli.NewAPIClient(serverURL, "", exchange.Token)
+	var me struct {
+		Name  string `json:"name"`
+		Email string `json:"email"`
+	}
+	if err := patClient.GetJSON(ctx, "/api/me", &me); err != nil {
+		return cli.WithUserMessageUnlessNetwork("Sign-in did not complete: the server did not accept the new credential. Run `multica login` again.", err)
 	}
 
 	// Save to config. Reset workspace data on every login because the user or
@@ -521,7 +531,7 @@ func runAuthLoginToken(cmd *cobra.Command, providedToken string) error {
 		Email string `json:"email"`
 	}
 	if err := client.GetJSON(ctx, "/api/me", &me); err != nil {
-		return cli.WithUserMessage("Could not sign in with that token — make sure it is valid and not expired, then run `multica login --token <token>` again.", err)
+		return cli.WithUserMessageUnlessNetwork("Could not sign in with that token — make sure it is valid and not expired, then run `multica login --token <token>` again.", err)
 	}
 
 	profile := resolveProfile(cmd)

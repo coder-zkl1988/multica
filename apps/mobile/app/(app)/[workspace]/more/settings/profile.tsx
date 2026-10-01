@@ -70,20 +70,19 @@ export default function ProfileSettingsScreen() {
       tCommon("cancel"),
     ];
     const removeIndex = user?.avatar_url ? 2 : -1;
-    const cancelIndex = user?.avatar_url ? 3 : 2;
-    const visibleOptions = user?.avatar_url ? options : options.filter((_, i) => i !== 2);
+    const cancelIndex = options.length - 1;
 
     showActionSheetWithOptions(
       {
-        options: visibleOptions,
+        options,
         cancelButtonIndex: cancelIndex,
         destructiveButtonIndex: removeIndex >= 0 ? removeIndex : undefined,
       },
       async (index) => {
-        if (index === cancelIndex) return;
+        if (index === undefined || index === cancelIndex) return;
         if (index === 0) await pickFromCamera();
         else if (index === 1) await pickFromLibrary();
-        else if (index === removeIndex) await removeAvatar();
+        else if (index === 2) await removeAvatar();
       },
     );
   };

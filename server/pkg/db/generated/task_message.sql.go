@@ -224,7 +224,7 @@ func (q *Queries) DeleteTaskMessages(ctx context.Context, taskID pgtype.UUID) er
 }
 
 const getLatestTaskMessageForTask = `-- name: GetLatestTaskMessageForTask :one
-SELECT id, task_id, seq, type, tool, content, input, output, created_at, output_truncated FROM task_message
+SELECT id, task_id, seq, type, tool, content, input, output, created_at, output_truncated, call_id FROM task_message
 WHERE task_id = $1
 ORDER BY seq DESC
 LIMIT 1
@@ -244,6 +244,7 @@ func (q *Queries) GetLatestTaskMessageForTask(ctx context.Context, taskID pgtype
 		&i.Output,
 		&i.CreatedAt,
 		&i.OutputTruncated,
+		&i.CallID,
 	)
 	return i, err
 }

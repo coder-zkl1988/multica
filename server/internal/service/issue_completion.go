@@ -75,6 +75,7 @@ func (s *TaskService) applyIssueCompletion(ctx context.Context, qtx *db.Queries,
 			nextStatus = "blocked"
 		}
 		updated, updateErr := qtx.UpdateIssue(ctx, db.UpdateIssueParams{
+			SourceTaskID:     task.ID,
 			ID:               task.IssueID,
 			ExpectedRevision: pgtype.Int8{Int64: issue.Revision, Valid: true},
 			Status:           pgtype.Text{String: nextStatus, Valid: true},
@@ -263,6 +264,6 @@ func (s *TaskService) publishIssueCompletion(ctx context.Context, task db.AgentT
 		s.Bus.Publish(events.Event{Type: protocol.EventCommentCreated, WorkspaceID: util.UUIDToString(issue.WorkspaceID), ActorType: "agent", ActorID: util.UUIDToString(task.AgentID), Payload: map[string]any{
 			"comment": fields, "issue_title": issue.Title, "issue_status": issue.Status, "issue_revision": row.IssueRevision,
 		}})
-		s.AutoUnresolveThreadOnReply(ctx, committed.roots[util.UUIDToString(comment.ID)], util.UUIDToString(issue.WorkspaceID), "agent", util.UUIDToString(task.AgentID))
+		s.AutoUnresolveThreadOnReply(ctx, committed.roots[util.UUIDToString(comment.ID)], util.UUIDToString(issue.WorkspaceID), "agent", util.UUIDToString(task.AgentID), task.ID)
 	}
 }

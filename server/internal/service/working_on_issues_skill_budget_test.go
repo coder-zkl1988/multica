@@ -7,13 +7,10 @@ import (
 
 func TestWorkingOnIssuesSkillKeepsCoreSmallAndDetailsLoadable(t *testing.T) {
 	const (
-		issuesPath        = "references/issues.md"
-		maxCoreLines      = 110
-		maxCoreBytes      = 6_500
-		// The reference tracks upstream's own growth: this budget is a guard
-		// against runaway prose, not a freeze. Raise it deliberately, as here
-		// for the reworked PR-linking and comment-editing sections, rather than
-		// trimming contracts to fit.
+		issuesPath   = "references/issues.md"
+		maxCoreLines = 110
+		maxCoreBytes = 6_500
+		// Keep all operational contracts loadable without expanding their budget.
 		maxReferenceLines = 470
 		maxReferenceBytes = 24_500
 	)
@@ -53,11 +50,12 @@ func TestWorkingOnIssuesSkillKeepsCoreSmallAndDetailsLoadable(t *testing.T) {
 		"do not duplicate it with a CLI comment",
 		"available for deliberate state changes",
 		"successful process exit alone does not establish review readiness",
-		"the PR **title**, the **branch name**, and the **body right after a closing keyword**",
-		"title or body only",
-		"never the branch",
-		"a passing reference and links nothing",
-		"put the key in the title, the branch, or after a closing keyword",
+		"**title**, **branch name**, or **body right after a closing keyword**",
+		"A bare key in the body links nothing",
+		"Closing keywords only link",
+		"the workspace picks what a merge does",
+		"When every linked PR is merged",
+		"Closed-unmerged PRs prevent that move",
 		"multica issue pull-requests <issue-id> --output json",
 		"snapshot_available == true",
 		"Only then does `checks_rollup == null` mean \"no checks\"",
@@ -74,11 +72,18 @@ func TestWorkingOnIssuesSkillKeepsCoreSmallAndDetailsLoadable(t *testing.T) {
 		"multica issue runs <issue-id> --siblings --output json",
 		"Nothing here reserves an issue or serialises anything",
 		"todo starts work now, backlog parks it",
-		"when a whole stage finishes",
-		"one implicit stage",
+		"when a stage closes while a later stage is waiting",
+		"when every child, staged or not, is closed",
+		"With no stages, only the last child's completion wakes the parent",
 		"Advancement is agent-driven",
 		"multica issue status <stage-2-child-id> todo",
 		"status_category",
+		"--until-pr checks",
+		"--until-children-done --stage 2",
+		"wakeup checkin <issue> <wakeup-id>",
+		"paused_reason=max_fires",
+		"paused_reason=loop",
+		"reopening does not restore them",
 	} {
 		if !containsUnwrapped(issues, want) {
 			t.Errorf("%s missing operational contract %q", issuesPath, want)

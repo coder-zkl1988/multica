@@ -1,35 +1,25 @@
 {
-  "header_title": "设置",
+  "title": "设置",
   "account": {
     "title": "账号",
+    "sign_out": "退出登录",
+    "sign_out_message": "你需要重新登录才能在此设备上使用 Multica。",
+    "workspace": "工作区",
+    "workspaces": "工作区",
+    "notifications_subtitle": "收件箱和系统提醒",
+    "load_failed": "工作区加载失败",
     "user_avatar_alt": "用户头像",
     "notifications_row": {
       "title": "通知",
       "subtitle": "收件箱与系统提醒"
     }
   },
-  "workspaces": {
-    "title": "工作区",
-    "error": "加载工作区失败"
-  },
-  "appearance": {
-    "title": "外观",
-    "theme": {
-      "light": "浅色",
-      "dark": "深色",
-      "system": "跟随系统"
-    }
-  },
-  "language": {
-    "title": "语言",
-    "options": {
-      "english": "English",
-      "chinese": "中文",
-      "system": "跟随系统"
-    }
-  },
-  "sign_out_message": "退出后需要重新登录才能使用 Multica。",
   "profile": {
+    "title": "个人资料",
+    "name": "姓名",
+    "email": "邮箱",
+    "save": "保存个人资料",
+    "saving": "保存中…",
     "header_title": "个人资料",
     "your_avatar_alt": "你的头像",
     "tap_to_change_photo": "点击更换头像",
@@ -37,7 +27,6 @@
     "name_placeholder": "你的姓名",
     "email_label": "邮箱",
     "email_hint": "邮箱在注册时设置，此处无法修改。",
-    "saving": "保存中…",
     "avatar_actions": {
       "take_photo": "拍照",
       "choose_library": "从相册选择",
@@ -64,7 +53,37 @@
       "message": "个人资料更新失败。"
     }
   },
+  "appearance": {
+    "title": "外观",
+    "theme": {
+      "light": "浅色",
+      "dark": "深色",
+      "system": "跟随系统"
+    },
+    "light": "浅色",
+    "dark": "深色",
+    "system": "跟随系统"
+  },
+  "language": {
+    "title": "语言",
+    "system": "跟随系统",
+    "english": "English",
+    "chinese_simplified": "简体中文",
+    "options": {
+      "english": "English",
+      "chinese": "中文",
+      "system": "跟随系统"
+    }
+  },
   "notifications": {
+    "title": "通知",
+    "issues": "任务",
+    "inbox": "收件箱",
+    "chat": "聊天",
+    "mentions": "提及",
+    "assignments": "分配给我的",
+    "status_changes": "状态变更",
+    "saved": "通知设置已保存",
     "error": "加载通知设置失败。",
     "inbox_section": {
       "title": "收件箱通知",
@@ -104,5 +123,55 @@
       "label": "系统通知",
       "description": "账号变更、安全提醒、产品更新。"
     }
-  }
+  },
+  "workspace": {
+    "switch": "切换工作区",
+    "select": "选择工作区",
+    "empty": "还没有工作区"
+  },
+  "avatar": {
+    "take": "拍照",
+    "library": "从相册选择",
+    "remove": "移除头像",
+    "change_hint": "点按更换头像",
+    "permission_title": "需要权限",
+    "permission_message": "拍照需要相机权限。",
+    "too_large_title": "图片过大",
+    "too_large_message": "请选择小于 5 MB 的图片。",
+    "upload_failed": "上传失败",
+    "upload_failed_default": "无法上传头像。",
+    "remove_failed": "移除失败",
+    "remove_failed_default": "无法移除头像。"
+  },
+  "errors": {
+    "load_failed": "通知偏好设置加载失败。",
+    "save_failed": "个人资料保存失败。",
+    "save_failed_default": "无法保存你的个人资料。"
+  },
+  "email_fixed": "邮箱在注册时设置，无法在这里修改。",
+  "groups": {
+    "assignments": "分配给我的",
+    "assignments_description": "任务分配给我或取消分配给我时。",
+    "status_changes": "状态变更",
+    "comments": "评论",
+    "comments_description": "你订阅的任务有新评论时。",
+    "mentions": "提及",
+    "mentions_description": "有人用 @ 提到你时，包括 @all 和 @squad。",
+    "updates": "任务更新",
+    "updates_description": "标题、描述、标签、优先级或截止日期变更时。",
+    "agent_activity": "智能体动态",
+    "agent_activity_description": "智能体运行失败时。",
+    "inbox_notifications": "收件箱通知",
+    "system": "系统",
+    "system_notifications": "系统通知",
+    "system_description": "账号变更、安全提醒和产品更新。"
+  },
+  "groups.assignments_description": "任务分配给我或取消分配给我时。",
+  "groups.mentions_description": "有人用 @ 提到你时，包括 @all 和 @squad。",
+  "header_title": "设置",
+  "workspaces": {
+    "title": "工作区",
+    "error": "加载工作区失败"
+  },
+  "sign_out_message": "退出后需要重新登录才能使用 Multica。"
 }

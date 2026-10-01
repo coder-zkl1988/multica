@@ -292,7 +292,7 @@ func (h *Handler) createCommentDesignDelivery(w http.ResponseWriter, r *http.Req
 		"comment": response, "issue_title": issue.Title, "issue_assignee_type": textToPtr(issue.AssigneeType),
 		"issue_assignee_id": uuidToPtr(issue.AssigneeID), "issue_status": issue.Status, "issue_revision": created.IssueRevision,
 	})
-	h.TaskService.AutoUnresolveThreadOnReply(r.Context(), root, uuidToString(issue.WorkspaceID), actorType, actorID)
+	h.TaskService.AutoUnresolveThreadOnReply(r.Context(), root, uuidToString(issue.WorkspaceID), actorType, actorID, h.wakeupSourceTaskID(r))
 	h.TaskService.NotifyTaskEnqueued(r.Context(), task)
 	writeJSON(w, http.StatusCreated, response)
 }

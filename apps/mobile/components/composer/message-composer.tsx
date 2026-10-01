@@ -342,7 +342,8 @@ export function MessageComposer({
           ),
         );
       } catch (err) {
-        const message = err instanceof Error ? err.message : "Unknown error";
+        const message =
+          err instanceof Error ? err.message : t("common:states.error");
         setAttachments((prev) =>
           prev.map((it) =>
             it.localId === localId
@@ -352,7 +353,7 @@ export function MessageComposer({
         );
       }
     },
-    [uploadContext],
+    [uploadContext, t],
   );
 
   const onImagePress = useCallback(async () => {

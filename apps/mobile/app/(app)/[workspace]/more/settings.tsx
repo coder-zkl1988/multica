@@ -32,7 +32,7 @@ import {
 } from "@/lib/use-color-scheme";
 import { THEME } from "@/lib/theme";
 import { useTranslation } from "react-i18next";
-import { useLocale, type LanguagePreference } from "@/lib/i18n/use-locale";
+import { useLocalePreference, type LocalePreference } from "@/lib/i18n";
 
 function initialsOf(name: string | undefined): string {
   if (!name) return "?";
@@ -58,15 +58,15 @@ export default function SettingsPage() {
   const { t } = useTranslation("settings");
   const { t: tCommon } = useTranslation("common");
   const { preference: langPreference, setPreference: setLangPreference } =
-    useLocale();
+    useLocalePreference();
 
-  const themeOptions: Array<{ value: ThemePreference; label: string }> = [
+  const themeOptions: { value: ThemePreference; label: string }[] = [
     { value: "light", label: t("appearance.theme.light") },
     { value: "dark", label: t("appearance.theme.dark") },
     { value: "system", label: t("appearance.theme.system") },
   ];
 
-  const languageOptions: Array<{ value: LanguagePreference; label: string }> = [
+  const languageOptions: { value: LocalePreference; label: string }[] = [
     { value: "en", label: t("language.options.english") },
     { value: "zh-Hans", label: t("language.options.chinese") },
     { value: "system", label: t("language.options.system") },
@@ -200,7 +200,7 @@ export default function SettingsPage() {
       <SectionGroup title={t("language.title")}>
         <RadioGroup
           value={langPreference}
-          onValueChange={(v) => setLangPreference(v as LanguagePreference)}
+          onValueChange={(v) => setLangPreference(v as LocalePreference)}
           className="gap-0"
         >
           {languageOptions.map((opt, idx) => {

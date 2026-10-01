@@ -106,7 +106,11 @@ export function HelpLauncher() {
         )}
         <DropdownMenuItem
           render={
-            <a href={DOCS_URL} target="_blank" rel="noopener noreferrer" />
+            <a
+              href={DOCS_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+            />
           }
         >
           <BookOpen className="h-3.5 w-3.5" />

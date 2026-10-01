@@ -90,6 +90,7 @@ func TestCodexNativeTokenUsageKeepsMalformedPartialEvidenceIncomplete(t *testing
 	c, _, _ := newTestCodexClient(t)
 	c.threadID = "thread-current"
 	c.notificationProtocol = "raw"
+	c.setActiveTurnID("turn-current")
 	c.handleLine(`{"jsonrpc":"2.0","method":"thread/tokenUsage/updated","params":{"threadId":"thread-current","turnId":"turn-current","tokenUsage":{"last":{"inputTokens":10,"outputTokens":2,"reasoningOutputTokens":1,"totalTokens":12},"total":{"inputTokens":110,"outputTokens":12,"reasoningOutputTokens":3,"totalTokens":122}}}}`)
 
 	c.usageMu.Lock()
@@ -106,6 +107,32 @@ func TestCodexNativeTokenUsageKeepsMalformedPartialEvidenceIncomplete(t *testing
 	if c.executionEvidence.Usage.OutputTokens == nil || *c.executionEvidence.Usage.OutputTokens != 2 || c.executionEvidence.Usage.Complete {
 		t.Fatalf("partial native usage was not preserved honestly: %+v", c.executionEvidence.Usage)
 	}
+}
+
+func TestCodexNativeTokenUsageRetainsBaselineAfterCompletion(t *testing.T) {
+	t.Parallel()
+
+	c, _, _ := newTestCodexClient(t)
+	c.threadID = "thread-current"
+	c.setActiveTurnID("turn-current")
+	c.handleRawNotification("thread/tokenUsage/updated", codexThreadTokenUsageParams(
+		"thread-current", "turn-current",
+		map[string]any{"inputTokens": float64(1000), "cachedInputTokens": float64(300), "outputTokens": float64(50)},
+		map[string]any{"inputTokens": float64(100), "cachedInputTokens": float64(20), "outputTokens": float64(5)},
+	))
+	c.handleRawNotification("turn/completed", map[string]any{
+		"threadId": "thread-current", "turn": map[string]any{"id": "turn-current", "status": "completed"},
+	})
+	c.handleRawNotification("thread/tokenUsage/updated", codexThreadTokenUsageParams(
+		"thread-current", "turn-current",
+		map[string]any{"inputTokens": float64(1100), "cachedInputTokens": float64(320), "outputTokens": float64(60)},
+		map[string]any{"inputTokens": float64(100), "cachedInputTokens": float64(20), "outputTokens": float64(10)},
+	))
+
+	if want := (TokenUsage{InputTokens: 160, CacheReadTokens: 40, OutputTokens: 15}); c.usage != want {
+		t.Fatalf("late cumulative usage = %+v, want %+v", c.usage, want)
+	}
+	assertUsageEvidence(t, c.executionEvidence, 160, 40, 0, 15, true)
 }
 
 func TestCodexSessionFallbackProducesPartialEvidenceWithoutModelInference(t *testing.T) {

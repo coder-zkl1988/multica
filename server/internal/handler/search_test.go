@@ -347,28 +347,25 @@ func orderByClause(t *testing.T, query string) string {
 // already landed in the same tier, so an exactly-titled cancelled issue
 // (tier 1) would still beat an in_progress title-contains match (tier 3).
 func TestBuildSearchQuery_CancelledDemotedAheadOfRelevance(t *testing.T) {
-	orderBy := orderByClause(t, buildSearchQueryForTest(t, "login bug", []string{"login", "bug"}, 0, false, true))
-
-	cancelledAt := strings.Index(orderBy, "i.status = 'cancelled' AND NOT")
-	if cancelledAt == -1 {
-		t.Fatalf("ORDER BY has no cancelled demotion:\n%s", orderBy)
+	query := buildSearchQueryForTest(t, "login bug", []string{"login", "bug"}, 0, false, true)
+	if !strings.Contains(query, "CASE WHEN im.status = 'cancelled' AND NOT (im.title_exact) THEN 1 ELSE 0 END AS cancelled_rank") {
+		t.Fatalf("ranked candidates have no cancelled demotion:\n%s", query)
 	}
 
-	// "ELSE 9 END" terminates the relevance CASE (rankExpr).
-	relevanceEndsAt := strings.Index(orderBy, "ELSE 9 END")
-	if relevanceEndsAt == -1 {
-		t.Fatalf("ORDER BY has no relevance rank CASE:\n%s", orderBy)
-	}
-	if cancelledAt > relevanceEndsAt {
-		t.Errorf("cancelled demotion sorts after the relevance tiers, so a well-matching cancelled issue still outranks live work:\n%s", orderBy)
+	orderBy := orderByClause(t, query)
+	if !strings.HasPrefix(orderBy, "pc.cancelled_rank, pc.relevance_rank, pc.status_rank") {
+		t.Errorf("cancelled demotion does not sort before relevance and status:\n%s", orderBy)
 	}
 
 	// The demotion must not replace the existing status ordering.
-	if !strings.Contains(orderBy, "WHEN 'in_progress' THEN 0") {
-		t.Errorf("statusRank was dropped from ORDER BY:\n%s", orderBy)
+	if !strings.Contains(query, "WHEN 'in_progress' THEN 0") {
+		t.Errorf("statusRank was dropped from ranked candidates:\n%s", query)
 	}
-	if !strings.Contains(orderBy, "i.updated_at DESC") {
+	if !strings.Contains(orderBy, "pc.updated_at DESC") {
 		t.Errorf("recency tie-breaker was dropped from ORDER BY:\n%s", orderBy)
+	}
+	if !strings.Contains(orderBy, "pc.issue_id ASC") {
+		t.Errorf("stable issue ID tie-breaker was dropped from ORDER BY:\n%s", orderBy)
 	}
 }
 
@@ -376,17 +373,16 @@ func TestBuildSearchQuery_CancelledDemotedAheadOfRelevance(t *testing.T) {
 // the searcher already knows which issue they want, so demoting it would just
 // hide the row they asked for.
 func TestBuildSearchQuery_CancelledDirectHitExempt(t *testing.T) {
-	// $1 is the exact (non-wildcard) phrase param.
-	textOnly := orderByClause(t, buildSearchQueryForTest(t, "ship it", []string{"ship", "it"}, 0, false, true))
-	if !strings.Contains(textOnly, "i.status = 'cancelled' AND NOT (LOWER(i.title) = $1)") {
+	textOnly := buildSearchQueryForTest(t, "ship it", []string{"ship", "it"}, 0, false, true)
+	if !strings.Contains(textOnly, "im.status = 'cancelled' AND NOT (im.title_exact)") {
 		t.Errorf("exact-title hit is not exempt from the cancelled demotion:\n%s", textOnly)
 	}
-	if strings.Contains(textOnly, "i.number = ") {
+	if strings.Contains(textOnly, "number_exact") {
 		t.Errorf("non-numeric query should not reference i.number in the demotion:\n%s", textOnly)
 	}
 
-	withNumber := orderByClause(t, buildSearchQueryForTest(t, "MUL-42", []string{"MUL-42"}, 42, true, true))
-	if !strings.Contains(withNumber, "LOWER(i.title) = $1 OR i.number = ") {
+	withNumber := buildSearchQueryForTest(t, "MUL-42", []string{"MUL-42"}, 42, true, true)
+	if !strings.Contains(withNumber, "NOT (im.title_exact OR im.number_exact)") {
 		t.Errorf("identifier lookup is not exempt from the cancelled demotion, so MUL-42 sinks below every fuzzy match:\n%s", withNumber)
 	}
 }

@@ -37,6 +37,9 @@ type auditBot struct {
 	forbidEdits            bool
 	sends                  int64
 	edits                  int
+	// uploads counts sendPhoto / sendDocument / … calls: the attachment hop
+	// behind a reply, which must never run twice for one turn.
+	uploads int
 }
 
 func (a *auditBot) serve(w http.ResponseWriter, r *http.Request) {
@@ -79,6 +82,9 @@ func (a *auditBot) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		_, _ = w.Write([]byte(`{"ok":true,"result":true}`))
+	case "sendPhoto", "sendDocument", "sendVideo", "sendAudio":
+		a.uploads++
+		_, _ = fmt.Fprintf(w, `{"ok":true,"result":{"message_id":%d}}`, 1000+a.uploads)
 	}
 }
 
@@ -90,6 +96,17 @@ func (a *auditBot) wantOne(t *testing.T) {
 		t.Fatalf("visible replies = %d, want 1; methods=%v messages=%v", len(a.messages), a.methods, a.messages)
 	}
 }
+
+// Lease expiry is database time, which auditClock cannot move, so cases that
+// exercise a takeover shorten the lease and really wait it out. The lease also
+// sizes every provider call's budget (a third of it, see callContext), and that
+// budget covers real Postgres writes: the 33ms a 100ms lease left timed out a
+// send claim on a slow -race CI runner and failed the case (MUL-7547).
+const (
+	testLeaseTTL = 600 * time.Millisecond
+	// testLeaseLapse outlasts testLeaseTTL, so any lease taken before it has expired.
+	testLeaseLapse = testLeaseTTL + 150*time.Millisecond
+)
 
 type auditClock struct{ nanos atomic.Int64 }
 
@@ -389,7 +406,7 @@ func TestAuditReplayAfterInterruptionBetweenChunks(t *testing.T) {
 	// The interrupted process never releases its lease — it stops existing.
 	// Expiry is what frees the turn, and expiry is database time, so the test
 	// shortens the lease and really waits for it.
-	a.leaseTTL = 100 * time.Millisecond
+	a.leaseTTL = testLeaseTTL
 	e := telegramTestEventFor(3, 2, strings.Repeat("A", maxMessageUnits)+"tail")
 	a.enqueueTerminalReply(e)
 	reply := a.terminalSessions[e.ChatSessionID].queue[0]
@@ -407,10 +424,10 @@ func TestAuditReplayAfterInterruptionBetweenChunks(t *testing.T) {
 	}
 	// Simulate losing process memory before the next chunk. A replay-capable
 	// caller delivers the same completion against the same durable database.
-	time.Sleep(150 * time.Millisecond)
+	time.Sleep(testLeaseLapse)
 	b := NewOutbound(q, nil, srv.URL, srv.Client(), nil)
 	b.now = c.now
-	b.leaseTTL = 100 * time.Millisecond
+	b.leaseTTL = testLeaseTTL
 	b.enqueueTerminalReply(e)
 	auditDrain(t, b, c, e.ChatSessionID)
 	bot.mu.Lock()

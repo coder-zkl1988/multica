@@ -29,7 +29,7 @@ func runUpdate(_ *cobra.Command, _ []string) error {
 
 	fmt.Fprintf(os.Stderr, "Current version: %s (commit: %s, built: %s)\n", version, commit, date)
 
-	// Check latest version from GitHub.
+	// Check the configured release source.
 	latest, err := cli.FetchLatestRelease()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: could not check latest version: %v\n", err)
@@ -48,7 +48,7 @@ func runUpdate(_ *cobra.Command, _ []string) error {
 		return fmt.Errorf("could not determine latest version; check https://github.com/coder-zkl1988/multica/releases")
 	}
 	targetVersion := latest.TagName
-	fmt.Fprintf(os.Stderr, "Downloading %s from GitHub Releases...\n", targetVersion)
+	fmt.Fprintf(os.Stderr, "Downloading %s from the configured release source...\n", targetVersion)
 	output, err := cli.UpdateViaDownloadWithTimeout(targetVersion, updateDownloadTimeout)
 	if err != nil {
 		return fmt.Errorf("update failed: %w", err)

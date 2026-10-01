@@ -376,26 +376,38 @@ LIMIT 1;
 -- recorded in this run's planned inputs. Timestamp-only implicit agent replies
 -- remain excluded. Replays are scoped to the completing agent, never a fan-out.
 -- Ordered ASC so later comments coalesce onto the follow-up created by the first.
-SELECT * FROM comment
-WHERE issue_id = @issue_id
-  AND design_delivery IS NULL
-  AND (id = ANY(@planned_comment_ids::uuid[])
-       OR comment_thread_root_id(id) = sqlc.narg('comment_thread_id')::uuid)
+SELECT c.* FROM comment c
+WHERE c.issue_id = @issue_id
+  AND c.design_delivery IS NULL
+  AND (c.id = ANY(@planned_comment_ids::uuid[])
+       OR comment_thread_root_id(c.id) = sqlc.narg('comment_thread_id')::uuid)
   -- A deleted comment is no longer input, even when replies keep its row.
-  AND deleted_at IS NULL
+  AND c.deleted_at IS NULL
+  -- A comment that steered this agent's running turn belongs to that turn,
+  -- regardless of delivery status: failed delivery must not become an automatic
+  -- new run. The same comment still reconciles normally for any other agent
+  -- it addressed without steering.
+  AND NOT EXISTS (
+      SELECT 1 FROM task_supplement s
+      JOIN agent_task_queue bound ON bound.id = s.task_id
+      WHERE s.comment_id = c.id AND s.workspace_id = c.workspace_id
+        AND bound.agent_id = @agent_id
+  )
+  -- Nor does a comment whose author chose not to start this agent for it.
+  AND NOT COALESCE(@agent_id::uuid = ANY(c.suppressed_agent_ids), false)
   AND (
       (
-          author_type IN ('member', 'agent')
-          AND (created_at > @since OR id = ANY(@planned_comment_ids::uuid[]))
+          c.author_type IN ('member', 'agent')
+          AND (c.created_at > @since OR c.id = ANY(@planned_comment_ids::uuid[]))
       )
       OR (
-          author_type = 'system'
-          AND type = 'progress_update'
-          AND source_task_id IS NOT NULL
-          AND id = ANY(@planned_comment_ids::uuid[])
+          c.author_type = 'system'
+          AND c.type = 'progress_update'
+          AND c.source_task_id IS NOT NULL
+          AND c.id = ANY(@planned_comment_ids::uuid[])
       )
   )
-ORDER BY created_at ASC, id ASC;
+ORDER BY c.created_at ASC, c.id ASC;
 
 -- name: GetComment :one
 SELECT * FROM comment
@@ -447,8 +459,8 @@ WITH touched_issue AS (
     WHERE issue.id = sqlc.arg(issue_id) AND issue.workspace_id = sqlc.arg(workspace_id)
     RETURNING issue.id, issue.workspace_id, issue.revision
 ), inserted_comment AS (
-    INSERT INTO comment (issue_id, workspace_id, author_type, author_id, content, type, parent_id, source_task_id, quick_action_id, via_plugin_id, id, design_delivery)
-    SELECT ti.id, ti.workspace_id, sqlc.arg(author_type), sqlc.arg(author_id), sqlc.arg(content), sqlc.arg(type), sqlc.narg(parent_id), sqlc.narg(source_task_id), sqlc.narg(quick_action_id), sqlc.narg(via_plugin_id), COALESCE(sqlc.narg('id')::uuid, gen_random_uuid()), sqlc.narg(design_delivery)
+    INSERT INTO comment (issue_id, workspace_id, author_type, author_id, content, type, parent_id, source_task_id, quick_action_id, via_plugin_id, id, design_delivery, suppressed_agent_ids)
+    SELECT ti.id, ti.workspace_id, sqlc.arg(author_type), sqlc.arg(author_id), sqlc.arg(content), sqlc.arg(type), sqlc.narg(parent_id), sqlc.narg(source_task_id), sqlc.narg(quick_action_id), sqlc.narg(via_plugin_id), COALESCE(sqlc.narg('id')::uuid, gen_random_uuid()), sqlc.narg(design_delivery), sqlc.narg(suppressed_agent_ids)::uuid[]
     FROM touched_issue ti
     RETURNING *
 )
@@ -522,6 +534,11 @@ WITH locked_issue AS MATERIALIZED (
     UPDATE comment SET
         content = $2,
         source_task_id = sqlc.narg(source_task_id)::uuid,
+        -- New text re-decides which agents it must not start, under the same
+        -- revision check as the text itself.
+        suppressed_agent_ids = CASE WHEN target.content IS DISTINCT FROM $2
+                                    THEN sqlc.narg(suppressed_agent_ids)::uuid[]
+                                    ELSE comment.suppressed_agent_ids END,
         revision = comment.revision + CASE WHEN target.did_change THEN 1 ELSE 0 END,
         updated_at = CASE WHEN target.did_change THEN now() ELSE comment.updated_at END
     FROM target
@@ -531,7 +548,7 @@ WITH locked_issue AS MATERIALIZED (
               comment.parent_id, comment.workspace_id, comment.resolved_at,
               comment.resolved_by_type, comment.resolved_by_id, comment.source_task_id,
               comment.quick_action_id, comment.via_plugin_id, comment.revision,
-              comment.design_delivery, comment.deleted_at, target.did_change
+              comment.design_delivery, comment.deleted_at, comment.suppressed_agent_ids, target.did_change
 ), touched_issue AS (
     UPDATE issue
     SET revision = issue.revision + 1,
@@ -549,7 +566,7 @@ SELECT updated_comment.id, updated_comment.issue_id, updated_comment.author_type
        updated_comment.resolved_by_type, updated_comment.resolved_by_id,
        updated_comment.source_task_id, updated_comment.quick_action_id,
        updated_comment.via_plugin_id, updated_comment.revision,
-       updated_comment.design_delivery, updated_comment.deleted_at,
+       updated_comment.design_delivery, updated_comment.deleted_at, updated_comment.suppressed_agent_ids,
        COALESCE((SELECT revision FROM touched_issue), 0)::bigint AS issue_revision
 FROM updated_comment;
 

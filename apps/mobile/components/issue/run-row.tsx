@@ -127,7 +127,7 @@ function CancelButton({
   );
 }
 
-function fallbackSummary(task: AgentTask, t: TFunction): string {
+function fallbackSummary(task: AgentTask, t: TFunction<"issues">): string {
   switch (task.kind) {
     case "comment":
       return t("activity.run_row.fallback_summary.comment");
@@ -145,6 +145,7 @@ function fallbackSummary(task: AgentTask, t: TFunction): string {
 
 const STATUS_CLASS: Record<AgentTask["status"], string> = {
   queued: "text-muted-foreground",
+  deferred: "text-muted-foreground",
   dispatched: "text-brand",
   waiting_local_directory: "text-muted-foreground",
   running: "text-brand",

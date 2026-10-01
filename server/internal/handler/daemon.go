@@ -1388,12 +1388,9 @@ func (h *Handler) processHeartbeat(ctx context.Context, runtimeID string, suppor
 	slog.Debug("daemon heartbeat", "runtime_id", runtimeID)
 
 	ack := &protocol.DaemonHeartbeatAckPayload{
-		RuntimeID: runtimeID,
-		Status:    "ok",
-		ServerCapabilities: []string{
-			protocol.DaemonCapabilityRPCV1,
-			protocol.DaemonCapabilityTaskSteerV1,
-		},
+		RuntimeID:          runtimeID,
+		Status:             "ok",
+		ServerCapabilities: []string{protocol.DaemonCapabilityRPCV1},
 	}
 
 	probeUpdateCtx, cancelProbeUpdate := context.WithTimeout(ctx, heartbeatHasPendingTimeout)
@@ -2416,6 +2413,19 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 			}
 		}
 	}
+	if err := (&service.IssueWakeupService{Tasks: h.TaskService}).CheckClaim(r.Context(), *task); err != nil {
+		if !errors.Is(err, service.ErrWakeupForbidden) {
+			return resp, nil, nil, 0, 0, h.rejectClaimSourceLoad(r.Context(), task, err, "wakeup", resp.WakeupID)
+		}
+		return resp, nil, nil, 0, 0, h.failClaimedTaskBeforeLaunch(r.Context(), task, "Wakeup is disabled or its authorization is no longer available.", taskfailure.ReasonInvalidTaskIdentity, "wakeup_unavailable", http.StatusConflict, "wakeup unavailable")
+	}
+	// Preserve PostgreSQL's microseconds: second-resolution display timestamps
+	// cannot distinguish stale claims reclaimed within the same second.
+	if task.DispatchedAt.Valid {
+		generation := task.DispatchedAt.Time.UTC().Format(time.RFC3339Nano)
+		resp.DispatchedAt = &generation
+		resp.StartClaimSupported = true
+	}
 	var issueNumber int32
 	// Claim-only capability: this server resolves the squad-leader role on the
 	// wire (is_leader_task / squad_id), so the daemon must not re-derive it
@@ -2678,23 +2688,6 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 		}
 	}
 
-	// Stored task initiator: chat tasks persist the real message sender at
-	// enqueue time (web: request user; Lark: inbound sender — NOT the chat
-	// session creator, which for Lark groups is the installer). When set, it is
-	// the authoritative initiator for this run; resolve the live name/email so
-	// the daemon can render `## Task Initiator`. Comment-triggered tasks instead
-	// resolve their initiator from the triggering comment's author below; the
-	// two paths are mutually exclusive (a task is either chat or issue-bound).
-	// See MUL-2645.
-	if task.InitiatorUserID.Valid {
-		resp.InitiatorType = "member"
-		resp.InitiatorID = uuidToString(task.InitiatorUserID)
-		if u, err := h.Queries.GetUser(r.Context(), task.InitiatorUserID); err == nil {
-			resp.InitiatorName = u.Name
-			resp.InitiatorEmail = u.Email
-		}
-	}
-
 	// Include workspace ID and repos so the daemon can set up worktrees.
 	// Project context, repo precedence and the tenant/failure rules around both
 	// live in resolveClaimProjectContext, which every claim path shares.
@@ -2940,22 +2933,14 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 					}
 				}
 				resp.TriggerAuthorType = comment.AuthorType
-				// The triggering comment's author is the task initiator — the
-				// real requester behind this run. Surface it (type + id + name,
-				// plus email for members) so a workspace-visible agent can
-				// attribute the request to the right person instead of to the
-				// runtime owner. Same lookups as the display name above; we just
-				// also capture the id and email. See MUL-2645.
-				resp.InitiatorType = comment.AuthorType
-				if comment.AuthorID.Valid {
-					resp.InitiatorID = uuidToString(comment.AuthorID)
-				}
+				// Preserve the direct trigger actor independently from the human
+				// whose authority this run uses. They can differ on delegated runs
+				// and manual reruns of comment-triggered tasks.
 				switch comment.AuthorType {
 				case "agent":
 					if comment.AuthorID.Valid {
 						if a, err := h.Queries.GetAgent(r.Context(), comment.AuthorID); err == nil {
 							resp.TriggerAuthorName = a.Name
-							resp.InitiatorName = a.Name
 						}
 					}
 				case "member":
@@ -2964,8 +2949,6 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 					if comment.AuthorID.Valid {
 						if u, err := h.Queries.GetUser(r.Context(), comment.AuthorID); err == nil {
 							resp.TriggerAuthorName = u.Name
-							resp.InitiatorName = u.Name
-							resp.InitiatorEmail = u.Email
 						}
 					}
 				}
@@ -4010,6 +3993,33 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 		}
 	}
 
+	// Wakeup rules that waited for this run hand it their inputs now, after
+	// every gate passed, and only for a daemon that renders them; otherwise
+	// they keep their inputs and start their own run.
+	if requestHasClientCapability(r, protocol.DaemonCapabilityJoinedWakeupsV1) {
+		joined, err := (&service.IssueWakeupService{Tasks: h.TaskService}).JoinWaitingWakeups(r.Context(), *task)
+		if err != nil {
+			slog.Warn("daemon claim: waiting wakeups keep their inputs", "task_id", uuidToString(task.ID), "error", err)
+		} else {
+			task.Context = joined
+			resp.WakeupJoined = service.JoinedWakeupNotes(joined)
+		}
+	}
+
+	// Hydrate attribution only after every source/workspace/version gate has
+	// passed so a rejected claim cannot receive another user's profile data.
+	// The existing flat initiator fields carry the run's authorization human to
+	// installed daemons as well as current ones. Direct trigger authors remain
+	// available separately through trigger_author_*.
+	h.hydrateTaskAttributions(r.Context(), []*TaskAttribution{resp.Attribution})
+	if resp.Attribution != nil && resp.Attribution.Originator != nil {
+		originator := resp.Attribution.Originator
+		resp.InitiatorType = "member"
+		resp.InitiatorID = originator.ID
+		resp.InitiatorName = originator.Name
+		resp.InitiatorEmail = originator.Email
+	}
+
 	return resp, deliveredCommentIDs, issueSnapshot, agentSkillCount, builtinSkillCount, nil
 }
 
@@ -4506,7 +4516,6 @@ func (h *Handler) ListPendingTasksByRuntime(w http.ResponseWriter, r *http.Reque
 	for i, t := range tasks {
 		resp[i] = taskToResponse(t, workspaceID)
 	}
-
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -4544,6 +4553,9 @@ func (h *Handler) ExtendTaskPrepareLease(w http.ResponseWriter, r *http.Request)
 }
 
 type TaskStartRequest struct {
+	Capabilities    []string           `json:"capabilities"`
+	RuntimeID       string             `json:"runtime_id"`
+	DispatchedAt    string             `json:"dispatched_at"`
 	ClaimGeneration int64              `json:"claim_generation,omitempty"`
 	IssueStart      *IssueStartRequest `json:"issue_start,omitempty"`
 }
@@ -4584,12 +4596,12 @@ func (h *Handler) StartTask(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	enableTaskSupplement := slices.Contains(req.Capabilities, protocol.DaemonCapabilityTaskSupplementV1)
 	var task *db.AgentTaskQueue
-	var startState service.IssueStartState
 	var err error
-	if req.IssueStart == nil {
-		task, err = h.TaskService.StartTask(r.Context(), parseUUID(taskID))
-	} else {
+	var startState service.IssueStartState
+	legacy := req.RuntimeID == "" && req.DispatchedAt == ""
+	if req.IssueStart != nil {
 		req.IssueStart.BaseETag = util.SanitizeTextForPostgres(req.IssueStart.BaseETag)
 		req.IssueStart.BaseStatus = util.SanitizeTextForPostgres(req.IssueStart.BaseStatus)
 		if !ordinaryIssueCompletionSupported(existingTask) || req.IssueStart.Version != issueCompletionContractVersion ||
@@ -4601,15 +4613,39 @@ func (h *Handler) StartTask(w http.ResponseWriter, r *http.Request) {
 		task, startState, err = h.TaskService.StartTaskWithIssueStart(r.Context(), parseUUID(taskID), service.IssueStart{
 			Version: req.IssueStart.Version, ClaimGeneration: req.ClaimGeneration,
 			BaseRevision: req.IssueStart.BaseRevision, BaseStatus: req.IssueStart.BaseStatus,
-		})
+		}, enableTaskSupplement)
+	} else if legacy {
+		// Older daemons send {}. Keep their single-winner behavior; in
+		// particular, they cannot acknowledge an already-running task.
+		task, err = h.TaskService.StartTask(r.Context(), parseUUID(taskID), enableTaskSupplement)
+	} else {
+		runtimeID, ok := parseUUIDOrBadRequest(w, req.RuntimeID, "runtime_id")
+		if !ok {
+			return
+		}
+		generation, parseErr := time.Parse(time.RFC3339Nano, req.DispatchedAt)
+		if parseErr != nil || generation.Nanosecond()%1000 != 0 {
+			writeError(w, http.StatusBadRequest, "dispatched_at must be a PostgreSQL claim timestamp")
+			return
+		}
+		task, err = h.TaskService.StartTaskForClaim(r.Context(), db.LockAgentTaskStartClaimParams{
+			ID: parseUUID(taskID), RuntimeID: runtimeID,
+			DispatchedAt: pgtype.Timestamptz{Time: generation, Valid: true},
+		}, enableTaskSupplement)
 	}
 	if err != nil {
 		slog.Warn("start task failed", "task_id", taskID, "error", err)
 		if errors.Is(err, service.ErrStaleIssueStartClaim) {
 			writeError(w, http.StatusConflict, err.Error())
-			return
+		} else if errors.Is(err, pgx.ErrNoRows) {
+			status := http.StatusConflict
+			if legacy {
+				status = http.StatusBadRequest
+			}
+			writeError(w, status, "task claim is stale or task is no longer startable")
+		} else {
+			writeError(w, http.StatusInternalServerError, "failed to start task")
 		}
-		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if err := h.markDesignRestoreTaskRunning(r.Context(), *task); err != nil {
@@ -4633,6 +4669,17 @@ func (h *Handler) StartTask(w http.ResponseWriter, r *http.Request) {
 			EmptyCommentHistory: startState.EmptyCommentHistory,
 		}
 	}
+	// Echo the capability the server actually committed for this exact run.
+	// A daemon must use this response rather than its own offer: an old server
+	// ignores the offer and omits the field, which keeps daemon-first rollouts
+	// fail closed without requiring synchronized deployment.
+	if task.IssueID.Valid {
+		if capability, capabilityErr := h.Queries.GetTaskSupplementCapability(r.Context(), task.ID); capabilityErr == nil {
+			resp.SupplementCapability = capability.Capability
+		} else if !errors.Is(capabilityErr, pgx.ErrNoRows) {
+			slog.Warn("start task: failed to load negotiated supplement capability", "task_id", taskID, "error", capabilityErr)
+		}
+	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -4653,106 +4700,6 @@ func (h *Handler) markDesignRestoreTaskRunning(ctx context.Context, task db.Agen
 		Error:       restoreTask.Error,
 	})
 	return err
-}
-
-// ClaimCommentSteer atomically claims the oldest pending human instruction for
-// an active task. Capability gating makes a mixed-version daemon fail safe:
-// old daemons never call this route and new daemons refuse to infer support
-// from a server version.
-func (h *Handler) ClaimCommentSteer(w http.ResponseWriter, r *http.Request) {
-	if !requestHasClientCapability(r, protocol.DaemonCapabilityTaskSteerV1) {
-		writeError(w, http.StatusPreconditionFailed, "task steering capability required")
-		return
-	}
-	taskID := chi.URLParam(r, "taskId")
-	if _, ok := h.requireDaemonTaskAccess(w, r, taskID); !ok {
-		return
-	}
-	row, err := h.Queries.ClaimNextCommentSteer(r.Context(), parseUUID(taskID))
-	if errors.Is(err, pgx.ErrNoRows) {
-		writeJSON(w, http.StatusOK, map[string]any{})
-		return
-	}
-	if err != nil {
-		slog.Warn("claim comment steer failed", "task_id", taskID, "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to claim comment steer")
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"comment_id":  uuidToString(row.CommentID),
-		"author_name": row.AuthorName,
-		"content":     row.Content,
-	})
-}
-
-type ackCommentSteerRequest struct {
-	Delivered bool   `json:"delivered"`
-	Error     string `json:"error,omitempty"`
-}
-
-// AckCommentSteer commits a receipt only while the target task is still
-// running. If completion won the race, the row becomes follow_up and normal
-// reconciliation remains responsible for it.
-func (h *Handler) AckCommentSteer(w http.ResponseWriter, r *http.Request) {
-	if !requestHasClientCapability(r, protocol.DaemonCapabilityTaskSteerV1) {
-		writeError(w, http.StatusPreconditionFailed, "task steering capability required")
-		return
-	}
-	taskID := chi.URLParam(r, "taskId")
-	if _, ok := h.requireDaemonTaskAccess(w, r, taskID); !ok {
-		return
-	}
-	commentID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "commentId"), "comment_id")
-	if !ok {
-		return
-	}
-	var req ackCommentSteerRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-	status := "follow_up"
-	if req.Delivered {
-		if _, err := h.Queries.AckCommentSteerDelivered(r.Context(), db.AckCommentSteerDeliveredParams{
-			TaskID: parseUUID(taskID), CommentID: commentID,
-		}); err == nil {
-			status = "delivered"
-		} else if !errors.Is(err, pgx.ErrNoRows) {
-			slog.Warn("ack comment steer failed", "task_id", taskID, "comment_id", chi.URLParam(r, "commentId"), "error", err)
-			writeError(w, http.StatusInternalServerError, "failed to acknowledge comment steer")
-			return
-		}
-	}
-	if status == "follow_up" {
-		reason := strings.TrimSpace(req.Error)
-		if reason == "" {
-			reason = "turn_ended"
-		}
-		if _, err := h.Queries.MarkCommentSteerFollowUp(r.Context(), db.MarkCommentSteerFollowUpParams{
-			TaskID: parseUUID(taskID), CommentID: commentID, FailureReason: pgtype.Text{String: reason, Valid: true},
-		}); err != nil {
-			if !errors.Is(err, pgx.ErrNoRows) {
-				slog.Warn("mark comment steer follow-up failed", "task_id", taskID, "error", err)
-				writeError(w, http.StatusInternalServerError, "failed to acknowledge comment steer")
-				return
-			}
-			existing, loadErr := h.Queries.GetCommentSteerDeliveryForTask(r.Context(), db.GetCommentSteerDeliveryForTaskParams{
-				TaskID: parseUUID(taskID), CommentID: commentID,
-			})
-			if errors.Is(loadErr, pgx.ErrNoRows) {
-				writeError(w, http.StatusNotFound, "comment steer not found")
-				return
-			}
-			if loadErr != nil {
-				slog.Warn("load comment steer acknowledgement failed", "task_id", taskID, "error", loadErr)
-				writeError(w, http.StatusInternalServerError, "failed to acknowledge comment steer")
-				return
-			}
-			status = existing.Status
-		}
-	}
-	h.publishCommentDeliveryUpdate(r, commentID)
-	writeJSON(w, http.StatusOK, map[string]any{"status": status})
 }
 
 // TaskWaitLocalDirectoryRequest is the body the daemon POSTs when it parks
@@ -5188,8 +5135,9 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 	// missing continuity-gap flag.
 	var task *db.AgentTaskQueue
 	var err error
+	var transitioned bool
 	completeWithMutation := func(mutate func(*db.Queries, db.AgentTaskQueue) error) {
-		task, err = h.TaskService.CompleteTaskWithMutationAndSessionStateAndIssueCompletion(r.Context(), parseUUID(taskID), result, req.SessionID, req.WorkDir, req.BranchName, req.SessionRolloutMissing, req.RetiredSessionID, req.DurableWorkDir, issueCompletion, mutate)
+		task, transitioned, err = h.TaskService.CompleteTaskWithMutationAndSessionStateAndIssueCompletion(r.Context(), parseUUID(taskID), result, req.SessionID, req.WorkDir, req.BranchName, req.SessionRolloutMissing, req.RetiredSessionID, req.DurableWorkDir, issueCompletion, mutate)
 	}
 	if preparedRepositoryAnalysis != nil {
 		completeWithMutation(func(qtx *db.Queries, completedTask db.AgentTaskQueue) error {
@@ -5299,6 +5247,10 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if !transitioned {
+		writeJSON(w, http.StatusOK, taskToResponse(*task, workspaceID))
+		return
+	}
 	// A successful V2 completion is already the final single-Agent draft.
 
 	if pmoSnapshot != nil {
@@ -5340,7 +5292,7 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 	// it after its context was built), schedule a single follow-up so the
 	// input is not silently dropped. Agent replays are restricted to explicit
 	// mentions and recorded worker inputs; see reconcileCommentsOnCompletion.
-	h.publishCommentDeliveryUpdates(r, h.reconcileCommentsOnCompletion(r.Context(), task))
+	h.reconcileCommentsOnCompletion(r.Context(), task)
 	// The terminal transaction and completion reconciliation are committed.
 	// Wake the owning runtime now so queued work that was blocked by this
 	// task's agent capacity or serialization key is re-claimed immediately.
@@ -5455,23 +5407,6 @@ func (h *Handler) emitIssueExecutedOnFirstCompletion(r *http.Request, task *db.A
 	))
 }
 
-// finalizeUndeliveredCommentSteers settles only the receipt. It never schedules
-// work: completion reconciliation owns that behavior, while cancellation and
-// failure must preserve Stop semantics and any retry policy already committed
-// by TaskService. Delivered is a historical fact and is deliberately immutable.
-func (h *Handler) finalizeUndeliveredCommentSteers(ctx context.Context, taskID pgtype.UUID) []pgtype.UUID {
-	rows, err := h.Queries.FinalizeUndeliveredCommentSteers(ctx, taskID)
-	if err != nil {
-		slog.Warn("finalize comment steers failed", "task_id", uuidToString(taskID), "error", err)
-		return nil
-	}
-	updates := make([]pgtype.UUID, 0, len(rows))
-	for _, row := range rows {
-		updates = append(updates, row.CommentID)
-	}
-	return updates
-}
-
 // reconcileCommentsOnCompletion closes the at-least-once gap for member
 // comments a completing run did NOT deliver (MUL-4195).
 //
@@ -5498,8 +5433,8 @@ func (h *Handler) finalizeUndeliveredCommentSteers(ctx context.Context, taskID p
 //
 // Scope + loop safety:
 //   - MEMBER comments keep their full routing. AGENT comments qualify through
-//     explicit mentions, or the worker-to-assigned-leader route when the input
-//     was already accepted and recorded in this run's plan. Timestamp-only
+//     explicit mentions, or a worker-to-leader route when the input was already
+//     accepted and recorded in this run's plan. Timestamp-only
 //     implicit agent replies are excluded: completion must not invent a new
 //     conversation. Current invocation permissions and self-trigger guards
 //     still apply to every replay.
@@ -5512,14 +5447,10 @@ func (h *Handler) finalizeUndeliveredCommentSteers(ctx context.Context, taskID p
 //     run, and terminating: the follow-up's own created_at is later than all of
 //     these comments and its delivered set will contain them, so its completion
 //     finds nothing to re-schedule.
-func (h *Handler) reconcileCommentsOnCompletion(ctx context.Context, task *db.AgentTaskQueue) []pgtype.UUID {
+func (h *Handler) reconcileCommentsOnCompletion(ctx context.Context, task *db.AgentTaskQueue) {
 	if task == nil || !task.IssueID.Valid || !task.AgentID.Valid || !task.CreatedAt.Valid {
-		return nil
+		return
 	}
-	// Anything not acknowledged before completion keeps the old lossless
-	// follow-up semantics. Delivered steer receipts remain separate from
-	// delivered_comment_ids (approved option A).
-	deliveryUpdates := h.finalizeUndeliveredCommentSteers(ctx, task.ID)
 	plannedCommentIDs := append([]pgtype.UUID{}, task.CoalescedCommentIds...)
 	if task.TriggerCommentID.Valid {
 		plannedCommentIDs = append(plannedCommentIDs, task.TriggerCommentID)
@@ -5544,14 +5475,15 @@ func (h *Handler) reconcileCommentsOnCompletion(ctx context.Context, task *db.Ag
 		IssueID:           task.IssueID,
 		Since:             task.CreatedAt,
 		PlannedCommentIds: plannedCommentIDs,
+		AgentID:           task.AgentID,
 	})
 	if err != nil {
 		slog.Warn("reconcile comments on completion: list comments failed",
 			"issue_id", uuidToString(task.IssueID), "task_id", uuidToString(task.ID), "error", err)
-		return deliveryUpdates
+		return
 	}
 	if len(comments) == 0 {
-		return deliveryUpdates
+		return
 	}
 	// The delivered set is the claim-time receipt, not the enqueue-time plan.
 	// Legacy tasks backfill only the primary trigger, deliberately replaying
@@ -5562,21 +5494,11 @@ func (h *Handler) reconcileCommentsOnCompletion(ctx context.Context, task *db.Ag
 			delivered[uuidToString(id)] = struct{}{}
 		}
 	}
-	if steered, err := h.Queries.ListDeliveredSteerCommentIDs(ctx, task.ID); err != nil {
-		slog.Warn("list delivered comment steers failed; preserving follow-up fallback",
-			"task_id", uuidToString(task.ID), "error", err)
-	} else {
-		for _, id := range steered {
-			if id.Valid {
-				delivered[uuidToString(id)] = struct{}{}
-			}
-		}
-	}
 	issue, err := h.Queries.GetIssue(ctx, task.IssueID)
 	if err != nil {
 		slog.Warn("reconcile comments on completion: load issue failed",
 			"issue_id", uuidToString(task.IssueID), "error", err)
-		return deliveryUpdates
+		return
 	}
 	agentID := uuidToString(task.AgentID)
 	scheduled := 0
@@ -5636,6 +5558,7 @@ func (h *Handler) reconcileCommentsOnCompletion(ctx context.Context, task *db.Ag
 		}
 		triggers, _ := h.computeCommentAgentTriggers(ctx, issue, c.Content, parentComment, actorType, actorID, commentTriggerComputeOptions{
 			ExcludeTriggerCommentID: c.ID,
+			AuthoringTaskID:         c.SourceTaskID,
 			OriginatorUserID:        originatorUserID,
 		})
 		// Agent replies discovered only by timestamp must not start a new
@@ -5688,7 +5611,6 @@ func (h *Handler) reconcileCommentsOnCompletion(ctx context.Context, task *db.Ag
 			"agent_id", agentID,
 			"undelivered_comments", scheduled)
 	}
-	return deliveryUpdates
 }
 
 // keepReplayableAgentTriggers preserves explicit mentions (MUL-4304) and
@@ -5704,7 +5626,7 @@ func keepReplayableAgentTriggers(triggers []commentAgentTrigger, planned bool) [
 		switch trigger.Source {
 		case commentTriggerSourceMentionAgent, commentTriggerSourceMentionSquadLeader:
 			filtered = append(filtered, trigger)
-		case commentTriggerSourceIssueAssignee:
+		case commentTriggerSourceIssueAssignee, commentTriggerSourceThreadParent:
 			if planned && trigger.NonLeaderAgentReply {
 				filtered = append(filtered, trigger)
 			}
@@ -6634,10 +6556,6 @@ func (h *Handler) CancelTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	// Stop must not enqueue a replacement run. Pending/claimed steer receipts
-	// still become follow_up so the UI records that this turn did not receive
-	// them; delivered receipts remain immutable history.
-	h.publishCommentDeliveryUpdates(r, h.finalizeUndeliveredCommentSteers(r.Context(), task.ID))
 
 	slog.Info("task cancelled by user", "task_id", taskID, "issue_id", uuidToString(task.IssueID))
 	resp := taskToResponse(*task, workspaceID)
@@ -6804,6 +6722,7 @@ func (h *Handler) ListTasksByIssue(w http.ResponseWriter, r *http.Request) {
 	for i, t := range tasks {
 		resp[i] = taskToResponse(t, workspaceID)
 	}
+	h.hydrateTaskSupplementMetadata(r.Context(), r, issue.WorkspaceID, tasks, resp)
 	// Execution-log rows render the "on behalf of <member>" badge, so this
 	// issue-facing surface must resolve initiator/originator names (departed-safe,
 	// one batch) — otherwise the badge falls back to "someone" on issue detail.

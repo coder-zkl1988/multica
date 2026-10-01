@@ -31,7 +31,7 @@ import (
 //     Sub-issue, ...).
 //  2. Per-section prose compression — Available Commands, Issue
 //     Body Formatting, Mentions, Sub-issue Creation,
-//     Comment Formatting, Always Use CLI, Background Task Safety, Task Initiator,
+//     Comment Formatting, Always Use CLI, Background Task Safety,
 //     Repositories, Output are all tightened. Test-asserted phrases either
 //     survive verbatim or are renegotiated to new semantic anchors in the
 //     same PR (MUL-5442 established that discipline); no assertion is
@@ -101,7 +101,7 @@ func writeHeader(b *strings.Builder) {
 // a fresh review decision.
 func writeBackgroundTaskSafetySlim(b *strings.Builder) {
 	b.WriteString("## Background Task Safety\n\n")
-	b.WriteString("Multica marks the task terminal the moment your top-level turn exits — any run-owned work still active is orphaned, its result lost, and the final comment you meant to post never sends. There is no background-completion wakeup, whatever a tool response promises. Never background-and-yield: collect required results inside foreground tool calls that block to completion, run unobservable work synchronously, and never end a turn \"standing by\" for something to finish — that message becomes your final output.\n\n")
+	b.WriteString("Multica marks the task terminal the moment your top-level turn exits — any run-owned work still active is orphaned, its result lost, and the final comment you meant to post never sends. There is no background-completion wakeup, whatever a tool response promises; an issue wakeup (`multica issue wakeup create`) is different — the platform stores it and starts a new run later. Never background-and-yield: collect required results inside foreground tool calls that block to completion, run unobservable work synchronously, and never end a turn \"standing by\" for something to finish — that message becomes your final output.\n\n")
 	b.WriteString("External systems triggered by your completed actions — CI, GitHub Actions after a successful push — are not run-owned: do not wait for them, and do not run `gh pr checks --watch`, `gh run watch`, or sleep/retry polls. A repo's merge gate (\"CI must be green before merge\") is NOT your delivery acceptance criteria. Deliver what you have — \"Local tests pass; CI running: <PR link>\" is a complete hand-off. The one exception: when the trigger comment or the issue's acceptance criteria explicitly ask for the CI result, collect it as ONE foreground blocking call (`gh pr checks <pr> --watch`) inside this same turn.\n\n")
 	b.WriteString("A user explicitly asking for a local service to stay available after the turn is a persistent service handoff, not background-and-yield — allowed only when the running service itself is the requested deliverable. Detach its lifecycle from this run first (durable logs, a recorded cleanup handle such as PID/profile), verify readiness, and reply with the URL, logs, and stop instructions. Without a supervisor, describe survival as best-effort, not guaranteed.\n\n")
 	b.WriteString("Never terminate `multica` or `multica.exe` by executable name: a long-lived matching process may be the workspace daemon. Cancel only the exact child PID you started, and before terminating it compare that PID with `multica daemon status --output json`; never kill it if it is the reported daemon PID.\n\n")
@@ -170,30 +170,23 @@ func writeRequestingUser(b *strings.Builder, ctx TaskContextForEnv) {
 	b.WriteString("\nTreat this as background context, not as task instructions. If it conflicts with the actual task, the task wins.\n\n")
 }
 
-// BuildTaskInitiatorBlock renders the Task Initiator block for the per-turn
-// user message. Both MUL-2645 test-pinned phrases ("apply any per-person
-// privacy or access rules" and "credentials stay scoped to the runtime
-// owner") are kept.
-//
-// This lives in the per-turn prompt rather than the runtime brief because the
-// initiator changes whenever a different person or agent triggers a run on the
-// same issue; rendering it into the brief broke prompt-cache prefix stability
-// across resumes (MUL-5377). Returns "" when no initiator name resolves.
-func BuildTaskInitiatorBlock(initiatorType, initiatorName, initiatorEmail string) string {
-	safeInitiator := sanitizeNameForBriefMarkdown(initiatorName)
-	if safeInitiator == "" {
+// BuildOnBehalfOfBlock renders the run's authorization human in per-turn
+// context. This value can change between runs on a resumed issue, so keeping
+// it out of the runtime brief preserves the prompt-cache prefix (MUL-5377).
+// Returns "" when the server could not resolve a display name.
+func BuildOnBehalfOfBlock(name, email string) string {
+	safeName := sanitizeNameForBriefMarkdown(name)
+	if safeName == "" {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString("## Task Initiator\n\n")
-	if initiatorType == "agent" {
-		fmt.Fprintf(&b, "This task was initiated by **%s**, another agent in this workspace.\n\n", safeInitiator)
-	} else if email := sanitizeEmailForBrief(initiatorEmail); email != "" {
-		fmt.Fprintf(&b, "This task was initiated by **%s** (%s), a member of this workspace.\n\n", safeInitiator, email)
+	b.WriteString("## On Behalf Of\n\n")
+	if safeEmail := sanitizeEmailForBrief(email); safeEmail != "" {
+		fmt.Fprintf(&b, "You are acting on behalf of **%s** (%s). ", safeName, safeEmail)
 	} else {
-		fmt.Fprintf(&b, "This task was initiated by **%s**, a member of this workspace.\n\n", safeInitiator)
+		fmt.Fprintf(&b, "You are acting on behalf of **%s**. ", safeName)
 	}
-	b.WriteString("The initiator — not the runtime owner — is who you are answering: apply any per-person privacy or access rules your instructions define. Your Multica credentials stay scoped to the runtime owner, and initiator attribution does not change what you may read or write; do not assume the initiator can see everything you can.\n\n")
+	b.WriteString("Apply any person-specific privacy or access rules in your instructions to this person. Your Multica credentials and access remain scoped to the runtime owner; do not assume this person can access everything you can.\n\n")
 	return b.String()
 }
 
@@ -283,12 +276,11 @@ func writeAvailableCommands(b *strings.Builder, ctx TaskContextForEnv) {
 	b.WriteString("- `multica issue get <id> --output json` — full issue.\n")
 	b.WriteString("- `multica issue comment list <issue-id> [--roots-only] [--summary] [--thread <comment-id> [--tail N] | --recent N] [--since <RFC3339>] --output json` — thread-aware comment reads. Bound a wide read with `--roots-only --summary` (roots plus `reply_count` / `last_activity_at`, clipped bodies); bound a deep one with `--thread <id> --tail N`; add `--compact` to any JSON read to drop echoed/null/bookkeeping fields. Careful with `--recent N`: it caps THREADS, not comments, and can return the whole history on a small issue. Resolved-thread folding, paging cursors, and full flag semantics: `--help`.\n")
 	b.WriteString("- `multica issue create --title \"...\" [--description-file <path>] [--priority X] [--status X] [--assignee X | --assignee-id <uuid>] [--parent <issue-id>] [--stage N] [--project <project-id>] [--due-date <YYYY-MM-DD>] [--attachment <path>]` — create an issue. For agent-authored long descriptions prefer `--description-file <path>` (heredoc stdin can swallow trailing flags, #4182). Write that file inside your working directory (e.g. `./description.md`), never `/tmp` or shared paths — same workdir rule as `## Comment Formatting`.\n")
-	b.WriteString("- `multica issue update <id> [--title X] [--description-file <path>] [--priority X] [--status X] [--assignee X] [--parent <issue-id>] [--stage N] [--project <project-id>] [--due-date <YYYY-MM-DD>] [--no-start]` — update fields; pass `--parent \"\"` to clear parent.\n")
-	// Assign deliberately stays in the core brief: it is the action that can
-	// create an unaware cross-issue run, and agents cannot discover the safe
-	// ownership-only --no-start path if the command is hidden behind --help.
-	b.WriteString("- `multica issue assign <id> (--to X | --to-id <uuid> | --unassign) [--no-start]` — change ownership. On assign/update/status, `--no-start` records the change without starting another run — use it when the work is already underway.\n")
+	b.WriteString("- `multica issue update <id> [--title X] [--description-file <path>] [--priority X] [--status X] [--assignee X] [--parent <issue-id>] [--stage N] [--project <project-id>] [--due-date <YYYY-MM-DD>]` — update fields; pass `--parent \"\"` to clear parent.\n")
+	b.WriteString("- `multica issue assign <id> (--to X | --to-id <uuid> | --unassign)` — change ownership; assigning to an agent can start a run.\n")
 	writeIssueStatusCommand(b, ctx)
+	b.WriteString(duplicateOfCommandLine)
+	b.WriteString("- `multica issue wakeup <create|list|get|update|disable|trigger|delete|runs|events>` — persist an event, condition or time wakeup on this issue, then finish the current run. When the platform can check the fact itself, use a condition (`--until-status`, `--until-pr checks`, `--until-children-done`, `--until-issue`) so no run starts before it holds. Use `--event comment.created --filter-actor-type member --filter-actor-id USER_ID` to wait for a specific member to comment. See `multica issue wakeup --help` and the multica-platform issues reference.\n")
 	b.WriteString("- `multica issue children <id> [--output json]` — list a parent's sub-issues grouped by stage.\n")
 	b.WriteString("- `multica issue comment add <issue-id> [--content \"...\" | --content-file <path> | --content-stdin] [--parent <comment-id>] [--attachment <path>]` — post a comment. Agent-authored bodies MUST use `--content-file`; see `## Comment Formatting` for why. `multica issue comment add --help` for full flags.\n")
 	b.WriteString("- `multica repo checkout <url> [--ref <branch-or-sha>] [--fresh]` — repository checkout on a dedicated branch. Re-running it keeps an existing checkout that has uncommitted or unpushed work, or is already on this task's branch, and only fetches. `--fresh` discards uncommitted and untracked files and starts a new branch; commits stay on the old branch, but push any you still need first.\n\n")
@@ -306,15 +298,19 @@ func writeAvailableCommands(b *strings.Builder, ctx TaskContextForEnv) {
 	}
 }
 
+// duplicateOfCommandLine teaches the duplicate mark (MUL-7821). Without it
+// agents cancel duplicates with a plain status change plus a comment, which
+// leaves the original's duplicates list empty.
+const duplicateOfCommandLine = "- `multica issue status <id> cancelled --duplicate-of <original>` — cancel an issue that duplicates another and record the mark, so the original lists it; a plain cancel plus a comment leaves no link.\n"
+
 // briefStatusCategoryOrder groups the briefing catalog by internal lifecycle,
 // matching ListIssueStatusEntries. User-facing columns still use status keys.
 var briefStatusCategoryOrder = issuestatus.Categories()
 
 // writeIssueStatusCommand emits the `multica issue status` bullet.
 //
-// With no custom statuses on the claim (the overwhelmingly common case, and
-// every old-server case) it emits the exact pre-MUL-6460 line — byte-identical
-// so existing deployments see no brief change and no prompt-cache loss.
+// With no custom statuses on the claim (including old-server payloads), it
+// emits the fixed built-in status list.
 //
 // With custom statuses it replaces the seven-value enumeration with the
 // workspace's catalog, grouped by lifecycle category. Special workflow rules
@@ -340,7 +336,7 @@ var briefStatusCategoryOrder = issuestatus.Categories()
 // and an entry whose key fails it is dropped rather than rendered mangled.
 func writeIssueStatusCommand(b *strings.Builder, ctx TaskContextForEnv) {
 	if len(ctx.IssueStatuses) == 0 {
-		b.WriteString("- `multica issue status <id> <status> [--no-start]` — flip status (todo / in_progress / in_review / done / blocked / backlog / cancelled).\n")
+		b.WriteString("- `multica issue status <id> <status>` — flip status (todo / in_progress / in_review / done / blocked / backlog / cancelled).\n")
 		return
 	}
 	byCategory := make(map[string][]IssueStatusForEnv, len(briefStatusCategoryOrder))
@@ -356,7 +352,7 @@ func writeIssueStatusCommand(b *strings.Builder, ctx TaskContextForEnv) {
 		}
 		byCategory[category] = append(byCategory[category], s)
 	}
-	b.WriteString("- `multica issue status <id> <status> [--no-start]` — flip status. Available statuses by lifecycle category:\n")
+	b.WriteString("- `multica issue status <id> <status>` — flip status. Available statuses by lifecycle category:\n")
 	for _, category := range briefStatusCategoryOrder {
 		customs := byCategory[category]
 		fmt.Fprintf(b, "  - %s category: `%s` (built-in)", category, strings.Join(issuestatus.BehaviorsForCategory(category), "`, `"))
@@ -410,7 +406,7 @@ func writeIssueBodyFormatting(b *strings.Builder) {
 // shell is a wrong comment), while the receipt mode only decides how much of
 // an already-correct comment is echoed back, so it must not displace the
 // guardrail from the section lede.
-const commentReceiptRule = "For final-result comments, use `--output table` to confirm success without echoing the body. Use `--output json` instead when you need the returned comment ID, attachment details, or other response fields. Gate the cleanup on the post succeeding (`&&`, or an `$LASTEXITCODE` check on Windows): a cleanup command run unconditionally succeeds after a failed post and makes the whole shell call exit 0, and under `--output table` empty stdout alone does not prove success.\n\n"
+const commentReceiptRule = "For final-result comments, use `--output table` to confirm success without echoing the body. Use `--output json` instead when you need the returned comment ID, attachment details, or other response fields. Gate the cleanup on the post succeeding (`&&` in bash or Git Bash, an `$LASTEXITCODE` check in PowerShell): a cleanup command run unconditionally succeeds after a failed post and makes the whole shell call exit 0, and under `--output table` empty stdout alone does not prove success.\n\n"
 
 // writeCommentFormatting emits the cross-platform file-first guardrail.
 // The Windows branch carries the `$OutputEncoding` rationale: Windows
@@ -421,7 +417,7 @@ const commentReceiptRule = "For final-result comments, use `--output table` to c
 func writeCommentFormatting(b *strings.Builder) {
 	b.WriteString("## Comment Formatting\n\n")
 	if runtimeGOOS == "windows" {
-		b.WriteString("On Windows, **always write the comment body to a UTF-8 file with your file-write tool first, then post it with `--content-file <path>`** — do NOT pipe via `--content-stdin` (Windows PowerShell 5.1's `$OutputEncoding` may replace non-ASCII characters with `?`). Never use inline `--content` for agent-authored comments. Write the file inside your working directory, never `/tmp` or shared paths (MUL-4252). Keep the same `--parent` value from the trigger comment when replying. Delete the temp file (`Remove-Item ./reply.md`) only after the post succeeded; do not rely on `\\n` escapes.\n\n")
+		b.WriteString("On Windows, **always write the comment body to a UTF-8 file with your file-write tool first, then post it with `--content-file <path>`** — do NOT pipe via `--content-stdin` (Windows PowerShell 5.1's `$OutputEncoding` may replace non-ASCII characters with `?`). Never use inline `--content` for agent-authored comments. Write the file inside your working directory, never `/tmp` or shared paths (MUL-4252). Keep the same `--parent` value from the trigger comment when replying. Delete the temp file (`Remove-Item ./reply.md` in PowerShell, `rm ./reply.md` in Git Bash) only after the post succeeded; do not rely on `\\n` escapes.\n\n")
 		b.WriteString(commentReceiptRule)
 		return
 	}
@@ -837,14 +833,13 @@ func writeWorkflowPMOSync(b *strings.Builder) {
 // the re-trigger (member update / stage barrier) that confirms the overall
 // goal is met. Flipping the parent on the dispatch turn would mark unfinished
 // multi-stage work as ready for review; see the Squad Operating Protocol and
-// child-done system comments.
+// the sub-issue wakeup (service/issue_wakeup_system.go).
 //
 // ctx.IsSquadLeader is a PER-TASK role, not agent configuration: branching on
 // it here does move brief bytes when the same agent runs leader one turn and
 // worker the next. Owner-accepted tradeoff; decision recorded in MUL-5811.
 func writeWorkflowIssue(b *strings.Builder, ctx TaskContextForEnv) {
 	b.WriteString("**Every issue turn runs the same workflow.** The per-turn user message carries what triggered this run — an assignment handoff, or a triggering comment with its id and your `--parent` value — plus this issue's real id and ready-to-run context-read commands; assemble other calls from `## Available Commands`.\n\n")
-	b.WriteString("A `[STEER]` message is a human comment delivered while this turn is active. Apply it at the next safe boundary as additional guidance for the current task, preserving the original objective unless the message explicitly changes it.\n\n")
 
 	b.WriteString("1. Read the issue body (`multica issue get`) to understand the context unless the per-turn message contains a validated `## Authoritative Issue Body Snapshot` that explicitly satisfies this step. That snapshot replaces only the initial title, description, status, metadata, revision, and timestamp read, never the mandatory comment-history catch-up in step 2; fetch omitted issue detail when the task refers to it.\n")
 	b.WriteString("   The per-turn message may instead report that the server compared the issue against your last run; when it says the issue is unchanged, that report is this step's answer and you continue from your resumed context. Only those two explicit reports waive the read — a message that says nothing about the issue record has neither carried it nor compared it.\n")
@@ -1043,6 +1038,21 @@ func writeDeliveryInvariant(b *strings.Builder) {
 	b.WriteString("**Runtime-local paths are never deliverables.** Your working directory exists only on the machine running you — NEVER write an absolute path or a `file://` URL as a clickable link or an embedded image. Reference code locations as inline code, never a link: `path/to/file.ts:42`. Deliver files through this surface's mechanism (above); if it has none, say so in words — never link the path and imply the file was delivered.\n\n")
 }
 
+// writeInlineBlocksPolicy tells a surface that renders the reply as rich text
+// where a chart or diagram goes (MUL-7649). A fenced `html` / `mermaid` block
+// renders in place as a dynamic block; an attachment, HTML included, is a file
+// and shows as a card. Agents that uploaded report.html expecting an inline
+// chart now get a card, and the platform skill's reference is only opened on
+// demand, so the one-line rule sits here, beside the file-delivery line, where
+// it is in front of the agent when it writes the reply. The detail (theme
+// variables, sizing) stays in the reference.
+//
+// Only surfaces the web renders get it: channel chats, autopilot run results
+// and quick-create stdout do not render these blocks.
+func writeInlineBlocksPolicy(b *strings.Builder) {
+	b.WriteString("\n**Charts and diagrams:** put them in the text as a fenced `html` or `mermaid` code block — it renders in place (name it with `title=\"...\"` after the language). An attached file, HTML included, shows as a card instead. Theming and sizing: the multica-platform issues reference.\n")
+}
+
 // writeOutput emits the kind-specific Output section: the always-on delivery
 // invariant plus one per-surface file-delivery policy line per kind.
 func writeOutput(b *strings.Builder, kind taskKind, ctx TaskContextForEnv) {
@@ -1079,6 +1089,7 @@ func writeOutput(b *strings.Builder, kind taskKind, ctx TaskContextForEnv) {
 			fmt.Fprintf(b, "**Delivering files here:** whether Multica can push a file you produce into this %s conversation depends on how this deployment is configured, so it is stated per turn rather than here: the per-turn user message tells you, every turn. Follow what it says about files, and never report a file as delivered unless it told you how to deliver one.\n", ChannelDisplayName(ctx.ChatChannelType))
 		} else {
 			b.WriteString("**Delivering files here:** run `multica attachment upload <local-path>` — it binds the file to your reply and it renders as an attachment card. That command is the ONLY way a file reaches the user; a path written into your reply text is not.\n")
+			writeInlineBlocksPolicy(b)
 		}
 	case kindUIDraftCreate, kindDesignRestore, kindDesignImplementation, kindDesignSystemProfileAnalyze, kindPMOSync:
 		b.WriteString("This is a server-managed design task. Your final assistant output is captured automatically and processed by the server; do not post an issue comment. Follow the exact output schema in the user message.\n\n")
@@ -1092,10 +1103,11 @@ func writeOutput(b *strings.Builder, kind taskKind, ctx TaskContextForEnv) {
 			b.WriteString("⚠️ **Final results MUST be delivered via `multica issue comment add`.** The user does NOT see your terminal output or run logs — only comments on the issue.\n\n")
 		}
 		if ctx.IssueID == "" || ctx.IssueCompletionContractVersion != 1 {
-			b.WriteString("**Post exactly ONE comment per run — your final result, before this turn exits.** Do NOT post progress updates or plans along the way.\n\n")
+			b.WriteString("**Post exactly ONE comment per run — your final result, before this turn exits.** Do NOT post progress updates or plans along the way. Only a scheduled wakeup check whose `[WAKEUP]` block offers `multica issue wakeup checkin` may check in instead of commenting, when it found nothing that needs a reply.\n\n")
 		}
 		b.WriteString("Keep comments concise and natural — state the outcome, not the process.\n\n")
 		b.WriteString("**Delivering files here:** pass `--attachment <path>` to `multica issue comment add` (repeatable) — the only way a screenshot or artifact reaches the reader.\n")
+		writeInlineBlocksPolicy(b)
 	}
 	b.WriteString("\n")
 	writeDeliveryInvariant(b)
@@ -1122,7 +1134,7 @@ func writeOutput(b *strings.Builder, kind taskKind, ctx TaskContextForEnv) {
 //	Attachments           |    ✓    |   ✓    |     —     |      —       |  —
 //
 // Always-on rows — Header, Background Task Safety, Agent Identity,
-// Requesting User, Task Initiator, Workspace Context, Connected Apps,
+// Requesting User, Workspace Context, Connected Apps,
 // Workflow, Always Use CLI, Output — are shared by every kind and emitted
 // unconditionally (or gated by their own data preconditions).
 func buildMetaSkillContentSlim(provider string, ctx TaskContextForEnv) string {
@@ -1132,10 +1144,11 @@ func buildMetaSkillContentSlim(provider string, ctx TaskContextForEnv) string {
 		return buildCompactIssueBrief(ctx)
 	}
 
-	// Session Continuity Notice, Task Initiator and Connected Apps used to be
-	// rendered here. They are per-run values, so emitting them into this file
-	// broke prompt-cache prefix stability on every resume; they now travel in
-	// the per-turn user message (daemon.BuildPrompt) instead. See MUL-5377.
+	// Session Continuity Notice, Task Initiator (now On Behalf Of) and
+	// Connected Apps used to be rendered here. They are per-run values, so
+	// emitting them into this file broke prompt-cache prefix stability on
+	// every resume; they now travel in the per-turn user message
+	// (daemon.BuildPrompt) instead. See MUL-5377.
 	writeHeader(&b)
 	writeBackgroundTaskSafetySlim(&b)
 	writeAgentIdentity(&b, ctx)

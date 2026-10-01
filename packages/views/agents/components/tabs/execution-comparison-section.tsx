@@ -427,6 +427,7 @@ function ExecutionDetail({
         : unknown;
   const statusLabels: Record<AgentTask["status"], string> = {
     queued: t(($) => $.tab_body.activity.status.queued),
+    deferred: t(($) => $.tab_body.activity.status.queued),
     dispatched: t(($) => $.tab_body.activity.status.dispatched),
     waiting_local_directory: t(
       ($) => $.tab_body.activity.status.waiting_local_directory,

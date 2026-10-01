@@ -70,6 +70,7 @@ func applyIssueStart(ctx context.Context, qtx *db.Queries, task db.AgentTaskQueu
 		return state, nil
 	}
 	updated, err := qtx.UpdateIssue(ctx, db.UpdateIssueParams{
+		SourceTaskID:     task.ID,
 		ID:               task.IssueID,
 		ExpectedRevision: pgtype.Int8{Int64: start.BaseRevision, Valid: true},
 		Status:           pgtype.Text{String: "in_progress", Valid: true},

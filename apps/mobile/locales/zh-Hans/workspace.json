@@ -1,17 +1,46 @@
 {
-  "agents_placeholder": {
-    "header_title": "智能体",
-    "message": "智能体功能即将上线。"
+  "title": "选择工作区",
+  "members": "成员",
+  "agents": "智能体",
+  "select": "选择工作区",
+  "switch": {
+    "title": "切换工作区",
+    "message": "切换到 {{name}}？",
+    "confirm": "切换",
+    "current_a11y": "{{name}} 是当前工作区",
+    "switch_a11y": "切换到 {{name}}"
+  },
+  "empty": "你还没有加入任何工作区。请联系工作区管理员以获取邀请。",
+  "agent": {
+    "title": "智能体",
+    "empty": "还没有智能体",
+    "search_placeholder": "搜索智能体...",
+    "coming_soon": "智能体功能即将上线。"
+  },
+  "actions": {
+    "retry": "重试",
+    "sign_out": "退出登录"
+  },
+  "auth": {
+    "signed_in_as": "当前登录账号"
+  },
+  "errors": {
+    "load_failed": "工作区加载失败：{{message}}"
   },
   "pins": {
+    "errors": {
+      "load_failed": "固定项加载失败：{{message}}"
+    },
+    "empty": {
+      "message": "暂无固定项。可在 issue 或项目的操作菜单中固定，将其显示在这里。"
+    },
+    "unavailable_issue": "该固定任务不可用。",
+    "unavailable_project": "该固定项目不可用。",
     "header_title": "固定",
     "error": {
       "load_prefix": "加载固定项失败：",
       "unknown": "未知错误",
       "retry": "重试"
-    },
-    "empty": {
-      "message": "暂无固定项。可在 issue 或项目的操作菜单中固定，将其显示在这里。"
     },
     "missing": {
       "item_type": {
@@ -21,6 +50,10 @@
       "a11y": "无法访问的{{itemType}}，点按取消固定",
       "label": "无法访问的{{itemType}} — 点按取消固定"
     }
+  },
+  "agents_placeholder": {
+    "header_title": "智能体",
+    "message": "智能体功能即将上线。"
   },
   "search": {
     "header_title": "搜索",

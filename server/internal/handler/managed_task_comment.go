@@ -21,7 +21,7 @@ type managedTaskCommentResult struct {
 }
 
 func (h *Handler) createManagedTaskComment(ctx context.Context, params db.CreateCommentParams, hasAttachments bool) (managedTaskCommentResult, error) {
-	tx, err := h.TxStarter.Begin(ctx)
+	tx, err := h.beginWakeupWrite(ctx)
 	if err != nil {
 		return managedTaskCommentResult{}, fmt.Errorf("begin managed task comment: %w", err)
 	}

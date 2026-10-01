@@ -51,6 +51,7 @@ func addedReactionToResponse(r db.AddReactionRow) ReactionResponse {
 }
 
 func (h *Handler) AddReaction(w http.ResponseWriter, r *http.Request) {
+	r = h.withWakeupActor(r)
 	commentId := chi.URLParam(r, "commentId")
 
 	userID, ok := requireUserID(w, r)
@@ -143,6 +144,7 @@ func (h *Handler) AddReaction(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) RemoveReaction(w http.ResponseWriter, r *http.Request) {
+	r = h.withWakeupActor(r)
 	commentId := chi.URLParam(r, "commentId")
 
 	userID, ok := requireUserID(w, r)

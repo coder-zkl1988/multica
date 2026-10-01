@@ -85,11 +85,11 @@ function pickStage(
   status: string | undefined,
   taskMessages: readonly TaskMessagePayload[],
   availability: AgentAvailability | undefined,
-  t: TFunction,
+  t: TFunction<"chat">,
 ): Stage {
   // Mirrors web: deferred is an older turn waiting for retry backoff, not
   // active model work, so it must not fall through to "Thinking".
-  if (status === "deferred") return { label: "Retrying" };
+  if (status === "deferred") return { label: t("chat:status.retrying") };
   if (
     (status === "queued" || status === "dispatched") &&
     availability === "offline"

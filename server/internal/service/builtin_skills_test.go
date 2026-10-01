@@ -437,7 +437,6 @@ func TestPlatformSkillCoversPlatformContracts(t *testing.T) {
 				// home, so losing one here loses it everywhere.
 				"A name is not an id",
 				"`--output json` writes to stdout",
-				"`--no-start` when you are only recording",
 				"categories describe lifecycle only",
 				"Custom statuses do not inherit built-in automation behavior",
 				"Comment reads stay bounded",
@@ -447,6 +446,7 @@ func TestPlatformSkillCoversPlatformContracts(t *testing.T) {
 				// the bounded-reads rule must name it rather than leave an
 				// agent choosing between two contradicting instructions.
 				"that read is the bounded scan",
+				"`--no-start` when you are only recording",
 			},
 			notWant: []string{
 				// The singular forms this replaced.
@@ -467,11 +467,10 @@ func TestPlatformSkillCoversPlatformContracts(t *testing.T) {
 				// both halves of it are pinned: a syntax problem is repairable
 				// by editing the PR, and an integration problem is not — an
 				// agent that keeps editing burns deliveries on a no-op.
-				"editing the title or adding a closing keyword re-runs the scan",
+				"editing the title re-runs the scan",
 				"stop editing the PR blind",
 				"whether the installation is bound to this workspace",
 				"redelivered once the receiving side is fixed",
-				"unless the issue should auto-advance",
 				"include the PR URL when a PR exists",
 				"Closes MUL-123",
 				"--status backlog",
@@ -486,7 +485,7 @@ func TestPlatformSkillCoversPlatformContracts(t *testing.T) {
 				// playbook — if they leave, the brief pointer dangles.
 				"todo starts work now, backlog parks it",
 				"`--stage <N>`",
-				"when a whole stage finishes",
+				"wakes the parent assignee when a stage",
 				"multica issue status <child-id> todo",
 				// MUL-6966 phase 1 retired the metadata write discipline
 				// along with the brief section that pointed here. What the
@@ -515,6 +514,7 @@ func TestPlatformSkillCoversPlatformContracts(t *testing.T) {
 				"--resolve-properties",
 				"display_values",
 				"`value` keeps the stored ids",
+				"multica issue assign <issue-id> --to-id <agent-id> --no-start",
 			},
 			notWant: []string{
 				// MUL-6966 phase 1: this reference must not teach the KV bag
@@ -606,6 +606,10 @@ func TestPlatformSkillCoversPlatformContracts(t *testing.T) {
 				"--roots-only --summary",
 				"--thread <thread-id> --tail 30",
 				"scan the roots first, then open the threads",
+				// MUL-5850: the reads carry --compact, matching the brief and
+				// the router's bounded-reads rule.
+				"--roots-only --summary --compact --output json",
+				"--thread <thread-id> --tail 30 --compact --output json",
 			},
 			notWant: []string{
 				// MUL-5696: no unbounded comment pull. Both shapes contradict

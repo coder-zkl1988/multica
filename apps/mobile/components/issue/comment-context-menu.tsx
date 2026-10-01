@@ -146,7 +146,7 @@ export function useCommentLongPress(
               );
             useReplyTargetStore.getState().setTarget({
               commentId: entry.id,
-              actorName: actorName || "comment",
+              actorName: actorName || t("comments.fallback_actor"),
               preview: entry.content ?? "",
             });
             return;
@@ -253,8 +253,8 @@ function presentReactSheet(args: {
   // helper invoked from inside the outer sheet's completion callback, not
   // a hook. The caller (`useCommentLongPress`, a real hook) calls
   // `useTranslation` at its top level and passes `t` / `tCommon` through.
-  t: TFunction;
-  tCommon: TFunction;
+  t: TFunction<"issues">;
+  tCommon: TFunction<"common">;
   toggle: (emoji: string, existing: Reaction | undefined) => void;
 }) {
   const {

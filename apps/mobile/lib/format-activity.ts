@@ -20,6 +20,7 @@
  */
 import type { TimelineEntry } from "@multica/core/types";
 import { formatDateOnly } from "@multica/core/issues/date";
+import { i18n } from "./i18n/singleton";
 import {
   type IssueTranslate,
   issuePriorityLabel,
@@ -46,12 +47,13 @@ function priorityName(t: IssueTranslate, value: string | undefined): string {
 
 // start_date / due_date are calendar days — format timezone-safely (no offset
 // day shift). Mirrors web's formatActivity in issue-detail.tsx.
-//
-// Still pinned to en-US: locale-aware dates are a separate pass that also
-// covers components/inbox/detail-label.tsx and the due-date chips.
 function shortDate(date: string | undefined): string {
   if (!date) return "?";
-  return formatDateOnly(date, { month: "short", day: "numeric" }, "en-US");
+  return formatDateOnly(
+    date,
+    { month: "short", day: "numeric" },
+    i18n.resolvedLanguage ?? i18n.language,
+  );
 }
 
 export function formatActivity(
@@ -108,6 +110,31 @@ export function formatActivity(
       });
     case "description_updated":
       return t("activity.verb.description_updated");
+    case "duplicate_marked":
+      return t("activity.duplicate_marked", {
+        identifier: details.original_identifier ?? "?",
+      });
+    case "duplicate_unmarked": {
+      const identifier = details.original_identifier ?? "?";
+      if (details.reason === "original_deleted") {
+        return t("activity.duplicate_unmarked_original_deleted", { identifier });
+      }
+      if (details.to) {
+        return t("activity.duplicate_unmarked_to", {
+          identifier,
+          status: statusName(t, details.to, resolveStatusLabel),
+        });
+      }
+      return t("activity.duplicate_unmarked", { identifier });
+    }
+    case "duplicate_added":
+      return t("activity.duplicate_added", {
+        identifier: details.duplicate_identifier ?? "?",
+      });
+    case "duplicate_removed":
+      return t("activity.duplicate_removed", {
+        identifier: details.duplicate_identifier ?? "?",
+      });
     case "task_completed":
       return t("activity.verb.task_completed", {
         count: entry.coalesced_count ?? 1,

@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 import type { Issue, IssuePriority, IssueStatus, IssueStatusEntry } from "@multica/core/types";
-import { RESOURCES } from "../locales";
+import { resources as RESOURCES } from "./i18n/resources";
 import {
   BOARD_CATEGORIES,
   BOARD_STATUSES,
@@ -111,7 +111,7 @@ describe("buildIssueStatusCatalog", () => {
     for (const key of ["backlog", "todo", "in_progress", "in_review", "done", "blocked", "cancelled"]) {
       expect(c.categoryOf(key)).toBe(issueColumnCategory(issue({ status: key })));
     }
-    expect(c.labelOf("in_review")).toBe("In Review");
+    expect(c.labelOf("in_review")).toBe("issues:status.in_review");
     expect(c.colorOf("in_review")).toBeNull();
   });
 
@@ -141,7 +141,7 @@ describe("buildIssueStatusCatalog", () => {
       color: "#22c55e",
     });
     const c = buildIssueStatusCatalog([builtIn, entry("qa", "started", { name: "QA" })]);
-    expect(c.labelOf("in_review")).toBe("In Review");
+    expect(c.labelOf("in_review")).toBe("issues:status.in_review");
     expect(c.colorOf("in_review")).toBeNull();
     expect(c.colorOf("qa")).toBe("#123456");
   });
@@ -203,7 +203,7 @@ describe("statusOptions", () => {
     ]);
     const inReview = statusOptions(c).filter((o) => o.category === "started");
     expect(inReview.map((o) => o.key)).toEqual(["in_review", "human_review"]);
-    expect(inReview.map((o) => o.label)).toEqual(["In Review", "Human Review"]);
+    expect(inReview.map((o) => o.label)).toEqual(["issues:status.in_review", "Human Review"]);
     expect(inReview.map((o) => o.color)).toEqual([null, "#123456"]);
   });
 

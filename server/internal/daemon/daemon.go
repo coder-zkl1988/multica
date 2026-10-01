@@ -36,6 +36,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/designdocument"
 	"github.com/multica-ai/multica/server/internal/designimplementation"
 	"github.com/multica-ai/multica/server/internal/selfexec"
+	"github.com/multica-ai/multica/server/internal/util"
 	"github.com/multica-ai/multica/server/pkg/agent"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 	"github.com/multica-ai/multica/server/pkg/redact"
@@ -601,11 +602,6 @@ type Daemon struct {
 	pendingWorkMu       sync.Mutex
 	pendingWorkInflight map[string]struct{}  // runtime_id -> hint-driven heartbeat in flight
 	pendingWorkLastRun  map[string]time.Time // runtime_id -> when the last hint-driven heartbeat started
-	// Negotiated from heartbeat acknowledgements or a server-originated steer
-	// hint. Until then a new daemon must not poll an older server's missing API.
-	taskSteerServerSupported atomic.Bool
-	taskSteerWakeMu          sync.Mutex
-	taskSteerWakeups         map[string]map[chan struct{}]struct{} // runtime_id -> active provider sessions
 
 	cancelFunc context.CancelFunc // set by Run(); called by triggerRestart
 	rootCtx    context.Context    // set by Run(); used by long-running recoveries that must survive per-runtime ctx cancellation
@@ -705,6 +701,12 @@ type Daemon struct {
 	// taskSlotWait is the brief semaphore wait before the capacity backoff.
 	// New sets the production default; tests shorten it to reach that branch.
 	taskSlotWait time.Duration
+	// taskSupplementSignals carries content-free server hints to the exact
+	// negotiated task. The two intervals are production defaults in New and
+	// independently overridable by focused tests.
+	taskSupplementSignals       taskSupplementSignals
+	taskSupplementPollInterval  time.Duration
+	taskSupplementReadyInterval time.Duration
 	// envRootBusyWait is how long a task that is entitled to a prior env root
 	// waits for the previous run to let go of it before giving up and preparing
 	// a fresh one. New() sets it; the zero value means "do not wait", which is
@@ -743,46 +745,47 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 	// server can split logs/metrics by client version (parallel to the CLI).
 	client.SetVersion(cfg.CLIVersion)
 	d := &Daemon{
-		cfg:                       cfg,
-		client:                    client,
-		deviceIP:                  outboundIPForServer(cfg.ServerBaseURL),
-		repoCache:                 repocache.New(cacheRoot, logger),
-		skillCache:                NewSkillBundleCache(skillCacheRoot),
-		logger:                    logger,
-		terminalReports:           newTerminalReportStore(cfg),
-		terminalReportWakeup:      make(chan struct{}, 1),
-		terminalReportNow:         time.Now,
-		terminalReportFlight:      make(map[string]struct{}),
-		workspaces:                make(map[string]*workspaceState),
-		runtimeIndex:              make(map[string]Runtime),
-		profileLaunchSpecs:        make(map[string]profileLaunchSpec),
-		runtimeSet:                newRuntimeSetWatcher(),
-		agentDiscoveryKick:        make(chan struct{}, 1),
-		agentVersions:             make(map[string]string),
-		skippedAgents:             make(map[string]string),
-		resolvedPaths:             make(map[string]healedAgent),
-		wsHBLastAck:               make(map[string]time.Time),
-		activeEnvRoots:            make(map[string]int),
-		deletingEnvRoots:          make(map[string]bool),
-		activeStores:              make(map[string]int),
-		deletingStores:            make(map[string]bool),
-		localPathLocks:            NewLocalPathLocker(),
-		runtimeGoneInflight:       make(map[string]struct{}),
-		pendingWorkInflight:       make(map[string]struct{}),
-		pendingWorkLastRun:        make(map[string]time.Time),
-		taskSteerWakeups:          make(map[string]map[chan struct{}]struct{}),
-		reregisterNextAttempt:     make(map[string]time.Time),
-		reregisterLastCompletedAt: make(map[string]time.Time),
-		cancelPollInterval:        5 * time.Second,
-		taskSlotWait:              taskSlotWaitTimeout,
-		envRootBusyWait:           15 * time.Second,
-		taskPrepareTimeout:        defaultTaskPrepareTimeout,
-		prepareLeaseRefresh:       taskPrepareLeaseRefresh,
-		reconcile:                 newReconcileBroadcaster(),
-		workspaceChanges:          newWorkspaceChangeSignal(),
-		wsRPC:                     newWSRPCClient(wsRPCResponseGrace),
-		authDrainLead:             DefaultAuthDrainLead,
-		activeTaskCancels:         make(map[string]context.CancelCauseFunc),
+		cfg:                         cfg,
+		client:                      client,
+		deviceIP:                    outboundIPForServer(cfg.ServerBaseURL),
+		repoCache:                   repocache.New(cacheRoot, logger),
+		skillCache:                  NewSkillBundleCache(skillCacheRoot),
+		logger:                      logger,
+		terminalReports:             newTerminalReportStore(cfg),
+		terminalReportWakeup:        make(chan struct{}, 1),
+		terminalReportNow:           time.Now,
+		terminalReportFlight:        make(map[string]struct{}),
+		workspaces:                  make(map[string]*workspaceState),
+		runtimeIndex:                make(map[string]Runtime),
+		profileLaunchSpecs:          make(map[string]profileLaunchSpec),
+		runtimeSet:                  newRuntimeSetWatcher(),
+		agentDiscoveryKick:          make(chan struct{}, 1),
+		agentVersions:               make(map[string]string),
+		skippedAgents:               make(map[string]string),
+		resolvedPaths:               make(map[string]healedAgent),
+		wsHBLastAck:                 make(map[string]time.Time),
+		activeEnvRoots:              make(map[string]int),
+		deletingEnvRoots:            make(map[string]bool),
+		activeStores:                make(map[string]int),
+		deletingStores:              make(map[string]bool),
+		localPathLocks:              NewLocalPathLocker(),
+		runtimeGoneInflight:         make(map[string]struct{}),
+		pendingWorkInflight:         make(map[string]struct{}),
+		pendingWorkLastRun:          make(map[string]time.Time),
+		reregisterNextAttempt:       make(map[string]time.Time),
+		reregisterLastCompletedAt:   make(map[string]time.Time),
+		cancelPollInterval:          5 * time.Second,
+		taskSlotWait:                taskSlotWaitTimeout,
+		envRootBusyWait:             15 * time.Second,
+		taskPrepareTimeout:          defaultTaskPrepareTimeout,
+		prepareLeaseRefresh:         taskPrepareLeaseRefresh,
+		reconcile:                   newReconcileBroadcaster(),
+		workspaceChanges:            newWorkspaceChangeSignal(),
+		wsRPC:                       newWSRPCClient(wsRPCResponseGrace),
+		authDrainLead:               DefaultAuthDrainLead,
+		activeTaskCancels:           make(map[string]context.CancelCauseFunc),
+		taskSupplementPollInterval:  defaultTaskSupplementPollInterval,
+		taskSupplementReadyInterval: defaultTaskSupplementReadyInterval,
 	}
 	d.activeEnvRootsCond = sync.NewCond(&d.activeEnvRootsMu)
 	d.activeStoresCond = sync.NewCond(&d.activeStoresMu)
@@ -4707,14 +4710,6 @@ func (d *Daemon) handleHeartbeatActions(ctx context.Context, runtimeID string, r
 	if resp == nil {
 		return
 	}
-	steerSupported := false
-	for _, capability := range resp.ServerCapabilities {
-		if capability == protocol.DaemonCapabilityTaskSteerV1 {
-			steerSupported = true
-			break
-		}
-	}
-	d.taskSteerServerSupported.Store(steerSupported)
 	if resp.PendingUpdate != nil || resp.PendingModelList != nil || resp.PendingLocalSkills != nil || resp.PendingLocalSkillImport != nil {
 		d.logger.Debug("heartbeat: pending actions",
 			"runtime_id", runtimeID,
@@ -4780,16 +4775,6 @@ func (d *Daemon) handlePendingWorkHint(runtimeID, kind string) {
 	}
 	if d.findRuntime(runtimeID) == nil {
 		// Not one of ours (stale relay fanout, or the runtime was just pruned).
-		return
-	}
-	if kind == protocol.PendingWorkKindTaskSteer {
-		// Receiving this server-owned hint is itself positive feature
-		// negotiation; old servers cannot emit the new kind.
-		d.taskSteerServerSupported.Store(true)
-		d.signalTaskSteerWakeups(runtimeID)
-		// Wake active provider sessions directly. Their low-frequency durable
-		// poll remains only as recovery if this best-effort hint is lost; this
-		// kind must not turn into a generic heartbeat/claim cycle here.
 		return
 	}
 
@@ -4859,38 +4844,6 @@ func (d *Daemon) handlePendingWorkHint(runtimeID, kind string) {
 	}
 	d.logger.Debug("pending work hint served", "runtime_id", runtimeID, "kind", kind)
 	d.handleHeartbeatActions(ctx, runtimeID, resp)
-}
-
-func (d *Daemon) registerTaskSteerWakeup(runtimeID string) (chan struct{}, func()) {
-	wake := make(chan struct{}, 1)
-	d.taskSteerWakeMu.Lock()
-	if d.taskSteerWakeups == nil {
-		d.taskSteerWakeups = make(map[string]map[chan struct{}]struct{})
-	}
-	if d.taskSteerWakeups[runtimeID] == nil {
-		d.taskSteerWakeups[runtimeID] = make(map[chan struct{}]struct{})
-	}
-	d.taskSteerWakeups[runtimeID][wake] = struct{}{}
-	d.taskSteerWakeMu.Unlock()
-	return wake, func() {
-		d.taskSteerWakeMu.Lock()
-		delete(d.taskSteerWakeups[runtimeID], wake)
-		if len(d.taskSteerWakeups[runtimeID]) == 0 {
-			delete(d.taskSteerWakeups, runtimeID)
-		}
-		d.taskSteerWakeMu.Unlock()
-	}
-}
-
-func (d *Daemon) signalTaskSteerWakeups(runtimeID string) {
-	d.taskSteerWakeMu.Lock()
-	defer d.taskSteerWakeMu.Unlock()
-	for wake := range d.taskSteerWakeups[runtimeID] {
-		select {
-		case wake <- struct{}{}:
-		default:
-		}
-	}
 }
 
 // handleModelList resolves the provider's supported models (via static
@@ -6140,6 +6093,10 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 	// Failed preparation still has real result/failure reporting to measure;
 	// only phases actually entered are present (no synthetic execute phase).
 	execution.beginFinalize(executionStatus)
+	if errors.Is(err, errStartClaimRejected) {
+		taskLog.Info("discarding rejected start claim", "error", err)
+		return
+	}
 	if errors.Is(context.Cause(ctx), errAuthenticationExpired) {
 		evidenceRecorder.finishFinalization(time.Now())
 		d.reportAuthenticationExpired(task.ID, result, taskLog)
@@ -7194,11 +7151,15 @@ func shouldReusePriorWorkdir(task Task, localAssignment *localDirectoryAssignmen
 		return "", false
 	}
 
-	root, err := filepath.EvalSymlinks(workspacesRoot)
+	// util.ResolveSymlinks, not filepath.EvalSymlinks: on Windows the latter
+	// cannot pass through a directory junction, so a junctioned workspaces
+	// root silently declined every reuse and each follow-up lost its session
+	// (#8946).
+	root, err := util.ResolveSymlinks(workspacesRoot)
 	if err != nil {
 		return "", false
 	}
-	workdir, err := filepath.EvalSymlinks(task.PriorWorkDir)
+	workdir, err := util.ResolveSymlinks(task.PriorWorkDir)
 	if err != nil {
 		return "", false
 	}
@@ -7644,11 +7605,12 @@ func (d *Daemon) lockReusablePriorEnvRoot(ctx context.Context, task Task, localA
 		return nil, "", nil, false, nil
 	}
 	priorRoot := filepath.Dir(workDir)
-	// workDir came back through EvalSymlinks, so the root it is measured
-	// against has to be resolved the same way — otherwise a symlinked
-	// workspaces root (macOS /tmp -> /private/tmp, a home on a linked volume)
-	// makes the two look unrelated and every reuse is refused.
-	canonicalWorkspacesRoot, err := filepath.EvalSymlinks(d.cfg.WorkspacesRoot)
+	// workDir came back through util.ResolveSymlinks, so the root it is
+	// measured against has to be resolved the same way — otherwise a symlinked
+	// workspaces root (macOS /tmp -> /private/tmp, a home on a linked volume,
+	// a Windows junction to another drive) makes the two look unrelated and
+	// every reuse is refused.
+	canonicalWorkspacesRoot, err := util.ResolveSymlinks(d.cfg.WorkspacesRoot)
 	if err != nil {
 		return nil, "", nil, false, nil
 	}
@@ -7935,13 +7897,14 @@ func resolveTaskModelSelection(
 
 	// service_tier is catalog-owned and currently Codex-only. As with
 	// thinking_level, stale or incompatible persisted values degrade to the
-	// runtime default instead of failing the task. Catalog lookup errors pass
-	// through so a transient discovery failure does not silently disable a
-	// previously valid user choice.
+	// runtime default instead of failing the task. A catalog that cannot
+	// validate — a lookup error, or a fallback catalog standing in for a
+	// failed discovery — passes the value through, so a discovery failure does
+	// not silently disable a previously valid user choice (MUL-7691).
 	if sel.ServiceTier != "" {
 		ok, err := agent.ValidateServiceTierWith(loadCatalog, provider, sel.Model, sel.ServiceTier)
 		if err != nil {
-			taskLog.Warn("service_tier: catalog lookup failed; passing through",
+			taskLog.Warn("service_tier: catalog cannot validate; passing through",
 				"provider", provider,
 				"model", sel.Model,
 				"service_tier", sel.ServiceTier,
@@ -7957,21 +7920,22 @@ func resolveTaskModelSelection(
 		}
 	}
 	// Per-model guard: the server validates the literal token against the
-	// provider's enum, but per-model gaps (Claude's `xhigh` on a non-Opus
-	// model, Codex's per-model `supported_reasoning_levels`) only resolve
-	// here, against the daemon's local CLI catalog. Invalid combinations
-	// log a warning and drop the level rather than failing the task, so a
-	// stale persisted value never blocks execution. An empty model is
-	// resolved by ValidateThinkingLevelWith to the provider's default model so
-	// default-model tasks aren't misjudged — except for codex, whose empty
+	// provider's enum, but per-model gaps (Codex's per-model
+	// `supported_reasoning_levels`, Claude's per-model `supportedEffortLevels`)
+	// only resolve here, against the daemon's local CLI catalog. Invalid
+	// combinations log a warning and drop the level rather than failing the
+	// task, so a stale persisted value never blocks execution. An empty model
+	// is resolved by ValidateThinkingLevelWith to the provider's default model
+	// so default-model tasks aren't misjudged — except for codex, whose empty
 	// model follows config.toml (any model) and so fails closed, dropping the
-	// level here without a catalog read at all. Discovery errors fail open for
-	// resolved models: if we can't list models, we keep the persisted level
-	// and let the CLI object.
+	// level here without a catalog read at all. Only a verified catalog can
+	// drop a level: on a lookup error or a fallback/empty catalog we keep the
+	// persisted level and let the CLI object, unless the binary itself has no
+	// such effort flag (MUL-7691).
 	if sel.ThinkingLevel != "" {
 		ok, err := agent.ValidateThinkingLevelWith(loadCatalog, provider, sel.Model, sel.ThinkingLevel)
 		if err != nil {
-			taskLog.Warn("thinking_level: catalog lookup failed; passing through",
+			taskLog.Warn("thinking_level: catalog cannot validate; passing through",
 				"provider", provider,
 				"model", sel.Model,
 				"thinking_level", sel.ThinkingLevel,
@@ -8112,7 +8076,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	prepareComplete := false
 	defer func() {
 		cancelPrepare()
-		if prepareComplete || returnErr == nil || !errors.Is(context.Cause(prepareCtx), errTaskPrepareTimeout) {
+		if prepareComplete || returnErr == nil || errors.Is(returnErr, errStartClaimRejected) || !errors.Is(context.Cause(prepareCtx), errTaskPrepareTimeout) {
 			return
 		}
 		// Collapse every deadline shape (context deadline, HTTP cancellation,
@@ -8483,10 +8447,10 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	}
 	if provider == "hermes" {
 		// Resolve from the argv hermes will actually parse — launch prefix,
-		// `acp`, then the filtered custom args — which agent.HermesLaunchArgv
+		// the filtered custom args, then `acp` — which agent.HermesLaunchArgv
 		// assembles the same way the backend does. A custom runtime profile's
 		// fixed_args are the launch prefix now, so they are scanned before
-		// custom_args, and the backend's own `acp` token sits between them and
+		// custom_args, and the backend's own `acp` token closes the argv and
 		// participates in the scan. Approximating that argv reads a different
 		// profile than the process does, and the overlay ends up seeded from
 		// the wrong home (GH #7046).
@@ -8992,20 +8956,42 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// /multica_workspaces/{ws}/{short-id}/workdir hit FileNotFoundError in
 	// the microsecond window before os.MkdirAll ran.
 	//
-	// On error we return early so handleTask's existing FailTask +
-	// taskfailure.Classify path records the failure with the same
+	// On error we return early. A rejected claim is discarded by handleTask;
+	// other errors use its existing FailTask + taskfailure.Classify path with the same
 	// "start task failed: <…>" string and the same failure_reason
 	// taxonomy as before — see MUL-2946 for the classifier contract.
+	var taskCapabilities []string
+	if agent.SupportsTaskSupplement(provider, resolvedVersion) && task.IssueID != "" {
+		taskCapabilities = append(taskCapabilities, protocol.DaemonCapabilityTaskSupplementV1)
+	}
+	var taskSupplementNegotiated bool
 	if issueStart, ok := issueStartReportForTask(task); ok {
-		state, err := d.client.StartTaskWithIssueStart(prepareCtx, task.ID, issueStart)
-		if err != nil {
+		state, startErr := d.client.StartTaskWithIssueStart(prepareCtx, task.ID, issueStart, taskCapabilities...)
+		if startErr != nil {
 			stopPrepareLease()
-			return TaskResult{}, fmt.Errorf("start task failed: %w", err)
+			return TaskResult{}, fmt.Errorf("start task failed: %w", startErr)
 		}
 		applyIssueStartState(&task, state)
-	} else if err := d.client.StartTask(prepareCtx, task.ID); err != nil {
+		taskSupplementNegotiated = state.SupplementCapability == protocol.DaemonCapabilityTaskSupplementV1
+	} else {
+		var startErr error
+		taskSupplementNegotiated, startErr = d.client.StartTask(prepareCtx, task, taskCapabilities...)
+		if startErr != nil {
+			stopPrepareLease()
+			return TaskResult{}, fmt.Errorf("start task failed: %w", startErr)
+		}
+	}
+	if prepareCtx.Err() != nil {
 		stopPrepareLease()
-		return TaskResult{}, fmt.Errorf("start task failed: %w", err)
+		return TaskResult{}, fmt.Errorf("start task failed: %w", prepareCtx.Err())
+	}
+	if taskSupplementNegotiated {
+		// Register before provider launch so a hint cannot arrive in the gap
+		// between the committed server transition and turn/started. The row is
+		// durable, so a coalesced hint is sufficient; the five-second fallback
+		// covers a notification sent before this start response arrived.
+		_, unsubscribeSupplements := d.taskSupplementSignals.subscribe(task.ID)
+		defer unsubscribeSupplements()
 	}
 	stopPrepareLease()
 	prepareComplete = true
@@ -9349,8 +9335,8 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// The overlay is authoritative once built, so nothing on the command line
 	// may re-point HERMES_HOME out of it. Both argv regions are stripped
 	// together, against the same assembled argv the resolver read: a selection
-	// can straddle them (a prefix ending in a bare `-p` captures the backend's
-	// `acp`), which per-region stripping cannot see.
+	// can straddle them (a prefix ending in a bare `-p` captures the first
+	// custom arg), which per-region stripping cannot see.
 	var hermesOverlayCustomArgs []string
 	hermesOverlayActive := provider == "hermes" && env != nil && env.HermesHome != ""
 	if hermesOverlayActive {
@@ -9479,6 +9465,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		idleWatchdogTimeout = d.cfg.OpenCodeIdleWatchdog
 	}
 	execOpts := agent.ExecOptions{
+		EnableTaskSupplement:       taskSupplementNegotiated,
 		Cwd:                        env.WorkDir,
 		Model:                      model,
 		ThreadName:                 deriveTaskThreadName(task),
@@ -9620,8 +9607,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	var msgSeq atomic.Int32
 	evidenceRecorder.setExecutionIdentity(task.Agent.Model, task.Agent.ThinkingLevel, execOpts.Model, execOpts.ThinkingLevel, resolvedVersion, entry.Path)
 	evidenceRecorder.beginExecution(time.Now())
-	execCtx := context.WithValue(ctx, taskSteerRuntimeIDContextKey{}, task.RuntimeID)
-	result, tools, err := d.executeAndDrain(execCtx, backend, prompt, execOpts, taskLog, task.ID, env.CodexHome, &msgSeq)
+	result, tools, err := d.executeAndDrain(ctx, backend, prompt, execOpts, taskLog, task.ID, env.CodexHome, &msgSeq)
 	if err != nil {
 		if errors.Is(err, agentconfig.ErrRuntimeMCPSelection) {
 			return TaskResult{}, asEnvironmentSetupFailure(err)
@@ -9698,7 +9684,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		freshPrompt := buildTaskPrompt(task, provider, d.cfg.DirectAgentMode, promptOptions...)
 		freshPrompt = primaryRepositoryPrompt(runtimeBrief, freshPrompt, primaryRepository)
 
-		retryResult, retryTools, retryErr := d.executeAndDrain(execCtx, backend, freshPrompt, execOpts, taskLog, task.ID, env.CodexHome, &msgSeq)
+		retryResult, retryTools, retryErr := d.executeAndDrain(ctx, backend, freshPrompt, execOpts, taskLog, task.ID, env.CodexHome, &msgSeq)
 		if retryErr != nil {
 			taskLog.Error("fresh session also failed to start; keeping the original poisoned result", "error", retryErr)
 		} else if retryResult.Status != "completed" && retryResult.SessionID == "" {
@@ -10173,16 +10159,6 @@ func freshSessionMayHelp(errText string) bool {
 // messages and is owned by the caller so a same-task retry continues the
 // sequence instead of restarting at 1 — the server orders the transcript by
 // seq alone, and duplicate seqs would interleave the two attempts' rows.
-type taskSteerRuntimeIDContextKey struct{}
-
-func formatCommentSteerInstruction(authorName, content string) string {
-	authorName = strings.Join(strings.Fields(authorName), " ")
-	if authorName == "" {
-		authorName = "a user"
-	}
-	return fmt.Sprintf("[STEER] Human %s left a new comment while you were working:\n\n%s", strconv.Quote(authorName), content)
-}
-
 func (d *Daemon) executeAndDrain(ctx context.Context, backend agent.Backend, prompt string, opts agent.ExecOptions, taskLog *slog.Logger, taskID, codexHome string, msgSeq *atomic.Int32) (agent.Result, int32, error) {
 	phaseRecorder := taskPhaseRecorderFromContext(ctx)
 	// Wrap the caller's ctx so the idle watchdog (below) can interrupt both
@@ -10210,70 +10186,22 @@ func (d *Daemon) executeAndDrain(ctx context.Context, backend agent.Backend, pro
 	phaseRecorder.Mark(taskPhaseRuntimeStarted)
 	taskLog.Debug("backend started, draining messages")
 
-	// Pull steering instructions while this exact provider session is alive.
-	// Server hints wake matching runtime sessions immediately; the low-frequency
-	// poll is only a recovery path when a best-effort hint is lost.
-	steerCtx, cancelSteer := context.WithCancel(agentCtx)
-	steerDone := make(chan struct{})
-	if session.Steer != nil {
-		runtimeID, _ := ctx.Value(taskSteerRuntimeIDContextKey{}).(string)
-		steerWake, unregisterSteerWake := d.registerTaskSteerWakeup(runtimeID)
-		defer unregisterSteerWake()
+	// Only negotiated sessions may claim additions. Stop and join delivery
+	// before the caller reports the task's terminal state to the server.
+	if opts.EnableTaskSupplement && session.Supplement != nil && session.SupplementReady != nil {
+		supplementCtx, cancelSupplements := context.WithCancel(agentCtx)
+		supplementsDone := make(chan struct{})
+		wakeup, unsubscribe := d.taskSupplementSignals.subscribe(taskID)
 		go func() {
-			defer close(steerDone)
-			ticker := time.NewTicker(15 * time.Second)
-			defer ticker.Stop()
-			for {
-				if !d.taskSteerServerSupported.Load() {
-					select {
-					case <-steerCtx.Done():
-						return
-					case <-steerWake:
-					case <-ticker.C:
-					}
-					continue
-				}
-				claimCtx, cancel := context.WithTimeout(steerCtx, 3*time.Second)
-				steer, claimErr := d.client.ClaimCommentSteer(claimCtx, taskID)
-				cancel()
-				if claimErr != nil {
-					if steerCtx.Err() != nil {
-						return
-					}
-					taskLog.Debug("comment steer claim failed", "error", claimErr)
-				} else if steer != nil {
-					injectCtx, cancelInject := context.WithTimeout(steerCtx, 5*time.Second)
-					injectErr := session.Steer(injectCtx, formatCommentSteerInstruction(steer.AuthorName, steer.Content))
-					cancelInject()
-					injectErrText := ""
-					if injectErr != nil {
-						injectErrText = injectErr.Error()
-					}
-					ackCtx, cancelAck := context.WithTimeout(context.Background(), 5*time.Second)
-					_, ackErr := d.client.AckCommentSteer(ackCtx, taskID, steer.CommentID, injectErr == nil, injectErrText)
-					cancelAck()
-					if ackErr != nil {
-						taskLog.Warn("comment steer acknowledgement failed", "comment_id", steer.CommentID, "error", ackErr)
-					}
-					// Drain all currently pending rows before sleeping so several
-					// comments retain their database order at one safe boundary.
-					continue
-				}
-				select {
-				case <-steerCtx.Done():
-					return
-				case <-steerWake:
-				case <-ticker.C:
-				}
-			}
+			defer unsubscribe()
+			defer close(supplementsDone)
+			d.runTaskSupplementLoop(supplementCtx, session, taskID, wakeup, taskLog)
 		}()
-	} else {
-		close(steerDone)
+		defer func() {
+			cancelSupplements()
+			<-supplementsDone
+		}()
 	}
-	defer func() {
-		cancelSteer()
-		<-steerDone
-	}()
 
 	// Bound the drain loop only when there is a wall-clock cap. With a positive
 	// opts.Timeout, give the drain a slightly longer deadline than the backend

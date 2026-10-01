@@ -24,45 +24,16 @@ import { PriorityIcon } from "@/components/ui/priority-icon";
 import { useActorLookup } from "@/data/use-actor-name";
 import { useIssueLabels } from "@/lib/use-issue-labels";
 import { useIssueStatuses } from "@/lib/use-issue-statuses";
+import { i18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
-// Mirrors PRIORITY_CONFIG.label in packages/core/issues/config/priority.ts
-const PRIORITY_LABEL: Record<IssuePriority, string> = {
-  urgent: "Urgent",
-  high: "High",
-  medium: "Medium",
-  low: "Low",
-  none: "No priority",
-};
-
-// Mirrors useTypeLabels in packages/views/inbox/components/inbox-detail-label.tsx
-const TYPE_LABEL: Record<InboxItemType, string> = {
-  issue_assigned: "Assigned",
-  issue_subscribed: "Subscribed",
-  unassigned: "Unassigned",
-  assignee_changed: "Reassigned",
-  status_changed: "Status changed",
-  priority_changed: "Priority changed",
-  start_date_changed: "Start date changed",
-  due_date_changed: "Due date changed",
-  new_comment: "New comment",
-  mentioned: "Mentioned",
-  review_requested: "Review requested",
-  task_completed: "Task completed",
-  task_failed: "Task failed",
-  agent_blocked: "Agent blocked",
-  agent_completed: "Agent completed",
-  reaction_added: "Reaction added",
-  design_ready: "Design ready",
-  quick_create_done: "Quick-create done",
-  quick_create_failed: "Quick-create failed",
-  quick_create_unconfirmed: "Quick-create needs a check",
-  autopilot_paused: "Autopilot paused",
-  autopilot_quota_exceeded: "Autopilot run limit reached",
-};
 // due_date is a calendar day — format timezone-safely (no offset day shift).
 function shortDate(dateStr: string): string {
-  return formatDateOnly(dateStr, { month: "short", day: "numeric" }, "en-US");
+  return formatDateOnly(
+    dateStr,
+    { month: "short", day: "numeric" },
+    i18n.resolvedLanguage ?? i18n.language,
+  );
 }
 
 function singleLine(value: string | null | undefined): string {
@@ -124,7 +95,7 @@ export function InboxDetailLabel({
   }
 
   // Single-string cases.
-  const text = (() => {
+  const text: string = (() => {
     switch (item.type) {
       case "issue_assigned":
       case "assignee_changed":
@@ -166,7 +137,7 @@ export function InboxDetailLabel({
         return detail || typeLabel(item.type);
       }
       case "autopilot_quota_exceeded":
-        return "Run blocked because the limit was reached";
+        return t("type.run_limit_blocked");
       default:
         return typeLabel(item.type);
     }

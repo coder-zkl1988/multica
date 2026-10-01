@@ -102,7 +102,7 @@ export function AgentPickerSheet({
                         </View>
                         {!runtimeBound ? (
                           <Text className="text-xs font-medium text-warning">
-                            Needs runtime
+                            {t("picker.needs_runtime")}
                           </Text>
                         ) : null}
                         {selected ? (

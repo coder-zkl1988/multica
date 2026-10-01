@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef, type ReactNode, type Ref } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type ReactNode, type Ref } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
@@ -25,10 +25,14 @@ const apiListWorkspaces = vi.hoisted(() => vi.fn());
 const apiListQuickActions = vi.hoisted(() => vi.fn());
 const apiRenderQuickAction = vi.hoisted(() => vi.fn());
 const apiPreviewCommentTriggers = vi.hoisted(() => vi.fn());
-const uploadWithToast = vi.hoisted(() => vi.fn());
-const editorDefaultValues = vi.hoisted(() => ({
-  values: [] as Array<string | undefined>,
+const apiListTasksByIssue = vi.hoisted(() => vi.fn());
+const apiCancelTask = vi.hoisted(() => vi.fn());
+
+vi.mock("@multica/core/hooks", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@multica/core/hooks")>()),
+  useWorkspaceId: () => "ws-1",
 }));
+const uploadWithToast = vi.hoisted(() => vi.fn());
 // The `/` quick-action menu is wired through a ContentEditor prop, so the mock
 // editor records it — that prop being absent is exactly the MUL-5588 bug.
 const editorQuickActionMenu = vi.hoisted(() => ({
@@ -63,6 +67,8 @@ vi.mock("@multica/core/api", () => ({
     listProjectResources: vi.fn().mockResolvedValue({ resources: [{ id: "repository-1", resource_type: "github_repo", config: { url: "https://github.com/example/project" } }] }),
     listProjectDesignSystemCatalogue: vi.fn().mockResolvedValue({ design_systems: [] }),
     previewCommentTriggers: apiPreviewCommentTriggers,
+    listTasksByIssue: apiListTasksByIssue,
+    cancelTask: apiCancelTask,
   },
 }));
 
@@ -79,8 +85,12 @@ vi.mock("../../common/actor-avatar", () => ({
       {actorType}:{actorId}
     </span>
   ),
-  // CommentTriggerChips renders one per agent chip.
   AgentStatusDot: () => <span data-testid="status-dot" />,
+}));
+
+vi.mock("@multica/core/agents", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@multica/core/agents")>()),
+  useAgentPresenceDetail: () => "loading",
 }));
 
 vi.mock("../../editor", async () => ({
@@ -108,6 +118,7 @@ vi.mock("../../editor", async () => ({
   ContentEditor: forwardRef(function MockContentEditor(
     {
       defaultValue,
+      value,
       onUpdate,
       placeholder,
       onUploadFile,
@@ -117,6 +128,7 @@ vi.mock("../../editor", async () => ({
       quickActionMenu,
     }: {
       defaultValue?: string;
+      value?: string;
       onUpdate?: (markdown: string) => void;
       placeholder?: string;
       onUploadFile?: (file: File, uploadId: string) => Promise<UploadResult | null>;
@@ -127,10 +139,11 @@ vi.mock("../../editor", async () => ({
     },
     ref: Ref<unknown>,
   ) {
-    editorDefaultValues.values.push(defaultValue);
     editorQuickActionMenu.last = quickActionMenu;
     editorUploadSignal.notify = onUploadingChange;
-    const valueRef = useRef(defaultValue ?? "");
+    const initialValue = value ?? defaultValue ?? "";
+    const valueRef = useRef(initialValue);
+    const [editorValue, setEditorValue] = useState(initialValue);
     // Mirrors the real editor's `uploading` node attrs: the placeholder exists
     // from before the await until the upload settles, `hasActiveUploads` reads
     // it synchronously, and the host is told through onUploadingChange.
@@ -147,11 +160,17 @@ vi.mock("../../editor", async () => ({
       };
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
+    useEffect(() => {
+      if (value === undefined || value === valueRef.current) return;
+      valueRef.current = value;
+      setEditorValue(value);
+    }, [value]);
 
     useImperativeHandle(ref, () => ({
       getMarkdown: () => valueRef.current,
       clearContent: () => {
         valueRef.current = "";
+        setEditorValue("");
       },
       focus: () => { focusCalls.focused += 1; },
       focusAtCoords: () => {},
@@ -163,6 +182,7 @@ vi.mock("../../editor", async () => ({
           const result = await onUploadFile?.(file, `mock-upload-${++mockUploadIdSeq}`);
           if (!result || destroyedRef.current) return;
           valueRef.current = `${valueRef.current}\n${result.url}`.trim();
+          setEditorValue(valueRef.current);
           onUpdate?.(valueRef.current);
         } finally {
           inFlightRef.current -= 1;
@@ -182,6 +202,7 @@ vi.mock("../../editor", async () => ({
         insertMarkdownSpy(md);
         if (destroyedRef.current || !insertMarkdownBehavior.succeed) return false;
         valueRef.current = `${valueRef.current}\n\n${md}`.trim();
+        setEditorValue(valueRef.current);
         onUpdate?.(valueRef.current);
         return true;
       },
@@ -190,10 +211,11 @@ vi.mock("../../editor", async () => ({
     return (
       <textarea
         data-testid="editor"
-        defaultValue={defaultValue}
+        value={editorValue}
         placeholder={placeholder}
         onChange={(event) => {
           valueRef.current = event.target.value;
+          setEditorValue(event.target.value);
           onUpdate?.(event.target.value);
         }}
         onKeyDown={(event) => {
@@ -267,17 +289,21 @@ beforeEach(() => {
   uploadWithToast.mockReset();
   apiUploadFile.mockReset();
   apiListWorkspaces.mockReset();
+  apiListWorkspaces.mockResolvedValue([]);
   apiListQuickActions.mockReset();
+  apiListQuickActions.mockResolvedValue([]);
   apiRenderQuickAction.mockReset();
-  // Default: no resolved triggers, matching an issue with no assignee — the
-  // concise toggle's render gate must see the same shape as production.
   apiPreviewCommentTriggers.mockReset();
+  apiListTasksByIssue.mockReset();
+  apiCancelTask.mockReset();
   apiPreviewCommentTriggers.mockResolvedValue({ agents: [], blocked: [] });
+  apiListTasksByIssue.mockResolvedValue([]);
+  apiCancelTask.mockResolvedValue(undefined);
   insertMarkdownSpy.mockReset();
   insertPlaceholderSpy.mockReset();
   insertMarkdownBehavior.succeed = true;
   localStorage.clear();
-  useCommentComposerStore.setState({ sticky: true, concise: false });
+  useCommentComposerStore.setState({ sticky: true, concise: false, runningAgentReply: "steer" });
   // The composer's pinning (and the height cap that follows it) is viewport
   // dependent, so a narrow-viewport test must not leak into the next one.
   Object.defineProperty(window, "innerWidth", { configurable: true, value: 1280 });
@@ -285,13 +311,54 @@ beforeEach(() => {
   // (e.g. the failed-send case) would trip the composers' draft-direct-mount
   // path and hide the shell the next test expects.
   useCommentDraftStore.setState({ drafts: {} });
-  editorDefaultValues.values = [];
   editorQuickActionMenu.last = undefined;
   focusCalls.focused = 0;
   focusCalls.blurred = 0;
 });
 
 describe("explicit comment design delivery", () => {
+  it.each(["comment", "reply"] as const)("%s design delivery does not stop a previously selected recipient run", async (kind) => {
+    const workspace = { id: "ws-1", slug: "acme", name: "Acme" };
+    apiListWorkspaces.mockResolvedValue([workspace]);
+    apiListTasksByIssue.mockResolvedValue([{
+      id: "turn-1", agent_id: "selected-agent", issue_id: "issue-1", status: "running", priority: 0,
+      created_at: "2026-09-23T00:00:00Z", dispatched_at: null, started_at: "2026-09-23T00:00:01Z",
+      completed_at: null, result: null, error: null,
+      supplement_capability: "task-supplement-v1", can_supplement: true,
+    }]);
+    apiPreviewCommentTriggers.mockResolvedValue({
+      agents: [{ id: "selected-agent", name: "Selected agent", source: "mention_agent", reason: "" }],
+    });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClient.setQueryData(["workspaces", "list"], [workspace]);
+    const draftKey = kind === "comment" ? "new:issue-1" : "reply:issue-1:comment-1";
+    const store = useCommentDraftStore.getState();
+    store.setDraft(draftKey, "Design a checkout flow");
+    const onSubmit = vi.fn().mockResolvedValue("comment-new");
+    const props = {
+      issueId: "issue-1",
+      issue: { id: "issue-1", project_id: "project-1", assignee_type: "agent", assignee_id: "selected-agent" } as Issue,
+      agents: [{ id: "selected-agent", name: "Selected agent", runtime_id: "runtime-1" } as Agent],
+      onSubmit,
+    };
+    const view = renderWithI18n(<QueryClientProvider client={queryClient}><WorkspaceSlugProvider slug="acme">
+      {kind === "comment" ? <CommentInput {...props} /> : <ReplyInput {...props} parentId="comment-1" avatarType="member" avatarId="user-1" steerByDefault={() => true} />}
+    </WorkspaceSlugProvider></QueryClientProvider>);
+    await chooseRecipientAction("Selected agent trigger: Add to current run", /Stop and start over/);
+    expect(screen.getByRole("button", { name: "Stop and send" })).toBeInTheDocument();
+    act(() => store.setDesignRequest(draftKey, {
+      request_id: "delivery-1", operation: "design", agent_id: "selected-agent", project_resource_id: "repository-1",
+    }));
+    await waitFor(() => expect(getSubmitButton(view.container)).not.toBeDisabled());
+
+    expect(screen.queryByRole("button", { name: "Stop and send" })).not.toBeInTheDocument();
+    fireEvent.click(getSubmitButton(view.container));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(apiCancelTask).not.toHaveBeenCalled();
+    expect(onSubmit.mock.calls[0]![3]).toMatchObject({ request_id: "delivery-1", operation: "design" });
+    expect(onSubmit.mock.calls[0]![5]).toBeUndefined();
+  });
+
   it.each(["comment", "reply"] as const)("%s sends once, preserves request identity on failure, and clears delivery only after acceptance", async (kind) => {
     const workspace = { id: "ws-1", slug: "acme", name: "Acme" };
     apiListWorkspaces.mockResolvedValue([workspace]);
@@ -445,6 +512,20 @@ describe("quick action `/` menu", () => {
   }
 });
 
+/**
+ * Pick a recipient's action from its chip menu. Under CI load the composer can
+ * still re-render the chips (the previous send settling, the preview catching
+ * up) right after the menu opens, closing it; reopen until the item shows.
+ */
+async function chooseRecipientAction(chip: string, action: RegExp) {
+  await waitFor(() => {
+    const trigger = screen.getByRole("button", { name: chip });
+    if (trigger.getAttribute("aria-expanded") !== "true") fireEvent.click(trigger);
+    expect(screen.getByRole("menuitemradio", { name: action })).toBeInTheDocument();
+  }, { timeout: 5000 });
+  fireEvent.click(screen.getByRole("menuitemradio", { name: action }));
+}
+
 describe("comment composers", () => {
   it("renders the main comment composer without a manual expand control", () => {
     const { container } = renderCommentInput();
@@ -500,6 +581,125 @@ describe("comment composers", () => {
     });
   });
 
+  it("steers the thread's running turn by default, and stops it first to start over", async () => {
+    const turn = {
+      id: "turn-1", agent_id: "agent-1", issue_id: "issue-1", status: "running", priority: 0,
+      created_at: "2026-09-23T00:00:00Z", dispatched_at: null, started_at: "2026-09-23T00:00:01Z",
+      completed_at: null, result: null, error: null,
+      supplement_capability: "task-supplement-v1", can_supplement: true,
+    };
+    apiListTasksByIssue.mockResolvedValue([turn]);
+    apiPreviewCommentTriggers.mockResolvedValue({
+      agents: [{ id: "agent-1", name: "Lambda", source: "thread_parent", reason: "" }],
+    });
+    apiCancelTask.mockResolvedValue({ ...turn, status: "cancelled" });
+    const onSubmit = vi.fn().mockResolvedValue("reply-new");
+    const { container } = renderWithProviders(
+      <ReplyInput issueId="issue-1" parentId="comment-1" avatarType="member" avatarId="user-1"
+        onSubmit={onSubmit} steerByDefault={(task) => task.id === "turn-1"} />,
+    );
+
+    activateComposer("reply-composer-shell");
+    fireEvent.change(screen.getByTestId("editor"), { target: { value: "only fix web" } });
+    await screen.findByText("Add to current run", {}, { timeout: 5000 });
+    fireEvent.click(getSubmitButton(container));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith("only fix web", undefined, undefined,
+      undefined, undefined, ["turn-1"]), { timeout: 5000 });
+    expect(apiCancelTask).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByTestId("editor"), { target: { value: "start over on web" } });
+    await chooseRecipientAction("Lambda trigger: Add to current run", /Stop and start over/);
+    fireEvent.click(await screen.findByRole("button", { name: "Stop and send" }, { timeout: 5000 }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith("start over on web", undefined, undefined, undefined), { timeout: 5000 });
+    expect(apiCancelTask).toHaveBeenCalledWith("issue-1", "turn-1");
+    expect(apiCancelTask.mock.invocationCallOrder[0]!).toBeLessThan(onSubmit.mock.invocationCallOrder[1]!);
+  }, 15_000);
+
+  it("starts after the run by default when the personal preference says so", async () => {
+    useCommentComposerStore.setState({ runningAgentReply: "after_run" });
+    const turn = {
+      id: "turn-1", agent_id: "agent-1", issue_id: "issue-1", status: "running", priority: 0,
+      created_at: "2026-09-23T00:00:00Z", dispatched_at: null, started_at: "2026-09-23T00:00:01Z",
+      completed_at: null, result: null, error: null,
+      supplement_capability: "task-supplement-v1", can_supplement: true,
+    };
+    apiListTasksByIssue.mockResolvedValue([turn]);
+    apiPreviewCommentTriggers.mockResolvedValue({ agents: [{ id: "agent-1", name: "Lambda", source: "thread_parent", reason: "" }] });
+    const onSubmit = vi.fn().mockResolvedValue("reply-new");
+    const { container } = renderWithProviders(
+      <ReplyInput issueId="issue-1" parentId="comment-1" avatarType="member" avatarId="user-1"
+        onSubmit={onSubmit} steerByDefault={(task) => task.id === "turn-1"} />,
+    );
+
+    activateComposer("reply-composer-shell");
+    fireEvent.change(screen.getByTestId("editor"), { target: { value: "only fix web" } });
+    await screen.findByRole("button", { name: "Lambda trigger: Start after this run" }, { timeout: 5000 });
+    fireEvent.click(getSubmitButton(container));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith("only fix web", undefined, undefined, undefined), { timeout: 5000 });
+
+    // One message can still go into the running turn.
+    fireEvent.change(screen.getByTestId("editor"), { target: { value: "and keep desktop as is" } });
+    await chooseRecipientAction("Lambda trigger: Start after this run", /Add to current run/);
+    await screen.findByRole("button", { name: "Lambda trigger: Add to current run" }, { timeout: 5000 });
+    fireEvent.click(getSubmitButton(container));
+    await waitFor(() => expect(onSubmit).toHaveBeenLastCalledWith("and keep desktop as is", undefined, undefined,
+      undefined, undefined, ["turn-1"]), { timeout: 5000 });
+  }, 15_000);
+
+  it("steers every running recipient the message addresses", async () => {
+    const turn = (id: string, agentId: string) => ({
+      id, agent_id: agentId, issue_id: "issue-1", status: "running", priority: 0,
+      created_at: "2026-09-23T00:00:00Z", dispatched_at: null, started_at: "2026-09-23T00:00:01Z",
+      completed_at: null, result: null, error: null,
+      supplement_capability: "task-supplement-v1", can_supplement: true,
+    });
+    apiListTasksByIssue.mockResolvedValue([turn("turn-1", "agent-1"), turn("turn-2", "agent-2")]);
+    apiPreviewCommentTriggers.mockResolvedValue({ agents: [
+      { id: "agent-1", name: "Lambda", source: "mention_agent", reason: "" },
+      { id: "agent-2", name: "Orion", source: "mention_agent", reason: "" },
+    ] });
+    const onSubmit = vi.fn().mockResolvedValue("reply-new");
+    const { container } = renderWithProviders(
+      <ReplyInput issueId="issue-1" parentId="comment-1" avatarType="member" avatarId="user-1"
+        onSubmit={onSubmit} steerByDefault={() => true} />,
+    );
+    activateComposer("reply-composer-shell");
+    fireEvent.change(screen.getByTestId("editor"), { target: { value: "only fix web" } });
+    fireEvent.click(await screen.findByText("2 agents will receive this", {}, { timeout: 5000 }));
+    expect(await screen.findByRole("button", { name: "Lambda trigger: Add to current run" }, { timeout: 5000 })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Orion trigger: Add to current run" })).toBeInTheDocument();
+    fireEvent.click(getSubmitButton(container));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith("only fix web", undefined, undefined,
+      undefined, undefined, ["turn-1", "turn-2"]), { timeout: 5000 });
+  }, 15_000);
+
+  it("never stops the previous recipient after the mentions change under a stale preview", async () => {
+    const turn = {
+      id: "turn-1", agent_id: "agent-1", issue_id: "issue-1", status: "running", priority: 0,
+      created_at: "2026-09-23T00:00:00Z", dispatched_at: null, started_at: "2026-09-23T00:00:01Z",
+      completed_at: null, result: null, error: null,
+      supplement_capability: "task-supplement-v1", can_supplement: true,
+    };
+    apiListTasksByIssue.mockResolvedValue([turn]);
+    apiPreviewCommentTriggers.mockResolvedValue({ agents: [{ id: "agent-1", name: "Lambda", source: "thread_parent", reason: "" }] });
+    apiCancelTask.mockResolvedValue({ ...turn, status: "cancelled" });
+    const onSubmit = vi.fn().mockResolvedValue("reply-new");
+    renderWithProviders(<ReplyInput issueId="issue-1" parentId="comment-1" avatarType="member" avatarId="user-1"
+      onSubmit={onSubmit} steerByDefault={(task) => task.id === "turn-1"} />);
+    activateComposer("reply-composer-shell");
+    fireEvent.change(screen.getByTestId("editor"), { target: { value: "start over" } });
+    await chooseRecipientAction("Lambda trigger: Add to current run", /Stop and start over/);
+    // A slow preview still holds Lambda's restart, though the comment now
+    // explicitly addresses only a different agent.
+    apiPreviewCommentTriggers.mockImplementation(() => new Promise(() => {}));
+    fireEvent.change(screen.getByTestId("editor"), {
+      target: { value: "[@Orion](mention://agent/11111111-1111-4111-8111-111111111111) review desktop" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Stop and send" }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalled(), { timeout: 5000 });
+    expect(apiCancelTask).not.toHaveBeenCalled();
+  }, 15_000);
+
   it("keeps reply submission wired after removing expand", async () => {
     const { container, onSubmit } = renderReplyInput();
 
@@ -514,7 +714,7 @@ describe("comment composers", () => {
     });
   });
 
-  it("keeps the main comment editor's initial draft snapshot after persistence rerenders", () => {
+  it("keeps typed main comment text after persistence rerenders", () => {
     renderCommentInput();
     activateComposer("comment-composer-shell");
 
@@ -523,7 +723,18 @@ describe("comment composers", () => {
     });
 
     expect(useCommentDraftStore.getState().getDraft("new:issue-1")).toBe("test.de");
-    expect(editorDefaultValues.values.at(-1)).toBe("");
+    expect(screen.getByTestId("editor")).toHaveValue("test.de");
+  });
+
+  it("shows and submits an external draft update while the main composer stays mounted", async () => {
+    const { container, onSubmit } = renderCommentInput();
+    activateComposer("comment-composer-shell");
+    fireEvent.change(screen.getByTestId("editor"), { target: { value: "Previous draft" } });
+
+    act(() => useCommentDraftStore.getState().setDraft("new:issue-1", "External quick action"));
+    expect(screen.getByTestId("editor")).toHaveValue("External quick action");
+    fireEvent.click(getSubmitButton(container));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith("External quick action", undefined, undefined, undefined));
   });
 
   it("preserves the hidden design implementation identity through the editor roundtrip", async () => {

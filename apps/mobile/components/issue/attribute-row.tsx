@@ -20,7 +20,7 @@ import { View } from "react-native";
 import { router } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import type { Issue, IssuePriority } from "@multica/core/types";
+import type { Issue } from "@multica/core/types";
 import { formatDateOnly } from "@multica/core/issues/date";
 import { Text } from "@/components/ui/text";
 import { StatusIcon } from "@/components/ui/status-icon";
@@ -31,15 +31,9 @@ import { AttributeChip } from "./attribute-chip";
 import { useActorLookup } from "@/data/use-actor-name";
 import { findProject, projectListOptions } from "@/data/queries/projects";
 import { useWorkspaceStore } from "@/data/workspace-store";
-import { issuePriorityLabel, issueStatusLabel, PRIORITY_LABEL as PRIORITY_FULL_LABEL } from "@/lib/issue-status";
+import { issuePriorityLabel, issueStatusLabel } from "@/lib/issue-status";
 import { useIssueStatuses } from "@/lib/use-issue-statuses";
-
-// Chip placeholder shortens `none` from "No priority" → "Priority" so the
-// unset chip reads as a placeholder, not as a confusing assigned value.
-const PRIORITY_CHIP_LABEL: Record<IssuePriority, string> = {
-  ...PRIORITY_FULL_LABEL,
-  none: "Priority",
-};
+import { i18n } from "@/lib/i18n";
 
 /**
  * The picker fields the issue-detail attribute row can open. Bound to a
@@ -68,7 +62,13 @@ const ISSUE_PICKER_PATHNAMES = {
 // with the viewer's offset. Mirrors web's formatDate in list-row/board-card.
 function formatDueDate(iso: string | null): string | null {
   if (!iso) return null;
-  return formatDateOnly(iso, { month: "short", day: "numeric" }, "en-US") || null;
+  return (
+    formatDateOnly(
+      iso,
+      { month: "short", day: "numeric" },
+      i18n.resolvedLanguage ?? i18n.language,
+    ) || null
+  );
 }
 
 export function AttributeRow({ issue }: { issue: Issue }) {

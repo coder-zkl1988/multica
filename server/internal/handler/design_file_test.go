@@ -1095,15 +1095,6 @@ func TestCompleteDesignTemplateBlueprintAnalyzeTaskSavesBlueprint(t *testing.T) 
 	}
 }
 
-func handlerTestAgentID(t *testing.T) string {
-	t.Helper()
-	var id string
-	if err := testPool.QueryRow(context.Background(), `SELECT id FROM agent WHERE workspace_id = $1 AND name = 'Handler Test Agent' LIMIT 1`, testWorkspaceID).Scan(&id); err != nil {
-		t.Fatalf("get handler test agent: %v", err)
-	}
-	return id
-}
-
 func createLocalUIRestoreAgentForDesignTest(t *testing.T) string {
 	t.Helper()
 	var agentID string

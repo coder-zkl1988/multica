@@ -31,11 +31,11 @@ export default function NotificationsSettingsScreen() {
 
   const { t } = useTranslation("settings");
 
-  const inboxGroups: Array<{
+  const inboxGroups: {
     key: Exclude<NotificationGroupKey, "system_notifications">;
     label: string;
     description: string;
-  }> = [
+  }[] = [
     {
       key: "assignments",
       label: t("notifications.groups.assignments.label"),

@@ -57,6 +57,15 @@ const ISSUE_LIMIT = 20;
 const PROJECT_LIMIT = 10;
 const RECENT_LIMIT = 5;
 
+// `buildSearchRows` stays pure; it supplies stable section identities and the
+// localized render owns the label lookup.
+const SEARCH_HEADER_LABELS: Record<string, string> = {
+  "h-recent": "navigation:routes.recent",
+  "h-projects": "navigation:routes.projects",
+  "h-issues": "navigation:routes.issues",
+  "h-cancelled": "issues:status.cancelled",
+};
+
 // =====================================================
 // HighlightText — mobile port of web's HighlightText
 // =====================================================
@@ -432,7 +441,7 @@ export default function SearchModal() {
         case "header":
           return (
             <Text className="px-4 pt-4 pb-1 text-xs font-medium text-muted-foreground uppercase">
-              {item.title}
+              {t(SEARCH_HEADER_LABELS[item.key] ?? item.title)}
             </Text>
           );
         case "issue":
@@ -443,7 +452,7 @@ export default function SearchModal() {
           return <RecentRow item={item.issue} slug={slug} />;
       }
     },
-    [slug],
+    [slug, t],
   );
 
   return (

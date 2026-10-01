@@ -23,7 +23,7 @@ import { formatDateOnly } from "@multica/core/issues/date";
 import { useActorLookup } from "@/data/use-actor-name";
 import { useNewIssueDraftStore } from "@/data/stores/new-issue-draft-store";
 import { useWorkspaceStore } from "@/data/workspace-store";
-import { issuePriorityLabel, issueStatusLabel, PRIORITY_LABEL } from "@/lib/issue-status";
+import { issuePriorityLabel, issueStatusLabel } from "@/lib/issue-status";
 import { useIssueStatuses } from "@/lib/use-issue-statuses";
 
 /**

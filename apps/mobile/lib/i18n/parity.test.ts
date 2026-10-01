@@ -1,13 +1,9 @@
+// @vitest-environment node
 import { readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-// Relative import, not the "@/" tsconfig alias: vitest.config.ts has no
-// path-alias resolution wired up (confirmed by running this suite — the
-// alias throws ERR_MODULE_NOT_FOUND), and no other lib/**/*.test.ts file
-// in this app uses "@/" either. Runtime code (lib/i18n/index.ts) still
-// uses "@/locales" since Metro/tsc do resolve the alias for app code.
-import { RESOURCES } from "../../locales";
+import { resources as RESOURCES } from "./resources";
 
 // Schema-level guard: every key in the EN bundle must have a counterpart
 // in the zh-Hans bundle and vice-versa. Catches retrofit drift where a

@@ -130,7 +130,7 @@ func TestBuildDirectPromptRetainsTaskScopedContext(t *testing.T) {
 		"## Workspace Context", "workspace-1", "acme", "Keep customer-facing comments concise.",
 		"## Active sibling runs", "task-2",
 		"## Session Continuity Notice",
-		"## Task Initiator", "Alice", "alice@example.com",
+		"## On Behalf Of", "Alice", "alice@example.com",
 		"## Connected Apps", "GitHub", "github-app",
 	} {
 		if !strings.Contains(prompt, want) {
@@ -383,7 +383,7 @@ func TestBuildConcisePromptPreservesIdentityAndRunSafety(t *testing.T) {
 		"## Shared working directory",
 		"## Unresolved merge in your working tree",
 		"## Session Continuity Notice",
-		"## Task Initiator",
+		"## On Behalf Of",
 		"## Connected Apps",
 		"## Active sibling runs",
 	} {
@@ -394,7 +394,7 @@ func TestBuildConcisePromptPreservesIdentityAndRunSafety(t *testing.T) {
 	for _, heading := range []string{
 		"## Agent Identity", "## Privacy Security Boundary", "## Shared working directory",
 		"## Unresolved merge in your working tree", "## Session Continuity Notice",
-		"## Task Initiator", "## Connected Apps", "## Active sibling runs",
+		"## On Behalf Of", "## Connected Apps", "## Active sibling runs",
 	} {
 		if got := strings.Count(prompt, heading); got != 1 {
 			t.Fatalf("concise prompt rendered %q %d times, want exactly one:\n%s", heading, got, prompt)

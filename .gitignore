@@ -96,3 +96,5 @@ __pycache__/
 *.pyc
 .repo_memory/
 perf-report/
+# The production example is a tracked template; `.env*` above would hide it.
+!apps/mobile/.env.production.example

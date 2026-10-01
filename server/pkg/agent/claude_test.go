@@ -1596,17 +1596,17 @@ func TestClaudeHandleControlRequestAllowsFileAccessInsideWorkspace(t *testing.T)
 	}
 }
 
-func TestClaudeInputStreamCloseUnblocksWriteAndRejectsLaterFrames(t *testing.T) {
+func TestClaudeInputWriterCloseUnblocksWriteAndRejectsLaterFrames(t *testing.T) {
 	reader, writer := io.Pipe()
 	defer reader.Close()
-	stream := &claudeInputStream{writer: writer, closer: writer}
+	stream := &claudeInputWriter{w: writer}
 	written := make(chan error, 1)
 	go func() {
 		_, err := stream.Write([]byte("blocked"))
 		written <- err
 	}()
 	time.Sleep(10 * time.Millisecond)
-	if err := stream.Close(); err != nil {
+	if err := writer.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
 	select {
@@ -1619,7 +1619,7 @@ func TestClaudeInputStreamCloseUnblocksWriteAndRejectsLaterFrames(t *testing.T) 
 	}
 }
 
-func TestClaudeSteerRejectsAfterTerminalResultBeforeProcessExit(t *testing.T) {
+func TestClaudeTerminalObservedBeforeProcessExit(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell-script fixture is POSIX-only")
 	}
@@ -1661,9 +1661,6 @@ func TestClaudeSteerRejectsAfterTerminalResultBeforeProcessExit(t *testing.T) {
 	}
 	if !session.TerminalObserved() {
 		t.Fatal("Claude terminal result was not observed")
-	}
-	if err := session.Steer(context.Background(), "late instruction"); err == nil {
-		t.Fatal("steer succeeded after Claude's terminal result")
 	}
 	select {
 	case result := <-session.Result:
