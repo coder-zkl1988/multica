@@ -114,6 +114,13 @@ multica issue property unset <issue-id> --name Environment
 - `actor` / `multi_actor` values are workspace members only. Accept a name,
   email, UUID, short id or `member:<uuid>`; multi-actor is comma-separated,
   deduplicated in order, with at most 20 members.
+- `multi_text` / `multi_url` hold free-form string / http(s) URL lists without
+  options. `--value` accepts comma-separated entries, skips empties and
+  deduplicates in order, with at most 20 entries. Use a JSON array if any entry
+  contains a comma or the input starts with `[`, for example
+  `--value '["Smith, John","https://en.wikipedia.org/wiki/Washington,_D.C."]'`
+  or `--value '["[draft] spec"]'`. Creation accepts the same forms:
+  `--property 'Aliases=["Smith, John","[draft] spec"]'`.
 - Definition icons affect appearance, not validation. Only owner/admin humans
   can create or edit definitions; propose missing properties in a comment.
 - Where state belongs: workflow state a human should see and filter by goes in
@@ -128,12 +135,13 @@ multica issue list --sort property:Impact --direction desc --output json
 
 `--property Name=Value` uses ANY for repeated values of one property and ALL
 across properties. Values are option names/ids, booleans, member names/emails/ids,
-or literal text, URL, number or date (`YYYY-MM-DD`). `__none__` means unset for
+or literal text, URL, number or date (`YYYY-MM-DD`). For `multi_text` / `multi_url`,
+the value matches any single list element exactly. `__none__` means unset for
 every type; it is not index-backed, so reserve it for targeted audits.
 Only `=` is supported; `>=`, `<=`, `!=` are reserved and rejected.
 `--sort property:<name-or-id>` uses option order for select and value order for
 number/date/text/URL; unset sorts last in either direction. Archived properties
-and unordered types (multi-select, checkbox, actor kinds) are rejected.
+and unordered types (multi-select, checkbox, actor kinds, list types) are rejected.
 
 Issue JSON normally maps definition ids to stored values. `--resolve-properties`
 in JSON mode returns named typed rows with at most one catalog request per page:
@@ -143,8 +151,9 @@ multica issue list --status in_progress --output json --resolve-properties
 multica issue get <issue-id> --resolve-properties
 ```
 
-Read `display` for single values and `display_values` for multi-select/multi-actor;
-`value` keeps the stored ids.
+Read `display` for single values and `display_values` for multi-value properties
+(`multi_select`, `multi_actor`, `multi_text`, `multi_url`);
+`value` keeps the stored ids / strings.
 
 ## Status changes have server side effects
 
