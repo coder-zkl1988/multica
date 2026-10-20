@@ -121,6 +121,11 @@ export default ({ config }: ConfigContext): ExpoConfig => {
           },
         },
       ],
+      // Android launch crash: react-native-shiki-engine requests fbjni:+, which
+      // now resolves to a libfbjni.so needing a libc++ symbol the packaged
+      // libc++_shared.so lacks. Pins floating fbjni to React Native's version;
+      // see the plugin for the diagnosis and when to drop it.
+      "./plugins/with-fbjni-pin",
     ],
     extra: { APP_ENV: env },
   };
