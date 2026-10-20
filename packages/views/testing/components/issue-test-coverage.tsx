@@ -197,9 +197,9 @@ export function IssueTestCoverage({
         <LatestRunLine run={summary.latest_run} href={paths.testRunDetail(summary.latest_run.id)} />
       ) : null}
 
-      {hasPoints || canCreate ? (
-        <IssueTestPoints issueId={issueId} data={points} linkedCases={cases} startAdding={pointsOpen && !hasPoints} />
-      ) : null}
+      {/* Test points belong to the issue, not to a project: any issue with a
+          test block can be split into the conditions it is accepted on. */}
+      <IssueTestPoints issueId={issueId} data={points} linkedCases={cases} startAdding={pointsOpen && !hasPoints} />
 
       {cases.length > 0 ? (
         <ul className="flex flex-col gap-1 pl-2">
