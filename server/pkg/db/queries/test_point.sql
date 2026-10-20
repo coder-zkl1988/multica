@@ -91,19 +91,23 @@ WHERE tctp.workspace_id = sqlc.arg(workspace_id)
   );
 
 -- name: ListTestPointCoverageForIssue :many
--- Every (point, covering case) pair of one issue, with the case's latest
--- recorded outcome, so coverage and verification are computed from one read.
--- A point no case covers does not appear; the handler joins this with
--- ListIssueTestPoints.
+-- Every (point, covering case) pair of one issue, with the case's current
+-- verdict (see ListTestCasesForIssue: the newest passed or failed result from
+-- a round that froze it active with its current steps) and its steps, so
+-- coverage and verification are computed from one read. A point no case
+-- covers does not appear; the handler joins this with ListIssueTestPoints.
 SELECT tctp.test_point_id, tctp.test_case_id, tctp.origin, tctp.created_at,
        tc.case_number, tc.title AS case_title, tc.status AS case_status,
-       tc.priority AS case_priority, tc.case_type,
+       tc.priority AS case_priority, tc.case_type, tc.steps AS case_steps,
        COALESCE((
            SELECT rc.result
            FROM test_run_case rc
            WHERE rc.test_case_id = tctp.test_case_id
              AND rc.workspace_id = tctp.workspace_id
              AND rc.executed_at IS NOT NULL
+             AND rc.result IN ('passed', 'failed')
+             AND rc.case_snapshot->>'status' = 'active'
+             AND (tc.steps_changed_at IS NULL OR rc.created_at >= tc.steps_changed_at)
            ORDER BY rc.executed_at DESC
            LIMIT 1
        ), '')::text AS latest_result
@@ -125,9 +129,11 @@ ORDER BY i.number ASC, p.number ASC;
 
 -- name: ListProjectTestCoverage :many
 -- One row per issue of a project with what covers it: active linked cases and
--- how many of them last failed, and the issue's active test points with how
--- many are covered by an active case, passed (a covering case's latest result
--- passed and none failed) or failing. Only active cases count anywhere.
+-- how many of them currently fail, and the issue's active test points with how
+-- many are covered by an active case, passed (every covering active case's
+-- current verdict is passed) or failing (one of them failed). A case's current
+-- verdict is defined as in ListTestCasesForIssue. Only active cases count;
+-- review_points are points only drafts with executable steps verify.
 WITH project_issues AS (
     SELECT i.id, i.number, i.title, i.status
     FROM issue i
@@ -144,15 +150,26 @@ relevant_cases AS (
     WHERE p.workspace_id = sqlc.arg(workspace_id) AND p.issue_id IN (SELECT id FROM project_issues)
 ),
 draft_cases AS (
+    -- A draft only an approval separates from coverage: one without
+    -- executable steps cannot be approved, so it leaves its points uncovered.
     SELECT tc.id FROM test_case tc
     WHERE tc.workspace_id = sqlc.arg(workspace_id) AND tc.status = 'draft'
       AND tc.id IN (SELECT test_case_id FROM relevant_cases)
+      AND jsonb_typeof(tc.steps) = 'array' AND jsonb_array_length(tc.steps) > 0
+      AND NOT EXISTS (
+          SELECT 1 FROM jsonb_array_elements(tc.steps) s
+          WHERE btrim(COALESCE(s->>'action', ''), E' \t\r\n') = ''
+             OR btrim(COALESCE(s->>'expected', ''), E' \t\r\n') = ''
+      )
 ),
 active_case_latest AS (
     SELECT tc.id AS test_case_id,
            COALESCE((
                SELECT rc.result FROM test_run_case rc
                WHERE rc.test_case_id = tc.id AND rc.workspace_id = tc.workspace_id AND rc.executed_at IS NOT NULL
+                 AND rc.result IN ('passed', 'failed')
+                 AND rc.case_snapshot->>'status' = 'active'
+                 AND (tc.steps_changed_at IS NULL OR rc.created_at >= tc.steps_changed_at)
                ORDER BY rc.executed_at DESC
                LIMIT 1
            ), '')::text AS latest
@@ -164,7 +181,7 @@ point_state AS (
     SELECT p.issue_id, p.id,
            bool_or(acl.test_case_id IS NOT NULL) AS covered,
            bool_or(dc.id IS NOT NULL) AS draft_covered,
-           bool_or(acl.latest = 'passed') AS any_passed,
+           bool_and(acl.latest = 'passed') FILTER (WHERE acl.test_case_id IS NOT NULL) AS all_passed,
            bool_or(acl.latest = 'failed') AS any_failed
     FROM issue_test_point p
     LEFT JOIN test_case_test_point tctp ON tctp.test_point_id = p.id AND tctp.workspace_id = p.workspace_id
@@ -184,7 +201,16 @@ SELECT pi.id AS issue_id, pi.number AS issue_number, pi.title AS issue_title, pi
        (SELECT count(*) FROM point_state ps WHERE ps.issue_id = pi.id
           AND NOT COALESCE(ps.covered, false) AND COALESCE(ps.draft_covered, false))::int AS review_points,
        (SELECT count(*) FROM point_state ps WHERE ps.issue_id = pi.id
-          AND COALESCE(ps.any_passed, false) AND NOT COALESCE(ps.any_failed, false))::int AS passed_points,
+          AND COALESCE(ps.covered, false) AND COALESCE(ps.all_passed, false))::int AS passed_points,
        (SELECT count(*) FROM point_state ps WHERE ps.issue_id = pi.id AND COALESCE(ps.any_failed, false))::int AS failing_points
 FROM project_issues pi
 ORDER BY pi.number DESC;
+
+-- name: CountActiveCasesForTestPoint :one
+-- How many active cases verify a point: an agent may not drop a point a live
+-- case is checked against.
+SELECT count(*)::int
+FROM test_case_test_point tctp
+JOIN test_case tc ON tc.id = tctp.test_case_id
+WHERE tctp.test_point_id = $1 AND tctp.workspace_id = $2
+  AND tc.workspace_id = $2 AND tc.status = 'active';

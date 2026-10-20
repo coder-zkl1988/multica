@@ -560,13 +560,15 @@ func (h *Handler) rewriteDraftTestCase(
 	}
 
 	priority, caseType, scope, executionMode := proposalCaseDefaults(payload)
+	newSteps := normalizeTestCaseSteps(payload.Steps)
 	updated, err := qtx.UpdateTestCase(r.Context(), db.UpdateTestCaseParams{
 		ID:                   current.ID,
 		WorkspaceID:          wsUUID,
 		Title:                pgtype.Text{String: strings.TrimSpace(payload.Title), Valid: true},
 		Module:               pgtype.Text{String: payload.Module, Valid: true},
 		Preconditions:        pgtype.Text{String: payload.Preconditions, Valid: true},
-		Steps:                marshalJSONColumn(normalizeTestCaseSteps(payload.Steps), "[]"),
+		Steps:                marshalJSONColumn(newSteps, "[]"),
+		StepsChanged:         pgtype.Bool{Bool: !sameTestCaseSteps(newSteps, decodeTestCaseSteps(current.Steps)), Valid: true},
 		ExpectedResult:       pgtype.Text{String: payload.ExpectedResult, Valid: true},
 		TestData:             marshalJSONColumn(defaultMap(payload.TestData), "{}"),
 		Priority:             pgtype.Text{String: priority, Valid: true},
@@ -745,7 +747,10 @@ func (h *Handler) reviewTestCaseProposal(w http.ResponseWriter, r *http.Request,
 			params.Title = pgtype.Text{String: strings.TrimSpace(payload.Title), Valid: true}
 			params.Module = pgtype.Text{String: payload.Module, Valid: true}
 			params.Preconditions = pgtype.Text{String: payload.Preconditions, Valid: true}
-			params.Steps = marshalJSONColumn(normalizeTestCaseSteps(payload.Steps), "[]")
+			newSteps := normalizeTestCaseSteps(payload.Steps)
+			params.Steps = marshalJSONColumn(newSteps, "[]")
+			// Results on the old procedure stop counting toward coverage.
+			params.StepsChanged = pgtype.Bool{Bool: !sameTestCaseSteps(newSteps, decodeTestCaseSteps(current.Steps)), Valid: true}
 			params.ExpectedResult = pgtype.Text{String: payload.ExpectedResult, Valid: true}
 			params.TestData = marshalJSONColumn(defaultMap(payload.TestData), "{}")
 			params.Priority = pgtype.Text{String: priority, Valid: true}

@@ -17,7 +17,7 @@ func TestTestPointState(t *testing.T) {
 	active := func(latest *string) TestPointCaseResponse {
 		return TestPointCaseResponse{CaseStatus: "active", LatestResult: latest}
 	}
-	draft := TestPointCaseResponse{CaseStatus: "draft", LatestResult: result("passed")}
+	draft := TestPointCaseResponse{CaseStatus: "draft", LatestResult: result("passed"), executable: true}
 	retired := TestPointCaseResponse{CaseStatus: "deprecated", LatestResult: result("failed")}
 	for _, tc := range []struct {
 		name    string
@@ -31,11 +31,17 @@ func TestTestPointState(t *testing.T) {
 		{"only a passing draft", "active", []TestPointCaseResponse{draft}, false, false, "in_review"},
 		{"covered, never run", "active", []TestPointCaseResponse{active(nil)}, true, false, "not_run"},
 		{"covered, blocked", "active", []TestPointCaseResponse{active(result("blocked"))}, true, false, "not_run"},
-		{"passed", "active", []TestPointCaseResponse{active(result("passed")), active(nil)}, true, true, "passed"},
+		{"passed", "active", []TestPointCaseResponse{active(result("passed")), active(result("passed"))}, true, true, "passed"},
+		// One case per boundary value or refused role: one passing says
+		// nothing about the one that never ran.
+		{"one of two cases never ran", "active", []TestPointCaseResponse{active(result("passed")), active(nil)}, true, false, "not_run"},
 		{"a failing case wins over a passing one", "active", []TestPointCaseResponse{active(result("passed")), active(result("failed"))}, true, false, "failing"},
 		{"a deprecated failure does not count", "active", []TestPointCaseResponse{active(result("passed")), retired}, true, true, "passed"},
 		{"dropped", "dropped", []TestPointCaseResponse{active(result("passed"))}, false, false, "dropped"},
-		{"only a run's draft covers it", "active", []TestPointCaseResponse{{CaseStatus: "draft"}}, false, false, "in_review"},
+		{"only a run's draft covers it", "active", []TestPointCaseResponse{{CaseStatus: "draft", executable: true}}, false, false, "in_review"},
+		// A draft with nothing to check cannot be approved, so approving is
+		// not what is left.
+		{"only a step-less draft covers it", "active", []TestPointCaseResponse{{CaseStatus: "draft"}}, false, false, "uncovered"},
 	} {
 		covered, passed, state := testPointState(tc.status, tc.cases)
 		if covered != tc.covered || passed != tc.passed || state != tc.state {

@@ -1510,10 +1510,12 @@ func (h *Handler) UpdateTestRunCaseResult(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, problem)
 		return
 	}
-	// A write that leaves the step results out keeps the stored ones, so the
-	// verdict must agree with them too: a case cannot be marked passed while
-	// a recorded step says it failed.
-	if req.StepResults == nil && !requireComplete {
+	// A write that leaves the step results out keeps the stored ones, so a
+	// new verdict must agree with them too: a case cannot be marked passed
+	// while a recorded step says it failed. A write that keeps the verdict (a
+	// note on a row recorded before step results were checked) changes
+	// nothing this protects.
+	if req.StepResults == nil && !requireComplete && req.Result != rc.Result {
 		if problem := stepResultsProblem(req.Result, storedStepResults(rc.StepResults, snapshotIndexes), nil, false); problem != "" {
 			writeError(w, http.StatusBadRequest, problem+"; change the step results with the verdict")
 			return
@@ -1544,11 +1546,16 @@ func (h *Handler) UpdateTestRunCaseResult(w http.ResponseWriter, r *http.Request
 		ExecutedByType: pgtype.Text{String: executedByType, Valid: true},
 		ExecutedByID:   executedByID,
 	}
-	// executed_at orders a case's results across rounds ("latest result" for
-	// coverage and verification). It is stamped when the case is first
-	// executed; a later note, step edit or correction of an old round fixes
-	// that execution's record and must not make it the newest.
-	if !rc.ExecutedAt.Valid {
+	// executed_at orders a case's verdicts across rounds (its current verdict
+	// for coverage and verification). It is stamped when the case is first
+	// recorded, when a case that had no verdict (blocked, skipped) is finally
+	// executed, and when the verdict changes while the round is still in
+	// progress — each is a new execution. A note, a step edit, or a
+	// correction of a finished round fixes that execution's record and must
+	// not make it the newest.
+	roundOpen := run.Status == "pending" || run.Status == "running"
+	if !rc.ExecutedAt.Valid ||
+		(isTestRunVerdict(req.Result) && (!isTestRunVerdict(rc.Result) || (roundOpen && req.Result != rc.Result))) {
 		params.ExecutedAt = pgtype.Timestamptz{Time: time.Now(), Valid: true}
 	}
 	if req.Notes != nil {

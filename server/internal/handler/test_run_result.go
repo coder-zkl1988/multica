@@ -90,6 +90,11 @@ func stepResultsProblem(result string, steps []TestRunStepResult, snapshotIndexe
 				return fmt.Sprintf("the case cannot pass while step %d is %s", step.Index, step.Result)
 			}
 		}
+		// Every step skipped is a pass on nothing executed: the case was
+		// skipped, and saying so keeps it out of coverage.
+		if len(steps) > 0 && !slices.ContainsFunc(steps, func(step TestRunStepResult) bool { return step.Result == "passed" }) {
+			return "a passed case needs at least one passed step; when no step was executed, record the case as skipped"
+		}
 	case "failed":
 		// Only checked when step results were given at all: a person may
 		// record a bare `failed`; an agent cannot (requireComplete above).
@@ -98,6 +103,13 @@ func stepResultsProblem(result string, steps []TestRunStepResult, snapshotIndexe
 		}
 	}
 	return ""
+}
+
+// isTestRunVerdict is whether a result says how the product behaved. blocked
+// and skipped say the case was not executed, so they never stand as a case's
+// current verdict.
+func isTestRunVerdict(result string) bool {
+	return result == "passed" || result == "failed"
 }
 
 // storedStepResults reads the step results already on a run case, keeping only

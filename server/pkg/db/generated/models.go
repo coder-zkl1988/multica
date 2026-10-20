@@ -2407,6 +2407,7 @@ type TestCase struct {
 	ReviewedAt           pgtype.Timestamptz `json:"reviewed_at"`
 	CreatedAt            pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
+	StepsChangedAt       pgtype.Timestamptz `json:"steps_changed_at"`
 }
 
 type TestCaseIssue struct {

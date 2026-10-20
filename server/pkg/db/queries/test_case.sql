@@ -53,6 +53,11 @@ UPDATE test_case SET
     required_capabilities = COALESCE(sqlc.narg('required_capabilities'), required_capabilities),
     business_rules_ref    = COALESCE(sqlc.narg('business_rules_ref'), business_rules_ref),
     status                = COALESCE(sqlc.narg('status'), status),
+    source_refs           = COALESCE(sqlc.narg('source_refs'), source_refs),
+    -- The caller decides whether the steps changed (it compares what an
+    -- executor reads, not JSON bytes); results frozen before this moment stop
+    -- counting toward coverage.
+    steps_changed_at      = CASE WHEN sqlc.narg('steps_changed')::boolean IS TRUE THEN now() ELSE steps_changed_at END,
     reviewed_by           = COALESCE(sqlc.narg('reviewed_by'), reviewed_by),
     reviewed_at           = COALESCE(sqlc.narg('reviewed_at'), reviewed_at),
     updated_by            = COALESCE(sqlc.narg('updated_by'), updated_by),
@@ -128,10 +133,12 @@ WHERE tci.test_case_id = $1 AND tci.workspace_id = $2
 ORDER BY i.number ASC;
 
 -- name: ListTestCasesForIssue :many
--- The case side of one issue's coverage. latest_result is the most recent
--- recorded outcome across every round the case appeared in, so the issue can
--- show whether its coverage actually passes — a linked case that has never run
--- reports NULL rather than a misleading "pending".
+-- The case side of one issue's coverage. latest_result is the case's current
+-- verdict: its most recent passed or failed result from a round that froze it
+-- as an active case with the steps it has now. blocked and skipped carry no
+-- verdict, so they never hide an earlier failure; a result on old steps, or
+-- from a trial run of the draft, says nothing about the case as it is. A case
+-- with no such result reports NULL rather than a misleading "pending".
 SELECT tci.test_case_id, tci.issue_id, tci.origin, tci.created_at,
        tc.case_number, tc.title AS case_title, tc.status AS case_status,
        tc.priority AS case_priority, tc.case_type,
@@ -144,6 +151,9 @@ SELECT tci.test_case_id, tci.issue_id, tci.origin, tci.created_at,
            WHERE rc.test_case_id = tci.test_case_id
              AND rc.workspace_id = tci.workspace_id
              AND rc.executed_at IS NOT NULL
+             AND rc.result IN ('passed', 'failed')
+             AND rc.case_snapshot->>'status' = 'active'
+             AND (tc.steps_changed_at IS NULL OR rc.created_at >= tc.steps_changed_at)
            ORDER BY rc.executed_at DESC
            LIMIT 1
        ), '')::text AS latest_result,
@@ -153,6 +163,9 @@ SELECT tci.test_case_id, tci.issue_id, tci.origin, tci.created_at,
            WHERE rc.test_case_id = tci.test_case_id
              AND rc.workspace_id = tci.workspace_id
              AND rc.executed_at IS NOT NULL
+             AND rc.result IN ('passed', 'failed')
+             AND rc.case_snapshot->>'status' = 'active'
+             AND (tc.steps_changed_at IS NULL OR rc.created_at >= tc.steps_changed_at)
            ORDER BY rc.executed_at DESC
            LIMIT 1
        ) AS latest_executed_at

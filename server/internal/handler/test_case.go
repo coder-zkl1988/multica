@@ -781,6 +781,9 @@ func (h *Handler) UpdateTestCase(w http.ResponseWriter, r *http.Request) {
 	// compared, not assumed: re-sending a legacy case's unchanged steps must
 	// not block a title fix.
 	stepsChanged := req.Steps != nil && !sameTestCaseSteps(normalizeTestCaseSteps(*req.Steps), decodeTestCaseSteps(current.Steps))
+	if stepsChanged {
+		params.StepsChanged = pgtype.Bool{Bool: true, Valid: true}
+	}
 	if effectiveStatus == "active" && (stepsChanged || (params.Status.Valid && current.Status != "active")) {
 		effectiveSteps := decodeTestCaseSteps(current.Steps)
 		if req.Steps != nil {

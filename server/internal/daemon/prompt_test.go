@@ -2162,6 +2162,7 @@ func TestBuildTestRunCasePromptStatesTheVerdictContract(t *testing.T) {
 		"Upload evidence FIRST",
 		"--step <index>=<result>",
 		"for EVERY step of the snapshot",
+		"a pass needs at least one step you actually saw pass",
 		"not_run",
 		"It is NOT a synonym for failed",
 		"TEST_RUN_CASE_RESULT_JSON:",
