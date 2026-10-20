@@ -9,6 +9,7 @@ import { useWorkspacePaths } from "@multica/core/paths";
 import {
   testRunDetailOptions,
   testRunCasesOptions,
+  testRunCaseEvidenceOptions,
   useStartTestRun,
   useAbortTestRun,
   useRetryTestRun,
@@ -18,12 +19,18 @@ import {
   useTestRunCaseLiveFrame,
 } from "@multica/core/testing";
 import { agentListOptions } from "@multica/core/workspace/queries";
-import type { TestRunCase, TestRunCaseResult, DispatchTestRunBlockedResponse } from "@multica/core/types";
+import type {
+  TestRunCase,
+  TestRunCaseResult,
+  TestRunStepResult,
+  DispatchTestRunBlockedResponse,
+} from "@multica/core/types";
 import { Badge } from "@multica/ui/components/ui/badge";
 import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { Textarea } from "@multica/ui/components/ui/textarea";
+import { useAttachmentPreview, useDownloadAttachment } from "../editor";
 import { BreadcrumbHeader } from "../layout/breadcrumb-header";
 import { AppLink, useNavigation } from "../navigation";
 import { useT } from "../i18n";
@@ -351,6 +358,7 @@ export function TestRunDetail({ runId }: { runId: string }) {
                       <RunCaseRow
                         key={runCase.id}
                         runCase={runCase}
+                        resultsLocked={run.status === "aborted"}
                         expanded={expandedCaseId === runCase.id}
                         onToggleExpand={() =>
                           setExpandedCaseId(
@@ -361,8 +369,14 @@ export function TestRunDetail({ runId }: { runId: string }) {
                           updateCaseResult.mutate(
                             { id: runCase.id, runId, data: { result, notes } },
                             {
-                              onError: () =>
-                                toast.error(t(($) => $.toast.runResultFailed)),
+                              // The server says why a write is refused (an
+                              // aborted round is final); say that, not "failed".
+                              onError: (err) =>
+                                toast.error(
+                                  err instanceof Error && err.message
+                                    ? err.message
+                                    : t(($) => $.toast.runResultFailed),
+                                ),
                             },
                           )
                         }
@@ -474,6 +488,7 @@ export function TestRunDetail({ runId }: { runId: string }) {
 
 function RunCaseRow({
   runCase,
+  resultsLocked,
   expanded,
   onToggleExpand,
   onSetResult,
@@ -481,6 +496,8 @@ function RunCaseRow({
   onOpenDefect,
 }: {
   runCase: TestRunCase;
+  /** An aborted round is final: its results can no longer change. */
+  resultsLocked: boolean;
   expanded: boolean;
   onToggleExpand: () => void;
   onSetResult: (result: TestRunCaseResult, notes: string) => void;
@@ -569,8 +586,9 @@ function RunCaseRow({
               type="button"
               aria-label={t(($) => $.run.result[result as keyof typeof $.run.result])}
               data-active={runCase.result === result || undefined}
+              disabled={resultsLocked}
               onClick={() => onSetResult(result, notes)}
-              className={`rounded-sm px-2 py-0.5 text-caption transition-colors data-active:font-medium
+              className={`rounded-sm px-2 py-0.5 text-caption transition-colors data-active:font-medium disabled:pointer-events-none disabled:opacity-50
                 ${result === "passed"
                   ? "text-success hover:bg-success/10 data-active:bg-success/20"
                   : result === "failed"
@@ -608,6 +626,10 @@ function RunCaseRow({
           {runCase.result === "running" && runCase.agent_task_id ? (
             <LiveFrame runCaseId={runCase.id} />
           ) : null}
+          {/* What to execute, from the frozen snapshot, with what was
+              recorded against each step. */}
+          <RunCaseProcedure snapshot={snapshot} stepResults={runCase.step_results} />
+          <RunCaseEvidence runCaseId={runCase.id} />
           {/* Notes */}
           <div>
             <label className="mb-1 block text-caption font-medium text-muted-foreground">
@@ -692,6 +714,165 @@ function RunCaseRow({
           )}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+interface SnapshotStep {
+  index: number;
+  action: string;
+  expected: string;
+}
+
+/** Steps of a frozen snapshot, tolerant of whatever an old snapshot holds. */
+function readSnapshotSteps(snapshot: Record<string, unknown>): SnapshotStep[] {
+  const raw = Array.isArray(snapshot.steps) ? snapshot.steps : [];
+  return raw.flatMap((entry, position) => {
+    if (!entry || typeof entry !== "object") return [];
+    const step = entry as Record<string, unknown>;
+    const index = typeof step.index === "number" && step.index > 0 ? step.index : position + 1;
+    return [{
+      index,
+      action: typeof step.action === "string" ? step.action : "",
+      expected: typeof step.expected === "string" ? step.expected : "",
+    }];
+  });
+}
+
+function stepResultClass(result: string): string {
+  switch (result) {
+    case "passed":
+      return "text-success";
+    case "failed":
+      return "text-destructive";
+    case "blocked":
+      return "text-warning";
+    default:
+      return "text-muted-foreground";
+  }
+}
+
+const STEP_VERDICTS = ["passed", "failed", "blocked", "skipped", "not_run"] as const;
+type KnownStepVerdict = (typeof STEP_VERDICTS)[number];
+function isKnownStepVerdict(result: string): result is KnownStepVerdict {
+  return (STEP_VERDICTS as readonly string[]).includes(result);
+}
+
+/** The snapshot's procedure as a checklist, each step beside its recorded verdict. */
+function RunCaseProcedure({
+  snapshot,
+  stepResults,
+}: {
+  snapshot: Record<string, unknown>;
+  stepResults: TestRunStepResult[];
+}) {
+  const { t } = useT("testing");
+  const steps = readSnapshotSteps(snapshot);
+  const byIndex = new Map(stepResults.map((step) => [step.index, step]));
+  const preconditions = typeof snapshot.preconditions === "string" ? snapshot.preconditions.trim() : "";
+  const expectedResult = typeof snapshot.expected_result === "string" ? snapshot.expected_result.trim() : "";
+
+  return (
+    <div className="space-y-2">
+      {preconditions ? (
+        <div>
+          <div className="mb-0.5 text-caption font-medium text-muted-foreground">
+            {t(($) => $.detail.preconditions)}
+          </div>
+          <p className="whitespace-pre-wrap break-words text-caption">{preconditions}</p>
+        </div>
+      ) : null}
+      <div>
+        <div className="mb-1 text-caption font-medium text-muted-foreground">
+          {t(($) => $.detail.steps)}
+        </div>
+        {steps.length === 0 ? (
+          <p className="text-caption text-muted-foreground">{t(($) => $.runCase.noSteps)}</p>
+        ) : (
+          <ol className="space-y-1.5">
+            {steps.map((step) => {
+              const recorded = byIndex.get(step.index);
+              return (
+                <li key={step.index} className="flex gap-2 text-caption">
+                  <span className="w-5 shrink-0 text-right tabular-nums text-muted-foreground">
+                    {step.index}.
+                  </span>
+                  <div className="min-w-0 flex-1 space-y-0.5">
+                    <p className="whitespace-pre-wrap break-words">{step.action}</p>
+                    {step.expected ? (
+                      <p className="whitespace-pre-wrap break-words text-muted-foreground">
+                        {t(($) => $.steps.expected)}: {step.expected}
+                      </p>
+                    ) : null}
+                    {recorded?.actual ? (
+                      <p className="whitespace-pre-wrap break-words">
+                        <span className="text-muted-foreground">{t(($) => $.runCase.observed)}: </span>
+                        {recorded.actual}
+                      </p>
+                    ) : null}
+                    {recorded?.note ? (
+                      <p className="whitespace-pre-wrap break-words text-muted-foreground">{recorded.note}</p>
+                    ) : null}
+                  </div>
+                  {recorded ? (
+                    <span className={`shrink-0 font-medium ${stepResultClass(recorded.result)}`}>
+                      {isKnownStepVerdict(recorded.result)
+                        ? t(($) => $.runCase.stepResult[recorded.result as KnownStepVerdict])
+                        : recorded.result}
+                    </span>
+                  ) : null}
+                </li>
+              );
+            })}
+          </ol>
+        )}
+      </div>
+      {expectedResult ? (
+        <div>
+          <div className="mb-0.5 text-caption font-medium text-muted-foreground">
+            {t(($) => $.detail.expected)}
+          </div>
+          <p className="whitespace-pre-wrap break-words text-caption">{expectedResult}</p>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** Files the executor uploaded for this case — what a verdict is checked against. */
+function RunCaseEvidence({ runCaseId }: { runCaseId: string }) {
+  const { t } = useT("testing");
+  const wsId = useWorkspaceId();
+  const { data: files = [], isLoading } = useQuery(testRunCaseEvidenceOptions(wsId, runCaseId));
+  const preview = useAttachmentPreview();
+  const download = useDownloadAttachment();
+  if (isLoading) return null;
+  return (
+    <div>
+      <div className="mb-1 text-caption font-medium text-muted-foreground">
+        {t(($) => $.runCase.evidence)}
+      </div>
+      {files.length === 0 ? (
+        <p className="text-caption text-muted-foreground">{t(($) => $.runCase.evidenceEmpty)}</p>
+      ) : (
+        <ul className="flex flex-wrap gap-1.5">
+          {files.map((file) => (
+            <li key={file.id} className="min-w-0 max-w-full">
+              <button
+                type="button"
+                title={file.filename}
+                onClick={() => {
+                  if (!preview.tryOpen({ kind: "full", attachment: file })) download(file.id);
+                }}
+                className="max-w-full truncate rounded-sm border border-border bg-background px-2 py-0.5 text-caption hover:bg-accent"
+              >
+                {file.filename}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {preview.modal}
     </div>
   );
 }

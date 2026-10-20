@@ -218,7 +218,7 @@ func TestProposeTestCasesRequiresTaskToken(t *testing.T) {
 	bindJobToTask(t, jobID, testGenerationTaskUUID)
 
 	w := proposeRequest(t, jobID, "", []map[string]any{
-		{"kind": "new", "case": map[string]any{"title": "should never land"}},
+		{"kind": "new", "case": map[string]any{"title": "should never land", "steps": executableSteps}},
 	})
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403 without a task token: %s", w.Code, w.Body.String())
@@ -232,7 +232,7 @@ func TestProposeTestCasesRejectsForeignTaskToken(t *testing.T) {
 
 	// A run authorized for another task must not be able to write into this job.
 	w := proposeRequest(t, jobID, otherTestGenerationTaskUUID, []map[string]any{
-		{"kind": "new", "case": map[string]any{"title": "cross-job write"}},
+		{"kind": "new", "case": map[string]any{"title": "cross-job write", "steps": executableSteps}},
 	})
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403 for a token bound to a different task: %s", w.Code, w.Body.String())
@@ -282,11 +282,12 @@ func TestProposeTestCasesQueuesProposalForApprovedCase(t *testing.T) {
 	existing := createTestCaseForTest(t, map[string]any{
 		"project_id": projectID,
 		"title":      "原始用例",
+		"steps":      executableSteps,
 	})
 
 	w := proposeRequest(t, jobID, testGenerationTaskUUID, []map[string]any{
 		{"kind": "update", "target": existing.Key, "rationale": "接口新增分页参数",
-			"case": map[string]any{"title": "原始用例（含分页）"}},
+			"case": map[string]any{"title": "原始用例（含分页）", "steps": executableSteps}},
 	})
 	if w.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201: %s", w.Code, w.Body.String())
@@ -325,7 +326,7 @@ func TestProposeTestCasesRewritesDraftTargetDirectly(t *testing.T) {
 	})
 
 	w := proposeRequest(t, jobID, testGenerationTaskUUID, []map[string]any{
-		{"kind": "update", "target": draft.Key, "case": map[string]any{"title": "草稿用例（已细化）"}},
+		{"kind": "update", "target": draft.Key, "case": map[string]any{"title": "草稿用例（已细化）", "steps": executableSteps}},
 	})
 	if w.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201: %s", w.Code, w.Body.String())
@@ -356,8 +357,8 @@ func TestProposeTestCasesIsAtomicAcrossTheBatch(t *testing.T) {
 	bindJobToTask(t, jobID, testGenerationTaskUUID)
 
 	w := proposeRequest(t, jobID, testGenerationTaskUUID, []map[string]any{
-		{"kind": "new", "case": map[string]any{"title": "valid first entry"}},
-		{"kind": "new", "case": map[string]any{"title": "bad enum", "priority": "urgent"}},
+		{"kind": "new", "case": map[string]any{"title": "valid first entry", "steps": executableSteps}},
+		{"kind": "new", "case": map[string]any{"title": "bad enum", "priority": "urgent", "steps": executableSteps}},
 	})
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400: %s", w.Code, w.Body.String())
@@ -383,6 +384,7 @@ func TestProposeTestCasesRejectsCrossRepoCaseWithOneRole(t *testing.T) {
 		{"kind": "new", "case": map[string]any{
 			"title": "mislabelled cross-repo case",
 			"scope": "cross_repo",
+			"steps": executableSteps,
 			"repos": []map[string]any{
 				{"project_resource_id": resourceID, "alias": "api", "role": "under_test"},
 			},
@@ -397,10 +399,10 @@ func TestAcceptTestCaseProposalAppliesAndSnapshots(t *testing.T) {
 	projectID := newTestCaseProject(t)
 	jobID := newTestGenerationJob(t, projectID)
 	bindJobToTask(t, jobID, testGenerationTaskUUID)
-	existing := createTestCaseForTest(t, map[string]any{"project_id": projectID, "title": "原始用例"})
+	existing := createTestCaseForTest(t, map[string]any{"project_id": projectID, "title": "原始用例", "steps": executableSteps})
 
 	if w := proposeRequest(t, jobID, testGenerationTaskUUID, []map[string]any{
-		{"kind": "update", "target": existing.Key, "case": map[string]any{"title": "采纳后的标题"}},
+		{"kind": "update", "target": existing.Key, "case": map[string]any{"title": "采纳后的标题", "steps": executableSteps}},
 	}); w.Code != http.StatusCreated {
 		t.Fatalf("seed proposal: %s", w.Body.String())
 	}
@@ -442,10 +444,10 @@ func TestDeleteTestCaseSweepsProposals(t *testing.T) {
 	projectID := newTestCaseProject(t)
 	jobID := newTestGenerationJob(t, projectID)
 	bindJobToTask(t, jobID, testGenerationTaskUUID)
-	existing := createTestCaseForTest(t, map[string]any{"project_id": projectID, "title": "待删除用例"})
+	existing := createTestCaseForTest(t, map[string]any{"project_id": projectID, "title": "待删除用例", "steps": executableSteps})
 
 	if w := proposeRequest(t, jobID, testGenerationTaskUUID, []map[string]any{
-		{"kind": "update", "target": existing.Key, "case": map[string]any{"title": "建议标题"}},
+		{"kind": "update", "target": existing.Key, "case": map[string]any{"title": "建议标题", "steps": executableSteps}},
 	}); w.Code != http.StatusCreated {
 		t.Fatalf("seed proposal: %s", w.Body.String())
 	}
@@ -516,5 +518,64 @@ func TestGenerationJobHealsWhenAgentTaskDies(t *testing.T) {
 	}
 	if resp.Error == nil || !strings.Contains(*resp.Error, "cancelled") {
 		t.Fatalf("error = %v, want a cancellation explanation", resp.Error)
+	}
+}
+
+// A generated case nobody can check fills the library with coverage that never
+// finds a bug; the writeback refuses one whatever its kind.
+func TestProposeTestCasesRejectsUncheckableSteps(t *testing.T) {
+	projectID := newTestCaseProject(t)
+	jobID := newTestGenerationJob(t, projectID)
+	bindJobToTask(t, jobID, testGenerationTaskUUID)
+
+	w := proposeRequest(t, jobID, testGenerationTaskUUID, []map[string]any{
+		{"kind": "new", "case": map[string]any{
+			"title": "退款后积分回滚",
+			"steps": []map[string]any{{"action": "发起退款"}},
+		}},
+	})
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "step 1 has no expected result") {
+		t.Fatalf("status = %d, want 400 naming the step without an expected result: %s", w.Code, w.Body.String())
+	}
+	var landed int
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT count(*) FROM test_case WHERE project_id = $1`, projectID).Scan(&landed); err != nil {
+		t.Fatal(err)
+	}
+	if landed != 0 {
+		t.Fatalf("cases written = %d, want none", landed)
+	}
+}
+
+// A proposal queued before the steps rule could still carry an empty
+// procedure; accepting it must not silently turn an active case unexecutable.
+func TestAcceptTestCaseProposalRefusesToEmptyAnActiveCase(t *testing.T) {
+	projectID := newTestCaseProject(t)
+	jobID := newTestGenerationJob(t, projectID)
+	bindJobToTask(t, jobID, testGenerationTaskUUID)
+	existing := createTestCaseForTest(t, map[string]any{"project_id": projectID, "title": "原始用例", "steps": executableSteps})
+
+	if w := proposeRequest(t, jobID, testGenerationTaskUUID, []map[string]any{
+		{"kind": "update", "target": existing.Key, "case": map[string]any{"title": "旧规则下的建议", "steps": executableSteps}},
+	}); w.Code != http.StatusCreated {
+		t.Fatalf("seed proposal: %s", w.Body.String())
+	}
+	var proposalID string
+	if err := testPool.QueryRow(context.Background(),
+		`UPDATE test_case_proposal SET payload = payload - 'steps' WHERE target_case_id = $1 RETURNING id`, existing.ID).Scan(&proposalID); err != nil {
+		t.Fatalf("age the proposal: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	testHandler.AcceptTestCaseProposal(w, withURLParam(newRequest("POST", "/api/test-case-proposals/"+proposalID+"/accept?workspace_id="+testWorkspaceID, nil), "id", proposalID))
+	if w.Code != http.StatusConflict {
+		t.Fatalf("accept status = %d, want 409: %s", w.Code, w.Body.String())
+	}
+	var storedTitle string
+	if err := testPool.QueryRow(context.Background(), `SELECT title FROM test_case WHERE id = $1`, existing.ID).Scan(&storedTitle); err != nil {
+		t.Fatal(err)
+	}
+	if storedTitle != "原始用例" {
+		t.Fatalf("title = %q, want the case untouched", storedTitle)
 	}
 }

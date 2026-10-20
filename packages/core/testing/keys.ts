@@ -36,6 +36,8 @@ export const testRunKeys = {
     [...testRunKeys.all(wsId), "detail", id] as const,
   cases: (wsId: string, runId: string) =>
     [...testRunKeys.all(wsId), "cases", runId] as const,
+  evidence: (wsId: string, runCaseId: string) =>
+    [...testRunKeys.all(wsId), "evidence", runCaseId] as const,
 };
 
 // ---------------------------------------------------------------------------

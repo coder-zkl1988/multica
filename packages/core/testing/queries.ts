@@ -147,6 +147,16 @@ export function testRunCasesOptions(wsId: string, runId: string) {
   });
 }
 
+/** Evidence of one run case; fetched when the case is expanded. */
+export function testRunCaseEvidenceOptions(wsId: string, runCaseId: string) {
+  return queryOptions({
+    queryKey: testRunKeys.evidence(wsId, runCaseId),
+    queryFn: () => api.listTestRunCaseEvidence(runCaseId),
+    select: (data) => data.evidence,
+    enabled: runCaseId.length > 0,
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Test capability queries — Phase 4
 // ---------------------------------------------------------------------------

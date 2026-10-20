@@ -2135,6 +2135,31 @@ func TestBuildTestRunPromptForbidsProbingTheHost(t *testing.T) {
 	}
 }
 
+// The per-case prompt states the recording contract the server enforces, so
+// an agent learns it before its write is refused rather than after.
+func TestBuildTestRunCasePromptStatesTheVerdictContract(t *testing.T) {
+	task := Task{TestRunContext: json.RawMessage(`{"type":"test_run","run_id":"run-1","run_case_id":"rc-1","case_key":"TC-7"}`)}
+	prompt := BuildPrompt(task, "claude")
+
+	for _, want := range []string{
+		"exactly ONE test case (TC-7)",
+		"Upload evidence FIRST",
+		"--step <index>=<result>",
+		"for EVERY step of the snapshot",
+		"not_run",
+		"It is NOT a synonym for failed",
+		"TEST_RUN_CASE_RESULT_JSON:",
+		"a `passed` here is recorded as `blocked`",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("per-case prompt is missing %q", want)
+		}
+	}
+	if strings.Contains(prompt, "--step-results '<json>'") {
+		t.Error("per-case prompt still teaches the raw JSON flag instead of --step")
+	}
+}
+
 // TestChatChannelDeliversFilesDefaultsOffAcrossVersions pins the mixed-version
 // half of the delivery capability at the wire, where it is actually decided.
 //

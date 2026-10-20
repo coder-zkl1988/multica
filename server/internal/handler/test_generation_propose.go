@@ -148,6 +148,14 @@ func (h *Handler) ProposeTestCases(w http.ResponseWriter, r *http.Request) {
 			if !h.validateProposalCaseEnums(w, prefix, item.Case) {
 				return
 			}
+			// The prompt has always required a concrete action and a checkable
+			// expected result for every step; the server now holds it to that.
+			// A generated case nobody can check is the cheapest way to fill the
+			// library with "coverage" that never finds a bug.
+			if problem := testCaseStepsProblem(normalizeTestCaseSteps(item.Case.Steps)); problem != "" {
+				writeError(w, http.StatusBadRequest, prefix+"case: "+problem)
+				return
+			}
 			repos, reposOK := h.validateTestCaseRepos(r.Context(), w, wsUUID, job.ProjectID, item.Case.Repos)
 			if !reposOK {
 				return
@@ -654,6 +662,15 @@ func (h *Handler) reviewTestCaseProposal(w http.ResponseWriter, r *http.Request,
 			if unmarshalErr := json.Unmarshal(proposal.Payload, &payload); unmarshalErr != nil {
 				writeError(w, http.StatusConflict, "the proposal payload is not readable; reject it instead")
 				return
+			}
+			// The writeback endpoint refuses such payloads now, but a proposal
+			// queued before that rule could still replace an active case's
+			// procedure with nothing to check.
+			if current.Status == "active" {
+				if problem := testCaseStepsProblem(normalizeTestCaseSteps(payload.Steps)); problem != "" {
+					writeError(w, http.StatusConflict, "accepting this proposal would leave an active case unexecutable ("+problem+"); reject it or edit the case by hand")
+					return
+				}
 			}
 			priority, caseType, scope, executionMode := proposalCaseDefaults(&payload)
 			params.Title = pgtype.Text{String: strings.TrimSpace(payload.Title), Valid: true}

@@ -483,7 +483,19 @@ func (h *Handler) loadCasesForRun(ctx context.Context, wsUUID pgtype.UUID, rawID
 		} else if tc.ProjectID != projectUUID {
 			return nil, nil, pgtype.UUID{}, &runCasesError{status: http.StatusBadRequest, msg: "all test cases must belong to the same project"}
 		}
+		// A deprecated case describes behaviour that no longer exists, so a
+		// round that executes it reports on nothing. It is left out rather
+		// than refused: a plan keeps its list when a member is deprecated, and
+		// a scheduled regression must not stop running because of it. Drafts
+		// stay runnable — a reviewer trying one out is legitimate — and are
+		// kept out of coverage and verification instead.
+		if tc.Status == "deprecated" {
+			continue
+		}
 		cases = append(cases, tc)
+	}
+	if len(cases) == 0 {
+		return nil, nil, pgtype.UUID{}, &runCasesError{status: http.StatusBadRequest, msg: "every selected test case is deprecated; there is nothing to execute"}
 	}
 
 	// Batch-fetch repos for all cases.
@@ -1362,11 +1374,11 @@ func (h *Handler) ListTestRunCases(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 type UpdateTestRunCaseResultRequest struct {
-	Result      string  `json:"result"`
-	Notes       *string `json:"notes"`
-	Evidence    []any   `json:"evidence"`
-	StepResults []any   `json:"step_results"`
-	DurationMs  *int32  `json:"duration_ms"`
+	Result      string               `json:"result"`
+	Notes       *string              `json:"notes"`
+	Evidence    []any                `json:"evidence"`
+	StepResults *[]TestRunStepResult `json:"step_results"`
+	DurationMs  *int32               `json:"duration_ms"`
 }
 
 // UpdateTestRunCaseResult writes the outcome of one executed case. It accepts
@@ -1427,6 +1439,42 @@ func (h *Handler) UpdateTestRunCaseResult(w http.ResponseWriter, r *http.Request
 	if !validateTestCaseEnum(w, "result", req.Result, validTestRunCaseResults) {
 		return
 	}
+	if accepted, reason := runAcceptsResultWrite(run.Status, isAgentCall); !accepted {
+		writeError(w, http.StatusConflict, reason)
+		return
+	}
+	// An agent records verdicts; pending and running are the platform's to
+	// set when it dispatches and starts the case task.
+	if isAgentCall && !isTerminalRunCaseResult(req.Result) {
+		writeError(w, http.StatusBadRequest, "an agent can only record passed, failed, blocked or skipped")
+		return
+	}
+	var stepResults []TestRunStepResult
+	if req.StepResults != nil {
+		stepResults = *req.StepResults
+	}
+	requireComplete := isAgentCall && agentVerdictNeedsEvidence(req.Result)
+	if problem := stepResultsProblem(req.Result, stepResults, snapshotStepIndexes(rc.CaseSnapshot), requireComplete); problem != "" {
+		writeError(w, http.StatusBadRequest, problem)
+		return
+	}
+	// An agent's pass or fail rests on what it saw; without a single captured
+	// frame or trace nobody can check it. Evidence is uploaded first
+	// (`multica test evidence add`), then the verdict is recorded.
+	if requireComplete {
+		files, err := h.Queries.ListAttachmentsByTestRunCase(r.Context(), db.ListAttachmentsByTestRunCaseParams{
+			TestRunCaseID: rc.ID, WorkspaceID: wsUUID,
+		})
+		if err != nil {
+			slog.Error("list run case evidence failed", append(logger.RequestAttrs(r), "error", err)...)
+			writeError(w, http.StatusInternalServerError, "failed to check evidence")
+			return
+		}
+		if len(files) == 0 {
+			writeError(w, http.StatusConflict, "a "+req.Result+" verdict needs evidence: upload what you observed with `multica test evidence add` first, then record the result")
+			return
+		}
+	}
 
 	params := db.UpdateTestRunCaseResultParams{
 		ID:             rc.ID,
@@ -1443,7 +1491,7 @@ func (h *Handler) UpdateTestRunCaseResult(w http.ResponseWriter, r *http.Request
 		params.Evidence = marshalJSONColumn(req.Evidence, "[]")
 	}
 	if req.StepResults != nil {
-		params.StepResults = marshalJSONColumn(req.StepResults, "[]")
+		params.StepResults = marshalJSONColumn(stepResults, "[]")
 	}
 	if req.DurationMs != nil {
 		params.DurationMs = pgtype.Int4{Int32: *req.DurationMs, Valid: true}
@@ -1467,29 +1515,44 @@ func (h *Handler) UpdateTestRunCaseResult(w http.ResponseWriter, r *http.Request
 	h.publish(protocol.EventTestRunCaseUpdated, workspaceID, actorType, actorID,
 		map[string]any{"test_run_case": caseResp, "run_id": uuidToString(run.ID)})
 
-	// Auto-complete the run when no cases remain pending or running.
-	pendingCount, countErr := h.Queries.CountPendingTestRunCases(r.Context(), db.CountPendingTestRunCasesParams{
-		RunID: run.ID, WorkspaceID: wsUUID,
-	})
-	if countErr != nil {
-		slog.Warn("count pending test run cases failed", append(logger.RequestAttrs(r), "error", countErr)...)
-	} else if pendingCount == 0 {
-		completedRun, updateErr := h.Queries.UpdateTestRun(r.Context(), db.UpdateTestRunParams{
-			ID:          run.ID,
-			WorkspaceID: wsUUID,
-			Status:      pgtype.Text{String: "completed", Valid: true},
-			CompletedAt: pgtype.Timestamptz{Time: time.Now(), Valid: true},
-		})
-		if updateErr != nil {
-			slog.Error("auto-complete test run failed", append(logger.RequestAttrs(r), "error", updateErr)...)
-		} else {
-			runResp := testRunToResponse(completedRun)
-			h.publish(protocol.EventTestRunUpdated, workspaceID, actorType, actorID,
-				map[string]any{"test_run": runResp})
-		}
+	// Complete the run once no case is pending or running. This goes through
+	// the same convergence as a finished case task: it never revives an
+	// aborted round, and it settles the autopilot run that launched the round.
+	// The CLI write is the normal last write of a round, so completing it here
+	// without that settle left the autopilot run "running" for good — the
+	// task hook that follows finds the round already completed and stops.
+	if completedRun, convergeErr := h.convergeTestRun(r.Context(), h.Queries, run); convergeErr != nil {
+		slog.Error("auto-complete test run failed", append(logger.RequestAttrs(r), "error", convergeErr)...)
+	} else if completedRun != nil {
+		h.publish(protocol.EventTestRunUpdated, workspaceID, actorType, actorID,
+			map[string]any{"test_run": testRunToResponse(*completedRun)})
 	}
 
 	writeJSON(w, http.StatusOK, caseResp)
+}
+
+// ListTestRunCaseEvidence — GET /api/test-run-cases/{id}/evidence. The files
+// an executor uploaded for one run case: what a reviewer checks the recorded
+// verdict against.
+func (h *Handler) ListTestRunCaseEvidence(w http.ResponseWriter, r *http.Request) {
+	rc, wsUUID, ok := h.loadTestRunCaseForUser(w, r)
+	if !ok {
+		return
+	}
+	files, err := h.Queries.ListAttachmentsByTestRunCase(r.Context(), db.ListAttachmentsByTestRunCaseParams{
+		TestRunCaseID: rc.ID, WorkspaceID: wsUUID,
+	})
+	if err != nil {
+		slog.Error("list run case evidence failed", append(logger.RequestAttrs(r), "error", err)...)
+		writeError(w, http.StatusInternalServerError, "failed to list evidence")
+		return
+	}
+	mode := attachmentURLModeFromRequest(r)
+	resp := make([]AttachmentResponse, len(files))
+	for i, file := range files {
+		resp[i] = h.attachmentToResponse(file, mode)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"evidence": resp})
 }
 
 type OpenTestRunCaseDefectRequest struct {

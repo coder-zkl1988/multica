@@ -10,6 +10,7 @@ import type {
   AgentBuilderSession,
   AgentBuilderSessionSummary,
   Attachment,
+  ListTestRunCaseEvidenceResponse,
   AutopilotRun,
   BillingBalance,
   BillingBatchesPage,
@@ -5500,6 +5501,26 @@ export const TestRunSchema = z.object({
   result_counts: z.record(z.string(), z.number()).optional(),
 }).loose();
 
+// One step's verdict. Rows written before step results had a shape could hold
+// anything; an entry that cannot be read is dropped rather than failing the
+// whole case.
+const TestRunStepResultSchema = z.object({
+  index: z.number(),
+  result: z.string(),
+  actual: z.string().default(""),
+  note: z.string().default(""),
+}).loose();
+
+const TestRunStepResultsSchema = z
+  .array(z.unknown())
+  .default([])
+  .transform((entries) =>
+    entries.flatMap((entry) => {
+      const parsed = TestRunStepResultSchema.safeParse(entry);
+      return parsed.success ? [parsed.data] : [];
+    }),
+  );
+
 export const TestRunCaseSchema = z.object({
   id: z.string().default(""),
   workspace_id: z.string().default(""),
@@ -5510,7 +5531,7 @@ export const TestRunCaseSchema = z.object({
   result: z.string().default("pending"),
   notes: z.string().default(""),
   evidence: z.array(z.unknown()).default([]),
-  step_results: z.array(z.unknown()).default([]),
+  step_results: TestRunStepResultsSchema,
   duration_ms: z.number().nullable().default(null),
   executed_by_type: z.string().nullable().default(null),
   executed_by_id: z.string().nullable().default(null),
@@ -5525,6 +5546,34 @@ export const ListTestRunsResponseSchema = z.object({
   test_runs: z.array(TestRunSchema).default([]),
   total: z.number().default(0),
 }).loose();
+
+// Evidence files carry every Attachment field the preview needs, defaulted so a
+// field an older server omits cannot knock the list into the fallback.
+const TestRunCaseEvidenceFileSchema = z.object({
+  id: z.string().default(""),
+  workspace_id: z.string().default(""),
+  issue_id: z.string().nullable().default(null),
+  comment_id: z.string().nullable().default(null),
+  chat_session_id: z.string().nullable().default(null),
+  chat_message_id: z.string().nullable().default(null),
+  uploader_type: z.string().default(""),
+  uploader_id: z.string().default(""),
+  filename: z.string().default(""),
+  url: z.string().default(""),
+  download_url: z.string().default(""),
+  markdown_url: z.string().default(""),
+  content_type: z.string().default(""),
+  size_bytes: z.number().default(0),
+  created_at: z.string().default(""),
+}).loose();
+
+export const ListTestRunCaseEvidenceResponseSchema = z.object({
+  evidence: z.array(TestRunCaseEvidenceFileSchema).default([]),
+}).loose();
+
+export const EMPTY_LIST_TEST_RUN_CASE_EVIDENCE_RESPONSE: ListTestRunCaseEvidenceResponse = {
+  evidence: [],
+};
 
 export const ListTestRunCasesResponseSchema = z.object({
   cases: z.array(TestRunCaseSchema).default([]),

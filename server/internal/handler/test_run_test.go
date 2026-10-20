@@ -20,7 +20,10 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"github.com/multica-ai/multica/server/internal/testutil"
 )
 
 // ---------------------------------------------------------------------------
@@ -52,6 +55,10 @@ func newTestRunProject(t *testing.T) string {
 	return id
 }
 
+// executableSteps is the smallest step list an active test case accepts: one
+// action with an expected result an executor can check.
+var executableSteps = []map[string]any{{"action": "Open the page", "expected": "The page renders"}}
+
 // createTestCaseForRun creates a minimal active test case in the given project.
 func createTestCaseForRun(t *testing.T, projectID string) TestCaseResponse {
 	t.Helper()
@@ -60,6 +67,7 @@ func createTestCaseForRun(t *testing.T, projectID string) TestCaseResponse {
 		"project_id": projectID,
 		"title":      "Run fixture case " + t.Name(),
 		"status":     "active",
+		"steps":      executableSteps,
 	})
 	testHandler.CreateTestCase(w, req)
 	if w.Code != http.StatusCreated {
@@ -850,5 +858,28 @@ func TestAbortTestRunRejectsACompletedRound(t *testing.T) {
 	testHandler.AbortTestRun(w, req)
 	if w.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want 409 for an already-completed run", w.Code)
+	}
+}
+
+// A deprecated case describes behaviour the product no longer has: running it
+// produces failures nobody should triage. A round skips it — a plan that still
+// lists one keeps working — and refuses to start with nothing else to run.
+func TestCreateTestRunSkipsDeprecatedCases(t *testing.T) {
+	projectID := newTestRunProject(t)
+	live := createTestCaseForRun(t, projectID)
+	retired := createTestCaseForRun(t, projectID)
+	dbfx.Exec(t, `UPDATE test_case SET status = 'deprecated' WHERE id = $1`, retired.ID)
+
+	run := createTestRunFromCases(t, "Skips retired", []string{live.ID, retired.ID})
+	cases := listRunCases(t, run.ID)
+	if len(cases) != 1 || cases[0].TestCaseID != live.ID {
+		t.Fatalf("round cases = %+v, want only the live case", cases)
+	}
+
+	resp := testutil.Call(t, testHandler.CreateTestRun, newRequest("POST", "/api/test-runs?workspace_id="+testWorkspaceID, map[string]any{
+		"test_case_ids": []string{retired.ID}, "title": "Only retired",
+	})).Want(http.StatusBadRequest)
+	if !strings.Contains(resp.Text(), "deprecated") {
+		t.Errorf("refused with %q, want it to say the cases are deprecated", resp.Text())
 	}
 }

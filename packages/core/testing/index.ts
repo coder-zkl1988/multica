@@ -28,6 +28,7 @@ export {
   testRunListOptions,
   testRunDetailOptions,
   testRunCasesOptions,
+  testRunCaseEvidenceOptions,
   testCapabilityListOptions,
   testCaseResultTimelineOptions,
   testCaseIssuesOptions,

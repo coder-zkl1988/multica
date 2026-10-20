@@ -178,7 +178,14 @@ export function TestCaseDetail({ refId }: TestCaseDetailProps) {
   function approve() {
     approveCase.mutate(refId, {
       onSuccess: () => toast.success(t(($) => $.toast.approved)),
-      onError: () => toast.error(t(($) => $.toast.saveFailed)),
+      // The server names what keeps a draft from becoming active (a step
+      // without an expected result); a generic failure hides the fix.
+      onError: (err) =>
+        toast.error(
+          err instanceof Error && err.message
+            ? err.message
+            : t(($) => $.toast.saveFailed),
+        ),
     });
   }
 

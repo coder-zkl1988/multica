@@ -213,6 +213,15 @@ func (h *Handler) completeTestRunTask(ctx context.Context, q *db.Queries, task d
 				notes = summary.Summary
 			}
 		}
+		// The closing marker settles a case the agent never recorded. That
+		// is fine for a failure or a blocker — they never overstate — but a
+		// pass declared only in prose carries no step verdicts and no checked
+		// evidence: the unverifiable pass the verdict rules exist to stop.
+		// It settles as blocked so the case is retried, not counted.
+		if result == "passed" {
+			result = "blocked"
+			notes = "the agent declared the case passed but never recorded the verdict with step results and evidence (`multica test result set`), so the pass is not accepted. Agent summary: " + notes
+		}
 		if _, err := q.UpdateTestRunCaseResult(ctx, db.UpdateTestRunCaseResultParams{
 			ID:             rc.ID,
 			WorkspaceID:    run.WorkspaceID,
@@ -230,19 +239,22 @@ func (h *Handler) completeTestRunTask(ctx context.Context, q *db.Queries, task d
 		// queued; the round stays running and a later hook retries.
 		slog.Warn("dispatch next test run cases failed", "run_id", uuidToString(run.ID), "error", err)
 	}
-	return h.convergeTestRun(ctx, q, run)
+	_, err = h.convergeTestRun(ctx, q, run)
+	return err
 }
 
 // convergeTestRun completes the round once every case is terminal. A round
 // where every case legitimately failed is still a completed round; the
-// per-case results carry the verdict.
-func (h *Handler) convergeTestRun(ctx context.Context, q *db.Queries, run db.TestRun) error {
+// per-case results carry the verdict. It returns the completed round when this
+// call completed it, nil when the round was not (or was already) complete —
+// so exactly one caller settles the autopilot run and publishes the change.
+func (h *Handler) convergeTestRun(ctx context.Context, q *db.Queries, run db.TestRun) (*db.TestRun, error) {
 	pending, err := q.CountPendingTestRunCases(ctx, db.CountPendingTestRunCasesParams{RunID: run.ID, WorkspaceID: run.WorkspaceID})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if pending > 0 || run.Status == "completed" || run.Status == "aborted" {
-		return nil
+		return nil, nil
 	}
 	completed, err := q.UpdateTestRun(ctx, db.UpdateTestRunParams{
 		ID:          run.ID,
@@ -251,10 +263,10 @@ func (h *Handler) convergeTestRun(ctx context.Context, q *db.Queries, run db.Tes
 		CompletedAt: pgtype.Timestamptz{Time: time.Now(), Valid: true},
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	h.settleAutopilotTestRun(ctx, q, completed)
-	return nil
+	return &completed, nil
 }
 
 // updateTestRunFromAgentFailure records an agent task that died. A per-case
@@ -304,5 +316,6 @@ func (h *Handler) updateTestRunFromAgentFailure(ctx context.Context, task db.Age
 	if err := h.dispatchNextTestRunCases(ctx, h.Queries, run); err != nil {
 		slog.Warn("dispatch next test run cases failed", "run_id", uuidToString(run.ID), "error", err)
 	}
-	return h.convergeTestRun(ctx, h.Queries, run)
+	_, err = h.convergeTestRun(ctx, h.Queries, run)
+	return err
 }

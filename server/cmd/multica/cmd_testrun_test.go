@@ -41,6 +41,7 @@ func newTestResultSetCmd() *cobra.Command {
 	cmd.Flags().String("result", "", "")
 	cmd.Flags().String("note", "", "")
 	cmd.Flags().String("step-results", "", "")
+	cmd.Flags().StringArray("step", nil, "")
 	return cmd
 }
 
@@ -231,6 +232,73 @@ func TestRunTestResultSetRejectsMalformedStepResults(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "--step-results must be valid JSON") {
 		t.Errorf("error should name the flag, got: %v", err)
+	}
+}
+
+func TestRunTestResultSetSendsRepeatedStepFlags(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": testRunCaseID, "result": "failed"})
+	}))
+	defer srv.Close()
+	setCLITestServerEnv(t, srv.URL)
+
+	cmd := newTestResultSetCmd()
+	for flag, value := range map[string]string{"result": "failed"} {
+		if err := cmd.Flags().Set(flag, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, step := range []string{"1=passed", "2=failed:total stayed at 100.00: no discount", "3=not_run"} {
+		if err := cmd.Flags().Set("step", step); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := captureStdout(t, func() error { return runTestResultSet(cmd, []string{testRunCaseID}) }); err != nil {
+		t.Fatalf("runTestResultSet: %v", err)
+	}
+	steps, _ := gotBody["step_results"].([]any)
+	if len(steps) != 3 {
+		t.Fatalf("step_results = %v, want three steps", gotBody["step_results"])
+	}
+	second, _ := steps[1].(map[string]any)
+	if second["index"] != float64(2) || second["result"] != "failed" || second["actual"] != "total stayed at 100.00: no discount" {
+		t.Errorf("second step = %v, want index 2 failed with the observed total (colons kept)", second)
+	}
+	if third, _ := steps[2].(map[string]any); third["actual"] != nil {
+		t.Errorf("third step = %v, want no actual", third)
+	}
+}
+
+func TestRunTestResultSetRejectsMalformedStepFlags(t *testing.T) {
+	t.Setenv("MULTICA_SERVER_URL", "http://localhost:9") // unreachable
+	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
+	t.Setenv("MULTICA_TOKEN", "mat_tok")
+	for _, tc := range []struct {
+		steps     []string
+		stepsJSON string
+		want      string
+	}{
+		{steps: []string{"passed"}, want: "<index>=<result>"},
+		{steps: []string{"0=passed"}, want: "starting at 1"},
+		{steps: []string{"one=passed"}, want: "starting at 1"},
+		{steps: []string{"1=passed"}, stepsJSON: `[]`, want: "not both"},
+	} {
+		cmd := newTestResultSetCmd()
+		_ = cmd.Flags().Set("result", "passed")
+		for _, step := range tc.steps {
+			_ = cmd.Flags().Set("step", step)
+		}
+		if tc.stepsJSON != "" {
+			_ = cmd.Flags().Set("step-results", tc.stepsJSON)
+		}
+		err := runTestResultSet(cmd, []string{testRunCaseID})
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("steps %v: err = %v, want it to mention %q", tc.steps, err, tc.want)
+		}
 	}
 }
 

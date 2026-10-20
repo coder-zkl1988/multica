@@ -288,6 +288,40 @@ func normalizeTestCaseSteps(steps []TestCaseStep) []TestCaseStep {
 	return normalized
 }
 
+// testCaseStepsProblem reports why a procedure cannot be executed, or "" when
+// it can. A case is the thing a tester or an agent checks the product against:
+// with no step, or a step whose expected result is blank, there is nothing to
+// compare, and an execution of it can only ever come back "passed". Drafts may
+// be incomplete — that is what a draft is — so callers apply this when a case
+// is, or is about to become, active.
+func testCaseStepsProblem(steps []TestCaseStep) string {
+	if len(steps) == 0 {
+		return "an active test case needs at least one step"
+	}
+	for i, step := range steps {
+		if strings.TrimSpace(step.Action) == "" {
+			return fmt.Sprintf("step %d has no action", i+1)
+		}
+		if strings.TrimSpace(step.Expected) == "" {
+			return fmt.Sprintf("step %d has no expected result: every step needs one an executor can check", i+1)
+		}
+	}
+	return ""
+}
+
+// decodeTestCaseSteps reads the persisted steps column. A malformed column
+// decodes to no steps, which testCaseStepsProblem then reports.
+func decodeTestCaseSteps(raw []byte) []TestCaseStep {
+	steps := []TestCaseStep{}
+	if len(raw) == 0 {
+		return steps
+	}
+	if err := json.Unmarshal(raw, &steps); err != nil {
+		return []TestCaseStep{}
+	}
+	return steps
+}
+
 func marshalJSONColumn(value any, fallback string) []byte {
 	raw, err := json.Marshal(value)
 	if err != nil {
@@ -518,12 +552,18 @@ func (h *Handler) CreateTestCase(w http.ResponseWriter, r *http.Request) {
 	if executionMode == "" {
 		executionMode = "manual"
 	}
-	// A hand-authored case is live on creation. Only a generation job produces
-	// draft cases, and it sets the column itself; an author who wants to park a
+	steps := normalizeTestCaseSteps(req.Steps)
+	// A hand-authored case is live on creation once it can be executed. One
+	// with nothing to check yet — the issue page's "new case" button creates
+	// it from a title alone and opens the editor — lands as a draft and is
+	// activated when its steps are filled in. An author who wants to park a
 	// case may still pass status explicitly.
 	status := req.Status
 	if status == "" {
 		status = "active"
+		if testCaseStepsProblem(steps) != "" {
+			status = "draft"
+		}
 	}
 	if !validateTestCaseEnum(w, "priority", priority, validTestCasePriorities) ||
 		!validateTestCaseEnum(w, "case_type", caseType, validTestCaseTypes) ||
@@ -531,6 +571,12 @@ func (h *Handler) CreateTestCase(w http.ResponseWriter, r *http.Request) {
 		!validateTestCaseEnum(w, "execution_mode", executionMode, validTestCaseExecutionModes) ||
 		!validateTestCaseEnum(w, "status", status, validTestCaseStatuses) {
 		return
+	}
+	if status == "active" {
+		if problem := testCaseStepsProblem(steps); problem != "" {
+			writeError(w, http.StatusBadRequest, problem)
+			return
+		}
 	}
 
 	repoParams, ok := h.validateTestCaseRepos(r.Context(), w, wsUUID, project.ID, req.Repos)
@@ -575,7 +621,7 @@ func (h *Handler) CreateTestCase(w http.ResponseWriter, r *http.Request) {
 		Title:                strings.TrimSpace(req.Title),
 		Module:               req.Module,
 		Preconditions:        req.Preconditions,
-		Steps:                marshalJSONColumn(normalizeTestCaseSteps(req.Steps), "[]"),
+		Steps:                marshalJSONColumn(steps, "[]"),
 		ExpectedResult:       req.ExpectedResult,
 		TestData:             marshalJSONColumn(testData, "{}"),
 		Priority:             priority,
@@ -681,6 +727,23 @@ func (h *Handler) UpdateTestCase(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Steps != nil {
 		params.Steps = marshalJSONColumn(normalizeTestCaseSteps(*req.Steps), "[]")
+	}
+	// An active case must stay executable. Checked only when this write
+	// touches the steps or turns the case active, so an unrelated edit to a
+	// legacy case that predates the rule (a title fix) is not refused.
+	effectiveStatus := current.Status
+	if params.Status.Valid {
+		effectiveStatus = params.Status.String
+	}
+	if effectiveStatus == "active" && (req.Steps != nil || (params.Status.Valid && current.Status != "active")) {
+		effectiveSteps := decodeTestCaseSteps(current.Steps)
+		if req.Steps != nil {
+			effectiveSteps = normalizeTestCaseSteps(*req.Steps)
+		}
+		if problem := testCaseStepsProblem(effectiveSteps); problem != "" {
+			writeError(w, http.StatusBadRequest, problem)
+			return
+		}
 	}
 	if req.TestData != nil {
 		params.TestData = marshalJSONColumn(*req.TestData, "{}")
@@ -796,6 +859,12 @@ func (h *Handler) ApproveTestCase(w http.ResponseWriter, r *http.Request) {
 	}
 	if current.Status != "draft" {
 		writeError(w, http.StatusConflict, "only a draft test case can be approved")
+		return
+	}
+	// Approval is the gate between "someone wrote this" and "rounds execute
+	// this": a draft that cannot be checked step by step is not approved.
+	if problem := testCaseStepsProblem(decodeTestCaseSteps(current.Steps)); problem != "" {
+		writeError(w, http.StatusBadRequest, problem)
 		return
 	}
 	workspaceID := h.resolveWorkspaceID(r)

@@ -433,7 +433,17 @@
     "notesNeedResult": "Les notes sont enregistrées avec un résultat — choisissez-en un d'abord.",
     "task": "tâche {{id}}",
     "liveFrame": "Écran en direct",
-    "liveFrameWaiting": "En attente de la première image du hub d'appareils…"
+    "liveFrameWaiting": "En attente de la première image du hub d'appareils…",
+    "observed": "Constaté",
+    "noSteps": "Ce cas a été figé sans étapes.",
+    "evidenceEmpty": "Aucune preuve téléversée.",
+    "stepResult": {
+      "passed": "Réussi",
+      "failed": "Échoué",
+      "blocked": "Bloqué",
+      "skipped": "Ignoré",
+      "not_run": "Non atteint"
+    }
   },
   "timeline": {
     "title": "Historique des séries",

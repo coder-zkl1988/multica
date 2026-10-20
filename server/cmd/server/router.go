@@ -2370,6 +2370,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// reachable by the run's own agent through its task token.
 			r.Put("/api/test-run-cases/{id}/result", h.UpdateTestRunCaseResult)
 			r.Get("/api/test-run-cases/{id}/frame", h.GetTestRunCaseFrame)
+			r.Get("/api/test-run-cases/{id}/evidence", h.ListTestRunCaseEvidence)
 			r.Post("/api/test-run-cases/{id}/defect", h.OpenTestRunCaseDefect)
 
 			// Execution capabilities

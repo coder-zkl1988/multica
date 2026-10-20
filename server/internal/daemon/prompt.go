@@ -1103,15 +1103,8 @@ func buildTestRunPrompt(task Task) string {
 	b.WriteString("4. Execute each case's steps in order and record the outcome as you go — do not batch the writes to the end, a crashed run should still have recorded what it got through.\n\n")
 
 	b.WriteString("Recording results:\n")
-	b.WriteString("```\n")
-	b.WriteString("multica test result set <run-case-id> --result passed|failed|blocked|skipped [--note \"…\"]\n")
-	b.WriteString("multica test evidence add <run-case-id> --file ./shot.png --kind screenshot\n")
-	b.WriteString("multica test defect open <run-case-id> --title \"…\"\n")
-	b.WriteString("```\n")
-	b.WriteString("- `failed` means the product behaved differently from the expected result. Open a defect for it.\n")
-	b.WriteString("- `blocked` means you could not run the case at all — a missing capability, an environment that would not come up, a precondition you could not reach. It is NOT a synonym for failed, and it must never be used to hide a real failure.\n")
-	b.WriteString("- `skipped` means the case did not apply to this round.\n")
-	b.WriteString("- Attach a screenshot or log for every `failed` and every `blocked`. A result nobody can audit is barely a result.\n\n")
+	writeTestResultRecordingRules(&b, "<run-case-id>")
+	b.WriteString("\n")
 
 	b.WriteString("Capability rules — these are hard:\n")
 	b.WriteString("- Use ONLY the `capability_key` values returned by `capability list`. Drive them through the MCP servers that were mounted for this run.\n")
@@ -1192,13 +1185,8 @@ func buildTestRunCasePrompt(task Task, ref testRunCaseRef) string {
 	}
 
 	b.WriteString("Recording:\n")
-	b.WriteString("```\n")
-	b.WriteString("multica test result set <run_case_id> --result passed|failed|blocked|skipped [--note \"…\"] [--step-results '<json>']\n")
-	b.WriteString("multica test evidence add <run_case_id> --file ./evidence/step-3.jpg --kind screenshot\n")
-	b.WriteString("multica test defect open <run_case_id> --title \"…\"\n")
-	b.WriteString("```\n")
-	b.WriteString("- `failed` means the product behaved differently from `expected`; open a defect for it. `blocked` means the case could not run (no device, missing precondition, login wall); it is NOT a synonym for failed. `skipped` means it did not apply.\n")
-	b.WriteString("- Do NOT record `passed` unless you observed every step's expected result yourself — on a screenshot, a trace step, or the browser. Attach at least one screenshot for `failed` and `blocked`, and the final one for `passed`.\n")
+	writeTestResultRecordingRules(&b, "<run_case_id>")
+	b.WriteString("- Do NOT record `passed` unless you observed every step's expected result yourself — on a screenshot, a trace step, or the browser.\n")
 	b.WriteString("- Do NOT modify product code or open pull requests; you are observing behaviour. Use the `multica` CLI for every Multica read and write.\n\n")
 
 	b.WriteString("Context JSON:\n")
@@ -1207,8 +1195,24 @@ func buildTestRunCasePrompt(task Task, ref testRunCaseRef) string {
 
 	b.WriteString("End your final response with a machine-readable line prefixed by exactly `TEST_RUN_CASE_RESULT_JSON:`:\n")
 	b.WriteString("{\"result\":\"passed|failed|blocked|skipped\",\"summary\":\"one paragraph: what you observed at the end and why that is the verdict\"}\n")
-	b.WriteString("The CLI write above is the record; this line only lets the platform settle the case if the write never happened.\n")
+	b.WriteString("The CLI write above is the record; this line only lets the platform settle the case if the write never happened — and then a `passed` here is recorded as `blocked`, because a pass needs the step results and evidence only the write carries.\n")
 	return b.String()
+}
+
+// writeTestResultRecordingRules is the recording contract both test run
+// prompts share. The server enforces each rule it states, so an agent that
+// skips one gets its write refused rather than a pass nobody can check.
+func writeTestResultRecordingRules(b *strings.Builder, id string) {
+	b.WriteString("```\n")
+	b.WriteString("multica test evidence add " + id + " --file ./evidence/step-2.png --kind screenshot\n")
+	b.WriteString("multica test result set " + id + " --result failed --step 1=passed --step \"2=failed:total stayed at 100.00\" --step 3=not_run [--note \"…\"]\n")
+	b.WriteString("multica test defect open " + id + " --title \"…\"\n")
+	b.WriteString("```\n")
+	b.WriteString("- Upload evidence FIRST, then record the verdict. A `passed` or `failed` is refused unless the case already has at least one evidence file AND the write carries a `--step <index>=<result>` for EVERY step of the snapshot (`index` is the step's `index`). A step result is passed, failed, blocked, skipped, or not_run (never reached).\n")
+	b.WriteString("- Add `:<what you observed>` to every step that did not pass, and wherever the expected result names a value (a total, a count, a message). A failure without the observed value cannot be triaged without running it again.\n")
+	b.WriteString("- A case cannot pass while any step is failed, blocked or not_run, and a failed case must mark the step that diverged as `failed`.\n")
+	b.WriteString("- `failed` means the product behaved differently from `expected`; open a defect for it.\n")
+	b.WriteString("- `blocked` means you could not run the case at all — a missing capability, an environment that would not come up, a precondition you could not reach. It is NOT a synonym for failed, and it must never be used to hide a real failure. `skipped` means the case did not apply. Neither needs step results or evidence; say why in `--note`.\n")
 }
 
 // writeArtemisCaseRules is how a case drives its Android phone: Artemis's own

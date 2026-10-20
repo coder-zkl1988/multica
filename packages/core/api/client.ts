@@ -341,6 +341,7 @@ import type {
   ListTestPlanCasesResponse,
   ListTestRunsResponse,
   ListTestRunCasesResponse,
+  ListTestRunCaseEvidenceResponse,
   TestCaseResultTimelineResponse,
   ListTestCapabilitiesResponse,
   RuntimeCapabilityScanResponse,
@@ -691,6 +692,7 @@ import {
   ListTestPlanCasesResponseSchema,
   ListTestRunsResponseSchema,
   ListTestRunCasesResponseSchema,
+  ListTestRunCaseEvidenceResponseSchema,
   TestCaseResultTimelineResponseSchema,
   ListTestCapabilitiesResponseSchema,
   ListTestCaseIssuesResponseSchema,
@@ -703,6 +705,7 @@ import {
   EMPTY_LIST_TEST_PLAN_CASES_RESPONSE,
   EMPTY_LIST_TEST_RUNS_RESPONSE,
   EMPTY_LIST_TEST_RUN_CASES_RESPONSE,
+  EMPTY_LIST_TEST_RUN_CASE_EVIDENCE_RESPONSE,
   EMPTY_TEST_CASE_RESULT_TIMELINE_RESPONSE,
   EMPTY_LIST_TEST_CAPABILITIES_RESPONSE,
   EMPTY_RUNTIME_CAPABILITY_SCAN_RESPONSE,
@@ -7087,6 +7090,16 @@ export class ApiClient {
     const raw = await this.fetch<unknown>(`/api/runtimes/${encodeURIComponent(runtimeId)}/device-hub`);
     return parseWithFallback(raw, RuntimeDeviceHubSchema, EMPTY_RUNTIME_DEVICE_HUB, {
       endpoint: "GET /api/runtimes/{id}/device-hub",
+    });
+  }
+
+  /** The files an executor uploaded as evidence for one run case. */
+  async listTestRunCaseEvidence(runCaseId: string): Promise<ListTestRunCaseEvidenceResponse> {
+    const raw = await this.fetch<unknown>(
+      `/api/test-run-cases/${encodeURIComponent(runCaseId)}/evidence`,
+    );
+    return parseWithFallback(raw, ListTestRunCaseEvidenceResponseSchema, EMPTY_LIST_TEST_RUN_CASE_EVIDENCE_RESPONSE, {
+      endpoint: "GET /api/test-run-cases/:id/evidence",
     });
   }
 

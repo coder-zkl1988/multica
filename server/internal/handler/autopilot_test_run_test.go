@@ -151,7 +151,7 @@ func TestAutopilotTestRunModeLaunchesARoundAndSettlesIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := testHandler.convergeTestRun(ctx, testHandler.Queries, run); err != nil {
+	if _, err := testHandler.convergeTestRun(ctx, testHandler.Queries, run); err != nil {
 		t.Fatal(err)
 	}
 	var settled string
@@ -195,5 +195,45 @@ func TestAbortingAnAutopilotRoundFailsItsRun(t *testing.T) {
 	}
 	if status != "failed" || !strings.Contains(reason, "phone lab closed") {
 		t.Errorf("autopilot run after abort = %s %q, want failed with the abort reason", status, reason)
+	}
+}
+
+// The CLI write is the normal last write of a round. Completing the round
+// there used to skip settling the autopilot run, and the case task's hook that
+// followed found the round already completed and stopped: the nightly run
+// stayed "running" for good.
+func TestRecordingTheLastResultSettlesTheAutopilotRun(t *testing.T) {
+	ctx := context.Background()
+	_, planID, _ := createAutopilotTestPlan(t)
+	runtimeID := dbfx.Runtime(t, "autopilot-http-settle-runtime")
+	agentID := dbfx.Agent(t, "autopilot-http-settle-agent", runtimeID)
+	testPool.Exec(ctx, "UPDATE agent_runtime SET status = 'online' WHERE id = $1", runtimeID)
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), "DELETE FROM agent_task_queue WHERE agent_id = $1", agentID)
+	})
+	ap := createTestRunAutopilot(t, map[string]any{
+		"title": "Nightly regression over HTTP", "assignee_id": agentID, "execution_mode": "test_run", "test_plan_id": planID,
+	})
+	w := httptest.NewRecorder()
+	testHandler.TriggerAutopilot(w, withURLParam(newRequest("POST", "/api/autopilots/"+ap.ID+"/trigger?workspace_id="+testWorkspaceID, map[string]any{}), "id", ap.ID))
+	if w.Code >= 300 {
+		t.Fatalf("trigger: got %d: %s", w.Code, w.Body.String())
+	}
+	var apRunID string
+	var testRunID *string
+	if err := testPool.QueryRow(ctx, "SELECT id, test_run_id FROM autopilot_run WHERE autopilot_id = $1 ORDER BY created_at DESC LIMIT 1", ap.ID).Scan(&apRunID, &testRunID); err != nil || testRunID == nil {
+		t.Fatalf("read autopilot run: %v (test run %v)", err, testRunID)
+	}
+
+	for _, rc := range listRunCases(t, *testRunID) {
+		setRunCaseResult(t, rc.ID, "failed")
+	}
+
+	var settled, result string
+	if err := testPool.QueryRow(ctx, "SELECT status, coalesce(result::text, '') FROM autopilot_run WHERE id = $1", apRunID).Scan(&settled, &result); err != nil {
+		t.Fatal(err)
+	}
+	if settled != "completed" || !strings.Contains(result, "failed") {
+		t.Errorf("autopilot run after the last recorded result = %s %s, want completed with the result counts", settled, result)
 	}
 }

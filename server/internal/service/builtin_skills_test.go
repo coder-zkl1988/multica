@@ -938,6 +938,11 @@ func TestTestCasesSkillCoversTheDataContract(t *testing.T) {
 		// Steps are the executable contract: structured, renumbered, repo-tagged.
 		"structured JSON array, not markdown",
 		"running order 1..n",
+		// An active case is executable: every step has an action and an expected result.
+		"An `active` case must be executable",
+		"a round skips `deprecated`",
+		// Verification counts live coverage only.
+		"only through its `active` linked cases",
 		// Multi-repo semantics are the reason roles exist at all.
 		"under_test",
 		"driver",
@@ -1017,11 +1022,17 @@ func TestRunningTestsSkillCoversExecutionContract(t *testing.T) {
 		"blocked",
 		"`blocked` is not `failed`",
 		// Recording commands.
-		"multica test result set <run-case-id> --result passed|failed|blocked|skipped",
+		"multica test result set <run-case-id> --result",
 		"multica test evidence add <run-case-id> --file",
 		"multica test defect open <run-case-id> --title",
-		// Evidence is required for failures.
-		"failed` or `blocked",
+		// A verdict carries one step result per snapshot step, in this shape.
+		"`<index>=<result>[:<what you observed>]`",
+		"`not_run` (a step you never reached)",
+		// The server refuses an agent's pass or fail without evidence on file
+		// and a result for every step, and a bare passed marker is not a pass.
+		"at least one evidence file",
+		"a step result for **every** step of the snapshot",
+		"a `passed` is recorded as `blocked`",
 		// Supporting file must ship.
 	}
 	for _, want := range mustContain {

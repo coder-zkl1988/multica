@@ -1,3 +1,5 @@
+import type { Attachment } from "./attachment";
+
 export type TestCasePriority = "p0" | "p1" | "p2" | "p3";
 export type TestCaseStatus = "draft" | "active" | "deprecated";
 export type TestCaseOrigin = "ai" | "human";
@@ -337,6 +339,21 @@ export interface TestRun {
   result_counts?: Record<string, number>;
 }
 
+/**
+ * A step's verdict inside a run case. `index` is the step's index in the frozen
+ * case snapshot; `not_run` is a step the executor never reached. Unknown
+ * verdicts from a newer server are kept as strings.
+ */
+export type TestRunStepVerdict = "passed" | "failed" | "blocked" | "skipped" | "not_run";
+
+export interface TestRunStepResult {
+  index: number;
+  result: TestRunStepVerdict | (string & {});
+  /** What the executor observed; set whenever it differs from the expected result. */
+  actual: string;
+  note: string;
+}
+
 export interface TestRunCase {
   id: string;
   workspace_id: string;
@@ -347,7 +364,7 @@ export interface TestRunCase {
   result: TestRunCaseResult;
   notes: string;
   evidence: unknown[];
-  step_results: unknown[];
+  step_results: TestRunStepResult[];
   duration_ms: number | null;
   executed_by_type: "member" | "agent" | null;
   executed_by_id: string | null;
@@ -476,8 +493,13 @@ export interface UpdateTestRunCaseResultRequest {
   result: TestRunCaseResult;
   notes?: string;
   evidence?: unknown[];
-  step_results?: unknown[];
+  step_results?: Array<{ index: number; result: TestRunStepVerdict; actual?: string; note?: string }>;
   duration_ms?: number;
+}
+
+/** GET /api/test-run-cases/{id}/evidence — the files uploaded for one run case. */
+export interface ListTestRunCaseEvidenceResponse {
+  evidence: Attachment[];
 }
 
 export interface OpenTestRunCaseDefectRequest {

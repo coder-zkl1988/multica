@@ -433,7 +433,17 @@
     "notesNeedResult": "Notes are saved with a result — pick one first.",
     "task": "task {{id}}",
     "liveFrame": "Live screen",
-    "liveFrameWaiting": "Waiting for the first frame from the device hub…"
+    "liveFrameWaiting": "Waiting for the first frame from the device hub…",
+    "observed": "Observed",
+    "noSteps": "This case was frozen without steps.",
+    "evidenceEmpty": "No evidence uploaded.",
+    "stepResult": {
+      "passed": "Passed",
+      "failed": "Failed",
+      "blocked": "Blocked",
+      "skipped": "Skipped",
+      "not_run": "Not reached"
+    }
   },
   "timeline": {
     "title": "Run History",

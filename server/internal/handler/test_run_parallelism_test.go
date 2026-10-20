@@ -118,11 +118,12 @@ func TestDispatchTestRunHonoursTheParallelismCapAndReleasesTheNextCase(t *testin
 		t.Fatalf("after dispatch only the first case may hold a task: %+v", cases)
 	}
 
-	// Finishing the first case releases exactly one more.
-	settleCase(t, *cases[0].taskID, "passed")
+	// Finishing the first case releases exactly one more. (A bare `passed`
+	// marker would settle as blocked; any marker verdict releases the next.)
+	settleCase(t, *cases[0].taskID, "skipped")
 	cases = runCasesInOrder(t, run.ID)
-	if cases[0].result != "passed" {
-		t.Errorf("first case result = %q, want passed", cases[0].result)
+	if cases[0].result != "skipped" {
+		t.Errorf("first case result = %q, want skipped", cases[0].result)
 	}
 	if cases[1].taskID == nil {
 		t.Fatalf("the second case was not released after the first settled: %+v", cases)
@@ -203,6 +204,7 @@ func TestDispatchTestRunRequiresATestHostForDeviceCases(t *testing.T) {
 		"project_id":            projectID,
 		"title":                 "Phone case " + t.Name(),
 		"status":                "active",
+		"steps":                 executableSteps,
 		"required_capabilities": []map[string]any{{"kind": "android_device"}},
 	})
 	testHandler.CreateTestCase(w, req)

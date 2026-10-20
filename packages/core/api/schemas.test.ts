@@ -112,6 +112,8 @@ import {
   TestPlanSchema,
   TestRunSchema,
   TestRunCaseSchema,
+  ListTestRunCaseEvidenceResponseSchema,
+  EMPTY_LIST_TEST_RUN_CASE_EVIDENCE_RESPONSE,
   TestCaseResultTimelineEntrySchema,
   ListTestPlansResponseSchema,
   ListTestRunsResponseSchema,
@@ -3633,6 +3635,67 @@ describe("TestRunCaseSchema", () => {
     );
     expect(parsed.id).toBe("");
     expect(parsed.result).toBe("pending");
+  });
+});
+
+describe("TestRunCaseSchema step_results", () => {
+  it("types step results and keeps what the executor observed", () => {
+    const parsed = TestRunCaseSchema.parse({
+      id: "rc-1",
+      step_results: [
+        { index: 1, result: "passed" },
+        { index: 2, result: "failed", actual: "total stayed at 100.00" },
+      ],
+    });
+    expect(parsed.step_results).toEqual([
+      { index: 1, result: "passed", actual: "", note: "" },
+      { index: 2, result: "failed", actual: "total stayed at 100.00", note: "" },
+    ]);
+  });
+
+  it("drops entries a legacy row stored in another shape instead of failing the case", () => {
+    const parsed = TestRunCaseSchema.parse({
+      id: "rc-1",
+      result: "failed",
+      step_results: ["step 2 broke", { index: "2", result: "failed" }, { index: 3, result: "blocked" }, null],
+    });
+    expect(parsed.result).toBe("failed");
+    expect(parsed.step_results).toEqual([{ index: 3, result: "blocked", actual: "", note: "" }]);
+  });
+
+  it("defaults step_results to an empty list when the field is not an array", () => {
+    const parsed = parseWithFallback(
+      { id: "rc-1", step_results: "nope" },
+      TestRunCaseSchema,
+      EMPTY_TEST_RUN_CASE,
+      { endpoint: "GET /api/test-runs/:id/cases" },
+    );
+    expect(parsed.step_results).toEqual([]);
+  });
+});
+
+describe("ListTestRunCaseEvidenceResponseSchema", () => {
+  it("fills attachment fields an older server omits", () => {
+    const parsed = ListTestRunCaseEvidenceResponseSchema.parse({
+      evidence: [{ id: "att-1", filename: "final.png", download_url: "/api/attachments/att-1/download" }],
+    });
+    expect(parsed.evidence[0]).toMatchObject({
+      id: "att-1",
+      filename: "final.png",
+      content_type: "",
+      size_bytes: 0,
+      issue_id: null,
+    });
+  });
+
+  it("recovers from a malformed response via parseWithFallback", () => {
+    const parsed = parseWithFallback(
+      { evidence: "not-a-list" },
+      ListTestRunCaseEvidenceResponseSchema,
+      EMPTY_LIST_TEST_RUN_CASE_EVIDENCE_RESPONSE,
+      { endpoint: "GET /api/test-run-cases/:id/evidence" },
+    );
+    expect(parsed.evidence).toEqual([]);
   });
 });
 

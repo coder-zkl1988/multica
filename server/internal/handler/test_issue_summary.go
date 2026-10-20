@@ -84,13 +84,23 @@ func (h *Handler) GetIssueTestSummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp.Cases = len(links)
-	resp.Verified = len(links) > 0
+	activeCases := 0
+	resp.Verified = true
 	for _, link := range links {
+		// Only an active case is a claim about the product: a draft has not
+		// been reviewed, and a deprecated case describes behaviour that is
+		// gone. Neither may make an issue look verified.
+		if link.CaseStatus != "active" {
+			continue
+		}
+		activeCases++
 		// The query reports "" for a case that never ran; that is not a pass.
 		if link.LatestResult != "passed" {
 			resp.Verified = false
-			break
 		}
+	}
+	if activeCases == 0 {
+		resp.Verified = false
 	}
 
 	if len(links) > 0 {

@@ -432,7 +432,17 @@
     "notesNeedResult": "メモは結果と一緒に保存されます。先に結果を選んでください。",
     "task": "タスク {{id}}",
     "liveFrame": "ライブ画面",
-    "liveFrameWaiting": "デバイスハブからの最初のフレームを待っています…"
+    "liveFrameWaiting": "デバイスハブからの最初のフレームを待っています…",
+    "observed": "実際",
+    "noSteps": "このケースはステップなしで固定されました。",
+    "evidenceEmpty": "証跡はアップロードされていません。",
+    "stepResult": {
+      "passed": "合格",
+      "failed": "失敗",
+      "blocked": "ブロック",
+      "skipped": "スキップ",
+      "not_run": "未到達"
+    }
   },
   "timeline": {
     "title": "実行履歴",

@@ -15,6 +15,9 @@ const mocks = vi.hoisted(() => ({
   dispatchRun: vi.fn(),
   updateCaseResult: vi.fn(),
   openDefect: vi.fn(),
+  evidence: [] as unknown[],
+  tryOpenPreview: vi.fn(),
+  downloadAttachment: vi.fn(),
 }));
 
 vi.mock("@tanstack/react-query", () => ({
@@ -23,6 +26,7 @@ vi.mock("@tanstack/react-query", () => ({
     const kind = options.queryKey?.[2];
     if (key === "test-runs" && kind === "detail") return { data: mocks.run, isLoading: false };
     if (key === "test-runs" && kind === "cases") return { data: mocks.cases, isLoading: false };
+    if (key === "test-runs" && kind === "evidence") return { data: mocks.evidence, isLoading: false };
     if (key === "agents") return { data: mocks.agents, isLoading: false };
     return { data: [], isLoading: false };
   },
@@ -46,6 +50,7 @@ vi.mock("@multica/core/paths", () => ({
 vi.mock("@multica/core/testing", () => ({
   testRunDetailOptions: () => ({ queryKey: ["test-runs", "ws-1", "detail"] }),
   testRunCasesOptions: () => ({ queryKey: ["test-runs", "ws-1", "cases"] }),
+  testRunCaseEvidenceOptions: () => ({ queryKey: ["test-runs", "ws-1", "evidence"] }),
   useStartTestRun: () => ({ mutateAsync: mocks.startRun, isPending: false }),
   useAbortTestRun: () => ({ mutateAsync: mocks.abortRun, isPending: false }),
   useRetryTestRun: () => ({ mutateAsync: mocks.retryRun, isPending: false }),
@@ -59,6 +64,12 @@ vi.mock("@multica/core/workspace/queries", () => ({
 }));
 
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+
+// The preview modal is the editor's; this page only decides what to open.
+vi.mock("../editor", () => ({
+  useAttachmentPreview: () => ({ tryOpen: mocks.tryOpenPreview, open: vi.fn(), modal: null }),
+  useDownloadAttachment: () => mocks.downloadAttachment,
+}));
 
 function makeRun(overrides = {}) {
   return {
@@ -118,6 +129,7 @@ beforeEach(() => {
   mocks.run = makeRun();
   mocks.cases = [];
   mocks.agents = [];
+  mocks.evidence = [];
 });
 
 describe("TestRunDetail entry points", () => {
@@ -285,5 +297,68 @@ describe("TestRunDetail case result", () => {
     page.rerenderPage();
 
     expect(await screen.findByRole("textbox")).toHaveValue("my draft");
+  });
+});
+
+describe("TestRunDetail case procedure", () => {
+  beforeEach(() => {
+    mocks.run = makeRun({ status: "completed" });
+    mocks.cases = [
+      {
+        id: "rc-1",
+        run_id: "run-1",
+        test_case_id: "tc-1",
+        case_snapshot: {
+          title: "Coupon checkout",
+          key: "TC-9",
+          preconditions: "One item in the cart",
+          steps: [
+            { index: 1, action: "Apply coupon SAVE10", expected: "The total drops by 10%" },
+            { index: 2, action: "Pay", expected: "The confirmation shows 90.00" },
+          ],
+        },
+        position: 0,
+        result: "failed",
+        notes: "",
+        evidence: [],
+        step_results: [
+          { index: 1, result: "passed", actual: "", note: "" },
+          { index: 2, result: "failed", actual: "The confirmation shows 100.00", note: "" },
+        ],
+        duration_ms: null,
+        executed_by_type: "agent",
+        executed_by_id: "agent-1",
+        executed_at: "2024-01-01T00:00:00Z",
+        defect_issue_id: null,
+        created_at: "2024-01-01T00:00:00Z",
+        updated_at: "2024-01-01T00:00:00Z",
+      },
+    ];
+    mocks.evidence = [
+      { id: "att-1", filename: "confirmation.png", content_type: "image/png", download_url: "/api/attachments/att-1/download" },
+    ];
+  });
+
+  // A manual tester executes from this page; it used to show only the title,
+  // and an agent's per-step verdicts and screenshots were stored but invisible.
+  it("lists the frozen steps beside what was recorded for each", async () => {
+    renderPage();
+    await userEvent.click(await screen.findByText("Coupon checkout"));
+
+    expect(screen.getByText("One item in the cart")).toBeInTheDocument();
+    expect(screen.getByText("Apply coupon SAVE10")).toBeInTheDocument();
+    expect(screen.getByText(/The confirmation shows 90\.00/)).toBeInTheDocument();
+    expect(screen.getByText("The confirmation shows 100.00")).toBeInTheDocument();
+  });
+
+  it("opens an evidence file in the preview", async () => {
+    mocks.tryOpenPreview.mockReturnValue(true);
+    renderPage();
+    await userEvent.click(await screen.findByText("Coupon checkout"));
+    await userEvent.click(screen.getByRole("button", { name: "confirmation.png" }));
+    expect(mocks.tryOpenPreview).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "full", attachment: expect.objectContaining({ id: "att-1" }) }),
+    );
+    expect(mocks.downloadAttachment).not.toHaveBeenCalled();
   });
 });

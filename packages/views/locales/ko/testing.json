@@ -432,7 +432,17 @@
     "notesNeedResult": "메모는 결과와 함께 저장됩니다. 결과를 먼저 선택하세요.",
     "task": "작업 {{id}}",
     "liveFrame": "실시간 화면",
-    "liveFrameWaiting": "디바이스 허브의 첫 프레임을 기다리는 중…"
+    "liveFrameWaiting": "디바이스 허브의 첫 프레임을 기다리는 중…",
+    "observed": "실제",
+    "noSteps": "이 케이스는 단계 없이 고정되었습니다.",
+    "evidenceEmpty": "업로드된 증거가 없습니다.",
+    "stepResult": {
+      "passed": "통과",
+      "failed": "실패",
+      "blocked": "차단됨",
+      "skipped": "건너뜀",
+      "not_run": "도달하지 않음"
+    }
   },
   "timeline": {
     "title": "실행 기록",

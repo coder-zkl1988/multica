@@ -25,6 +25,23 @@ the durable context a case is written against.
 so a gap never survives a save. `repo` is optional and, when present, must be
 one of the case's own `repos[].alias` values.
 
+An `active` case must be executable: at least one step, and every step with a
+non-empty `action` and a non-empty `expected`. A case with nothing to compare
+against can only ever come back "passed", so the server holds this line:
+
+| Write | Outcome when the steps are not executable |
+| --- | --- |
+| create without `status` | the case is created as `draft` |
+| create with `status: active` | 400 naming the step |
+| update an active case's steps, or set `status: active` | 400 naming the step |
+| `approve` | 400 naming the step |
+| `propose` a `new` or `update` item | 400; the whole batch is rolled back |
+| accept a queued proposal against an active case | 409 |
+
+Write `expected` as something an executor can observe and compare: a value, a
+message, a state change ("订单状态变为已支付，余额减少 100.00"), not "works
+correctly".
+
 ## Identity: TC-<n> and UUID are both accepted
 
 Every case carries `case_number` (an int, unique per workspace) and `key` (the
@@ -116,14 +133,17 @@ revision history, so an edit is always reversible. Bumping `version` is the
 server's job — never send it.
 
 `approve` moves a case from `draft` to `active` and stamps the reviewer. It
-rejects a case that is already active.
+rejects a case that is already active, and a draft whose steps are not yet
+executable.
 
 ## Enums
 
 Sending a value outside these lists returns 400 with the allowed list; it never
 reaches the database.
 
-- `status`: `draft`, `active`, `deprecated`
+- `status`: `draft`, `active`, `deprecated` — a round skips `deprecated`
+  cases (a plan that still lists one keeps working) and refuses to start when
+  nothing else is selected
 - `origin`: `ai`, `human` — set by the server, not the client
 - `priority`: `p0`, `p1`, `p2`, `p3`
 - `scope`: `single_repo`, `cross_repo`, `no_repo`
@@ -246,6 +266,11 @@ origin and author, so a later AI run cannot silently relabel a human's link.
 An `issue_id` that does not exist in the workspace is rejected with 400 rather
 than stored: the table has no foreign key, so an unchecked id would become a
 link to nothing.
+
+An issue counts as verified only through its `active` linked cases: at least
+one, and every one of them with a latest result of `passed`. A draft nobody
+reviewed cannot verify a requirement, and a deprecated case can neither verify
+it nor hold it back.
 
 The reverse direction carries `latest_result`, the most recent recorded outcome
 across every round the case appeared in. It is `null` when the case has never
