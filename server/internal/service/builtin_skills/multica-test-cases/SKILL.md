@@ -136,31 +136,40 @@ server's job — never send it.
 rejects a case that is already active, and a draft whose steps are not yet
 executable.
 
-A person's case created without executable steps (the issue page's "new case"
-button sends a title only) is a draft because there is nothing to check yet.
-The save that makes its steps executable activates it, unless that save names
-a `status`. A draft whose steps were already executable stays a draft until it
-is approved.
+A person's case created without executable steps and without a `status` (the
+issue page's "new case" button sends a title only) is a draft because there is
+nothing to check yet. The person's save that makes its steps executable
+activates it, unless that save names a `status`. Every other draft waits for
+approval: one created as a draft on purpose, one whose steps were already
+executable, and one an agent wrote steps into.
+
+Changing a case's steps (what an executor reads: action, expected, repo) is a
+new procedure: results recorded on the old steps stop counting toward
+coverage until a round runs the new ones. A title or priority edit is not.
 
 ### What an agent may write
 
 A case an agent writes is AI-written whichever command wrote it: `create` from
-an agent's task lands as `draft` with `origin: "ai"`, the same review gate a
-generation run's cases pass. A draft is how a person checks AI output before
-rounds execute it and coverage counts it, and a failing case is the signal a
-round exists to produce, so an agent can neither make a case live nor take one
-out of rounds:
+an agent's task always lands as `draft` with `origin: "ai"`, the same review
+gate a generation run's cases pass. A draft is how a person checks AI output
+before rounds execute it and coverage counts it, and a failing case is the
+signal a round exists to produce, so an agent can neither make a case live nor
+take one out of coverage or regression:
 
 | Agent write | Outcome |
 | --- | --- |
-| `create --status active` | 403 |
-| `approve`, or `update --status active` on a draft | 403 |
-| `update --status deprecated`, or `delete`, on an active case | 403 |
+| `approve`, or `update --status active` | 403 (a deprecated case is reactivated by a member) |
+| any status change of an active case, or `delete` of it | 403 |
+| unlinking an active case from an issue or a test point | 403 |
+| `point update --status dropped` on a point an active case verifies | 403 |
+| removing a case from a plan, changing a plan's rule or status, deleting a plan | 403 |
+| `delete` of anything but an AI-written draft | 403 |
 | `proposal accept` / `proposal reject` | 403 |
-| any other edit, and `delete` of a draft | allowed |
+| other edits, `delete` of an AI-written draft, adding cases to a plan | allowed |
 
+An agent's edit is recorded as the agent's in the case's revision history.
 When a 403 says so, tell the person which drafts are ready for review, or
-which case should be retired and why.
+which case, point or plan should change and why.
 
 ## Enums
 
@@ -341,28 +350,34 @@ a `state`:
 
 | state | meaning |
 | --- | --- |
-| `uncovered` | no case verifies it, not even a draft |
-| `in_review` | only drafts verify it — approving one is what is left |
-| `not_run` | an active case verifies it and has no recorded result |
-| `failing` | an active case that verifies it last failed |
-| `passed` | the active cases that verify it last passed |
+| `uncovered` | no active case verifies it, and no draft that could be approved |
+| `in_review` | only drafts with executable steps verify it — approving one is what is left |
+| `not_run` | active cases verify it, but at least one has no current verdict |
+| `failing` | an active case that verifies it currently fails |
+| `passed` | every active case that verifies it currently passes |
 | `dropped` | the condition is no longer part of the requirement |
+
+A case's current verdict is its newest `passed` or `failed` result from a
+round that froze it as an active case with the steps it has now. `blocked` and
+`skipped` say the case was not executed, so they never hide an earlier
+failure; a result on old steps, or from a trial run of the draft, says nothing
+about the case as it is.
 
 Whether an issue is verified depends on `basis` in its test summary:
 
 | basis | verified when |
 | --- | --- |
-| `test_points` | every active point is covered by an active case whose latest result is `passed`, and no active linked case is failing |
+| `test_points` | every active point is `passed` (every active case verifying it currently passes), and no active linked case is failing |
 | `cases_only` | the issue has no points yet: at least one active linked case, all passed — a weaker claim, labelled as such |
 | `none` | nothing active covers the issue; never verified |
 
 Only `active` cases count. A draft nobody reviewed cannot verify a
 requirement, and a deprecated case can neither verify it nor hold it back.
 
-The reverse direction carries `latest_result`, the most recent recorded outcome
-across every round the case appeared in. It is `null` when the case has never
-been executed — deliberately distinct from `"pending"`, which would claim the
-case is queued in a round it was never added to.
+The reverse direction carries `latest_result`, the case's current verdict as
+defined above. It is `null` when there is none — never run on its current
+steps — deliberately distinct from `"pending"`, which would claim the case is
+queued in a round it was never added to.
 
 Deleting either side sweeps the links in the same transaction as the delete.
 

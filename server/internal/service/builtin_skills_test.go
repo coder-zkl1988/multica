@@ -956,6 +956,16 @@ func TestTestCasesSkillCoversTheDataContract(t *testing.T) {
 		// TestAgentCannotReviewATestCaseProposal).
 		"lands as `draft` with `origin: \"ai\"`",
 		"| `proposal accept` / `proposal reject` | 403 |",
+		// Unlinking, dropping a covered point and narrowing a plan take a case
+		// out of coverage as surely as deprecating it
+		// (handler: TestAgentCannotRetireAnActiveCase, TestAgentCannotNarrowARegressionPlan).
+		"| unlinking an active case from an issue or a test point | 403 |",
+		"| removing a case from a plan, changing a plan's rule or status, deleting a plan | 403 |",
+		// A blocked round never hides a failure; old steps and trial runs do not
+		// count (handler: TestBlockedRoundNeverHidesAFailure, TestAPassOnOldStepsStopsCounting,
+		// TestADraftTrialRunDoesNotVerifyOnceApproved, TestEveryCoveringCaseMustPass).
+		"A case's current verdict is its newest `passed` or `failed` result",
+		"| `passed` | every active case that verifies it currently passes |",
 		// Multi-repo semantics are the reason roles exist at all.
 		"under_test",
 		"driver",
@@ -1053,6 +1063,8 @@ func TestRunningTestsSkillCoversExecutionContract(t *testing.T) {
 		"(403 for a sibling's)",
 		"a case frozen without steps has nothing to compare",
 		"checked against the step results\nalready on file",
+		// An all-skipped pass executed nothing (handler: TestAPassNeedsAPassedStep).
+		"at least one step is `passed`",
 		// Supporting file must ship.
 	}
 	for _, want := range mustContain {
