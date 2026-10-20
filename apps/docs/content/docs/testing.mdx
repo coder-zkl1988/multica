@@ -13,7 +13,7 @@ Each case carries a `TC-<n>` key, a module for grouping, preconditions, an order
 
 A case is only **active** when every step has an action and an expected result. Without them an execution can only ever come back "passed", so a case written without checkable steps starts as a `draft`, and your save that gives it checkable steps makes it active. Any other draft waits for approval: one created as a draft on purpose, one whose steps were already checkable, and one an agent wrote steps into.
 
-A case an agent writes — in a generation job or from the CLI — starts as a `draft` that a person approves. An agent cannot approve a case or make one active, and cannot take an active one out of coverage or regression — by changing its status, deleting it, unlinking it, dropping a test point it verifies, or removing it from a plan: a failing case is the signal a round exists to produce, and retiring it is a person's call. An agent may delete only drafts an agent wrote, and its edits show as agent edits in the case's history.
+A case an agent writes — in a generation job or from the CLI — starts as a `draft` that a person approves. An agent cannot approve a case or make one active, cannot claim that an active case covers an issue or test point (its past passes would count at once), and cannot take an active one out of coverage or regression — by changing its status, deleting it, unlinking it, dropping a test point it verifies, removing it from a plan, or retargeting, pausing or rescheduling a regression autopilot: a failing case is the signal a round exists to produce, and retiring it is a person's call. A deprecated case's status is a person's too. An agent may delete only AI-written drafts nobody approved, and its edits show as agent edits in the case's history.
 
 A case also records **which repositories it touches**. A project can bind several, and a case names the ones it relates to by role:
 
@@ -32,7 +32,7 @@ Linking a case to an issue says it is about that requirement. It does not say wh
 
 So an issue can be split into **test points** (`TP-1`, `TP-2`, …): conditions that can each be judged right or wrong on their own, such as "an order over the balance is refused with a message". Each point has a category — positive, negative, boundary, permission, state, data, non-functional — and cases declare which points they verify. A point is **uncovered** while no active case verifies it, **drafts only** while only drafts that could be approved do — approving one is what is left — **failing** when an active covering case fails, and **passed** only when every active case covering it passes: a generation run writes one case per boundary value or refused role, and one of them passing says nothing about the others.
 
-What counts is each case's current verdict: its newest `passed` or `failed` result from a round that ran it as an active case with the steps it has now. `blocked` and `skipped` mean the case did not run, so they never clear a failure. Editing a case's steps, or approving a draft that was trial-run, means it has to run again before it counts.
+What counts is each case's current verdict: its newest `passed` or `failed` result from a round that ran it as an active case with the steps it has now. `blocked` and `skipped` mean the case did not run, so they never clear a failure. Editing what a case checks — its steps, preconditions, overall expected result or test data — or approving a draft that was trial-run, means it has to run again before it counts.
 
 An issue with test points is **verified** only when every active point is covered and passed and none of its active cases is failing. An issue without points falls back to its linked cases and shows **Cases pass** instead of **Verified**: nobody listed what had to be checked. Drafts and deprecated cases never count.
 
@@ -86,7 +86,7 @@ When you execute a round by hand, expand a case to see its frozen steps: record 
 
 Dispatch a run to an agent and it executes the frozen snapshots, recording results through the CLI as it goes.
 
-Before anything is queued, the server resolves the **capabilities** the run needs — a phone, a desktop, a browser — against what your daemons report. If nothing can serve the run it is parked as `blocked` with the missing kind named, rather than dispatched to discover minutes later that there is no device. The resolution is frozen onto the run, so a retry reproduces the same environment.
+Before anything is queued, the server resolves the **capabilities** the run needs — a phone, a desktop, a browser — against what your daemons report. If nothing can serve the run it is parked as `blocked` with the missing kind named, rather than dispatched to discover minutes later that there is no device. The resolution is frozen onto the round, so every case of it runs against the same devices; a retry is a new round and resolves again when it is dispatched.
 
 The agent may only drive what was bound to the run. It is told never to go looking for an `adb`, a simulator or a browser on the host: if it was not bound, it may not be driven.
 
@@ -94,9 +94,9 @@ The agent may only drive what was bound to the run. It is told never to go looki
 Browsers run through a `playwright` or `chrome-devtools` MCP server on the runtime, Android phones through Artemis on a test host, and iPhones through the device hub on a test host. Computer-use is not implemented yet. A round whose capability no runtime provides is parked as `blocked` with the missing kind named, rather than running without a device.
 </Callout>
 
-An agent's `passed` or `failed` is only accepted with a result for **every** step of the snapshot and at least one evidence file already uploaded for that case, so it uploads evidence first and records the verdict second. A pass also needs at least one step that passed; a case where no step was executed is `skipped`. If an agent finishes without recording anything, a `passed` in its closing summary is recorded as `blocked`: a pass needs the evidence the summary does not carry.
+An agent's `passed` or `failed` is only accepted with a result for **every** step of the snapshot and at least one evidence file already uploaded for that case, so it uploads evidence first and records the verdict second. A pass with a result for every step also needs one step that passed; a case where no step was executed is `skipped`. If an agent finishes without recording anything, a `passed` in its closing summary is recorded as `blocked`: a pass needs the evidence the summary does not carry.
 
-Each case is executed by its own agent run, which can record a result or upload evidence for that case only. A verdict sent without step results has to agree with the step results already recorded. Correcting the result of a finished round keeps the time the case was executed, so a fix to an old round never becomes the case's latest result; a case first recorded `blocked` or `skipped` and executed later counts from that execution.
+Each case is executed by its own agent run, which can record a result or upload evidence for that case only. A verdict sent without step results has to agree with the step results already recorded. A verdict recorded while its round is still open — running, or parked as `blocked` for hand execution — counts from when it was recorded. Correcting the result of a finished round keeps the time it was observed, so a fix to an old round never outranks a round that ran since; a new observation belongs in a retry.
 
 ## CLI
 

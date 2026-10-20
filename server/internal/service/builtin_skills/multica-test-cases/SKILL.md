@@ -143,9 +143,10 @@ activates it, unless that save names a `status`. Every other draft waits for
 approval: one created as a draft on purpose, one whose steps were already
 executable, and one an agent wrote steps into.
 
-Changing a case's steps (what an executor reads: action, expected, repo) is a
-new procedure: results recorded on the old steps stop counting toward
-coverage until a round runs the new ones. A title or priority edit is not.
+Changing what an executor reads and checks — the steps (action, expected,
+repo), the preconditions, the overall expected result or the test data — is
+a new procedure: results recorded on the old one stop counting toward
+coverage until a round runs the new one. A title or priority edit is not.
 
 ### What an agent may write
 
@@ -158,14 +159,16 @@ take one out of coverage or regression:
 
 | Agent write | Outcome |
 | --- | --- |
-| `approve`, or `update --status active` | 403 (a deprecated case is reactivated by a member) |
-| any status change of an active case, or `delete` of it | 403 |
+| `approve`, or `update --status active` | 403 |
+| any status change of an active or a deprecated case, or `delete` of it | 403 |
+| linking an active case to an issue or test point (`cover`, issue links) | 403 — its past passes would count at once; name the points in a generation run's `update` instead |
 | unlinking an active case from an issue or a test point | 403 |
 | `point update --status dropped` on a point an active case verifies | 403 |
 | removing a case from a plan, changing a plan's rule or status, deleting a plan | 403 |
-| `delete` of anything but an AI-written draft | 403 |
+| changing a regression (`test_run`) autopilot's plan, mode, project, status or triggers, or deleting it | 403 |
+| `delete` of anything but an AI-written draft nobody approved | 403 |
 | `proposal accept` / `proposal reject` | 403 |
-| other edits, `delete` of an AI-written draft, adding cases to a plan | allowed |
+| other edits, linking drafts, `delete` of an AI-written draft, adding cases to a plan | allowed |
 
 An agent's edit is recorded as the agent's in the case's revision history.
 When a 403 says so, tell the person which drafts are ready for review, or
@@ -358,10 +361,12 @@ a `state`:
 | `dropped` | the condition is no longer part of the requirement |
 
 A case's current verdict is its newest `passed` or `failed` result from a
-round that froze it as an active case with the steps it has now. `blocked` and
-`skipped` say the case was not executed, so they never hide an earlier
-failure; a result on old steps, or from a trial run of the draft, says nothing
-about the case as it is.
+round that froze it as an active case with the procedure it has now. `blocked`
+and `skipped` say the case was not executed, so they never hide an earlier
+failure; a result on an old procedure, or from a trial run of the draft, says
+nothing about the case as it is. "Newest" is when the verdict was recorded
+while its round was open; correcting a finished round keeps the time it was
+observed.
 
 Whether an issue is verified depends on `basis` in its test summary:
 

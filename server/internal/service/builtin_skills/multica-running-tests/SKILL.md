@@ -104,7 +104,7 @@ What the server refuses from an agent:
 | Write | Refused unless |
 | --- | --- |
 | `passed` or `failed` | the case already has at least one evidence file, and there is a step result for **every** step of the snapshot |
-| `passed` | no step is `failed`, `blocked` or `not_run`, and at least one step is `passed` — when you executed no step, record the case `skipped` |
+| `passed` | no step is `failed`, `blocked` or `not_run`, and (with a result for every step, as an agent always gives) at least one step is `passed` — when you executed no step, record the case `skipped` |
 | `passed` | the snapshot has at least one step — a case frozen without steps has nothing to compare, so record `blocked` and say so |
 | `failed` with step results | at least one step is `failed` — the one that diverged |
 | any step result | its `index` is a step of the snapshot, given once |

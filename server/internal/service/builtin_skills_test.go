@@ -961,6 +961,12 @@ func TestTestCasesSkillCoversTheDataContract(t *testing.T) {
 		// (handler: TestAgentCannotRetireAnActiveCase, TestAgentCannotNarrowARegressionPlan).
 		"| unlinking an active case from an issue or a test point | 403 |",
 		"| removing a case from a plan, changing a plan's rule or status, deleting a plan | 403 |",
+		// Claiming coverage for a live case, and retargeting the nightly
+		// regression, are review decisions too (handler:
+		// TestAgentCannotClaimThatAnActiveCaseCoversARequirement,
+		// TestAgentCannotRetargetOrPauseARegressionAutopilot).
+		"| linking an active case to an issue or test point (`cover`, issue links) | 403",
+		"| changing a regression (`test_run`) autopilot's plan, mode, project, status or triggers, or deleting it | 403 |",
 		// A blocked round never hides a failure; old steps and trial runs do not
 		// count (handler: TestBlockedRoundNeverHidesAFailure, TestAPassOnOldStepsStopsCounting,
 		// TestADraftTrialRunDoesNotVerifyOnceApproved, TestEveryCoveringCaseMustPass).
