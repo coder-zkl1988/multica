@@ -180,3 +180,36 @@ export function withPlanRepoToggled(
   if (!stored) return plan;
   return { ...plan, repos: [...current, stored] };
 }
+
+// ---------------------------------------------------------------------------
+// Coverage snapshot
+// ---------------------------------------------------------------------------
+
+/** Where one scoped issue's test points stood when the generation run ended. */
+export interface JobIssueCoverage {
+  issueId: string;
+  active: number;
+  covered: number;
+  uncovered: string[];
+}
+
+/**
+ * Read the server's coverage snapshot (`result.coverage`) defensively: a job
+ * from before test points has none, and an entry this build cannot read is
+ * skipped rather than breaking the panel.
+ */
+export function readJobCoverage(result: Record<string, unknown> | null | undefined): JobIssueCoverage[] {
+  const raw = result?.coverage;
+  if (!Array.isArray(raw)) return [];
+  const count = (value: unknown) => (typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0);
+  return raw.flatMap((entry) => {
+    if (!entry || typeof entry !== "object") return [];
+    const record = entry as Record<string, unknown>;
+    const issueId = typeof record.issue_id === "string" ? record.issue_id : "";
+    if (!issueId) return [];
+    const uncovered = Array.isArray(record.uncovered)
+      ? record.uncovered.filter((key): key is string => typeof key === "string")
+      : [];
+    return [{ issueId, active: count(record.active), covered: count(record.covered), uncovered }];
+  });
+}

@@ -289,7 +289,11 @@
     "result": {
       "title": "Results",
       "proposals": "AI proposals",
-      "noProposals": "No proposals yet"
+      "noProposals": "No proposals yet",
+      "coverage": "Test point coverage",
+      "coverageLine": "{{covered}}/{{active}} covered",
+      "noPoints": "Not split into test points",
+      "uncovered": "Uncovered"
     }
   },
   "proposals": {

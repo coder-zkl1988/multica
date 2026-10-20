@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { TestCaseProposal } from "@multica/core/types";
 import {
   aggregateProposalStats,
+  readJobCoverage,
   validatePlanJson,
   parsePlanDraft,
   planRepos,
@@ -238,5 +239,22 @@ describe("structured scope editing", () => {
       true,
     );
     expect(dup).toBe(plan);
+  });
+});
+
+describe("readJobCoverage", () => {
+  it("reads each scoped issue's point coverage", () => {
+    expect(
+      readJobCoverage({ coverage: [{ issue_id: "i-1", active: 3, covered: 2, uncovered: ["TP-3"] }] }),
+    ).toEqual([{ issueId: "i-1", active: 3, covered: 2, uncovered: ["TP-3"] }]);
+  });
+
+  it("treats a job from before test points, or a malformed entry, as nothing to show", () => {
+    expect(readJobCoverage({})).toEqual([]);
+    expect(readJobCoverage(null)).toEqual([]);
+    expect(readJobCoverage({ coverage: "all good" })).toEqual([]);
+    expect(
+      readJobCoverage({ coverage: [null, { active: 2 }, { issue_id: "i-2", active: "2", uncovered: ["TP-1", 4] }] }),
+    ).toEqual([{ issueId: "i-2", active: 0, covered: 0, uncovered: ["TP-1"] }]);
   });
 });

@@ -289,7 +289,11 @@
     "result": {
       "title": "执行结果",
       "proposals": "AI 建议列表",
-      "noProposals": "暂无建议"
+      "noProposals": "暂无建议",
+      "coverage": "测试点覆盖",
+      "coverageLine": "已覆盖 {{covered}}/{{active}}",
+      "noPoints": "没有拆分测试点",
+      "uncovered": "未覆盖"
     }
   },
   "proposals": {

@@ -289,7 +289,11 @@
     "result": {
       "title": "실행 결과",
       "proposals": "AI 제안 목록",
-      "noProposals": "아직 제안이 없습니다"
+      "noProposals": "아직 제안이 없습니다",
+      "coverage": "테스트 포인트 커버리지",
+      "coverageLine": "커버 {{covered}}/{{active}}",
+      "noPoints": "테스트 포인트로 나누지 않았습니다",
+      "uncovered": "미커버"
     }
   },
   "proposals": {

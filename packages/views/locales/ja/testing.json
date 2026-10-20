@@ -289,7 +289,11 @@
     "result": {
       "title": "実行結果",
       "proposals": "AI提案一覧",
-      "noProposals": "提案はありません"
+      "noProposals": "提案はありません",
+      "coverage": "テストポイントのカバレッジ",
+      "coverageLine": "カバー {{covered}}/{{active}}",
+      "noPoints": "テストポイントに分解されていません",
+      "uncovered": "未カバー"
     }
   },
   "proposals": {

@@ -289,7 +289,11 @@
     "result": {
       "title": "Résultats",
       "proposals": "Suggestions de l'IA",
-      "noProposals": "Aucune suggestion pour l'instant"
+      "noProposals": "Aucune suggestion pour l'instant",
+      "coverage": "Couverture des points de test",
+      "coverageLine": "{{covered}}/{{active}} couverts",
+      "noPoints": "Pas découpée en points de test",
+      "uncovered": "Non couverts"
     }
   },
   "proposals": {
