@@ -575,6 +575,51 @@ func (q *Queries) ListTestCaseResultTimeline(ctx context.Context, arg ListTestCa
 	return items, nil
 }
 
+const listTestCaseSummariesByIDs = `-- name: ListTestCaseSummariesByIDs :many
+SELECT id, case_number, title, status
+FROM test_case
+WHERE workspace_id = $1 AND id = ANY($2::uuid[])
+`
+
+type ListTestCaseSummariesByIDsParams struct {
+	WorkspaceID pgtype.UUID   `json:"workspace_id"`
+	CaseIds     []pgtype.UUID `json:"case_ids"`
+}
+
+type ListTestCaseSummariesByIDsRow struct {
+	ID         pgtype.UUID `json:"id"`
+	CaseNumber int32       `json:"case_number"`
+	Title      string      `json:"title"`
+	Status     string      `json:"status"`
+}
+
+// Key, title and status of many cases in one read, for a plan's next-round
+// preview, which can name every active case of a project.
+func (q *Queries) ListTestCaseSummariesByIDs(ctx context.Context, arg ListTestCaseSummariesByIDsParams) ([]ListTestCaseSummariesByIDsRow, error) {
+	rows, err := q.db.Query(ctx, listTestCaseSummariesByIDs, arg.WorkspaceID, arg.CaseIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListTestCaseSummariesByIDsRow{}
+	for rows.Next() {
+		var i ListTestCaseSummariesByIDsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.CaseNumber,
+			&i.Title,
+			&i.Status,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTestCasesMatchingPlanSelector = `-- name: ListTestCasesMatchingPlanSelector :many
 SELECT tc.id, tc.case_number
 FROM test_case tc

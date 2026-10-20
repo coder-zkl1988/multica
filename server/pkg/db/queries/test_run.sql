@@ -198,3 +198,10 @@ LIMIT $3;
 SELECT * FROM test_run_case
 WHERE run_id = $1 AND workspace_id = $2 AND result = ANY(sqlc.arg('results')::text[])
 ORDER BY position ASC;
+
+-- name: ListTestCaseSummariesByIDs :many
+-- Key, title and status of many cases in one read, for a plan's next-round
+-- preview, which can name every active case of a project.
+SELECT id, case_number, title, status
+FROM test_case
+WHERE workspace_id = sqlc.arg(workspace_id) AND id = ANY(sqlc.arg(case_ids)::uuid[]);

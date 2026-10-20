@@ -183,16 +183,28 @@ func (h *Handler) GetTestPlanSelection(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to resolve the plan's cases")
 		return
 	}
+	ids := make([]pgtype.UUID, 0, len(sources))
+	for _, source := range sources {
+		if id, err := util.ParseUUID(source.id); err == nil {
+			ids = append(ids, id)
+		}
+	}
+	summaries, err := h.Queries.ListTestCaseSummariesByIDs(r.Context(), db.ListTestCaseSummariesByIDsParams{WorkspaceID: wsUUID, CaseIds: ids})
+	if err != nil {
+		slog.Error("load test plan selection cases failed", append(logger.RequestAttrs(r), "error", err)...)
+		writeError(w, http.StatusInternalServerError, "failed to resolve the plan's cases")
+		return
+	}
+	byID := make(map[string]db.ListTestCaseSummariesByIDsRow, len(summaries))
+	for _, summary := range summaries {
+		byID[uuidToString(summary.ID)] = summary
+	}
 	cases := make([]TestPlanSelectionCaseResponse, 0, len(sources))
 	counts := map[string]int{"manual": 0, "rule": 0}
 	for _, source := range sources {
-		id, err := util.ParseUUID(source.id)
-		if err != nil {
-			continue
-		}
-		tc, err := h.Queries.GetTestCaseInWorkspace(r.Context(), db.GetTestCaseInWorkspaceParams{ID: id, WorkspaceID: wsUUID})
+		tc, found := byID[source.id]
 		// A round leaves deprecated cases out; so does its preview.
-		if err != nil || tc.Status == "deprecated" {
+		if !found || tc.Status == "deprecated" {
 			continue
 		}
 		counts[source.source]++
