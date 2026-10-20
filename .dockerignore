@@ -35,12 +35,16 @@ coverage
 /docs/
 *.md
 
-# The web and docs workspaces are used by Dockerfile.web and Dockerfile.docs.
-# Default-exclude future app workspaces so they do not silently enter the
-# build context.
+# Dockerfile.web needs the web workspace and the root dependency patch inputs;
+# Dockerfile.docs needs the docs workspace. Default-exclude other app files so
+# they do not silently enter the build context.
 /apps/*
 !/apps/web/
 !/apps/docs/
+!/apps/mobile
+/apps/mobile/*
+!/apps/mobile/patches
+!/apps/mobile/patches/**
 
 # Repository-only tooling
 /.github/

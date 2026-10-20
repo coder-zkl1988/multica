@@ -111,7 +111,7 @@ func TestIsAgentError(t *testing.T) {
 		ReasonEnvironmentPrepareFailed,
 		ReasonInvalidTaskIdentity,
 		ReasonIssueWindowRestricted,
-		ReasonRuntimeAccessDenied,
+		ReasonRuntimeAccessDenied, ReasonRuntimeAccessRevoked,
 		ReasonToolBudgetExceeded,
 	}
 	for _, r := range platformSide {
@@ -153,8 +153,8 @@ func TestAllReasonsContents(t *testing.T) {
 	t.Parallel()
 
 	got := AllReasons()
-	if len(got) != 31 {
-		t.Fatalf("AllReasons() returned %d entries, want 31", len(got))
+	if len(got) != 32 {
+		t.Fatalf("AllReasons() returned %d entries, want 32", len(got))
 	}
 
 	seen := make(map[Reason]bool, len(got))
@@ -171,8 +171,8 @@ func TestAllReasonsContents(t *testing.T) {
 		}
 	}
 
-	if platformCount != 17 {
-		t.Errorf("AllReasons(): platform-side count = %d, want 17", platformCount)
+	if platformCount != 18 {
+		t.Errorf("AllReasons(): platform-side count = %d, want 18", platformCount)
 	}
 	if agentCount != 14 {
 		t.Errorf("AllReasons(): agent-side count = %d, want 14", agentCount)

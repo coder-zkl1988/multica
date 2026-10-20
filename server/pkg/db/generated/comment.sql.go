@@ -17,7 +17,7 @@ UPDATE agent_task_queue SET trigger_comment_id = $1,
     originator_source = 'direct_human', trigger_evidence_kind = 'comment',
     trigger_evidence_ref_id = $1, trigger_summary = $3
 WHERE id = $4 AND issue_id = $5
-RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, handoff_note, prepare_lease_expires_at, squad_id, runtime_mcp_overlay, escalation_for_task_id, fire_at, originator_user_id, runtime_connected_apps, coalesced_comment_ids, delivered_comment_ids, chat_input_task_id, chat_finalize_deferred_at, originator_source, delegated_from_task_id, retry_of_task_id, rerun_of_task_id, rule_version_id, trigger_evidence_kind, trigger_evidence_ref_id, accountable_user_id, session_rollout_missing, retired_session_id, quick_actions_disabled, regenerate_quick_actions_for, branch_name, durable_work_dir, channel_context_revision, comment_thread_id, cancelled_by_type, cancelled_by_id, cancelled_by_name, issue_snapshot, concise_mode, execution_metrics, queue_started_at
+RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, handoff_note, prepare_lease_expires_at, squad_id, runtime_mcp_overlay, escalation_for_task_id, fire_at, originator_user_id, runtime_connected_apps, coalesced_comment_ids, delivered_comment_ids, chat_input_task_id, chat_finalize_deferred_at, originator_source, delegated_from_task_id, retry_of_task_id, rerun_of_task_id, rule_version_id, trigger_evidence_kind, trigger_evidence_ref_id, accountable_user_id, session_rollout_missing, retired_session_id, quick_actions_disabled, regenerate_quick_actions_for, branch_name, durable_work_dir, channel_context_revision, comment_thread_id, cancelled_by_type, cancelled_by_id, cancelled_by_name, issue_snapshot, workflow_step, concise_mode, execution_metrics, queue_started_at
 `
 
 type BindDesignDeliveryTaskParams struct {
@@ -97,6 +97,7 @@ func (q *Queries) BindDesignDeliveryTask(ctx context.Context, arg BindDesignDeli
 		&i.CancelledByID,
 		&i.CancelledByName,
 		&i.IssueSnapshot,
+		&i.WorkflowStep,
 		&i.ConciseMode,
 		&i.ExecutionMetrics,
 		&i.QueueStartedAt,
@@ -1661,6 +1662,25 @@ WHERE c.issue_id = $1
       WHERE s.comment_id = c.id AND s.workspace_id = c.workspace_id
         AND bound.agent_id = $4
   )
+  -- An explicit member/agent cancellation acknowledges the planned input for
+  -- this agent only for completing tasks already in flight at cancellation;
+  -- automatic cancellations deliberately remain replayable.
+  AND NOT EXISTS (
+      SELECT 1
+      FROM agent_task_queue cancelled
+      WHERE cancelled.issue_id = c.issue_id
+        AND cancelled.agent_id = $4
+        AND cancelled.status = 'cancelled'
+        AND cancelled.cancelled_by_type IN ('member', 'agent')
+        AND cancelled.cancelled_by_id IS NOT NULL
+        AND cancelled.completed_at IS NOT NULL
+        AND cancelled.completed_at >= $5
+        AND c.updated_at <= cancelled.completed_at
+        AND (
+            cancelled.trigger_comment_id = c.id
+            OR c.id = ANY(cancelled.coalesced_comment_ids)
+        )
+  )
   -- Nor does a comment whose author chose not to start this agent for it.
   AND NOT COALESCE($4::uuid = ANY(c.suppressed_agent_ids), false)
   AND (
@@ -2163,7 +2183,7 @@ func (q *Queries) ListThreadCommentsForIssuePaged(ctx context.Context, arg ListT
 }
 
 const lockAgentTaskForManagedComment = `-- name: LockAgentTaskForManagedComment :one
-SELECT id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, handoff_note, prepare_lease_expires_at, squad_id, runtime_mcp_overlay, escalation_for_task_id, fire_at, originator_user_id, runtime_connected_apps, coalesced_comment_ids, delivered_comment_ids, chat_input_task_id, chat_finalize_deferred_at, originator_source, delegated_from_task_id, retry_of_task_id, rerun_of_task_id, rule_version_id, trigger_evidence_kind, trigger_evidence_ref_id, accountable_user_id, session_rollout_missing, retired_session_id, quick_actions_disabled, regenerate_quick_actions_for, branch_name, durable_work_dir, channel_context_revision, comment_thread_id, cancelled_by_type, cancelled_by_id, cancelled_by_name, issue_snapshot, concise_mode, execution_metrics, queue_started_at FROM agent_task_queue
+SELECT id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, handoff_note, prepare_lease_expires_at, squad_id, runtime_mcp_overlay, escalation_for_task_id, fire_at, originator_user_id, runtime_connected_apps, coalesced_comment_ids, delivered_comment_ids, chat_input_task_id, chat_finalize_deferred_at, originator_source, delegated_from_task_id, retry_of_task_id, rerun_of_task_id, rule_version_id, trigger_evidence_kind, trigger_evidence_ref_id, accountable_user_id, session_rollout_missing, retired_session_id, quick_actions_disabled, regenerate_quick_actions_for, branch_name, durable_work_dir, channel_context_revision, comment_thread_id, cancelled_by_type, cancelled_by_id, cancelled_by_name, issue_snapshot, workflow_step, concise_mode, execution_metrics, queue_started_at FROM agent_task_queue
 WHERE id = $1
 FOR UPDATE
 `
@@ -2235,6 +2255,7 @@ func (q *Queries) LockAgentTaskForManagedComment(ctx context.Context, taskID pgt
 		&i.CancelledByID,
 		&i.CancelledByName,
 		&i.IssueSnapshot,
+		&i.WorkflowStep,
 		&i.ConciseMode,
 		&i.ExecutionMetrics,
 		&i.QueueStartedAt,

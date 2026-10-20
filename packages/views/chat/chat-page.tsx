@@ -311,7 +311,7 @@ export function ChatPage() {
         <EmptyState
           agent={c.activeAgent}
           hasSessions={c.sessions.length > 0}
-          onPickPrompt={c.prefillConversationStarter}
+          onPickPrompt={c.sendConversationStarter}
           customizeHref={c.customizeConversationStartersHref}
         />
       )}

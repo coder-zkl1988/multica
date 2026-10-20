@@ -319,7 +319,7 @@ plugins = false
 		t.Fatalf("local_directory GC action=%d, want artifact cleanup", action)
 	}
 	stats := &gcStats{byPattern: make(map[string]int)}
-	secondDaemon.applyGCAction(first.EnvRoot, action, stats)
+	secondDaemon.applyGCAction(context.Background(), first.EnvRoot, action, stats)
 	if _, err := os.Stat(cache); !errors.Is(err, os.ErrNotExist) || stats.artifactDirs != 1 {
 		t.Fatal("targeted artifact GC did not reclaim fixture cache")
 	}

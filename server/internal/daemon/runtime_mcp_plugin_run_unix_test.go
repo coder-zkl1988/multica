@@ -18,7 +18,6 @@ func TestRuntimeMCPSelectionPluginExecuteFailureIsPreparationFailure(t *testing.
 	d, argsFile, cleanup := newLeaderReuseTestDaemon(t)
 	defer cleanup()
 	d.cfg.Agents["codex"] = d.cfg.Agents["claude"]
-	d.activeStores = make(map[string]int)
 	task := leaderReuseTestTask("task-plugin-mcp-unknown-contract")
 	task.Agent.McpConfig = json.RawMessage(`{"_multica":{"runtimeMcp":{"mode":"deny_all"}},"mcpServers":{}}`)
 	result, err := d.runTask(context.Background(), task, "codex", 0, d.logger)

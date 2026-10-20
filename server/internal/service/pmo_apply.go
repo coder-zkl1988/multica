@@ -639,14 +639,22 @@ func (s *PMOService) createEntityInTx(
 			return nothing, nil, nil, fmt.Errorf("pmo apply: create project: %w", err)
 		}
 		if leadID.Valid {
+			// UpdateProject writes a nullable column only when its *_set flag
+			// says so; this call carries the whole row, so every flag is set.
 			if _, err := qtx.UpdateProject(ctx, db.UpdateProjectParams{
-				ID:          project.ID,
-				Description: project.Description,
-				Icon:        project.Icon,
-				LeadType:    pgtype.Text{String: pmoLocalTypeAgent, Valid: true},
-				LeadID:      leadID,
-				StartDate:   project.StartDate,
-				DueDate:     project.DueDate,
+				ID:             project.ID,
+				DescriptionSet: true,
+				Description:    project.Description,
+				IconSet:        true,
+				Icon:           project.Icon,
+				LeadTypeSet:    true,
+				LeadType:       pgtype.Text{String: pmoLocalTypeAgent, Valid: true},
+				LeadIDSet:      true,
+				LeadID:         leadID,
+				StartDateSet:   true,
+				StartDate:      project.StartDate,
+				DueDateSet:     true,
+				DueDate:        project.DueDate,
 			}); err != nil {
 				return nothing, nil, nil, err
 			}
@@ -777,17 +785,25 @@ func (s *PMOService) applyProjectFields(ctx context.Context, qtx *db.Queries, wo
 	if err != nil {
 		return fmt.Errorf("pmo apply: reload project: %w", err)
 	}
+	// Seeded from the current row and then overwritten per requested write, so
+	// every nullable column is intentionally written: set all the *_set flags.
 	params := db.UpdateProjectParams{
-		ID:          projectID,
-		Title:       pgtype.Text{String: current.Title, Valid: true},
-		Description: current.Description,
-		Icon:        current.Icon,
-		Status:      pgtype.Text{String: current.Status, Valid: true},
-		Priority:    pgtype.Text{String: current.Priority, Valid: true},
-		LeadType:    current.LeadType,
-		LeadID:      current.LeadID,
-		StartDate:   current.StartDate,
-		DueDate:     current.DueDate,
+		ID:             projectID,
+		Title:          pgtype.Text{String: current.Title, Valid: true},
+		DescriptionSet: true,
+		Description:    current.Description,
+		IconSet:        true,
+		Icon:           current.Icon,
+		Status:         pgtype.Text{String: current.Status, Valid: true},
+		Priority:       pgtype.Text{String: current.Priority, Valid: true},
+		LeadTypeSet:    true,
+		LeadType:       current.LeadType,
+		LeadIDSet:      true,
+		LeadID:         current.LeadID,
+		StartDateSet:   true,
+		StartDate:      current.StartDate,
+		DueDateSet:     true,
+		DueDate:        current.DueDate,
 	}
 	if v, ok := writes["title"]; ok {
 		params.Title = pgtype.Text{String: pmoAnyToString(v), Valid: true}

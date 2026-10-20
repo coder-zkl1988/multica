@@ -4,7 +4,6 @@ import { CoreProvider } from "@multica/core/platform";
 import { pickLocale, type SupportedLocale } from "@multica/core/i18n";
 import { useAuthStore } from "@multica/core/auth";
 import { configStore, useConfigStore } from "@multica/core/config";
-import { useWelcomeStore } from "@multica/core/onboarding";
 import { workspaceKeys } from "@multica/core/workspace/queries";
 import { useWorkspaceList } from "@multica/core/workspace";
 import { api } from "@multica/core/api";
@@ -381,7 +380,6 @@ const sessionTeardown: SessionTeardown = {
     window.desktopAPI.reportAuthSession?.(userId),
   resetTabs: () => useTabStore.getState().reset(),
   closeOverlay: () => useWindowOverlayStore.getState().close(),
-  resetWelcome: () => useWelcomeStore.getState().reset(),
   clearDaemonToken: () => window.daemonAPI.clearToken(),
   stopDaemon: () => window.daemonAPI.stop(),
 };

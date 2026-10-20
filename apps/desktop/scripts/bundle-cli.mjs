@@ -78,7 +78,7 @@ const destBinary = join(destDir, binName);
 // Hand git arguments straight to the binary (no shell) on every platform.
 function git(...args) {
   try {
-    return execFileSync("git", args, { encoding: "utf-8" }).trim();
+    return execFileSync("git", args, { encoding: "utf-8", cwd: repoRoot }).trim();
   } catch {
     return "";
   }
@@ -110,9 +110,10 @@ if (hasGo()) {
     deriveVersion() ||
     "dev";
   const commit = git("rev-parse", "--short", "HEAD") || "unknown";
+  const buildCommit = git("rev-parse", "HEAD") || "unknown";
   const date = new Date().toISOString().replace(/\.\d+Z$/, "Z");
   // Match the release CLI: debug/symbol tables are not needed at runtime.
-  const ldflags = `-s -w -X main.version=${version} -X main.commit=${commit} -X main.date=${date}`;
+  const ldflags = `-s -w -X main.version=${version} -X main.commit=${commit} -X main.buildCommit=${buildCommit} -X main.date=${date}`;
 
   console.log(
     `[bundle-cli] go build → ${srcBinary} (${goos}/${goarch}, version=${version} commit=${commit})`,

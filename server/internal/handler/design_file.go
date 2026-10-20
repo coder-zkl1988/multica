@@ -2259,7 +2259,8 @@ func (h *Handler) CreateDesignFile(w http.ResponseWriter, r *http.Request) {
 	revisionErrors := json.RawMessage(`[]`)
 	file, revision, err := h.createDesignFileWithRevision(r, wsUUID, projectUUID, folderUUID, userUUID, req.Title, req.Description, sourceType, sourceRef, req.NativeJSON, revisionErrors)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		slog.Error("create design file failed", "error", err, "workspace_id", uuidToString(wsUUID), "project_id", uuidToString(projectUUID))
+		writeError(w, http.StatusInternalServerError, "failed to create design file")
 		return
 	}
 	h.publishDesignReady(r, file, revision, userUUID, nil)

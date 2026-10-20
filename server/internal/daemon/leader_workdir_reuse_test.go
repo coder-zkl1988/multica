@@ -387,6 +387,9 @@ printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"session_id
 		workspaces:     make(map[string]*workspaceState),
 		runtimeIndex:   map[string]Runtime{"rt-leader": {ID: "rt-leader", Provider: "claude"}},
 		activeEnvRoots: make(map[string]int),
+		// runTask refcounts the persistent store it mounts (MUL-4424), so the
+		// guard's map has to exist on a hand-built Daemon too.
+		activeStores: make(map[string]int),
 		cfg: Config{
 			WorkspacesRoot: t.TempDir(),
 			AgentTimeout:   5 * time.Second,
@@ -396,6 +399,7 @@ printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"session_id
 			},
 		},
 	}
+	d.activeStoresCond = sync.NewCond(&d.activeStoresMu)
 	return d, argsFile, srv.Close
 }
 

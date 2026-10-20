@@ -53,12 +53,13 @@ func TestGetConfigReportsCdnSignedMode(t *testing.T) {
 
 func TestGetConfigIncludesRuntimeAuthConfig(t *testing.T) {
 	origStorage := testHandler.Storage
-	origConfig := testHandler.cfg
+	origCfg := testHandler.cfg
 	testHandler.Storage = &mockStorage{}
 	testHandler.cfg = Config{UseSySSO: true, AllowSignup: true}
+	testHandler.cfg.PublicURL = "https://api.example.com"
 	defer func() {
 		testHandler.Storage = origStorage
-		testHandler.cfg = origConfig
+		testHandler.cfg = origCfg
 	}()
 
 	t.Setenv("POSTHOG_API_KEY", "phc_test")
@@ -86,6 +87,9 @@ func TestGetConfigIncludesRuntimeAuthConfig(t *testing.T) {
 	}
 	if !cfg.UseSySSO {
 		t.Fatalf("use_sy_sso: want true, got false")
+	}
+	if cfg.AttachmentPublicURL != "https://api.example.com" {
+		t.Fatalf("attachment_public_url = %q, want API public URL", cfg.AttachmentPublicURL)
 	}
 	if cfg.AllowSignup {
 		t.Fatalf("allow_signup: want false, got true")

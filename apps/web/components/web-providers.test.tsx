@@ -6,7 +6,6 @@ const state = vi.hoisted(() => ({
   user: null as null | { id: string },
   useSySso: null as boolean | null,
 }));
-const resetWelcome = vi.hoisted(() => vi.fn());
 const clearLoggedInCookie = vi.hoisted(() => vi.fn());
 
 vi.mock("@multica/core/platform", () => ({
@@ -23,9 +22,6 @@ vi.mock("@multica/core/config", () => ({
 }));
 vi.mock("@multica/core/i18n/browser", () => ({
   createBrowserCookieLocaleAdapter: () => ({}),
-}));
-vi.mock("@multica/core/onboarding", () => ({
-  useWelcomeStore: { getState: () => ({ reset: resetWelcome }) },
 }));
 vi.mock("@/platform/navigation", () => ({
   WebNavigationProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -90,7 +86,6 @@ describe("WebProviders auth mode", () => {
       (state.providerProps?.onLogout as () => void)();
       expect(assign).toHaveBeenCalledWith("/logout");
       expect(clearLoggedInCookie).toHaveBeenCalledTimes(2);
-      expect(resetWelcome).toHaveBeenCalledTimes(2);
     } finally {
       Object.defineProperty(window, "location", {
         configurable: true,

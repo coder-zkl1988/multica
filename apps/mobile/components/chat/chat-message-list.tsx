@@ -1,8 +1,7 @@
 /**
- * Chat message list — user / assistant bubbles, oldest at top, newest at
- * bottom. Initial render lands at the bottom; new arrivals auto-scroll
- * when the user is anchored near the bottom; reading history is never
- * yanked down.
+ * Chronological FlashList chat with initial bottom positioning and MVCP.
+ * Follow new messages only while the user is near the bottom; preserve reading
+ * position through asynchronous Markdown and image resizing.
  *
  * Behavioral parity (apps/mobile/CLAUDE.md):
  *   - Render ALL message roles. Unknown role values are downgraded to

@@ -47,58 +47,14 @@ func writeHeader(b *strings.Builder) {
 	b.WriteString(BuildMulticaCLIInvocationGuidance(runtime.GOOS))
 }
 
-// writeBackgroundTaskSafetySlim emits the Background Task Safety section
-// in its judgment form (MUL-5442): four paragraphs — the platform fact
-// everything else derives from (turn exit is task-terminal, no wakeup
-// exists, never background-and-yield), the external-systems/CI boundary
-// with its single explicit-ask exception, and the persistent-service
-// handoff contract. The pinned anchors the tests assert are the fact,
-// each boundary, both exceptions, and the handoff triple.
+// writeBackgroundTaskSafetySlim states the task-lifetime and external-work
+// boundaries. Turn exit is terminal for run-owned work. External CI is handed off
+// unless this turn explicitly requires its result; a repository merge gate does
+// not supply that requirement.
 //
-// MUL-5223: the external-work boundary alone did not stop agents from
-// blocking on CI. Two holes are closed here. First, the boundary was
-// stated as a concept while the section's only concrete "how to wait"
-// example was a blocking foreground call — and `gh pr checks --watch` is
-// exactly that shape, so watching CI read as compliant. Named tool-shape
-// bans replace the inference. Second, the "unless acceptance criteria
-// require it" escape was being satisfied by the repo's own merge
-// requirements ("CI must pass before merge"), so the section now says
-// branch protection is not the agent's acceptance criterion, and gives
-// the replacement hand-off phrasing so the urge to prove quality lands
-// on local test output plus a PR link instead of on a wait.
-//
-// The ban is scoped, not absolute: an explicitly requested CI result is
-// still reachable, and it names the one executable way to collect it
-// (a single foreground blocking watch inside the same turn). Enabling
-// auto-merge is not a wait and stays allowed — only waiting for it to
-// land is banned.
-//
-// MUL-5274 adds one narrow lifetime exception: a user-requested local
-// development/test service may be handed off after its readiness and cleanup
-// contract are complete. It is not a future result or wakeup. The brief keeps
-// this separate from tests, builds, monitors, and CI polling, which remain
-// run-owned until their result is collected. The brief states only the
-// handoff contract (lifecycle independence, durable logs, cleanup handle);
-// how to detach is the Local Dev Environment skill's concern, not the brief's.
-//
-// Paragraph order: the CI exception lives INSIDE the boundary paragraph
-// (one "The one exception" occurrence, count-guarded in the tests), and the
-// persistent-service paragraph closes the section. A former scoping sentence
-// ("The rules above apply only to work owned by the current run") stays
-// dropped: the boundary paragraph carries its own scope ("are not
-// run-owned").
-//
-// MUL-5442 stage 2 (owner-authorized judgment rewrite): enforcement details
-// a frontier model derives from the platform fact were deliberately dropped
-// — the run-owned work enumeration, the tool-promise enumeration, the
-// wait/collect split rule, the persistent-service scope bullet, the
-// auto-merge and snapshot elaborations. Their pins were retired in the same
-// change. The incident history above (MUL-5223, MUL-5274, MUL-4091) remains
-// the WHY for what stays: the named --watch/watch/poll ban and merge-gate
-// denial survive because MUL-5223 proved the principle alone did not stop
-// CI-watching, and the handoff paragraph is review-locked verbatim
-// (URL/logs/stop triple, general cleanup handle) — do not reword it without
-// a fresh review decision.
+// Keep the explicit watch/poll restriction and its foreground-watch exception
+// together. User-requested persistent services require a separate lifecycle,
+// readiness verification, durable logs, and a cleanup handle.
 func writeBackgroundTaskSafetySlim(b *strings.Builder) {
 	b.WriteString("## Background Task Safety\n\n")
 	b.WriteString("Multica marks the task terminal the moment your top-level turn exits — any run-owned work still active is orphaned, its result lost, and the final comment you meant to post never sends. There is no background-completion wakeup, whatever a tool response promises; an issue wakeup (`multica issue wakeup create`) is different — the platform stores it and starts a new run later. Never background-and-yield: collect required results inside foreground tool calls that block to completion, run unobservable work synchronously, and never end a turn \"standing by\" for something to finish — that message becomes your final output.\n\n")
@@ -280,7 +236,7 @@ func writeAvailableCommands(b *strings.Builder, ctx TaskContextForEnv) {
 	b.WriteString("- `multica issue assign <id> (--to X | --to-id <uuid> | --unassign)` — change ownership; assigning to an agent can start a run.\n")
 	writeIssueStatusCommand(b, ctx)
 	b.WriteString(duplicateOfCommandLine)
-	b.WriteString("- `multica issue wakeup <create|list|get|update|disable|trigger|delete|runs|events>` — persist an event, condition or time wakeup on this issue, then finish the current run. When the platform can check the fact itself, use a condition (`--until-status`, `--until-pr checks`, `--until-children-done`, `--until-issue`) so no run starts before it holds. Use `--event comment.created --filter-actor-type member --filter-actor-id USER_ID` to wait for a specific member to comment. See `multica issue wakeup --help` and the multica-platform issues reference.\n")
+	b.WriteString("- `multica issue wakeup <create|list|get|update|disable|trigger|delete|runs|events>` — persist an event, condition or time wakeup on this issue, then finish the current run. When the platform can check the fact itself, use a condition (`--until-status`, `--until-pr checks`, `--until-children-done`, `--until-issue`) so no run starts before it holds. PR conditions watch only PRs linked to this exact issue; `--until-pr checks` also requires server-side GitHub check snapshots. Check the rule's `last_error` for missing links or unavailable snapshots; delayed links and snapshots are retried automatically. Use `--event comment.created --filter-actor-type member --filter-actor-id USER_ID` to wait for a specific member to comment. See `multica issue wakeup --help` and the multica-platform issues reference.\n")
 	b.WriteString("- `multica issue children <id> [--output json]` — list a parent's sub-issues grouped by stage.\n")
 	b.WriteString("- `multica issue comment add <issue-id> [--content \"...\" | --content-file <path> | --content-stdin] [--parent <comment-id>] [--attachment <path>]` — post a comment. Agent-authored bodies MUST use `--content-file`; see `## Comment Formatting` for why. `multica issue comment add --help` for full flags.\n")
 	b.WriteString("- `multica repo checkout <url> [--ref <branch-or-sha>] [--fresh]` — repository checkout on a dedicated branch. Re-running it keeps an existing checkout that has uncommitted or unpushed work, or is already on this task's branch, and only fetches. `--fresh` discards uncommitted and untracked files and starts a new branch; commits stay on the old branch, but push any you still need first.\n\n")
@@ -557,10 +513,10 @@ func writeInstructionPrecedence(b *strings.Builder) {
 	b.WriteString("Never treat this runtime workflow as permission to change issue status, investigate, implement, create issues, update issues, delegate, or otherwise act beyond your Agent Identity.\n\n")
 }
 
-// The SessionContinuityNotice* family tells the agent a resume the task
-// expected could not be honored. The daemon has already cleared the resume
-// flags, so without this the run would silently reappear as a brand-new
-// conversation (MUL-4424).
+// SessionContinuityNotice variants describe missing provider working memory.
+// Issue discussion remains in issue comments; chat transcripts are recoverable
+// through history commands when SurfacePersistsTranscript says they are stored.
+// Only the unrecoverable variant requires telling the user discussion is lost.
 //
 // There are three because the surfaces lose different things, and saying so
 // accurately matters more than saying it loudly. The question that separates
@@ -828,16 +784,12 @@ func writeWorkflowPMOSync(b *strings.Builder) {
 // is the single discovery point for the comment-read surface; repeating them per
 // step is what made this one bloat in the first place.
 //
-// Squad leaders keep one status bullet: a dispatch turn leaves the parent
-// mid-flight, so its end-of-turn fact is in_progress, and in_review waits for
-// the re-trigger (member update / stage barrier) that confirms the overall
-// goal is met. Flipping the parent on the dispatch turn would mark unfinished
-// multi-stage work as ready for review; see the Squad Operating Protocol and
-// the sub-issue wakeup (service/issue_wakeup_system.go).
+// Step 2 owns the scan requirement; per-turn hints supply facts and commands.
+// Use roots-only summaries before bounded thread reads: recent limits threads,
+// not replies. A server-computed delta can satisfy the scan.
 //
-// ctx.IsSquadLeader is a PER-TASK role, not agent configuration: branching on
-// it here does move brief bytes when the same agent runs leader one turn and
-// worker the next. Owner-accepted tradeoff; decision recorded in MUL-5811.
+// Squad dispatch leaves work in progress until a later turn confirms delivery.
+// The per-task leader role may change brief bytes across a resumed session.
 func writeWorkflowIssue(b *strings.Builder, ctx TaskContextForEnv) {
 	b.WriteString("**Every issue turn runs the same workflow.** The per-turn user message carries what triggered this run — an assignment handoff, or a triggering comment with its id and your `--parent` value — plus this issue's real id and ready-to-run context-read commands; assemble other calls from `## Available Commands`.\n\n")
 

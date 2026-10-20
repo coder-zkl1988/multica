@@ -10,7 +10,7 @@
  */
 import { Tabs } from "expo-router";
 import { Image } from "expo-image";
-import { Platform, View } from "react-native";
+import { Platform, View, type ColorValue } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useTranslation } from "react-i18next";
 import { useWorkspaceStore } from "@/data/workspace-store";
@@ -42,15 +42,16 @@ function TabIcon({
 }: {
   sfSymbol: string;
   ionicon: keyof typeof Ionicons.glyphMap;
-  color: string;
+  /** The tab bar hands this down as a ColorValue, which both expo-image's
+   *  style.color and Ionicons' color prop accept. */
+  color: ColorValue;
   size: number;
 }) {
   if (Platform.OS === "ios") {
     return (
       <Image
         source={sfSymbol}
-        tintColor={color}
-        style={{ width: size, height: size }}
+        style={{ width: size, height: size, color }}
       />
     );
   }

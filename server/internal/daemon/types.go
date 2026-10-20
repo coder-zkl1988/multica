@@ -89,6 +89,13 @@ type IssueStatusData struct {
 	Description string `json:"description,omitempty"`
 }
 
+// ProjectWorkflowData mirrors the claim payload's project workflow (MUL-7420).
+// Brief is rendered by the server for this run — the assignee's or an
+// observer's — and goes into the per-turn prompt as is.
+type ProjectWorkflowData struct {
+	Brief string `json:"brief"`
+}
+
 // Task represents a claimed task from the server.
 // Agent data (name, skills) is populated by the claim endpoint.
 type Task struct {
@@ -189,11 +196,12 @@ type Task struct {
 	// order. Rendered into the brief's status-command line; empty (including on
 	// old servers that never send the field) keeps the brief byte-identical to
 	// the built-in-only form. IssueStatusesOmitted is the cap overflow count.
-	IssueStatuses        []IssueStatusData `json:"issue_statuses,omitempty"`
-	IssueStatusesOmitted int               `json:"issue_statuses_omitted,omitempty"`
-	WakeupID             string            `json:"wakeup_id,omitempty"`
-	WakeupSystemRule     string            `json:"wakeup_system_rule,omitempty"`
-	WakeupJoined         string            `json:"wakeup_joined,omitempty"`
+	IssueStatuses        []IssueStatusData    `json:"issue_statuses,omitempty"`
+	IssueStatusesOmitted int                  `json:"issue_statuses_omitted,omitempty"`
+	ProjectWorkflow      *ProjectWorkflowData `json:"project_workflow,omitempty"`
+	WakeupID             string               `json:"wakeup_id,omitempty"`
+	WakeupSystemRule     string               `json:"wakeup_system_rule,omitempty"`
+	WakeupJoined         string               `json:"wakeup_joined,omitempty"`
 
 	SquadID               string `json:"squad_id,omitempty"`                // when the picker was a squad, the squad's UUID; Agent is still the resolved leader
 	SquadName             string `json:"squad_name,omitempty"`              // display name for the picker squad, used in prompt text

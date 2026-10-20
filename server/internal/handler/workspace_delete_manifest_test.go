@@ -46,6 +46,7 @@ var workspaceDeletionManifest = map[string]workspaceDeleteAction{
 	"channel_media_pending_object":       workspaceDeleteSettle,
 	"channel_outbound_card_message":      workspaceDelete,
 	"channel_reply_delivery":             workspaceDelete,
+	"channel_typing_reaction":            workspaceDeleteSettle, // Source deletion makes retained anchors eligible for the cleanup worker.
 	"channel_user_binding":               workspaceDelete,
 	"chat_draft_restore":                 workspaceDelete,
 	"chat_message":                       workspaceDelete,
@@ -110,6 +111,7 @@ var workspaceDeletionManifest = map[string]workspaceDeleteAction{
 	"issue_pull_request_exclusion":       workspaceDelete,
 	"issue_reaction":                     workspaceDelete,
 	"issue_status":                       workspaceDelete,
+	"issue_workflow":                     workspaceDelete,
 	"issue_subscriber":                   workspaceDelete,
 	"issue_to_label":                     workspaceDelete,
 	"issue_vcs_pull_request":             workspaceDelete,

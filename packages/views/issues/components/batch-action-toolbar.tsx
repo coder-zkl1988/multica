@@ -15,8 +15,12 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@multica/ui/components/ui/alert-dialog";
+import { useQuery } from "@tanstack/react-query";
 import type { Issue, UpdateIssueRequest } from "@multica/core/types";
+import { useWorkspaceId } from "@multica/core/hooks";
 import { commonIssueFields } from "@multica/core/issues/batch";
+import { sharedWorkflowStatusKeys, useIssueWorkflows } from "@multica/core/issue-workflows";
+import { projectListOptions } from "@multica/core/projects/queries";
 import { useBatchUpdateIssues, useBatchDeleteIssues } from "@multica/core/issues/mutations";
 import { useModalStore } from "@multica/core/modals";
 import { StatusPicker, PriorityPicker, AssigneePicker } from "./pickers";
@@ -84,6 +88,21 @@ export function BatchActionToolbar({
     [selectedIssues],
   );
 
+  // A selection inside one project offers that project's workflow statuses;
+  // one spanning projects offers the statuses every selected issue's
+  // workflow allows. (MUL-7420)
+  const sharedProjectId = useMemo(() => {
+    const first = selectedIssues[0]?.project_id ?? null;
+    return first && selectedIssues.every((i) => i.project_id === first) ? first : null;
+  }, [selectedIssues]);
+  const wsId = useWorkspaceId();
+  const { workflows } = useIssueWorkflows(wsId);
+  const { data: projects } = useQuery({ ...projectListOptions(wsId), enabled: count > 0 && !sharedProjectId });
+  const allowedStatuses = useMemo(
+    () => (sharedProjectId ? null : sharedWorkflowStatusKeys(workflows, projects, selectedIssues)),
+    [sharedProjectId, workflows, projects, selectedIssues],
+  );
+
   const [statusOpen, setStatusOpen] = useState(false);
   const [priorityOpen, setPriorityOpen] = useState(false);
   const [assigneeOpen, setAssigneeOpen] = useState(false);
@@ -106,30 +125,29 @@ export function BatchActionToolbar({
 
   const handleBatchUpdate = async (updates: Partial<UpdateIssueRequest>) => {
     try {
-      if (surfaceActions) {
-        await surfaceActions.batchUpdate(ids, updates);
+      const result = surfaceActions
+        ? await surfaceActions.batchUpdate(ids, updates)
+        : await batchUpdate.mutateAsync({ ids, updates });
+      const updated = typeof result.updated === "number" ? result.updated : count;
+      if (updated < count) {
+        // A partial batch is a warning, not a success (upstream's signal), and
+        // it names the issues the server skipped (the fork's message).
+        const items = skippedIssueSummary(result.skipped ?? []);
+        toast.warning(
+          items
+            ? t(($) => $.batch.update_partial_success_with_items, {
+                updated,
+                skipped: count - updated,
+                items,
+              })
+            : t(($) => $.batch.update_partial_success, {
+                updated,
+                skipped: count - updated,
+              }),
+        );
       } else {
-        const result = await batchUpdate.mutateAsync({ ids, updates });
-        const updated = typeof result.updated === "number" ? result.updated : count;
-        if (updated < count) {
-          const skipped = result.skipped ?? [];
-          const items = skippedIssueSummary(skipped);
-          toast.success(
-            items
-              ? t(($) => $.batch.update_partial_success_with_items, {
-                  updated,
-                  skipped: count - updated,
-                  items,
-                })
-              : t(($) => $.batch.update_partial_success, {
-                  updated,
-                  skipped: count - updated,
-                }),
-          );
-          return;
-        }
+        toast.success(t(($) => $.batch.update_success, { count }));
       }
-      toast.success(t(($) => $.batch.update_success, { count }));
     } catch (err) {
       toast.error(
         err instanceof Error && err.message
@@ -251,6 +269,8 @@ export function BatchActionToolbar({
         {/* Status */}
         <StatusPicker
           status={common.status}
+          projectId={sharedProjectId}
+          allowedStatuses={allowedStatuses}
           onUpdate={handleBatchStatus}
           open={statusOpen}
           onOpenChange={setStatusOpen}

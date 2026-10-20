@@ -195,6 +195,9 @@ issues on archived statuses remain readable through an explicit status filter.
   and `duplicate_unmarked` / `duplicate_removed` (`issue timeline --action`).
 - Failed issue-triggered tasks may roll `in_progress` back to `todo` when
   no active task / retry remains: the main server-owned status write on this path.
+- **Project workflows** can limit an issue's statuses and turn a status change
+  into a handoff to another agent. When the per-turn prompt carries a
+  `[Project workflow]` block, read `references/projects.md`.
 
 A custom terminal status can still enqueue at creation. Use built-in `done` or
 `cancelled` when creating a terminal issue.
@@ -343,6 +346,9 @@ multica issue wakeup create <issue> --until-issue <other-issue-id> --until-issue
 - `--until-status KEY`: this issue reaches that built-in/custom key.
 - `--until-pr checks`: a linked PR's checks finish, pass or fail, on its current
   head. `--until-pr merged`: a linked PR merges. Any linked PR satisfies either.
+  Only PRs linked directly to this issue count; a parent's are not inherited.
+  `checks` needs the server's GitHub snapshot: a missing link or snapshot lands
+  in the rule's `last_error` and retries, it does not reject the rule.
 - `--until-children-done`: all children, staged or not, are done/cancelled.
   `--stage N` limits to staged children up to N, with at least one in N.
   No children never fires. Do not duplicate the parent's built-in stage wake.
