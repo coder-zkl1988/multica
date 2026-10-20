@@ -33,6 +33,7 @@ vi.mock("@multica/core/hooks", () => ({ useWorkspaceId: () => "ws-1" }));
 vi.mock("@multica/core/paths", () => ({
   useWorkspacePaths: () => ({
     tests: () => "/acme/tests",
+    testCoverage: () => "/acme/tests/coverage",
     testPlans: () => "/acme/tests/plans",
     testRuns: () => "/acme/tests/runs",
     testRunDetail: (id: string) => `/acme/tests/runs/${id}`,

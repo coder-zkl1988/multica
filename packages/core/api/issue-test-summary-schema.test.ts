@@ -5,10 +5,12 @@ import {
   EMPTY_ISSUE_TEST_SUMMARY,
   EMPTY_LIST_ISSUE_TEST_POINTS_RESPONSE,
   EMPTY_LIST_TEST_CASE_TEST_POINTS_RESPONSE,
+  EMPTY_PROJECT_COVERAGE_RESPONSE,
   EMPTY_TEST_PLAN_STATS,
   IssueTestSummarySchema,
   ListIssueTestPointsResponseSchema,
   ListTestCaseTestPointsResponseSchema,
+  ProjectCoverageResponseSchema,
   TestPlanStatsSchema,
 } from "./schemas";
 
@@ -85,6 +87,27 @@ describe("ListIssueTestPointsResponseSchema", () => {
     expect(parseWithFallback(42, ListTestCaseTestPointsResponseSchema, EMPTY_LIST_TEST_CASE_TEST_POINTS_RESPONSE, {
       endpoint: "GET /api/test-cases/:ref/test-points",
     })).toEqual(EMPTY_LIST_TEST_CASE_TEST_POINTS_RESPONSE);
+  });
+});
+
+describe("ProjectCoverageResponseSchema", () => {
+  it("reads each issue's coverage and defaults a half-sent row to no tests, never verified", () => {
+    const parsed = ProjectCoverageResponseSchema.parse({
+      issues: [
+        { issue_id: "i1", issue_identifier: "MUL-1", title: "Checkout", active_points: 3, covered_points: 2, state: "gaps" },
+        { issue_id: "i2" },
+      ],
+      summary: { gaps: 1 },
+    });
+    expect(parsed.issues[0]).toMatchObject({ state: "gaps", active_points: 3, covered_points: 2, passed_points: 0 });
+    expect(parsed.issues[1]?.state).toBe("no_tests");
+    expect(parsed.truncated).toBe(false);
+  });
+
+  it("recovers from a malformed response via parseWithFallback", () => {
+    expect(parseWithFallback({ issues: {} }, ProjectCoverageResponseSchema, EMPTY_PROJECT_COVERAGE_RESPONSE, {
+      endpoint: "GET /api/test-coverage",
+    })).toEqual(EMPTY_PROJECT_COVERAGE_RESPONSE);
   });
 });
 

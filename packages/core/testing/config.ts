@@ -11,6 +11,7 @@ import type {
   TestPlanStatus,
   TestPointCategory,
   TestPointState,
+  ProjectCoverageState,
   TestRunCaseResult,
 } from "../types";
 
@@ -131,6 +132,25 @@ export const TEST_POINT_STATE_TONE: Record<TestPointState, string> = {
   failing: "text-destructive",
   passed: "text-success",
   dropped: "text-muted-foreground",
+};
+
+/** Worst first: the order a QA lead works down the coverage list in. */
+export const PROJECT_COVERAGE_STATES: ProjectCoverageState[] = [
+  "failing",
+  "no_tests",
+  "gaps",
+  "no_points",
+  "not_run",
+  "verified",
+];
+
+export const PROJECT_COVERAGE_STATE_TONE: Record<ProjectCoverageState, string> = {
+  failing: "text-destructive",
+  no_tests: "text-warning",
+  gaps: "text-warning",
+  no_points: "text-muted-foreground",
+  not_run: "text-muted-foreground",
+  verified: "text-success",
 };
 
 export const TEST_CASE_PRIORITY_TONE: Record<TestCasePriority, string> = {

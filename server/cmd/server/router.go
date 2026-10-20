@@ -2327,6 +2327,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				})
 			})
 			r.Patch("/api/test-points/{pointId}", h.UpdateTestPoint)
+			// Every issue of a project with what covers it: the gap list.
+			r.Get("/api/test-coverage", h.ListProjectTestCoverage)
 			r.Delete("/api/test-points/{pointId}", h.DeleteTestPoint)
 
 			// AI test case generation

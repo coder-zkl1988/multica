@@ -348,6 +348,7 @@ import type {
   CreateTestPointRequest,
   UpdateTestPointRequest,
   TestPlanSelection,
+  ProjectCoverageResponse,
   TestCaseResultTimelineResponse,
   ListTestCapabilitiesResponse,
   RuntimeCapabilityScanResponse,
@@ -703,6 +704,7 @@ import {
   ListTestCaseTestPointsResponseSchema,
   TestPointSchema,
   TestPlanSelectionSchema,
+  ProjectCoverageResponseSchema,
   TestCaseResultTimelineResponseSchema,
   ListTestCapabilitiesResponseSchema,
   ListTestCaseIssuesResponseSchema,
@@ -719,6 +721,7 @@ import {
   EMPTY_LIST_ISSUE_TEST_POINTS_RESPONSE,
   EMPTY_TEST_POINT,
   EMPTY_TEST_PLAN_SELECTION,
+  EMPTY_PROJECT_COVERAGE_RESPONSE,
   EMPTY_LIST_TEST_CASE_TEST_POINTS_RESPONSE,
   EMPTY_TEST_CASE_RESULT_TIMELINE_RESPONSE,
   EMPTY_LIST_TEST_CAPABILITIES_RESPONSE,
@@ -7080,6 +7083,14 @@ export class ApiClient {
     );
     return parseWithFallback(raw, TestPlanStatsSchema, EMPTY_TEST_PLAN_STATS, {
       endpoint: "GET /api/test-plans/:id/stats",
+    });
+  }
+
+  /** Every issue of a project with what covers it — the gap list. */
+  async getProjectTestCoverage(projectId: string): Promise<ProjectCoverageResponse> {
+    const raw = await this.fetch<unknown>(`/api/test-coverage?project_id=${encodeURIComponent(projectId)}`);
+    return parseWithFallback(raw, ProjectCoverageResponseSchema, EMPTY_PROJECT_COVERAGE_RESPONSE, {
+      endpoint: "GET /api/test-coverage",
     });
   }
 

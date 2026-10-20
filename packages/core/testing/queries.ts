@@ -216,6 +216,14 @@ export function issueTestCasesOptions(wsId: string, issueId: string) {
   });
 }
 
+export function projectTestCoverageOptions(wsId: string, projectId: string) {
+  return queryOptions({
+    queryKey: issueTestCaseKeys.projectCoverage(wsId, projectId),
+    queryFn: () => api.getProjectTestCoverage(projectId),
+    enabled: projectId.length > 0,
+  });
+}
+
 export function issueTestPointsOptions(wsId: string, issueId: string) {
   return queryOptions({
     queryKey: issueTestCaseKeys.testPoints(wsId, issueId),

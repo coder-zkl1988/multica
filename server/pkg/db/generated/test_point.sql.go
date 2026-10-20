@@ -293,6 +293,114 @@ func (q *Queries) ListIssueTestPoints(ctx context.Context, arg ListIssueTestPoin
 	return items, nil
 }
 
+const listProjectTestCoverage = `-- name: ListProjectTestCoverage :many
+WITH project_issues AS (
+    SELECT i.id, i.number, i.title, i.status
+    FROM issue i
+    WHERE i.workspace_id = $1 AND i.project_id = $2
+    ORDER BY i.number DESC
+    LIMIT $3
+),
+relevant_cases AS (
+    SELECT tci.test_case_id FROM test_case_issue tci
+    WHERE tci.workspace_id = $1 AND tci.issue_id IN (SELECT id FROM project_issues)
+    UNION
+    SELECT tctp.test_case_id FROM test_case_test_point tctp
+    JOIN issue_test_point p ON p.id = tctp.test_point_id
+    WHERE p.workspace_id = $1 AND p.issue_id IN (SELECT id FROM project_issues)
+),
+active_case_latest AS (
+    SELECT tc.id AS test_case_id,
+           COALESCE((
+               SELECT rc.result FROM test_run_case rc
+               WHERE rc.test_case_id = tc.id AND rc.workspace_id = tc.workspace_id AND rc.executed_at IS NOT NULL
+               ORDER BY rc.executed_at DESC
+               LIMIT 1
+           ), '')::text AS latest
+    FROM test_case tc
+    WHERE tc.workspace_id = $1 AND tc.status = 'active'
+      AND tc.id IN (SELECT test_case_id FROM relevant_cases)
+),
+point_state AS (
+    SELECT p.issue_id, p.id,
+           bool_or(acl.test_case_id IS NOT NULL) AS covered,
+           bool_or(acl.latest = 'passed') AS any_passed,
+           bool_or(acl.latest = 'failed') AS any_failed
+    FROM issue_test_point p
+    LEFT JOIN test_case_test_point tctp ON tctp.test_point_id = p.id AND tctp.workspace_id = p.workspace_id
+    LEFT JOIN active_case_latest acl ON acl.test_case_id = tctp.test_case_id
+    WHERE p.workspace_id = $1 AND p.status = 'active'
+      AND p.issue_id IN (SELECT id FROM project_issues)
+    GROUP BY p.issue_id, p.id
+)
+SELECT pi.id AS issue_id, pi.number AS issue_number, pi.title AS issue_title, pi.status AS issue_status,
+       (SELECT count(*) FROM test_case_issue tci JOIN active_case_latest acl ON acl.test_case_id = tci.test_case_id
+        WHERE tci.issue_id = pi.id AND tci.workspace_id = $1)::int AS active_cases,
+       (SELECT count(*) FROM test_case_issue tci JOIN active_case_latest acl ON acl.test_case_id = tci.test_case_id
+        WHERE tci.issue_id = pi.id AND tci.workspace_id = $1 AND acl.latest = 'failed')::int AS failing_cases,
+       (SELECT count(*) FROM point_state ps WHERE ps.issue_id = pi.id)::int AS active_points,
+       (SELECT count(*) FROM point_state ps WHERE ps.issue_id = pi.id AND COALESCE(ps.covered, false))::int AS covered_points,
+       (SELECT count(*) FROM point_state ps WHERE ps.issue_id = pi.id
+          AND COALESCE(ps.any_passed, false) AND NOT COALESCE(ps.any_failed, false))::int AS passed_points,
+       (SELECT count(*) FROM point_state ps WHERE ps.issue_id = pi.id AND COALESCE(ps.any_failed, false))::int AS failing_points
+FROM project_issues pi
+ORDER BY pi.number DESC
+`
+
+type ListProjectTestCoverageParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ProjectID   pgtype.UUID `json:"project_id"`
+	RowLimit    int32       `json:"row_limit"`
+}
+
+type ListProjectTestCoverageRow struct {
+	IssueID       pgtype.UUID `json:"issue_id"`
+	IssueNumber   int32       `json:"issue_number"`
+	IssueTitle    string      `json:"issue_title"`
+	IssueStatus   string      `json:"issue_status"`
+	ActiveCases   int32       `json:"active_cases"`
+	FailingCases  int32       `json:"failing_cases"`
+	ActivePoints  int32       `json:"active_points"`
+	CoveredPoints int32       `json:"covered_points"`
+	PassedPoints  int32       `json:"passed_points"`
+	FailingPoints int32       `json:"failing_points"`
+}
+
+// One row per issue of a project with what covers it: active linked cases and
+// how many of them last failed, and the issue's active test points with how
+// many are covered by an active case, passed (a covering case's latest result
+// passed and none failed) or failing. Only active cases count anywhere.
+func (q *Queries) ListProjectTestCoverage(ctx context.Context, arg ListProjectTestCoverageParams) ([]ListProjectTestCoverageRow, error) {
+	rows, err := q.db.Query(ctx, listProjectTestCoverage, arg.WorkspaceID, arg.ProjectID, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListProjectTestCoverageRow{}
+	for rows.Next() {
+		var i ListProjectTestCoverageRow
+		if err := rows.Scan(
+			&i.IssueID,
+			&i.IssueNumber,
+			&i.IssueTitle,
+			&i.IssueStatus,
+			&i.ActiveCases,
+			&i.FailingCases,
+			&i.ActivePoints,
+			&i.CoveredPoints,
+			&i.PassedPoints,
+			&i.FailingPoints,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTestPointCoverageForIssue = `-- name: ListTestPointCoverageForIssue :many
 SELECT tctp.test_point_id, tctp.test_case_id, tctp.origin, tctp.created_at,
        tc.case_number, tc.title AS case_title, tc.status AS case_status,

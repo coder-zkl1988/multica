@@ -3,7 +3,8 @@
     "cases": "Cas",
     "plans": "Plans",
     "runs": "Séries",
-    "jobs": "Génération"
+    "jobs": "Génération",
+    "coverage": "Couverture"
   },
   "page": {
     "title": "Cas de test",
@@ -600,5 +601,38 @@
     },
     "casesPass": "Cas réussis",
     "casesPassHint": "Tous les cas liés ont réussi, mais cette tâche n'a aucun point de test : personne n'a listé ce qui doit être vérifié"
+  },
+  "coveragePage": {
+    "title": "Couverture des tests",
+    "hint": "Chaque tâche non annulée du projet et ce qui la couvre, les pires d'abord.",
+    "empty": "Aucune tâche dans ce projet",
+    "all": "Toutes",
+    "truncated": "Seules les {{count}} tâches les plus récentes sont affichées.",
+    "columns": {
+      "issue": "Tâche",
+      "points": "Points de test",
+      "cases": "Cas",
+      "state": "État"
+    },
+    "pointsLine": "{{covered}}/{{active}} couverts · {{passed}} réussis",
+    "noPoints": "—",
+    "casesLine": "{{count}} actifs",
+    "failingCases": "{{count}} en échec",
+    "state": {
+      "failing": "En échec",
+      "no_tests": "Aucun test",
+      "gaps": "Points non couverts",
+      "no_points": "Aucun point de test",
+      "not_run": "Pas tous réussis",
+      "verified": "Vérifiée"
+    },
+    "stateHint": {
+      "failing": "Le dernier résultat d'un cas qui la couvre est un échec",
+      "no_tests": "Aucun cas actif ni point de test — un bug ici passerait inaperçu",
+      "gaps": "Certains points de test n'ont aucun cas actif",
+      "no_points": "Des cas existent, mais personne n'a listé ce qui doit être vérifié",
+      "not_run": "Tous les points sont couverts, pas encore tous réussis",
+      "verified": "Chaque point de test est couvert par un cas réussi"
+    }
   }
 }

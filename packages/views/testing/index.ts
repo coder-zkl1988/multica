@@ -5,6 +5,7 @@ export { TestGenerationJobPage } from "./test-generation-job-page";
 export { TestPlansPage } from "./test-plans-page";
 export { TestPlanDetail } from "./test-plan-detail";
 export { TestRunsPage } from "./test-runs-page";
+export { TestCoveragePage } from "./test-coverage-page";
 export { TestRunDetail } from "./test-run-detail";
 export { TestsTabs, type TestsTab } from "./components/tests-tabs";
 export { CaseIssueLinks } from "./components/case-issue-links";

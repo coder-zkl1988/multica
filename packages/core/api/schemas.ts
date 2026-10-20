@@ -15,6 +15,7 @@ import type {
   ListTestCaseTestPointsResponse,
   TestPoint,
   TestPlanSelection,
+  ProjectCoverageResponse,
   AutopilotRun,
   BillingBalance,
   BillingBatchesPage,
@@ -5843,6 +5844,28 @@ export const EMPTY_LIST_TEST_CASE_TEST_POINTS_RESPONSE: ListTestCaseTestPointsRe
   test_points: [],
   total: 0,
 };
+
+export const ProjectCoverageResponseSchema = z.object({
+  issues: z.array(z.object({
+    issue_id: z.string().default(""),
+    issue_number: z.number().default(0),
+    issue_identifier: z.string().default(""),
+    title: z.string().default(""),
+    status: z.string().default(""),
+    active_cases: z.number().default(0),
+    failing_cases: z.number().default(0),
+    active_points: z.number().default(0),
+    covered_points: z.number().default(0),
+    passed_points: z.number().default(0),
+    failing_points: z.number().default(0),
+    // A row a server sent half of must not read as covered.
+    state: z.string().default("no_tests"),
+  }).loose()).default([]),
+  summary: z.record(z.string(), z.number()).default({}),
+  truncated: z.boolean().default(false),
+}).loose();
+
+export const EMPTY_PROJECT_COVERAGE_RESPONSE: ProjectCoverageResponse = { issues: [], summary: {}, truncated: false };
 
 export const IssueTestSummarySchema = z.object({
   cases: z.number().default(0),

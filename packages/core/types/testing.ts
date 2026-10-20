@@ -801,6 +801,32 @@ export interface UpdateTestPointRequest {
   status?: TestPointStatus;
 }
 
+/** Where one issue of a project stands, worst first; server-driven. */
+export type ProjectCoverageState = "failing" | "no_tests" | "gaps" | "no_points" | "not_run" | "verified";
+
+export interface ProjectCoverageIssue {
+  issue_id: string;
+  issue_number: number;
+  issue_identifier: string;
+  title: string;
+  status: string;
+  active_cases: number;
+  failing_cases: number;
+  active_points: number;
+  covered_points: number;
+  passed_points: number;
+  failing_points: number;
+  state: ProjectCoverageState | (string & {});
+}
+
+/** GET /api/test-coverage?project_id= */
+export interface ProjectCoverageResponse {
+  issues: ProjectCoverageIssue[];
+  summary: Record<string, number>;
+  /** The server stopped at its row limit. */
+  truncated: boolean;
+}
+
 /**
  * What `verified` was decided on: every active test point covered and passing
  * (`test_points`), only the linked cases because no point was listed

@@ -1,12 +1,12 @@
 "use client";
 
-import { ClipboardList, FlaskConical, Play, Sparkles } from "lucide-react";
+import { ClipboardList, FlaskConical, Play, Sparkles, Target } from "lucide-react";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { Tabs, TabsList, TabsTrigger } from "@multica/ui/components/ui/tabs";
 import { useNavigation } from "../../navigation";
 import { useT } from "../../i18n";
 
-export type TestsTab = "cases" | "plans" | "runs" | "jobs";
+export type TestsTab = "cases" | "coverage" | "plans" | "runs" | "jobs";
 
 /**
  * The one bar that holds the testing surface together.
@@ -24,6 +24,7 @@ export function TestsTabs({ active }: { active: TestsTab }) {
 
   const hrefByTab: Record<TestsTab, string> = {
     cases: paths.tests(),
+    coverage: paths.testCoverage(),
     plans: paths.testPlans(),
     runs: paths.testRuns(),
     jobs: paths.testGenerationJobs(),
@@ -46,6 +47,13 @@ export function TestsTabs({ active }: { active: TestsTab }) {
           >
             <FlaskConical className="size-3.5" />
             <span>{t(($) => $.tabs.cases)}</span>
+          </TabsTrigger>
+          <TabsTrigger
+            value="coverage"
+            className="h-10 flex-none gap-2 px-1 group-data-horizontal/tabs:after:bottom-0"
+          >
+            <Target className="size-3.5" />
+            <span>{t(($) => $.tabs.coverage)}</span>
           </TabsTrigger>
           <TabsTrigger
             value="plans"

@@ -3,7 +3,8 @@
     "cases": "用例",
     "plans": "计划",
     "runs": "轮次",
-    "jobs": "生成任务"
+    "jobs": "生成任务",
+    "coverage": "覆盖"
   },
   "page": {
     "title": "测试用例",
@@ -599,5 +600,38 @@
     },
     "casesPass": "用例通过",
     "casesPassHint": "关联用例都已通过，但这条任务还没有拆测试点，没人列出必须验证什么"
+  },
+  "coveragePage": {
+    "title": "测试覆盖",
+    "hint": "项目内所有未取消的任务及其覆盖情况，问题最大的排在前面。",
+    "empty": "这个项目还没有任务",
+    "all": "全部",
+    "truncated": "只显示最近的 {{count}} 个任务，更早的未列出。",
+    "columns": {
+      "issue": "任务",
+      "points": "测试点",
+      "cases": "用例",
+      "state": "状态"
+    },
+    "pointsLine": "已覆盖 {{covered}}/{{active}} · 通过 {{passed}}",
+    "noPoints": "—",
+    "casesLine": "{{count}} 条有效",
+    "failingCases": "{{count}} 条失败",
+    "state": {
+      "failing": "失败",
+      "no_tests": "没有测试",
+      "gaps": "有未覆盖测试点",
+      "no_points": "没有测试点",
+      "not_run": "未全部通过",
+      "verified": "已验证"
+    },
+    "stateHint": {
+      "failing": "覆盖它的用例最近一次执行失败",
+      "no_tests": "没有有效用例也没有测试点——这里出 bug 不会被发现",
+      "gaps": "部分测试点没有有效用例覆盖",
+      "no_points": "有用例，但没人列出必须验证什么",
+      "not_run": "测试点都已覆盖，但还没有全部通过",
+      "verified": "每个测试点都有用例覆盖且最近一次通过"
+    }
   }
 }

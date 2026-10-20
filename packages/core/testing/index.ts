@@ -36,6 +36,7 @@ export {
   issueTestCasesOptions,
   issueTestSummaryOptions,
   issueTestPointsOptions,
+  projectTestCoverageOptions,
   testCaseTestPointsOptions,
 } from "./queries";
 export {

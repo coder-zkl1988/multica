@@ -3,7 +3,8 @@
     "cases": "Cases",
     "plans": "Plans",
     "runs": "Runs",
-    "jobs": "Generation"
+    "jobs": "Generation",
+    "coverage": "Coverage"
   },
   "page": {
     "title": "Test Cases",
@@ -600,5 +601,38 @@
     },
     "casesPass": "Cases pass",
     "casesPassHint": "Every linked case passed, but this issue has no test points, so nobody listed what must be checked"
+  },
+  "coveragePage": {
+    "title": "Test coverage",
+    "hint": "Every live issue of the project with what covers it, worst first. Cancelled issues are left out.",
+    "empty": "No issues in this project",
+    "all": "All",
+    "truncated": "Showing the {{count}} most recent issues; older ones are not listed.",
+    "columns": {
+      "issue": "Issue",
+      "points": "Test points",
+      "cases": "Cases",
+      "state": "State"
+    },
+    "pointsLine": "{{covered}}/{{active}} covered · {{passed}} passed",
+    "noPoints": "—",
+    "casesLine": "{{count}} active",
+    "failingCases": "{{count}} failing",
+    "state": {
+      "failing": "Failing",
+      "no_tests": "No tests",
+      "gaps": "Uncovered points",
+      "no_points": "No test points",
+      "not_run": "Not all passed",
+      "verified": "Verified"
+    },
+    "stateHint": {
+      "failing": "A covering case's latest result is failed",
+      "no_tests": "No active case and no test point — nothing would catch a bug here",
+      "gaps": "Some test points have no active case",
+      "no_points": "Cases exist, but nobody listed what must be checked",
+      "not_run": "Every point is covered; not every one has passed yet",
+      "verified": "Every test point is covered by a case that passed"
+    }
   }
 }

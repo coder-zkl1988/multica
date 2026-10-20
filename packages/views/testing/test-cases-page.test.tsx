@@ -56,6 +56,7 @@ vi.mock("@multica/core/hooks", () => ({ useWorkspaceId: () => "ws-1" }));
 vi.mock("@multica/core/paths", () => ({
   useWorkspacePaths: () => ({
     tests: () => "/acme/tests",
+    testCoverage: () => "/acme/tests/coverage",
     testCaseDetail: (ref: string) => `/acme/tests/${ref}`,
     testGenerationJobs: () => "/acme/tests/jobs",
     testGenerationJobDetail: (id: string) => `/acme/tests/jobs/${id}`,
@@ -178,6 +179,7 @@ describe("TestCasesPage tab bar", () => {
       tabs.find((tab) => tab.textContent?.match(pattern));
 
     for (const [pattern, href] of [
+      [/覆盖|Coverage|カバレッジ|커버리지/, "/acme/tests/coverage"],
       [/计划|Plans|計画|계획/, "/acme/tests/plans"],
       [/轮次|Runs|実行|실행/, "/acme/tests/runs"],
       [/生成|Generation/, "/acme/tests/jobs"],
