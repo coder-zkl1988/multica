@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/multica-ai/multica/server/internal/testutil"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 // M4 "finish one, release one": a round with a parallelism cap queues only
@@ -357,5 +359,44 @@ func TestConcurrentSettlesReleaseDistinctCases(t *testing.T) {
 		if tasks != 1 {
 			t.Fatalf("case %s has %d agent tasks, want exactly 1", rc.id, tasks)
 		}
+	}
+}
+
+// A case keeps the task it was bound to: a second dispatch racing the first
+// gets no row back and withdraws its task instead of taking the case over.
+func TestABoundCaseIsNotReboundAndAnAbortIsNotRevived(t *testing.T) {
+	projectID := newTestRunProject(t)
+	a := createTestCaseForRun(t, projectID)
+	b := createTestCaseForRun(t, projectID)
+	run := createCappedRun(t, "Bind once", []string{a.ID, b.ID}, 1)
+	runtimeID := dbfx.Runtime(t, "bind-once-runtime", testutil.Cols{"daemon_id": "daemon-bind-once"})
+	agentID := dbfx.Agent(t, "bind-once-agent", runtimeID)
+	if w := dispatchRun(t, run.ID, agentID); w.Code != http.StatusCreated {
+		t.Fatalf("dispatch: got %d: %s", w.Code, w.Body.String())
+	}
+	cases := runCasesInOrder(t, run.ID)
+	ctx := context.Background()
+	_, err := testHandler.Queries.UpdateTestRunCaseAgentTask(ctx, db.UpdateTestRunCaseAgentTaskParams{
+		ID: parseUUID(cases[0].id), WorkspaceID: parseUUID(testWorkspaceID), AgentTaskID: parseUUID("00000000-0000-0000-0000-00000000b1d0"),
+	})
+	if !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("rebinding a bound case: err = %v, want no rows", err)
+	}
+
+	// The daemon starting the first task after a member aborted the round
+	// must not turn it back into "running".
+	testutil.Call(t, testHandler.AbortTestRun, withURLParam(newRequest("POST", "/api/test-runs/"+run.ID+"/abort?workspace_id="+testWorkspaceID, nil), "id", run.ID)).
+		Want(http.StatusOK)
+	task, err := testHandler.Queries.GetAgentTask(ctx, parseUUID(*cases[0].taskID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := testHandler.markTestRunRunning(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+	var status string
+	dbfx.QueryRow(t, `SELECT status FROM test_run WHERE id = $1`, run.ID).Scan(&status)
+	if status != "aborted" {
+		t.Fatalf("round status after a late start = %q, want aborted", status)
 	}
 }

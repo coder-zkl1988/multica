@@ -145,10 +145,15 @@ ORDER BY i.number ASC, p.number ASC;
 -- current verdict is passed) or failing (one of them failed). A case's current
 -- verdict is defined as in ListTestCasesForIssue. Only active cases count;
 -- review_points are points only drafts with executable steps verify.
+-- Issues in a closed status (cancelled, or a custom closed status) are not
+-- owed tests and are dropped before the limit, so the limit counts issues the
+-- page can show. Every count is aggregated once per issue and joined, so the
+-- cost grows with the rows read, not with their square.
 WITH project_issues AS (
     SELECT i.id, i.number, i.title, i.status
     FROM issue i
     WHERE i.workspace_id = sqlc.arg(workspace_id) AND i.project_id = sqlc.arg(project_id)
+      AND NOT (i.status = ANY(sqlc.arg(closed_statuses)::text[]))
     ORDER BY i.number DESC
     LIMIT sqlc.arg(row_limit)
 ),
@@ -169,8 +174,8 @@ draft_cases AS (
       AND jsonb_typeof(tc.steps) = 'array' AND jsonb_array_length(tc.steps) > 0
       AND NOT EXISTS (
           SELECT 1 FROM jsonb_array_elements(tc.steps) s
-          WHERE btrim(COALESCE(s->>'action', ''), E' \t\r\n') = ''
-             OR btrim(COALESCE(s->>'expected', ''), E' \t\r\n') = ''
+          WHERE COALESCE(s->>'action', '') ~ '^\s*$'
+             OR COALESCE(s->>'expected', '') ~ '^\s*$'
       )
 ),
 active_case_latest AS (
@@ -201,20 +206,37 @@ point_state AS (
     WHERE p.workspace_id = sqlc.arg(workspace_id) AND p.status = 'active'
       AND p.issue_id IN (SELECT id FROM project_issues)
     GROUP BY p.issue_id, p.id
+),
+case_counts AS (
+    SELECT tci.issue_id,
+           count(*) AS active_cases,
+           count(*) FILTER (WHERE acl.latest = 'failed') AS failing_cases
+    FROM test_case_issue tci
+    JOIN active_case_latest acl ON acl.test_case_id = tci.test_case_id
+    WHERE tci.workspace_id = sqlc.arg(workspace_id) AND tci.issue_id IN (SELECT id FROM project_issues)
+    GROUP BY tci.issue_id
+),
+point_counts AS (
+    SELECT ps.issue_id,
+           count(*) AS active_points,
+           count(*) FILTER (WHERE COALESCE(ps.covered, false)) AS covered_points,
+           count(*) FILTER (WHERE NOT COALESCE(ps.covered, false) AND COALESCE(ps.draft_covered, false)) AS review_points,
+           count(*) FILTER (WHERE COALESCE(ps.covered, false) AND COALESCE(ps.all_passed, false)) AS passed_points,
+           count(*) FILTER (WHERE COALESCE(ps.any_failed, false)) AS failing_points
+    FROM point_state ps
+    GROUP BY ps.issue_id
 )
 SELECT pi.id AS issue_id, pi.number AS issue_number, pi.title AS issue_title, pi.status AS issue_status,
-       (SELECT count(*) FROM test_case_issue tci JOIN active_case_latest acl ON acl.test_case_id = tci.test_case_id
-        WHERE tci.issue_id = pi.id AND tci.workspace_id = sqlc.arg(workspace_id))::int AS active_cases,
-       (SELECT count(*) FROM test_case_issue tci JOIN active_case_latest acl ON acl.test_case_id = tci.test_case_id
-        WHERE tci.issue_id = pi.id AND tci.workspace_id = sqlc.arg(workspace_id) AND acl.latest = 'failed')::int AS failing_cases,
-       (SELECT count(*) FROM point_state ps WHERE ps.issue_id = pi.id)::int AS active_points,
-       (SELECT count(*) FROM point_state ps WHERE ps.issue_id = pi.id AND COALESCE(ps.covered, false))::int AS covered_points,
-       (SELECT count(*) FROM point_state ps WHERE ps.issue_id = pi.id
-          AND NOT COALESCE(ps.covered, false) AND COALESCE(ps.draft_covered, false))::int AS review_points,
-       (SELECT count(*) FROM point_state ps WHERE ps.issue_id = pi.id
-          AND COALESCE(ps.covered, false) AND COALESCE(ps.all_passed, false))::int AS passed_points,
-       (SELECT count(*) FROM point_state ps WHERE ps.issue_id = pi.id AND COALESCE(ps.any_failed, false))::int AS failing_points
+       COALESCE(cc.active_cases, 0)::int AS active_cases,
+       COALESCE(cc.failing_cases, 0)::int AS failing_cases,
+       COALESCE(pc.active_points, 0)::int AS active_points,
+       COALESCE(pc.covered_points, 0)::int AS covered_points,
+       COALESCE(pc.review_points, 0)::int AS review_points,
+       COALESCE(pc.passed_points, 0)::int AS passed_points,
+       COALESCE(pc.failing_points, 0)::int AS failing_points
 FROM project_issues pi
+LEFT JOIN case_counts cc ON cc.issue_id = pi.id
+LEFT JOIN point_counts pc ON pc.issue_id = pi.id
 ORDER BY pi.number DESC;
 
 -- name: CountActiveCasesForTestPoint :one

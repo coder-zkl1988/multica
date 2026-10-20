@@ -248,7 +248,7 @@ func (h *Handler) ProposeTestCases(w http.ResponseWriter, r *http.Request) {
 					h.writeTestGenerationWriteError(w, r, updateErr, "update")
 					return
 				}
-				if err := replaceCaseAITestPoints(r, qtx, updated.ID, wsUUID, revisionOf(len(entry.item.Case.TestPoints) > 0, entry.points, scopeIssues), "ai", job.CreatedBy); err != nil {
+				if err := h.replaceCaseAITestPoints(r, qtx, updated.ID, wsUUID, revisionOf(len(entry.item.Case.TestPoints) > 0, entry.points, scopeIssues), "ai", job.CreatedBy); err != nil {
 					h.writeTestGenerationWriteError(w, r, err, "update")
 					return
 				}
@@ -522,13 +522,21 @@ func (h *Handler) insertProposedTestCase(
 	return testCase, repos, nil
 }
 
+// proposalTestData is the test data a proposal sets, as the update writes it.
+func proposalTestData(payload *TestCaseProposalCasePayload) *map[string]any {
+	data := defaultMap(payload.TestData)
+	return &data
+}
+
 // proposalScopeIssues is the issue scope of the run that queued a proposal:
 // the issues whose points it could name, and so the ones whose AI links its
-// revision may replace. nil (no job, or an unscoped run) means any issue.
+// revision may replace. nil (an unscoped run) means any issue; an empty set
+// (the job cannot be read, or its scope resolves to nothing) means none.
 func (h *Handler) proposalScopeIssues(r *http.Request, proposal db.TestCaseProposal, wsUUID pgtype.UUID) map[pgtype.UUID]struct{} {
 	job, err := h.Queries.GetTestGenerationJobInWorkspace(r.Context(), db.GetTestGenerationJobInWorkspaceParams{ID: proposal.JobID, WorkspaceID: wsUUID})
 	if err != nil {
-		return nil
+		// Unknown scope: the revision may remove nothing.
+		return map[pgtype.UUID]struct{}{}
 	}
 	return h.resolveScopeIssues(r, wsUUID, h.testGenerationScopeIssueRefs(r, job, wsUUID))
 }
@@ -586,14 +594,22 @@ func (h *Handler) rewriteDraftTestCase(
 
 	priority, caseType, scope, executionMode := proposalCaseDefaults(payload)
 	newSteps := normalizeTestCaseSteps(payload.Steps)
+	// Once a run has written a person's draft, its content is no longer only
+	// the person's: it waits for approval instead of going live on their
+	// next save.
+	var sourceRefs []byte
+	if testCaseAwaitingSteps(current.SourceRefs) {
+		sourceRefs = withoutAwaitingSteps(current.SourceRefs)
+	}
 	updated, err := qtx.UpdateTestCase(r.Context(), db.UpdateTestCaseParams{
+		SourceRefs:           sourceRefs,
 		ID:                   current.ID,
 		WorkspaceID:          wsUUID,
 		Title:                pgtype.Text{String: strings.TrimSpace(payload.Title), Valid: true},
 		Module:               pgtype.Text{String: payload.Module, Valid: true},
 		Preconditions:        pgtype.Text{String: payload.Preconditions, Valid: true},
 		Steps:                marshalJSONColumn(newSteps, "[]"),
-		StepsChanged:         pgtype.Bool{Bool: !sameTestCaseSteps(newSteps, decodeTestCaseSteps(current.Steps)), Valid: true},
+		StepsChanged:         pgtype.Bool{Bool: testCaseProcedureChanged(current, &newSteps, &payload.Preconditions, &payload.ExpectedResult, proposalTestData(payload)), Valid: true},
 		ExpectedResult:       pgtype.Text{String: payload.ExpectedResult, Valid: true},
 		TestData:             marshalJSONColumn(defaultMap(payload.TestData), "{}"),
 		Priority:             pgtype.Text{String: priority, Valid: true},
@@ -775,7 +791,7 @@ func (h *Handler) reviewTestCaseProposal(w http.ResponseWriter, r *http.Request,
 			newSteps := normalizeTestCaseSteps(payload.Steps)
 			params.Steps = marshalJSONColumn(newSteps, "[]")
 			// Results on the old procedure stop counting toward coverage.
-			params.StepsChanged = pgtype.Bool{Bool: !sameTestCaseSteps(newSteps, decodeTestCaseSteps(current.Steps)), Valid: true}
+			params.StepsChanged = pgtype.Bool{Bool: testCaseProcedureChanged(current, &newSteps, &payload.Preconditions, &payload.ExpectedResult, proposalTestData(&payload)), Valid: true}
 			params.ExpectedResult = pgtype.Text{String: payload.ExpectedResult, Valid: true}
 			params.TestData = marshalJSONColumn(defaultMap(payload.TestData), "{}")
 			params.Priority = pgtype.Text{String: priority, Valid: true}
@@ -820,7 +836,7 @@ func (h *Handler) reviewTestCaseProposal(w http.ResponseWriter, r *http.Request,
 			}
 			revision.link = append(revision.link, point)
 		}
-		if err := replaceCaseAITestPoints(r, qtx, applied.ID, wsUUID, revision, "ai", userUUID); err != nil {
+		if err := h.replaceCaseAITestPoints(r, qtx, applied.ID, wsUUID, revision, "ai", userUUID); err != nil {
 			h.writeTestGenerationWriteError(w, r, err, "update")
 			return
 		}

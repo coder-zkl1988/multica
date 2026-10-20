@@ -138,8 +138,11 @@ RETURNING *;
 
 -- name: UpdateTestRunCaseAgentTask :one
 -- Binds a case to the agent task that will execute it (per-case dispatch).
+-- Only an unbound case: two dispatches of one round racing must not each bind
+-- it, or the task that lost could never record or complete (no rows = the
+-- case already has its task).
 UPDATE test_run_case SET agent_task_id = $3, updated_at = now()
-WHERE id = $1 AND workspace_id = $2
+WHERE id = $1 AND workspace_id = $2 AND (agent_task_id IS NULL OR agent_task_id = $3)
 RETURNING *;
 
 -- name: GetTestRunCaseByAgentTask :one
@@ -257,4 +260,14 @@ UPDATE test_run SET
     updated_at   = now()
 WHERE id = sqlc.arg(id) AND workspace_id = sqlc.arg(workspace_id)
   AND status NOT IN ('completed', 'aborted')
+RETURNING *;
+
+-- name: StartPendingTestRun :one
+-- Moves a round from pending to running only while it is still pending, so a
+-- start racing an abort never revives the aborted round (no rows = it moved on).
+UPDATE test_run SET
+    status     = 'running',
+    started_at = COALESCE(started_at, now()),
+    updated_at = now()
+WHERE id = $1 AND workspace_id = $2 AND status = 'pending'
 RETURNING *;

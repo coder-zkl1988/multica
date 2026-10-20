@@ -1269,6 +1269,51 @@ func (q *Queries) SkipUndispatchedTestRunCases(ctx context.Context, arg SkipUndi
 	return items, nil
 }
 
+const startPendingTestRun = `-- name: StartPendingTestRun :one
+UPDATE test_run SET
+    status     = 'running',
+    started_at = COALESCE(started_at, now()),
+    updated_at = now()
+WHERE id = $1 AND workspace_id = $2 AND status = 'pending'
+RETURNING id, workspace_id, project_id, plan_id, title, executor_type, executor_id, agent_task_id, environment, build_ref, capability_binding, status, source_run_id, retry_scope, error, started_at, completed_at, created_by, created_at, updated_at, parallelism
+`
+
+type StartPendingTestRunParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+// Moves a round from pending to running only while it is still pending, so a
+// start racing an abort never revives the aborted round (no rows = it moved on).
+func (q *Queries) StartPendingTestRun(ctx context.Context, arg StartPendingTestRunParams) (TestRun, error) {
+	row := q.db.QueryRow(ctx, startPendingTestRun, arg.ID, arg.WorkspaceID)
+	var i TestRun
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.ProjectID,
+		&i.PlanID,
+		&i.Title,
+		&i.ExecutorType,
+		&i.ExecutorID,
+		&i.AgentTaskID,
+		&i.Environment,
+		&i.BuildRef,
+		&i.CapabilityBinding,
+		&i.Status,
+		&i.SourceRunID,
+		&i.RetryScope,
+		&i.Error,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Parallelism,
+	)
+	return i, err
+}
+
 const updateTestPlan = `-- name: UpdateTestPlan :one
 UPDATE test_plan SET
     title       = COALESCE($3, title),
@@ -1392,7 +1437,7 @@ func (q *Queries) UpdateTestRun(ctx context.Context, arg UpdateTestRunParams) (T
 
 const updateTestRunCaseAgentTask = `-- name: UpdateTestRunCaseAgentTask :one
 UPDATE test_run_case SET agent_task_id = $3, updated_at = now()
-WHERE id = $1 AND workspace_id = $2
+WHERE id = $1 AND workspace_id = $2 AND (agent_task_id IS NULL OR agent_task_id = $3)
 RETURNING id, workspace_id, run_id, test_case_id, case_snapshot, position, result, notes, evidence, step_results, duration_ms, executed_by_type, executed_by_id, executed_at, defect_issue_id, created_at, updated_at, agent_task_id
 `
 
@@ -1403,6 +1448,9 @@ type UpdateTestRunCaseAgentTaskParams struct {
 }
 
 // Binds a case to the agent task that will execute it (per-case dispatch).
+// Only an unbound case: two dispatches of one round racing must not each bind
+// it, or the task that lost could never record or complete (no rows = the
+// case already has its task).
 func (q *Queries) UpdateTestRunCaseAgentTask(ctx context.Context, arg UpdateTestRunCaseAgentTaskParams) (TestRunCase, error) {
 	row := q.db.QueryRow(ctx, updateTestRunCaseAgentTask, arg.ID, arg.WorkspaceID, arg.AgentTaskID)
 	var i TestRunCase

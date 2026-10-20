@@ -149,13 +149,16 @@ func TestEveryCoveringCaseMustPass(t *testing.T) {
 	}
 }
 
-// The first real verdict after a blocked record is a new execution; it must
-// sort after any round that ran in between.
-func TestARealVerdictAfterBlockedIsTheNewestExecution(t *testing.T) {
+// A verdict written while its round is still open is a new execution and
+// sorts after any round that ran in between; a correction of a finished round
+// keeps the time it was observed, so it never outranks a newer round.
+func TestAnOpenRoundsVerdictIsTheNewestExecution(t *testing.T) {
 	projectID, issueID, point := verdictFixture(t, "Refund staging")
 	tc := createTestCaseForRun(t, projectID)
+	other := createTestCaseForRun(t, projectID)
 	linkCaseTestPoints(t, tc.Key, []string{point.ID}).Want(http.StatusOK)
-	morning := createTestRunFromCases(t, "Morning", []string{tc.ID})
+	// The second case keeps the morning round open.
+	morning := createTestRunFromCases(t, "Morning", []string{tc.ID, other.ID})
 	morningCase := runCasesInOrder(t, morning.ID)[0].id
 	setRunCaseResultForSummary(t, morningCase, "blocked")
 	noon := createTestRunFromCases(t, "Noon", []string{tc.ID})
@@ -163,7 +166,24 @@ func TestARealVerdictAfterBlockedIsTheNewestExecution(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 	setRunCaseResultForSummary(t, morningCase, "failed")
 	if state := pointState(t, issueID); state != "failing" {
-		t.Fatalf("point after the blocked case finally failed = %q, want failing", state)
+		t.Fatalf("point after the open morning round finally failed = %q, want failing", state)
+	}
+}
+
+func TestCorrectingAFinishedRoundNeverOutranksANewerOne(t *testing.T) {
+	projectID, issueID, point := verdictFixture(t, "Refund nightly")
+	tc := createTestCaseForRun(t, projectID)
+	linkCaseTestPoints(t, tc.Key, []string{point.ID}).Want(http.StatusOK)
+	monday := createTestRunFromCases(t, "Monday", []string{tc.ID})
+	mondayCase := runCasesInOrder(t, monday.ID)[0].id
+	setRunCaseResultForSummary(t, mondayCase, "blocked")
+	tuesday := createTestRunFromCases(t, "Tuesday", []string{tc.ID})
+	setRunCaseResultForSummary(t, runCasesInOrder(t, tuesday.ID)[0].id, "failed")
+	time.Sleep(10 * time.Millisecond)
+	// Monday's round finished; reading its evidence, someone corrects it.
+	setRunCaseResultForSummary(t, mondayCase, "passed")
+	if state := pointState(t, issueID); state != "failing" {
+		t.Fatalf("point after correcting an older finished round = %q, want Tuesday's failure to stand", state)
 	}
 }
 
@@ -171,6 +191,11 @@ func TestAPassNeedsAPassedStep(t *testing.T) {
 	skipped := []TestRunStepResult{{Index: 1, Result: "skipped"}, {Index: 2, Result: "skipped"}}
 	if problem := stepResultsProblem("passed", skipped, []int32{1, 2}, true); problem == "" {
 		t.Fatal("an all-skipped pass was accepted")
+	}
+	// A person's partial annotations say nothing about the steps left blank.
+	partial := []TestRunStepResult{{Index: 2, Result: "skipped"}}
+	if problem := stepResultsProblem("passed", partial, []int32{1, 2}, false); problem != "" {
+		t.Fatalf("a person's partial annotation on a pass was refused: %s", problem)
 	}
 	mixed := []TestRunStepResult{{Index: 1, Result: "passed"}, {Index: 2, Result: "skipped"}}
 	if problem := stepResultsProblem("passed", mixed, []int32{1, 2}, true); problem != "" {
@@ -197,5 +222,20 @@ func TestAStepLessDraftLeavesItsPointUncovered(t *testing.T) {
 	}
 	if row := projectCoverageRow(t, projectID, issueID); row.ReviewPoints != 1 || row.State != "in_review" {
 		t.Fatalf("coverage row = %+v, want in_review", row)
+	}
+}
+
+// The executor reads the preconditions and the overall expected result too;
+// changing them is a new procedure as much as changing a step.
+func TestChangingPreconditionsNeedsANewRun(t *testing.T) {
+	projectID, issueID, point := verdictFixture(t, "Refund preconditions")
+	tc := createTestCaseForRun(t, projectID)
+	linkCaseTestPoints(t, tc.Key, []string{point.ID}).Want(http.StatusOK)
+	round := createTestRunFromCases(t, "Before", []string{tc.ID})
+	setRunCaseResultForSummary(t, runCasesInOrder(t, round.ID)[0].id, "passed")
+	testutil.Call(t, testHandler.UpdateTestCase, withURLParam(newRequest("PUT", "/api/test-cases/"+tc.Key+"?workspace_id="+testWorkspaceID,
+		map[string]any{"preconditions": "The order was paid with a gift card"}), "ref", tc.Key)).Want(http.StatusOK)
+	if state := pointState(t, issueID); state != "not_run" {
+		t.Fatalf("point after the preconditions changed = %q, want not_run", state)
 	}
 }

@@ -18,15 +18,9 @@ import (
 // points, and which still have points nobody covers — the list a QA lead
 // works down before a release.
 
-// projectCoverageLimit bounds the issues one response lists, counted after
-// cancelled and hidden issues are dropped; the response says when it was hit.
-// projectCoverageScanLimit bounds the rows the query reads to fill it — wider,
-// so a project whose newest issues are mostly cancelled still lists its live
-// ones.
-const (
-	projectCoverageLimit     = 500
-	projectCoverageScanLimit = 4 * projectCoverageLimit
-)
+// projectCoverageLimit bounds the issues one response lists. Closed issues are
+// dropped in the query, before the limit; the response says when it was hit.
+const projectCoverageLimit = 500
 
 type ProjectTestCoverageIssueResponse struct {
 	IssueID         string `json:"issue_id"`
@@ -92,11 +86,22 @@ func (h *Handler) ListProjectTestCoverage(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusNotFound, "project not found")
 		return
 	}
+	// A cancelled requirement is not owed any tests: the built-in cancelled
+	// status and every custom status in the closed category are left out in
+	// the query, so the limit counts issues the page can show.
+	closed := []string{issuestatus.Cancelled}
+	if entries, err := h.Queries.ListIssueStatusEntries(r.Context(), db.ListIssueStatusEntriesParams{WorkspaceID: wsUUID, IncludeArchived: true}); err == nil {
+		for _, entry := range entries {
+			if entry.Category == issuestatus.CategoryClosed && entry.Key != issuestatus.Cancelled {
+				closed = append(closed, entry.Key)
+			}
+		}
+	} else {
+		slog.Warn("list issue statuses for test coverage failed", append(logger.RequestAttrs(r), "error", err)...)
+	}
 	rows, err := h.Queries.ListProjectTestCoverage(r.Context(), db.ListProjectTestCoverageParams{
-		// The SQL reads a wider window than the page shows, because cancelled
-		// and hidden issues are dropped afterwards; one row past it says the
-		// window itself was exhausted.
-		WorkspaceID: wsUUID, ProjectID: projectUUID, RowLimit: projectCoverageScanLimit + 1,
+		// One row past the limit says whether anything was cut off.
+		WorkspaceID: wsUUID, ProjectID: projectUUID, ClosedStatuses: closed, RowLimit: projectCoverageLimit + 1,
 	})
 	if err != nil {
 		slog.Error("list project test coverage failed", append(logger.RequestAttrs(r), "error", err)...)
@@ -104,10 +109,6 @@ func (h *Handler) ListProjectTestCoverage(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	truncated := len(rows) > projectCoverageScanLimit
-	if truncated {
-		rows = rows[:projectCoverageScanLimit]
-	}
 
 	// The same issue-window rule every issue list follows.
 	policy, windowEnabled := h.issueWindowPolicy(r.Context(), wsUUID)
@@ -132,18 +133,21 @@ func (h *Handler) ListProjectTestCoverage(w http.ResponseWriter, r *http.Request
 	prefix := h.getIssuePrefix(r.Context(), wsUUID)
 	summary := map[string]int{"failing": 0, "no_tests": 0, "gaps": 0, "in_review": 0, "no_points": 0, "not_run": 0, "verified": 0}
 	issues := make([]ProjectTestCoverageIssueResponse, 0, min(len(rows), projectCoverageLimit))
+	// The window hides the oldest issues, which the newest-first order puts
+	// last: an issue past the limit that is visible is one the page cut.
+	truncated := false
 	for _, row := range rows {
-		// The limit counts the issues the page shows, after filtering.
-		if len(issues) == projectCoverageLimit {
-			truncated = true
-			break
-		}
 		if visible != nil {
 			if _, ok := visible[row.IssueID]; !ok {
 				continue
 			}
 		}
-		// A cancelled requirement is not owed any tests.
+		if len(issues) == projectCoverageLimit {
+			truncated = true
+			break
+		}
+		// Belt and braces for a status whose category changed since the
+		// catalog read above.
 		if resolver.Category(r.Context(), h.Queries, row.IssueStatus) == issuestatus.CategoryClosed {
 			continue
 		}

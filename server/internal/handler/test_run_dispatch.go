@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/integrations/testcapability"
 	"github.com/multica-ai/multica/server/internal/logger"
@@ -143,6 +144,10 @@ func (h *Handler) DispatchTestRun(w http.ResponseWriter, r *http.Request) {
 		var undispatchable *errTestRunUndispatchable
 		if errors.As(err, &undispatchable) {
 			writeError(w, http.StatusBadRequest, undispatchable.reason)
+			return
+		}
+		if errors.Is(err, errTestRunCaseAlreadyDispatched) {
+			writeError(w, http.StatusConflict, errTestRunCaseAlreadyDispatched.Error())
 			return
 		}
 		slog.Error("dispatch test run failed", append(logger.RequestAttrs(r), "error", err)...)
@@ -383,10 +388,22 @@ func (h *Handler) createTestRunCaseTask(ctx context.Context, q *db.Queries, in t
 		WorkspaceID: in.run.WorkspaceID,
 		AgentTaskID: agentTask.ID,
 	}); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			// Another dispatch bound the case first; the task just queued
+			// would own nothing, so it is withdrawn before a daemon claims it.
+			if _, cancelErr := q.CancelAgentTask(ctx, agentTask.ID); cancelErr != nil && !errors.Is(cancelErr, pgx.ErrNoRows) {
+				slog.Warn("cancel an unbound test run case task failed", "task_id", uuidToString(agentTask.ID), "error", cancelErr)
+			}
+			return db.AgentTaskQueue{}, errTestRunCaseAlreadyDispatched
+		}
 		return db.AgentTaskQueue{}, fmt.Errorf("record the case's agent task: %w", err)
 	}
 	return agentTask, nil
 }
+
+// errTestRunCaseAlreadyDispatched says a case already has its task: another
+// dispatch of the same round got there first.
+var errTestRunCaseAlreadyDispatched = errors.New("this run has already been dispatched")
 
 // dispatchNextTestRunCases releases the next cases of a capped round once a
 // case settles ("finish one, release one"). Uncapped rounds queued everything
@@ -479,6 +496,9 @@ func (h *Handler) dispatchNextTestRunCases(ctx context.Context, q *db.Queries, r
 	}
 	for _, rc := range waiting {
 		if _, err := h.createTestRunCaseTask(ctx, q, input, rc); err != nil {
+			if errors.Is(err, errTestRunCaseAlreadyDispatched) {
+				continue
+			}
 			return err
 		}
 	}

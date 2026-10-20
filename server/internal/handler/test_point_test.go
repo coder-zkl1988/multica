@@ -487,3 +487,47 @@ func TestARevisionKeepsAIPointLinksOutsideItsRunsScope(t *testing.T) {
 		t.Fatalf("links after a revision scoped to one issue = %d, want both kept", kept)
 	}
 }
+
+// When the run that queued a revision can no longer be read, its scope is
+// unknown, and accepting the revision removes no link it might not have
+// spoken for.
+func TestAcceptingARevisionOfAnUnknownScopeRemovesNoLinks(t *testing.T) {
+	projectID := newTestCaseProject(t)
+	jobID := newTestGenerationJob(t, projectID)
+	bindJobToTask(t, jobID, testGenerationTaskUUID)
+	first := dbfx.Issue(t, "Gift cards")
+	second := dbfx.Issue(t, "Store credit")
+	dbfx.Exec(t, `UPDATE test_generation_job SET input = jsonb_build_object('issue_ids', jsonb_build_array($1::text, $2::text)) WHERE id = $3`, first, second, jobID)
+	mine := createTestPoint(t, first, map[string]any{"title": "A gift card pays part of an order"})
+	theirs := createTestPoint(t, second, map[string]any{"title": "Store credit pays the rest"})
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM test_case_issue WHERE issue_id IN ($1, $2)`, first, second)
+	})
+	w := proposeRequest(t, jobID, testGenerationTaskUUID, []map[string]any{
+		{"kind": "new", "case": map[string]any{"title": "Split payment", "steps": executableSteps, "test_points": []string{mine.ID, theirs.ID}}},
+	})
+	if w.Code != http.StatusCreated {
+		t.Fatalf("propose: %d %s", w.Code, w.Body.String())
+	}
+	var created struct {
+		TestCases []TestCaseResponse `json:"test_cases"`
+	}
+	json.NewDecoder(w.Body).Decode(&created)
+	tc := created.TestCases[0]
+	testutil.Call(t, testHandler.ApproveTestCase, withURLParam(newRequest("POST", "/api/test-cases/"+tc.Key+"/approve?workspace_id="+testWorkspaceID, nil), "ref", tc.Key)).Want(http.StatusOK)
+	if w := proposeRequest(t, jobID, testGenerationTaskUUID, []map[string]any{
+		{"kind": "update", "target": tc.Key, "case": map[string]any{"title": "Split payment, refined", "steps": executableSteps, "test_points": []string{mine.ID}}},
+	}); w.Code != http.StatusCreated {
+		t.Fatalf("revise: %d %s", w.Code, w.Body.String())
+	}
+	var proposalID string
+	dbfx.QueryRow(t, `SELECT id FROM test_case_proposal WHERE target_case_id = $1 AND status = 'pending'`, tc.ID).Scan(&proposalID)
+	dbfx.Exec(t, `UPDATE test_case_proposal SET job_id = '00000000-0000-0000-0000-0000000dead1' WHERE id = $1`, proposalID)
+	testutil.Call(t, testHandler.AcceptTestCaseProposal, withURLParam(newRequest("POST", "/api/test-case-proposals/"+proposalID+"/accept?workspace_id="+testWorkspaceID, nil), "id", proposalID)).
+		Want(http.StatusOK)
+	var kept int
+	dbfx.QueryRow(t, `SELECT count(*) FROM test_case_test_point WHERE test_case_id = $1 AND test_point_id IN ($2, $3)`, tc.ID, mine.ID, theirs.ID).Scan(&kept)
+	if kept != 2 {
+		t.Fatalf("links after accepting a revision of unknown scope = %d, want both kept", kept)
+	}
+}

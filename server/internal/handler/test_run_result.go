@@ -90,9 +90,13 @@ func stepResultsProblem(result string, steps []TestRunStepResult, snapshotIndexe
 				return fmt.Sprintf("the case cannot pass while step %d is %s", step.Index, step.Result)
 			}
 		}
-		// Every step skipped is a pass on nothing executed: the case was
-		// skipped, and saying so keeps it out of coverage.
-		if len(steps) > 0 && !slices.ContainsFunc(steps, func(step TestRunStepResult) bool { return step.Result == "passed" }) {
+		// A complete record with every step skipped is a pass on nothing
+		// executed: the case was skipped, and saying so keeps it out of
+		// coverage. A person's partial annotations ("step 4 skipped, flag off
+		// on staging") say nothing about the steps they left blank.
+		complete := len(snapshotIndexes) > 0 && len(seen) == len(snapshotIndexes)
+		if (requireComplete || complete) && len(steps) > 0 &&
+			!slices.ContainsFunc(steps, func(step TestRunStepResult) bool { return step.Result == "passed" }) {
 			return "a passed case needs at least one passed step; when no step was executed, record the case as skipped"
 		}
 	case "failed":

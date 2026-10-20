@@ -1168,12 +1168,11 @@ func (h *Handler) StartTestRun(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	updated, err := h.Queries.UpdateTestRun(r.Context(), db.UpdateTestRunParams{
-		ID:          run.ID,
-		WorkspaceID: wsUUID,
-		Status:      pgtype.Text{String: "running", Valid: true},
-		StartedAt:   pgtype.Timestamptz{Time: time.Now(), Valid: true},
-	})
+	updated, err := h.Queries.StartPendingTestRun(r.Context(), db.StartPendingTestRunParams{ID: run.ID, WorkspaceID: wsUUID})
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusConflict, "only a pending run can be started")
+		return
+	}
 	if err != nil {
 		slog.Error("start test run failed", append(logger.RequestAttrs(r), "error", err)...)
 		writeError(w, http.StatusInternalServerError, "failed to start test run")
@@ -1593,14 +1592,14 @@ func (h *Handler) UpdateTestRunCaseResult(w http.ResponseWriter, r *http.Request
 	}
 	// executed_at orders a case's verdicts across rounds (its current verdict
 	// for coverage and verification). It is stamped when the case is first
-	// recorded, when a case that had no verdict (blocked, skipped) is finally
-	// executed, and when the verdict changes while the round is still in
-	// progress — each is a new execution. A note, a step edit, or a
-	// correction of a finished round fixes that execution's record and must
-	// not make it the newest.
-	roundOpen := run.Status == "pending" || run.Status == "running"
-	if !rc.ExecutedAt.Valid ||
-		(isTestRunVerdict(req.Result) && (!isTestRunVerdict(rc.Result) || (roundOpen && req.Result != rc.Result))) {
+	// recorded, and again when a write gives the case a new verdict while its
+	// round is still open (pending, running, or parked as blocked for manual
+	// execution) — that is a new execution. In a finished round a write is a
+	// correction of what was observed then: it keeps the time, so it never
+	// outranks a round that ran since. A new observation belongs in a new
+	// round (retry).
+	roundOpen := run.Status == "pending" || run.Status == "running" || run.Status == "blocked"
+	if !rc.ExecutedAt.Valid || (roundOpen && isTestRunVerdict(req.Result) && req.Result != rc.Result) {
 		params.ExecutedAt = pgtype.Timestamptz{Time: time.Now(), Valid: true}
 	}
 	if req.Notes != nil {

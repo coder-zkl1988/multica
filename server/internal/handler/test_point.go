@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/entitlement"
 	"github.com/multica-ai/multica/server/internal/logger"
+	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -676,14 +678,35 @@ func linkCaseToTestPoints(r *http.Request, qtx *db.Queries, caseID, wsUUID pgtyp
 // drew that the revision no longer claims are removed. A revision that names
 // no point (an older daemon's) leaves the links as they are, and links a
 // person drew are never removed.
-func replaceCaseAITestPoints(r *http.Request, qtx *db.Queries, caseID, wsUUID pgtype.UUID, revision caseTestPointRevision, origin string, createdBy pgtype.UUID) error {
+func (h *Handler) replaceCaseAITestPoints(r *http.Request, qtx *db.Queries, caseID, wsUUID pgtype.UUID, revision caseTestPointRevision, origin string, createdBy pgtype.UUID) error {
 	// A revision from an older daemon names no point at all; it says
 	// nothing about the links, so they stay.
 	if !revision.named {
-		return nil
+		return linkCaseToTestPoints(r, qtx, caseID, wsUUID, revision.link, origin, createdBy)
+	}
+	// A scope that names issues but resolved to none (an issue since
+	// deleted, an unreadable job) is not "any issue": the revision can speak
+	// for nothing, so nothing is removed.
+	if revision.scope != nil && len(revision.scope) == 0 {
+		return linkCaseToTestPoints(r, qtx, caseID, wsUUID, revision.link, origin, createdBy)
 	}
 	keep := make([]pgtype.UUID, 0, len(revision.keep))
 	keep = append(keep, revision.keep...)
+	// A link to a point on an issue outside the issue window is one the
+	// revising run could not have named; it is kept, not judged.
+	if existing, err := qtx.ListTestPointsForTestCase(r.Context(), db.ListTestPointsForTestCaseParams{TestCaseID: caseID, WorkspaceID: wsUUID}); err == nil {
+		for _, point := range existing {
+			if point.LinkOrigin != "ai" || slices.Contains(keep, point.ID) {
+				continue
+			}
+			var outside *service.IssueOutsideCreationWindowError
+			if windowErr := h.checkIssueWindowAuthorization(r, point.IssueID, wsUUID, "test_case_revision"); windowErr != nil && errors.As(windowErr, &outside) {
+				keep = append(keep, point.ID)
+			}
+		}
+	} else {
+		return err
+	}
 	scope := make([]pgtype.UUID, 0, len(revision.scope))
 	for issueID := range revision.scope {
 		scope = append(scope, issueID)

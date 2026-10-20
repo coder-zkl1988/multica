@@ -59,6 +59,12 @@ func (h *Handler) testGenerationCoverageSnapshot(ctx context.Context, job db.Tes
 			if proposal.Status != "pending" || proposal.Kind != "update" {
 				continue
 			}
+			// Only a revision of an active case covers anything once
+			// accepted; one queued against a case retired since does not.
+			target, err := h.Queries.GetTestCaseInWorkspace(ctx, db.GetTestCaseInWorkspaceParams{ID: proposal.TargetCaseID, WorkspaceID: job.WorkspaceID})
+			if err != nil || target.Status != "active" {
+				continue
+			}
 			var payload TestCaseProposalCasePayload
 			if json.Unmarshal(proposal.Payload, &payload) != nil {
 				continue
