@@ -11,7 +11,9 @@ The **Tests** tab holds one library of test cases per project. A case is a struc
 
 Each case carries a `TC-<n>` key, a module for grouping, preconditions, an ordered list of steps (each with an action and a checkable expectation), and a type. The type matters more than it looks: `business_flow`, `permission` and `data_consistency` exist so a library does not silently collapse into code-level checks.
 
-A case is only **active** when every step has an action and an expected result. Without them an execution can only ever come back "passed", so a case without checkable steps is kept as a `draft` until it has them.
+A case is only **active** when every step has an action and an expected result. Without them an execution can only ever come back "passed", so a case written without checkable steps starts as a `draft`, and the save that gives it checkable steps makes it active. A draft whose steps were already checkable waits for approval.
+
+A case an agent writes — in a generation job or from the CLI — starts as a `draft` that a person approves. An agent cannot approve a case or make one active, and cannot deprecate or delete an active one: a failing case is the signal a round exists to produce, and retiring it is a person's call.
 
 A case also records **which repositories it touches**. A project can bind several, and a case names the ones it relates to by role:
 
@@ -28,11 +30,11 @@ Set `scope` to `cross_repo` when a case spans systems — change a price in the 
 
 Linking a case to an issue says it is about that requirement. It does not say which of the requirement's conditions it checks — and one passing happy-path case used to be enough to mark an issue verified while its refusals, limits and permissions had no case at all.
 
-So an issue can be split into **test points** (`TP-1`, `TP-2`, …): conditions that can each be judged right or wrong on their own, such as "an order over the balance is refused with a message". Each point has a category — positive, negative, boundary, permission, state, data, non-functional — and cases declare which points they verify. A point is **uncovered** until an active case verifies it, **failing** when a covering case last failed, and **passed** when one last passed and none is failing.
+So an issue can be split into **test points** (`TP-1`, `TP-2`, …): conditions that can each be judged right or wrong on their own, such as "an order over the balance is refused with a message". Each point has a category — positive, negative, boundary, permission, state, data, non-functional — and cases declare which points they verify. A point is **uncovered** while no case verifies it, **drafts only** while only drafts do — approving one is what is left — **failing** when an active covering case last failed, and **passed** when one last passed and none is failing.
 
 An issue with test points is **verified** only when every active point is covered and passed and none of its active cases is failing. An issue without points falls back to its linked cases and shows **Cases pass** instead of **Verified**: nobody listed what had to be checked. Drafts and deprecated cases never count.
 
-**Tests → Coverage** lists every live issue of a project, worst first: failing, no tests at all, uncovered points, no test points, not all passed, verified. It is the list to work down before a release.
+**Tests → Coverage** lists every live issue of a project, worst first: failing, no tests at all, uncovered points, points only drafts cover (awaiting review), no test points, not all passed, verified. It is the list to work down before a release.
 
 ## Generating cases with an agent
 
@@ -92,9 +94,11 @@ Browser capabilities work today via a `playwright` or `chrome-devtools` MCP serv
 
 An agent's `passed` or `failed` is only accepted with a result for **every** step of the snapshot and at least one evidence file already uploaded for that case, so it uploads evidence first and records the verdict second. If an agent finishes without recording anything, a `passed` in its closing summary is recorded as `blocked`: a pass needs the evidence the summary does not carry.
 
+Each case is executed by its own agent run, which can record a result or upload evidence for that case only. A verdict sent without step results has to agree with the step results already recorded. Correcting a result keeps the time the case was first executed, so a fix to an old round never becomes the case's latest result.
+
 ## CLI
 
-Any agent can read the library; only a run's own agent can write that run's results.
+Any agent can read the library; only the agent executing a round can write its results, and in a round executed case by case each agent run writes only its own case.
 
 ```bash
 multica testcase list --project <id> --digest --output json

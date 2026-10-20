@@ -136,6 +136,32 @@ server's job — never send it.
 rejects a case that is already active, and a draft whose steps are not yet
 executable.
 
+A person's case created without executable steps (the issue page's "new case"
+button sends a title only) is a draft because there is nothing to check yet.
+The save that makes its steps executable activates it, unless that save names
+a `status`. A draft whose steps were already executable stays a draft until it
+is approved.
+
+### What an agent may write
+
+A case an agent writes is AI-written whichever command wrote it: `create` from
+an agent's task lands as `draft` with `origin: "ai"`, the same review gate a
+generation run's cases pass. A draft is how a person checks AI output before
+rounds execute it and coverage counts it, and a failing case is the signal a
+round exists to produce, so an agent can neither make a case live nor take one
+out of rounds:
+
+| Agent write | Outcome |
+| --- | --- |
+| `create --status active` | 403 |
+| `approve`, or `update --status active` on a draft | 403 |
+| `update --status deprecated`, or `delete`, on an active case | 403 |
+| `proposal accept` / `proposal reject` | 403 |
+| any other edit, and `delete` of a draft | allowed |
+
+When a 403 says so, tell the person which drafts are ready for review, or
+which case should be retired and why.
+
 ## Enums
 
 Sending a value outside these lists returns 400 with the allowed list; it never
@@ -263,6 +289,8 @@ approved cases land in the review queue:
     multica testcase proposal accept <proposal-id>
     multica testcase proposal reject <proposal-id>
 
+Accepting and rejecting are a member's decisions; an agent gets 403.
+
 Every case a run creates is linked to the issues in its APPROVED plan's
 `issues` scope, with `origin: "ai"`. The approved plan wins over the job's
 original `issue_ids` because a reviewer can edit the scope before approving,
@@ -309,8 +337,16 @@ points says which of its conditions it checks:
     GET    /api/test-cases/<ref>/test-points  # the points one case verifies
 
 Covering a point also links the case to the point's issue. Each point reports
-a `state`: `uncovered` (no active case verifies it), `not_run`, `failing`,
-`passed`, or `dropped`.
+a `state`:
+
+| state | meaning |
+| --- | --- |
+| `uncovered` | no case verifies it, not even a draft |
+| `in_review` | only drafts verify it — approving one is what is left |
+| `not_run` | an active case verifies it and has no recorded result |
+| `failing` | an active case that verifies it last failed |
+| `passed` | the active cases that verify it last passed |
+| `dropped` | the condition is no longer part of the requirement |
 
 Whether an issue is verified depends on `basis` in its test summary:
 

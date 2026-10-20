@@ -105,10 +105,16 @@ What the server refuses from an agent:
 | --- | --- |
 | `passed` or `failed` | the case already has at least one evidence file, and there is a step result for **every** step of the snapshot |
 | `passed` | no step is `failed`, `blocked` or `not_run` |
+| `passed` | the snapshot has at least one step — a case frozen without steps has nothing to compare, so record `blocked` and say so |
 | `failed` with step results | at least one step is `failed` — the one that diverged |
 | any step result | its `index` is a step of the snapshot, given once |
 | `pending` / `running` | never accepted from an agent; the platform sets them |
-| any result | the round is not `completed`, `blocked` or `aborted` |
+| any result or evidence | the round is not `completed`, `blocked` or `aborted` |
+| any result or evidence | the `run_case_id` is your task's own case (403 for a sibling's) |
+
+A verdict written without step results is checked against the step results
+already on file: changing a `failed` case to `passed` means sending the step
+results that make it a pass, in the same write.
 
 Add `:<what you observed>` to every step that did not pass, and wherever the
 expected result names a value (a total, a count, a message): a failure without
@@ -151,7 +157,9 @@ A round may carry a parallelism cap: the server queues only that many case tasks
 
 - Execute `case_snapshot` and nothing else. Sibling cases run in their own
   tasks, possibly on other phones, at the same time.
-- Record against `run_case_id` with `multica test result set`. The round
+- Record against `run_case_id` with `multica test result set`, and upload
+  evidence against the same id. Your task token is accepted for that case
+  only: a write against a sibling's `run_case_id` returns 403. The round
   completes by itself once every case is terminal; you never close it.
 - End with `TEST_RUN_CASE_RESULT_JSON:{"result":"passed|failed|blocked|skipped","summary":"…"}`.
   The CLI write is the record; the line only settles the case if the write

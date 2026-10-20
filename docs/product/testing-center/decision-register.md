@@ -329,6 +329,7 @@
 - 决定：`step_results` 有结构（`index` 对齐冻结快照、`result ∈ passed|failed|blocked|skipped|not_run`、`actual`、`note`）；智能体记 `passed` / `failed` 必须覆盖快照的每一步，且该用例已有至少一份证据（先 `evidence add` 再 `result set`）；`passed` 不得含 `failed` / `blocked` / `not_run` 步骤，`failed` 要指出失败的那一步；人工记录可以不填步骤，但填了就按同一规则校验。`aborted` 轮次拒绝一切写入；`completed` / `blocked` 轮次拒绝智能体写入、允许人工更正。兜底标记里的 `passed` 记为 `blocked` 并保留智能体摘要（失败可以靠标记结案，通过不行）。HTTP 写入后经 `convergeTestRun` 收敛，与任务钩子同一条路径。
 - 配套：`multica test result set --step <index>=<result>[:<实际>]`；两份执行提示词与 `multica-running-tests` 技能写明契约；`GET /api/test-run-cases/{id}/evidence`；轮次详情展开用例时显示冻结步骤、每步结论与实际值、证据文件（点开预览）。
 - 人工执行同等对待：工作区成员可以给轮次用例上传证据（智能体仍走 task token 三重门，`aborted` 轮次拒绝）；轮次未中止时每个冻结步骤都有结论选择与“实际看到了什么”输入，草稿随用例结论一起提交、按同一规则校验；任何证据上传都会推送 `test_run_case:updated`，打开的轮次页随之刷新。
+- 复审修正（2026-10-21 对抗复审）：按用例派发的任务只能写自己的 `run_case_id`——记结论与上传证据都一样，写兄弟用例返回 403；智能体上传证据同样受轮次状态约束（`completed` / `blocked` / `aborted` 返回 409）。任务钩子的兜底结案改为条件写，只写仍是 `pending` / `running` 的用例，不会覆盖智能体经 CLI 刚记下的结论；`aborted` 轮次里的兜底不写 `executed_at`，因此不会成为用例的“最近一次结果”。轮次完成改为条件写，只完成尚未 `completed` / `aborted` 的轮次：已中止的轮次不会被翻回 `completed`，autopilot 也不会被结算两次。钩子结案与轮次完成都推送事件，轮次页不再停在“执行中”。更正已记录的结果保留首次 `executed_at`，所以旧轮次的更正不会变成用例的最近一次结果。不带步骤结论的结论按已存的步骤结论校验（`failed` 改 `passed` 要在同一次写入里给出能成立的步骤结论）。冻结快照没有步骤的用例，智能体不能记 `passed`。轮次页只在步骤结论改动过时重发步骤，并保留每步的 `note`。停放（`blocked`）的轮次在所有用例都有结论后照常收敛为 `completed`：结论由各用例的结果承载，行为与此前相同。
 - 证据：`server/internal/handler/test_run_result.go`、`test_run.go` `UpdateTestRunCaseResult`、`test_run_daemon.go` `completeTestRunTask`；测试 `test_run_result_test.go`、`autopilot_test_run_test.go` `TestRecordingTheLastResultSettlesTheAutopilotRun`（去掉结算时该测试失败，已验证）。
 
 ### TS-037 有效用例必须可执行
@@ -336,7 +337,8 @@
 - 状态：`proposal` / `implemented`（待验收）
 - 问题：`active` 用例可以没有步骤，或步骤没有预期结果——这样的用例执行起来只可能“通过”；废弃用例照样进轮次；草稿、废弃用例照样计入“已验证”。
 - 决定：`active` 用例至少一步，每步有操作和预期；不满足时新建落为 `draft`（需求页“新建用例”只带标题，因此不受影响），显式设为 `active`、改步骤、审批、AI 提议（整批回滚）都返回 400 并指出哪一步；接受旧提议会把有效用例改得不可执行时返回 409。轮次跳过废弃用例（计划里还列着也照跑其余用例），全部废弃时拒绝建轮次；草稿仍可执行（试跑是正当需求），但不计入覆盖与验证。
-- 证据：`server/internal/handler/test_case.go` `testCaseStepsProblem`、`test_generation_propose.go`、`test_run.go` `loadCasesForRun`；测试 `test_case_gate_test.go`、`test_generation_test.go`、`test_run_test.go` `TestCreateTestRunSkipsDeprecatedCases`。
+- 复审修正：人写的、因为没有步骤才落成草稿的用例，在补齐可执行步骤的那次保存时自动生效；这次保存显式给了 `status` 时按给定值处理。步骤本来就完整的草稿和 AI 草稿仍要审批。旧版本遗留的“无步骤 `active` 用例”其它字段照常可改（只在步骤变化或转为 `active` 时校验），但智能体不能对其冻结快照记 `passed`。这条规则约束本版本之后的写入，存量数据不追溯降级。删除用例时同时把它从计划的列表里移除，计划不会因悬空 id 而无法建轮次。
+- 证据：`server/internal/handler/test_case.go` `testCaseStepsProblem`、`test_generation_propose.go`、`test_run.go` `loadCasesForRun`；测试 `test_case_gate_test.go`（含 `TestPersonsDraftGoesLiveWhenItsStepsAreFilledIn`、`TestLegacyActiveCaseStaysEditable`）、`test_generation_test.go`、`test_run_test.go` `TestCreateTestRunSkipsDeprecatedCases`、`test_plan_selector_test.go` `TestPlansOutliveTheirDeletedCases`。
 
 ### TS-038 覆盖按需求的测试点计算
 
@@ -344,6 +346,7 @@
 - 问题：覆盖率的分母不存在——“已验证”只看关联用例是否全部通过，一条正常路径用例通过，需求就显示已验证，而拒绝路径、边界、权限没人测，也没有任何地方列出“没测什么”。
 - 决定：新增测试点 `issue_test_point`（每个任务内 `TP-<n>`，类别 `positive|negative|boundary|permission|state|data|non_functional`，`origin ai|human`，`active|dropped`）与用例声明 `test_case_test_point`（声明测试点同时关联其任务）。测试点状态：无有效用例覆盖 = `uncovered`，有覆盖用例最近一次 `failed` = `failing`，有覆盖用例最近一次 `passed` 且无失败 = `passed`，否则 `not_run`。“已验证”按 `basis` 判定：有有效测试点时（`test_points`）每个都已覆盖并通过、且任务的有效关联用例中没有最近一次失败的；没有测试点时退回关联用例口径并标 `cases_only`，界面显示“用例通过”而不是“已验证”；什么都没有为 `none`。只计 `active` 用例。人写的测试点智能体不能改、不能删（403），智能体只能新增或改自己的、用 `dropped` 退场。
 - 配套：迁移 924–927（无外键、索引并发建、各自单文件；删任务 / 用例 / 测试点 / 工作区都清理）；`/api/issues/{id}/test-points`、`/api/test-points/{id}`、`/api/test-cases/{ref}/test-points`；`multica testcase point list|add|update`、`multica testcase cover`；需求页列出测试点、未覆盖高亮、可新增 / 废弃 / 选用例覆盖，用例页列出它验证的测试点；`test_case:updated` 与结果事件会刷新需求页覆盖。项目级“覆盖”页（测试 → 覆盖，`/tests/coverage`，`GET /api/test-coverage?project_id=`）列出项目内所有未取消的任务，按 `failing`（覆盖用例失败）、`no_tests`（没有有效用例也没有测试点）、`gaps`（有测试点未覆盖）、`no_points`（有用例但没拆测试点）、`not_run`、`verified` 从坏到好排序并可筛选——发版前要逐条处理的漏测清单。
+- 复审修正：新增测试点状态 `in_review`（界面“仅草稿覆盖”）：没有有效用例覆盖、但有草稿声明了它。生成运行的新用例都落草稿，不区分的话它刚覆盖的点会全部显示“未覆盖”，提示词又要求为未覆盖的点补用例，形成重复生成。覆盖页相应增加 `in_review` 行状态（“待审核”）与 `review_points` 列，排序在 `gaps` 之后。从任务解除用例关联时，同时删除该用例对这个任务测试点的声明，否则一个已无关联用例的任务仍可能显示已验证。人编辑 AI 测试点后其 `origin` 变为 `human`，之后智能体不能再改。用例修订（草稿改写、接受提议）替换它的 AI 测试点声明，而不是累加。接受提议前，对每个测试点所在的任务做与其它关联路径相同的窗口授权检查。覆盖页的截断与 `truncated` 标志改为在过滤之后计算。已知限制：删除编号最大的测试点后，下一个新点会复用该 `TP-<n>` 编号。
 - 证据：`server/internal/handler/test_point.go`、`test_issue_summary.go`；`packages/views/testing/components/issue-test-points.tsx`、`case-test-points.tsx`；测试 `test_point_test.go`（含“只测正常路径不算已验证”的端到端用例）、`issue-test-coverage.test.tsx`、`case-test-points.test.tsx`、`issue-test-summary-schema.test.ts`。
 
 ### TS-039 AI 生成先拆测试点，再逐点设计用例
@@ -352,6 +355,7 @@
 - 问题：生成提示词没有系统的测试设计方法，还写着“宁少勿多”——一条没有下限的引导，运行可以停在一条正常路径；生成结果只报数量，看不出漏了什么。
 - 决定：提示词先要求对 `plan.issues` 的每个任务读已有测试点、按七个类别补缺（人写的不改），再逐点派生用例：每个有效测试点至少一条；有输入的点覆盖等价类与边界值（min、min-1、max、max+1、空）；权限点每个被拒角色一条；状态点每个非法转换一条；“精确不等于少”。提议的 `case.test_points` 只能引用本次范围内任务的测试点（否则 400），存为 id，草稿直接改写与人工接受提议时建立关联；生成结束时服务端写入 `result.coverage`（每个范围内任务的有效 / 已覆盖测试点数与未覆盖列表），智能体自报的放 `declared_coverage`；生成任务页的结果区按任务列出“已覆盖 X/Y”与未覆盖的测试点，没拆测试点的任务单独标出。
 - 与复审草案的偏差：草案曾写“新用例必须声明测试点，否则拒绝”。实现改为**不拒绝、计数上报**（响应 `new_cases_without_test_points`）：守护进程与服务器版本可能不一致，旧守护进程的提示词不知道测试点，硬拒会让整次生成失败；约束改由提示词、需求页的未覆盖清单和结束时的覆盖快照承担。
+- 复审修正：生成结束时的覆盖快照此前从未在生产路径写入——完成钩子调用的是一个没有调用方的旧函数，现在由 `testGenerationCompletion` 写入 `result.coverage`。快照和提示词第 7 步都把“本次草稿已覆盖”的点算作 `in_review`，提示词明确不再为这些点加用例。
 - 证据：`server/internal/daemon/prompt.go` `buildTestGenerationPrompt`；`server/internal/handler/test_generation_propose.go`、`test_generation_daemon.go` `testGenerationCoverageSnapshot`；测试 `prompt_test.go`、`TestProposeTestCasesLinksDeclaredTestPoints`、`TestAcceptTestCaseProposalLinksItsTestPoints`、`TestGenerationCoverageSnapshotListsUncoveredPoints`。
 
 ### TS-040 回归计划按规则选例
@@ -359,6 +363,7 @@
 - 状态：`proposal` / `implemented`（待验收）
 - 问题：计划是静态列表，计划建好后新写的用例永远不进它的回归，夜间 autopilot 回归测到的产品范围逐周缩小。
 - 决定：`test_plan.selector`（迁移 928）：模块、优先级、用例类型、要跟随的任务（存 id）或“项目内所有有效用例”；维度之间取交、维度内取并、只选 `active`；`{}` 即无规则。一轮（人工建或 autopilot）先跑列出的用例，再跑规则此刻匹配到的有效用例（去重）；什么都选不出时拒绝建轮次。`GET /api/test-plans/{id}/selection` 预览下一轮及每条用例的来源，计划页可编辑规则并显示“下一轮将执行 N 条”。
+- 复审修正：模块规则按存储值精确匹配（此前会 trim 规则值，带首尾空格的模块永远匹配不到）；人工列出但已被删除的用例在预览与建轮次时都会被丢弃；用例变化会刷新计划的“下一轮”预览与开始按钮。已知限制：对不认识 `selector` 的旧服务器保存规则时，规则会被静默丢弃。
 - 证据：`server/internal/handler/test_plan_selector.go`、`test_run.go` `CreateTestRun`、`autopilot_test_run.go`；`packages/views/testing/components/plan-rule-section.tsx`；测试 `test_plan_selector_test.go`、`TestAutopilotRoundFollowsThePlansRule`、`plan-rule-section.test.tsx`。
 
 ### TS-041 用例类型拆成正交维度
@@ -372,6 +377,14 @@
 - 状态：`proposal`（未实现）
 - 问题：“已验证”只看最近一次结果，不看那次结果测的是哪个版本。需求合入新的 PR、部署新的构建之后，旧的通过仍然算数。
 - 建议：结果写入时记录轮次的 `build_ref`（已有字段）与部署 / 提交；任务关联的 PR 在最近一次通过之后合入，或环境当前构建晚于该次通过所用构建时，“已验证”降级为“待复测”，需求页给出“对新构建重跑覆盖用例”的入口。依赖部署信息的来源，先讨论。
+
+### TS-043 智能体写的用例同样要人审，智能体不能让用例生效或下线
+
+- 状态：`proposal` / `implemented`（待验收）
+- 问题：TS-004 规定生成任务的新用例落草稿，但智能体通过 CLI（`multica testcase create`）直接建的用例 `origin` 是 `human`，带步骤即为 `active`；智能体还能 `approve` 自己的草稿、`update --status active`、接受或拒绝提议，审批闸门形同虚设。反方向更危险：智能体能把一条失败的有效用例设为 `deprecated` 或直接删除，回归“变绿”，缺陷还在。
+- 决定：任务令牌发起的用例写入按智能体处理。新建一律 `origin ai`、默认 `draft`，显式 `active` 返回 403；`approve`、把草稿设为 `active`、接受或拒绝提议返回 403；把 `active` 用例设为 `deprecated` 或删除返回 403。智能体仍可编辑用例（有修订历史，可回滚），也可删除尚未审批的草稿。403 信息要求智能体告诉人：哪些草稿待审，哪条用例应该下线、为什么。
+- 未处理：智能体直接修改有效用例的步骤（例如放宽预期）仍然允许，靠修订历史追溯。若要收紧，应改成对有效用例的修改一律走提议，先讨论。
+- 证据：`server/internal/handler/test_case.go` `agentCannotActivateTestCase`、`agentCannotRetireTestCase`，`test_generation_propose.go` `reviewTestCaseProposal`；测试 `TestAgentCaseWaitsForAMembersApproval`、`TestAgentCannotRetireAnActiveCase`、`TestAgentCannotReviewATestCaseProposal`；`multica-test-cases` 技能的 “What an agent may write”。
 
 ## 开放问题
 

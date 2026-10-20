@@ -947,6 +947,15 @@ func TestTestCasesSkillCoversTheDataContract(t *testing.T) {
 		"`test_points`",
 		"| `cases_only` |",
 		"Only `active` cases count.",
+		// A point only drafts verify is in review, not uncovered: the generation
+		// prompt tells the agent not to add cases for it (handler: TestPointsCoveredOnlyByDraftsAreInReview).
+		"| `in_review` |",
+		// An agent's case passes the same review gate as a generation run's; it
+		// cannot activate, approve, retire, or decide proposals
+		// (handler: TestAgentCaseWaitsForAMembersApproval, TestAgentCannotRetireAnActiveCase,
+		// TestAgentCannotReviewATestCaseProposal).
+		"lands as `draft` with `origin: \"ai\"`",
+		"| `proposal accept` / `proposal reject` | 403 |",
 		// Multi-repo semantics are the reason roles exist at all.
 		"under_test",
 		"driver",
@@ -1037,6 +1046,13 @@ func TestRunningTestsSkillCoversExecutionContract(t *testing.T) {
 		"at least one evidence file",
 		"a step result for **every** step of the snapshot",
 		"a `passed` is recorded as `blocked`",
+		// A per-case task writes only its own case, a step-less snapshot cannot
+		// pass, and a bare verdict must agree with the step results on file
+		// (handler: TestPerCaseTaskCannotWriteASiblingCase,
+		// TestAgentCannotPassACaseFrozenWithoutSteps, TestVerdictMustAgreeWithStoredStepResults).
+		"(403 for a sibling's)",
+		"a case frozen without steps has nothing to compare",
+		"checked against the step results\nalready on file",
 		// Supporting file must ship.
 	}
 	for _, want := range mustContain {
