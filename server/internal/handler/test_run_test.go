@@ -883,3 +883,25 @@ func TestCreateTestRunSkipsDeprecatedCases(t *testing.T) {
 		t.Errorf("refused with %q, want it to say the cases are deprecated", resp.Text())
 	}
 }
+
+// A case deleted since the round ran is dropped from a "failed only" or
+// "all" retry, as from a plan round; one deleted case must not make the
+// round impossible to retry.
+func TestRetryDropsCasesDeletedSinceTheRound(t *testing.T) {
+	projectID := newTestRunProject(t)
+	kept := createTestCaseForRun(t, projectID)
+	gone := createTestCaseForRun(t, projectID)
+	run := createTestRunFromCases(t, "Round with a case deleted later", []string{kept.ID, gone.ID})
+	cases := listRunCases(t, run.ID)
+	setRunCaseResult(t, cases[0].ID, "failed")
+	setRunCaseResult(t, cases[1].ID, "failed")
+	testutil.Call(t, testHandler.DeleteTestCase, withURLParam(newRequest("DELETE", "/api/test-cases/"+gone.Key+"?workspace_id="+testWorkspaceID, nil), "ref", gone.Key)).
+		Want(http.StatusOK)
+
+	var retry TestRunResponse
+	testutil.Call(t, testHandler.RetryTestRun, withURLParam(newRequest("POST", "/api/test-runs/"+run.ID+"/retry?workspace_id="+testWorkspaceID,
+		map[string]any{"scope": "failed_only"}), "id", run.ID)).Want(http.StatusCreated).JSON(&retry)
+	if retried := listRunCases(t, retry.ID); len(retried) != 1 || retried[0].TestCaseID != kept.ID {
+		t.Fatalf("retry cases = %+v, want only the surviving case", retried)
+	}
+}

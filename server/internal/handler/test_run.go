@@ -1337,10 +1337,39 @@ func (h *Handler) RetryTestRun(w http.ResponseWriter, r *http.Request) {
 		title = fmt.Sprintf("Retry: %s", sourceRun.Title)
 	}
 
-	// Fetch fresh snapshots for all cases to be retried.
-	rawIDs := make([]string, len(sourceCases))
-	for i, sc := range sourceCases {
-		rawIDs[i] = uuidToString(sc.TestCaseID)
+	// Fetch fresh snapshots for all cases to be retried. A case deleted since
+	// the round ran is dropped from an "all" or "failed only" retry — the
+	// round runs what is left, as a plan round does — and refused only when
+	// someone picked it by hand or nothing is left.
+	rawIDs := make([]string, 0, len(sourceCases))
+	if req.Scope == "selected" {
+		for _, sc := range sourceCases {
+			rawIDs = append(rawIDs, uuidToString(sc.TestCaseID))
+		}
+	} else {
+		ids := make([]pgtype.UUID, len(sourceCases))
+		for i, sc := range sourceCases {
+			ids[i] = sc.TestCaseID
+		}
+		existing, err := h.Queries.ListTestCaseSummariesByIDs(r.Context(), db.ListTestCaseSummariesByIDsParams{CaseIds: ids, WorkspaceID: wsUUID})
+		if err != nil {
+			slog.Error("list retried cases failed", append(logger.RequestAttrs(r), "error", err)...)
+			writeError(w, http.StatusInternalServerError, "failed to load test cases")
+			return
+		}
+		alive := make(map[pgtype.UUID]struct{}, len(existing))
+		for _, row := range existing {
+			alive[row.ID] = struct{}{}
+		}
+		for _, sc := range sourceCases {
+			if _, ok := alive[sc.TestCaseID]; ok {
+				rawIDs = append(rawIDs, uuidToString(sc.TestCaseID))
+			}
+		}
+		if len(rawIDs) == 0 {
+			writeError(w, http.StatusBadRequest, "every case of this scope has been deleted since the round ran; nothing is left to retry")
+			return
+		}
 	}
 	freshCases, freshRepos, _, ok := h.fetchCasesForIDs(r.Context(), w, wsUUID, rawIDs)
 	if !ok {

@@ -1,4 +1,4 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { api } from "../api";
 import { useWorkspaceId } from "../hooks";
 import {
@@ -50,9 +50,21 @@ export function useCreateTestCase() {
       qc.setQueryData<TestCase>(testCaseKeys.detail(wsId, created.key), created);
     },
     onSettled: () => {
-      qc.invalidateQueries({ queryKey: testCaseKeys.all(wsId) });
+      invalidateAfterCaseWrite(qc, wsId);
     },
   });
+}
+
+/**
+ * A case write changes more than the case list: what a plan's rule selects
+ * (its next-round preview and Run button) and what an issue's coverage reads
+ * (a status or a changed procedure decides which results count). The
+ * realtime event refreshes them too, but a write must not depend on it.
+ */
+function invalidateAfterCaseWrite(qc: QueryClient, wsId: string) {
+  qc.invalidateQueries({ queryKey: testCaseKeys.all(wsId) });
+  qc.invalidateQueries({ queryKey: testPlanKeys.all(wsId) });
+  qc.invalidateQueries({ queryKey: issueTestCaseKeys.all(wsId) });
 }
 
 /**
@@ -86,7 +98,7 @@ export function useUpdateTestCase() {
       }
     },
     onSettled: () => {
-      qc.invalidateQueries({ queryKey: testCaseKeys.all(wsId) });
+      invalidateAfterCaseWrite(qc, wsId);
     },
   });
 }
@@ -114,7 +126,7 @@ export function useApproveTestCase() {
       }
     },
     onSettled: () => {
-      qc.invalidateQueries({ queryKey: testCaseKeys.all(wsId) });
+      invalidateAfterCaseWrite(qc, wsId);
     },
   });
 }
@@ -134,7 +146,7 @@ export function useDeleteTestCase() {
       qc.removeQueries({ queryKey: testCaseKeys.revisions(wsId, ref) });
     },
     onSettled: () => {
-      qc.invalidateQueries({ queryKey: testCaseKeys.all(wsId) });
+      invalidateAfterCaseWrite(qc, wsId);
     },
   });
 }

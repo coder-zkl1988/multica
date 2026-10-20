@@ -477,4 +477,45 @@ describe("TestRunDetail step drafts", () => {
       expect.anything(),
     );
   });
+
+  // An old agent recorded 0-based indexes; the server refuses them and the
+  // page cannot show them, so they are left out of a person's write.
+  it("leaves out stored entries at indexes the snapshot does not have", async () => {
+    const [row] = mocks.cases as Array<Record<string, unknown>>;
+    mocks.cases = [{ ...row, step_results: [...(row!.step_results as object[]), { index: 0, result: "passed", actual: "", note: "" }] }];
+    renderPage();
+    await userEvent.click(await screen.findByText("Coupon checkout"));
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: /Result of step 2|第 2 步的结果/ }), "blocked");
+    await userEvent.click(screen.getAllByRole("button", { name: /^(Failed|失败|실패)$/ })[0]!);
+    const [call] = mocks.updateCaseResult.mock.calls;
+    expect((call?.[0].data.step_results as Array<{ index: number }>).map((step) => step.index)).toEqual([1, 2]);
+  });
+
+  // A refused write leaves the person's draft; a co-tester's later save must
+  // not replace it with the stored verdicts.
+  it("keeps the step draft after a refused write when the row changes again", async () => {
+    mocks.updateCaseResult.mockImplementationOnce((_vars: unknown, options?: { onError?: (err: Error) => void }) => {
+      options?.onError?.(new Error("the case cannot pass while step 2 is blocked"));
+    });
+    const page = renderPage();
+    await userEvent.click(await screen.findByText("Coupon checkout"));
+    const step2 = screen.getByRole("combobox", { name: /Result of step 2|第 2 步的结果/ });
+    await userEvent.selectOptions(step2, "blocked");
+    await userEvent.click(screen.getAllByRole("button", { name: /^(Passed|通过|통과)$/ })[0]!);
+
+    mocks.cases = [{ ...(mocks.cases[0] as object), notes: "their note", updated_at: "2024-01-02T00:00:00Z" }];
+    page.rerenderPage();
+    expect(await screen.findByRole("combobox", { name: /Result of step 2|第 2 步的结果/ })).toHaveValue("blocked");
+  });
+
+  // Clearing every verdict is a decision too, and is sent as such.
+  it("sends an empty list when a person clears every step verdict", async () => {
+    renderPage();
+    await userEvent.click(await screen.findByText("Coupon checkout"));
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: /Result of step 1|第 1 步的结果/ }), "");
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: /Result of step 2|第 2 步的结果/ }), "");
+    await userEvent.click(screen.getAllByRole("button", { name: /^(Blocked|阻塞|차단)$/ })[0]!);
+    const [call] = mocks.updateCaseResult.mock.calls;
+    expect(call?.[0].data.step_results).toEqual([]);
+  });
 });

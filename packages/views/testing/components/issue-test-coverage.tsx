@@ -70,8 +70,12 @@ export function IssueTestCoverage({
 
   if (!hasContext && !canCreate) return null;
 
-  const failing = cases.filter((c) => c.latest_result === "failed").length;
-  const untested = cases.filter((c) => c.latest_result === null).length;
+  // Counted over active cases only, like the verified badge beside them: a
+  // deprecated case's old failure and an unreviewed draft say nothing about
+  // the requirement today, and must not contradict "Verified".
+  const activeCases = cases.filter((c) => c.case_status === "active");
+  const failing = activeCases.filter((c) => c.latest_result === "failed").length;
+  const untested = activeCases.filter((c) => c.latest_result === null).length;
 
   async function generateCases() {
     if (!projectId) return;
@@ -254,6 +258,13 @@ function CoverageRow({ link, href }: { link: IssueTestCaseLink; href: string }) 
       {link.origin === "ai" ? (
         <span className="shrink-0 rounded-sm bg-muted px-1 text-micro text-muted-foreground">
           {t(($) => $.origin.ai)}
+        </span>
+      ) : null}
+      {/* A draft awaits review and a deprecated case no longer counts; say so
+          instead of letting the row read like any other. */}
+      {link.case_status === "draft" || link.case_status === "deprecated" ? (
+        <span className="shrink-0 rounded-sm border px-1 text-micro text-muted-foreground">
+          {t(($) => $.status[link.case_status as "draft" | "deprecated"])}
         </span>
       ) : null}
       <span

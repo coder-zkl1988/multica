@@ -180,6 +180,22 @@ describe("IssueTestCoverage", () => {
     expect(screen.getByText(/1 not run|1 条未执行|未実行 1 件|미실행 1건/)).toBeTruthy();
   });
 
+  // The badge counts active cases only; the counts beside it must agree, and
+  // a draft or deprecated row says what it is.
+  it("leaves draft and deprecated cases out of the failing and not-run counts", async () => {
+    mocks.cases = [
+      makeLink({ test_case_id: "c-1", case_key: "TC-1", latest_result: "passed" }),
+      makeLink({ test_case_id: "c-2", case_key: "TC-2", case_status: "deprecated", latest_result: "failed" }),
+      makeLink({ test_case_id: "c-3", case_key: "TC-3", case_status: "draft", latest_result: null }),
+    ];
+    renderCoverage();
+    expect(await screen.findByText("TC-2")).toBeTruthy();
+    expect(screen.queryByText(/1 failing|1 条失败|失敗 1 件|실패 1건/)).toBeNull();
+    expect(screen.queryByText(/1 not run|1 条未执行|未実行 1 件|미실행 1건/)).toBeNull();
+    expect(screen.getByText(/^(Deprecated|已废弃)$/)).toBeTruthy();
+    expect(screen.getByText(/^(Draft|草稿)$/)).toBeTruthy();
+  });
+
   it("shows the verified badge and the latest round only when the server says so", async () => {
     mocks.cases = [makeLink()];
     mocks.summary = makeSummary();

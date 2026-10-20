@@ -369,23 +369,28 @@ export function TestRunDetail({ runId }: { runId: string }) {
                           )
                         }
                         onSetResult={(result, notes, stepResults) =>
-                          updateCaseResult.mutate(
-                            {
-                              id: runCase.id,
-                              runId,
-                              data: { result, notes, ...(stepResults ? { step_results: stepResults } : {}) },
-                            },
-                            {
-                              // The server says why a write is refused (an
-                              // aborted round is final); say that, not "failed".
-                              onError: (err) =>
-                                toast.error(
-                                  err instanceof Error && err.message
-                                    ? err.message
-                                    : t(($) => $.toast.runResultFailed),
-                                ),
-                            },
-                          )
+                          new Promise<void>((resolve, reject) => {
+                            updateCaseResult.mutate(
+                              {
+                                id: runCase.id,
+                                runId,
+                                data: { result, notes, ...(stepResults ? { step_results: stepResults } : {}) },
+                              },
+                              {
+                                onSuccess: () => resolve(),
+                                // The server says why a write is refused (an
+                                // aborted round is final); say that, not "failed".
+                                onError: (err) => {
+                                  toast.error(
+                                    err instanceof Error && err.message
+                                      ? err.message
+                                      : t(($) => $.toast.runResultFailed),
+                                  );
+                                  reject(new Error("set result failed"));
+                                },
+                              },
+                            );
+                          })
                         }
                         onSaveDraft={(notes, stepResults) =>
                           new Promise<void>((resolve, reject) => {
@@ -519,7 +524,7 @@ function RunCaseRow({
   resultsLocked: boolean;
   expanded: boolean;
   onToggleExpand: () => void;
-  onSetResult: (result: TestRunCaseResult, notes: string, stepResults?: StepResultInput[]) => void;
+  onSetResult: (result: TestRunCaseResult, notes: string, stepResults?: StepResultInput[]) => Promise<void>;
   onSaveDraft: (notes: string, stepResults?: StepResultInput[]) => Promise<void>;
   onOpenDefect: (title: string) => Promise<void>;
 }) {
@@ -546,10 +551,18 @@ function RunCaseRow({
   // draft rules as the notes: seeded from the server, followed on its change
   // marker while untouched, sent with the next result write.
   const [steps, setSteps] = useState<StepDraft>(() => draftFromRecorded(runCase.step_results));
+  // The last value the server held, and the draft a write is carrying. A
+  // draft that is still exactly what was sent follows the server's echo (it
+  // may normalize what it stored); one edited since, or whose write failed,
+  // is the person's and survives any server update.
   const syncedSteps = useRef(draftFromRecorded(runCase.step_results));
+  const sentSteps = useRef<StepDraft | null>(null);
   useEffect(() => {
     const fresh = draftFromRecorded(runCase.step_results);
-    if (sameDraft(steps, syncedSteps.current)) setSteps(fresh);
+    const followsServer =
+      sameDraft(steps, syncedSteps.current) || (sentSteps.current !== null && sameDraft(steps, sentSteps.current));
+    if (followsServer) setSteps(fresh);
+    sentSteps.current = null;
     syncedSteps.current = fresh;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runCase.id, runCase.updated_at]);
@@ -564,12 +577,24 @@ function RunCaseRow({
 
   // Step results are sent only when the person edited them: re-sending what
   // is stored would rewrite an agent's record on every note save, and a row
-  // the server would now refuse could block unrelated saves. The draft that
-  // was sent becomes the synced value, so the server's echo resyncs it.
+  // the server would now refuse could block unrelated saves. A person who
+  // cleared every verdict sends the empty list on purpose. Entries at indexes
+  // the snapshot does not have (an old agent's 0-based record) are left out:
+  // the server refuses them, and nobody can see them to clear them.
+  const snapshotIndexes = readSnapshotSteps(runCase.case_snapshot as Record<string, unknown>).map((step) => step.index);
   function stepsToSend(): StepResultInput[] | undefined {
     if (!stepsDirty) return undefined;
-    syncedSteps.current = steps;
-    return draftToRequest(steps);
+    sentSteps.current = steps;
+    return draftToRequest(steps, snapshotIndexes) ?? [];
+  }
+
+  async function setResult(result: TestRunCaseResult) {
+    try {
+      await onSetResult(result, notes, stepsToSend());
+    } catch {
+      // the toast is raised by the caller; the draft stays for a retry
+      sentSteps.current = null;
+    }
   }
 
   async function saveNotes() {
@@ -578,6 +603,7 @@ function RunCaseRow({
       await onSaveDraft(notes, stepsToSend());
     } catch {
       // the toast is raised by the caller; the draft stays for a retry
+      sentSteps.current = null;
     } finally {
       setSavingNotes(false);
     }
@@ -630,7 +656,7 @@ function RunCaseRow({
               aria-label={t(($) => $.run.result[result as keyof typeof $.run.result])}
               data-active={runCase.result === result || undefined}
               disabled={resultsLocked}
-              onClick={() => onSetResult(result, notes, stepsToSend())}
+              onClick={() => void setResult(result)}
               className={`rounded-sm px-2 py-0.5 text-caption transition-colors data-active:font-medium disabled:pointer-events-none disabled:opacity-50
                 ${result === "passed"
                   ? "text-success hover:bg-success/10 data-active:bg-success/20"
@@ -845,10 +871,12 @@ function sameDraft(a: StepDraft, b: StepDraft): boolean {
 }
 
 /** The draft as the server takes it, or undefined when nothing was recorded —
- *  sending an empty list would erase step results an agent wrote. */
-function draftToRequest(draft: StepDraft): StepResultInput[] | undefined {
+ *  sending an empty list would erase step results an agent wrote. With the
+ *  snapshot's step indexes, entries at any other index are dropped. */
+function draftToRequest(draft: StepDraft, snapshotIndexes: number[] = []): StepResultInput[] | undefined {
   const entries = Object.entries(draft)
     .filter(([, step]) => isKnownStepVerdict(step.result))
+    .filter(([index]) => snapshotIndexes.length === 0 || snapshotIndexes.includes(Number(index)))
     .map(([index, step]) => ({
       index: Number(index),
       result: step.result as KnownStepVerdict,

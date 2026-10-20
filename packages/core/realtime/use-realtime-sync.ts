@@ -671,6 +671,12 @@ function invalidateWorkspaceScopedQueries(qc: QueryClient): void {
     qc.invalidateQueries({ queryKey: chatKeys.all(wsId) });
     qc.invalidateQueries({ queryKey: labelKeys.all(wsId) });
     qc.invalidateQueries({ queryKey: propertyKeys.all(wsId) });
+    // Testing views run on staleTime: Infinity; a case, round or coverage
+    // event missed while disconnected would otherwise never show.
+    qc.invalidateQueries({ queryKey: testCaseKeys.all(wsId) });
+    qc.invalidateQueries({ queryKey: testPlanKeys.all(wsId) });
+    qc.invalidateQueries({ queryKey: testRunKeys.all(wsId) });
+    qc.invalidateQueries({ queryKey: issueTestCaseKeys.all(wsId) });
     // A catalog edit missed while disconnected would otherwise sit behind the
     // 5-minute staleTime — long enough to offer a status the server already
     // archived, or to keep painting its old name.
