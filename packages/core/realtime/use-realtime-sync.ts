@@ -677,6 +677,8 @@ function invalidateWorkspaceScopedQueries(qc: QueryClient): void {
     qc.invalidateQueries({ queryKey: testPlanKeys.all(wsId) });
     qc.invalidateQueries({ queryKey: testRunKeys.all(wsId) });
     qc.invalidateQueries({ queryKey: issueTestCaseKeys.all(wsId) });
+    qc.invalidateQueries({ queryKey: testGenerationJobKeys.all(wsId) });
+    qc.invalidateQueries({ queryKey: testCapabilityKeys.all(wsId) });
     // A catalog edit missed while disconnected would otherwise sit behind the
     // 5-minute staleTime — long enough to offer a status the server already
     // archived, or to keep painting its old name.

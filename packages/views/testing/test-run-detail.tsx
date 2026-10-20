@@ -369,57 +369,54 @@ export function TestRunDetail({ runId }: { runId: string }) {
                           )
                         }
                         onSetResult={(result, notes, stepResults) =>
-                          new Promise<void>((resolve, reject) => {
-                            updateCaseResult.mutate(
-                              {
-                                id: runCase.id,
-                                runId,
-                                data: { result, notes, ...(stepResults ? { step_results: stepResults } : {}) },
-                              },
-                              {
-                                onSuccess: () => resolve(),
+                          // mutateAsync, not mutate with callbacks: two rows
+                          // writing at once would drop the first call's
+                          // callbacks, and its row would never learn whether
+                          // the write was refused.
+                          updateCaseResult
+                            .mutateAsync({
+                              id: runCase.id,
+                              runId,
+                              data: { result, notes, ...(stepResults ? { step_results: stepResults } : {}) },
+                            })
+                            .then(
+                              () => undefined,
+                              (err: unknown) => {
                                 // The server says why a write is refused (an
                                 // aborted round is final); say that, not "failed".
-                                onError: (err) => {
-                                  toast.error(
-                                    err instanceof Error && err.message
-                                      ? err.message
-                                      : t(($) => $.toast.runResultFailed),
-                                  );
-                                  reject(new Error("set result failed"));
-                                },
+                                toast.error(
+                                  err instanceof Error && err.message
+                                    ? err.message
+                                    : t(($) => $.toast.runResultFailed),
+                                );
+                                throw new Error("set result failed");
                               },
-                            );
-                          })
+                            )
                         }
                         onSaveDraft={(notes, stepResults) =>
-                          new Promise<void>((resolve, reject) => {
-                            updateCaseResult.mutate(
-                              {
-                                id: runCase.id,
-                                runId,
-                                data: {
-                                  result: runCase.result,
-                                  notes,
-                                  ...(stepResults ? { step_results: stepResults } : {}),
-                                },
+                          updateCaseResult
+                            .mutateAsync({
+                              id: runCase.id,
+                              runId,
+                              data: {
+                                result: runCase.result,
+                                notes,
+                                ...(stepResults ? { step_results: stepResults } : {}),
                               },
-                              {
-                                onSuccess: () => {
-                                  toast.success(t(($) => $.toast.runResultSaved));
-                                  resolve();
-                                },
-                                onError: (err) => {
-                                  toast.error(
-                                    err instanceof Error && err.message
-                                      ? err.message
-                                      : t(($) => $.toast.runResultFailed),
-                                  );
-                                  reject(new Error("save draft failed"));
-                                },
+                            })
+                            .then(
+                              () => {
+                                toast.success(t(($) => $.toast.runResultSaved));
                               },
-                            );
-                          })
+                              (err: unknown) => {
+                                toast.error(
+                                  err instanceof Error && err.message
+                                    ? err.message
+                                    : t(($) => $.toast.runResultFailed),
+                                );
+                                throw new Error("save draft failed");
+                              },
+                            )
                         }
                         onOpenDefect={async (title) => {
                           try {

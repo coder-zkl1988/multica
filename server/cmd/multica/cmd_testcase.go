@@ -382,6 +382,7 @@ func registerTestcaseWriteFlags(cmd *cobra.Command) {
 	cmd.Flags().String("steps", "", `Steps as a JSON array: [{"index":1,"action":"…","expected":"…"}]`)
 	cmd.Flags().Bool("steps-stdin", false, "Read the steps JSON array from stdin")
 	cmd.Flags().String("steps-file", "", "Read the steps JSON array from a file in the working directory")
+	cmd.Flags().Bool("allow-external-file", false, "Allow a --*-file path outside the current working directory")
 	cmd.Flags().String("repos", "", `Repository bindings as a JSON array, replacing the case's: [{"project_resource_id":"…","alias":"web","role":"under_test","path_globs":["src/**"]}]`)
 	cmd.Flags().String("output", "json", "Output format: table or json")
 }
@@ -440,8 +441,12 @@ func testcaseBodyFromFlags(cmd *cobra.Command) (map[string]any, error) {
 		if err != nil {
 			return nil, err
 		}
-		if provided {
+		switch {
+		case provided:
 			body[field] = value
+		case cmd.Flags().Changed(flag):
+			// An explicitly empty value is a clear, like `--module ""`.
+			body[field] = ""
 		}
 	}
 	if raw, provided, err := testcaseJSONFlag(cmd, "steps"); err != nil {

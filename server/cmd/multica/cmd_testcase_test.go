@@ -442,3 +442,16 @@ func TestRunTestcaseProposalAcceptHitsAcceptEndpoint(t *testing.T) {
 		t.Errorf("path = %s, want %s", gotPath, want)
 	}
 }
+
+// `--preconditions ""` clears the field, as `--module ""` does.
+func TestTestcaseBodyClearsAnExplicitlyEmptyTextFlag(t *testing.T) {
+	cmd := newTestcaseWriteTestCmd()
+	cmd.Flags().Set("preconditions", "")
+	body, err := testcaseBodyFromFlags(cmd)
+	if err != nil {
+		t.Fatalf("build body: %v", err)
+	}
+	if value, ok := body["preconditions"]; !ok || value != "" {
+		t.Fatalf("body = %#v, want preconditions cleared", body)
+	}
+}

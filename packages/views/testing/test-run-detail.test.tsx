@@ -56,7 +56,7 @@ vi.mock("@multica/core/testing", () => ({
   useAbortTestRun: () => ({ mutateAsync: mocks.abortRun, isPending: false }),
   useRetryTestRun: () => ({ mutateAsync: mocks.retryRun, isPending: false }),
   useDispatchTestRun: () => ({ mutateAsync: mocks.dispatchRun, isPending: false }),
-  useUpdateTestRunCaseResult: () => ({ mutate: mocks.updateCaseResult, isPending: false }),
+  useUpdateTestRunCaseResult: () => ({ mutateAsync: mocks.updateCaseResult, isPending: false }),
   useOpenTestRunCaseDefect: () => ({ mutateAsync: mocks.openDefect, isPending: false }),
   useUploadTestRunCaseEvidence: () => ({ mutateAsync: mocks.uploadEvidence, isPending: false }),
 }));
@@ -128,6 +128,8 @@ function renderPage(adapter = makeAdapter()) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // The page awaits result writes (mutateAsync).
+  mocks.updateCaseResult.mockImplementation(() => Promise.resolve());
   mocks.run = makeRun();
   mocks.cases = [];
   mocks.agents = [];
@@ -259,7 +261,6 @@ describe("TestRunDetail case result", () => {
     await userEvent.click(passedBtns[0]!);
     expect(mocks.updateCaseResult).toHaveBeenCalledWith(
       expect.objectContaining({ id: "rc-1", data: expect.objectContaining({ result: "passed" }) }),
-      expect.anything(),
     );
   });
 
@@ -280,7 +281,6 @@ describe("TestRunDetail case result", () => {
         id: "rc-1",
         data: expect.objectContaining({ result: "passed", notes: "flaky on retry" }),
       }),
-      expect.anything(),
     );
   });
 
@@ -388,7 +388,6 @@ describe("TestRunDetail case procedure", () => {
           ],
         }),
       }),
-      expect.anything(),
     );
   });
 
@@ -474,7 +473,6 @@ describe("TestRunDetail step drafts", () => {
           ],
         }),
       }),
-      expect.anything(),
     );
   });
 
@@ -494,9 +492,7 @@ describe("TestRunDetail step drafts", () => {
   // A refused write leaves the person's draft; a co-tester's later save must
   // not replace it with the stored verdicts.
   it("keeps the step draft after a refused write when the row changes again", async () => {
-    mocks.updateCaseResult.mockImplementationOnce((_vars: unknown, options?: { onError?: (err: Error) => void }) => {
-      options?.onError?.(new Error("the case cannot pass while step 2 is blocked"));
-    });
+    mocks.updateCaseResult.mockImplementationOnce(() => Promise.reject(new Error("the case cannot pass while step 2 is blocked")));
     const page = renderPage();
     await userEvent.click(await screen.findByText("Coupon checkout"));
     const step2 = screen.getByRole("combobox", { name: /Result of step 2|第 2 步的结果/ });
