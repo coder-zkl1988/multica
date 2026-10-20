@@ -1,6 +1,6 @@
 # Multica 测试中心决策台账
 
-> 最后更新：2026-09-16
+> 最后更新：2026-10-20
 > 规则：保留历史，通过状态变化表达推翻或替代，不删除旧决策
 
 ## 状态说明
@@ -260,6 +260,7 @@
 - 状态：`confirmed`（实现者定义，用户可推翻）
 - 决定：“已验证”= 至少一条关联用例，且每条关联用例**最近一次执行**的结果都是 passed（与 Issue 覆盖列表已有的 `latest_result` 同一口径），只作徽章不改状态；“最近一轮”= 执行过任一关联用例的最新轮次，展示其中关联用例的结果分布；“测试发现的缺陷”= 关联用例所在轮次通过 `defect open` 开出的 Issue，按缺陷去重取最新一次发现。
 - 证据随缺陷：复制为同一存储对象的第二条附件行（`CreateAttachmentCopyForIssue`），`DeleteAttachment` 在仍有其他行引用同一对象时不删对象；不做存储层拷贝，因为 `Storage` 接口没有 Copy 且同一对象没有理由存两份。
+- 2026-10-20：TS-038 提案修订其中“已验证”的口径（按测试点判定、只计有效用例），已实现、待用户验收；验收后本条的“已验证”定义改为 `superseded`，“最近一轮”“测试发现的缺陷”与证据随缺陷不变。
 - 延后：09-02 §7.5 的“autopilot 回归模板（按计划建轮次并派发给 QA 智能体，定时触发）”。autopilot 现有执行模式只有 `create_issue` / `run_only`，没有能调用测试轮次 API 的动作；做法有两种——给 autopilot 加一种 `test_run` 动作，或让它创建一个派给 QA 智能体的 Issue 并靠技能里的 `multica test run` 命令组完成——两者都超出“看板”一行的范围，留到 M6 与“按差异推荐回归”一起定。
 
 ## 2026-09-07 落地记录：M6 的取舍
@@ -316,6 +317,60 @@
 - 移除：移动端设备执行器（TS-015）、中枢 Android 轨道在 Multica 中的用途（TS-022 / TS-026 的 Android 部分）、运行时页配对。iPhone 不变：仍是中枢 + PulsePhone（TS-031），逐帧由 Multica 智能体读屏（TS-034）。
 - 测试机的运维前提（代码不负责）：Artemis 需要模型 API 密钥（`.env`，默认 Gemini，逐帧定位默认要 Gemini ER 模型）；首次任务会往手机装无障碍助手 APK——小米 HyperOS 默认禁止 USB 安装，要么由机主打开“USB 安装”，要么在 Artemis `.env` 设 `ARTEMIS_HELPER_AUTO_INSTALL=false` 与 `ARTEMIS_HIERARCHY_BACKEND=uiautomator`；Artemis 默认保持被占用手机亮屏；Artemis 的调度守护进程默认占 8000 端口，测试机上若有开发服务占着（本机就是），在守护进程环境里设 `MULTICA_ARTEMIS_DAEMON_PORT`，它随能力 target 传给每条用例的代理（`--daemon-port` → `ARTEMIS_DAEMON_PORT`），所有用例共用同一个 Artemis 守护进程；录屏回放需要 scrcpy（可选，本机已用 Homebrew 装在 `/opt/homebrew/bin/scrcpy`）。adb 只解析一次：守护进程按 Artemis 自己的顺序（`ARTEMIS_ADB_PATH` → `ANDROID_HOME` / `ANDROID_SDK_ROOT` → SDK 默认位置 → Homebrew → PATH，PATH 放最后，桌面 App 拉起与终端启动选中同一个）找到 adb，作为 `adb_path` 随能力下发，代理以 `--adb` 设进 `ARTEMIS_ADB_PATH` 与 `ADB`，Artemis 和它调用的 scrcpy 都用这一个——scrcpy 否则只在 PATH 里找 adb，桌面 App 拉起的智能体没有登录 shell 的 PATH 时录屏会失败。
 - 未做：真机端到端（缺模型密钥与机主对安装的许可）；`mobile_manage_task` / `mobile_inspect_trace` 以 trace id 为界（只有启动它的用例拿得到这个 UUID），代理未额外校验 trace 归属。
+
+## 2026-10-20 测试模型复审（用户授权“按你的经验进行修改”，待验收）
+
+用户原话：“重新审视一下测试模型，设计的合理性，以及功能的完整性，如果不合理，和当前系统不匹配，或者现有的功能设计会导致测试覆盖度低，会遗漏大量的bug，那么就按照你的经验进行修改，8个小时之后我验收成果”。下列 TS-036 至 TS-040 是据此做出的修改，已在分支 `feat/testing-model-review` 实现并有测试，但仍是 `proposal`：用户验收前不得写成 `confirmed`。问题清单与取舍见 [2026-10-20 复审](../../superpowers/specs/2026-10-20-testing-model-review.md)。
+
+### TS-036 记录下来的结果必须可信
+
+- 状态：`proposal` / `implemented`（待验收）
+- 问题：智能体可以不带任何步骤结果、不传一张截图就记 `passed`；兜底标记 `TEST_RUN_CASE_RESULT_JSON` 里一个 `passed` 就能结案；中止后的轮次被晚到的写入翻成 `completed`；最后一条结果经 HTTP 写入时轮次完成但没有结算 autopilot，夜间回归永远停在 `running`。
+- 决定：`step_results` 有结构（`index` 对齐冻结快照、`result ∈ passed|failed|blocked|skipped|not_run`、`actual`、`note`）；智能体记 `passed` / `failed` 必须覆盖快照的每一步，且该用例已有至少一份证据（先 `evidence add` 再 `result set`）；`passed` 不得含 `failed` / `blocked` / `not_run` 步骤，`failed` 要指出失败的那一步；人工记录可以不填步骤，但填了就按同一规则校验。`aborted` 轮次拒绝一切写入；`completed` / `blocked` 轮次拒绝智能体写入、允许人工更正。兜底标记里的 `passed` 记为 `blocked` 并保留智能体摘要（失败可以靠标记结案，通过不行）。HTTP 写入后经 `convergeTestRun` 收敛，与任务钩子同一条路径。
+- 配套：`multica test result set --step <index>=<result>[:<实际>]`；两份执行提示词与 `multica-running-tests` 技能写明契约；`GET /api/test-run-cases/{id}/evidence`；轮次详情展开用例时显示冻结步骤、每步结论与实际值、证据文件（点开预览）。
+- 证据：`server/internal/handler/test_run_result.go`、`test_run.go` `UpdateTestRunCaseResult`、`test_run_daemon.go` `completeTestRunTask`；测试 `test_run_result_test.go`、`autopilot_test_run_test.go` `TestRecordingTheLastResultSettlesTheAutopilotRun`（去掉结算时该测试失败，已验证）。
+
+### TS-037 有效用例必须可执行
+
+- 状态：`proposal` / `implemented`（待验收）
+- 问题：`active` 用例可以没有步骤，或步骤没有预期结果——这样的用例执行起来只可能“通过”；废弃用例照样进轮次；草稿、废弃用例照样计入“已验证”。
+- 决定：`active` 用例至少一步，每步有操作和预期；不满足时新建落为 `draft`（需求页“新建用例”只带标题，因此不受影响），显式设为 `active`、改步骤、审批、AI 提议（整批回滚）都返回 400 并指出哪一步；接受旧提议会把有效用例改得不可执行时返回 409。轮次跳过废弃用例（计划里还列着也照跑其余用例），全部废弃时拒绝建轮次；草稿仍可执行（试跑是正当需求），但不计入覆盖与验证。
+- 证据：`server/internal/handler/test_case.go` `testCaseStepsProblem`、`test_generation_propose.go`、`test_run.go` `loadCasesForRun`；测试 `test_case_gate_test.go`、`test_generation_test.go`、`test_run_test.go` `TestCreateTestRunSkipsDeprecatedCases`。
+
+### TS-038 覆盖按需求的测试点计算
+
+- 状态：`proposal` / `implemented`（待验收）；验收后替代 TS-030 的“已验证”定义
+- 问题：覆盖率的分母不存在——“已验证”只看关联用例是否全部通过，一条正常路径用例通过，需求就显示已验证，而拒绝路径、边界、权限没人测，也没有任何地方列出“没测什么”。
+- 决定：新增测试点 `issue_test_point`（每个任务内 `TP-<n>`，类别 `positive|negative|boundary|permission|state|data|non_functional`，`origin ai|human`，`active|dropped`）与用例声明 `test_case_test_point`（声明测试点同时关联其任务）。测试点状态：无有效用例覆盖 = `uncovered`，有覆盖用例最近一次 `failed` = `failing`，有覆盖用例最近一次 `passed` 且无失败 = `passed`，否则 `not_run`。“已验证”按 `basis` 判定：有有效测试点时（`test_points`）每个都已覆盖并通过、且任务的有效关联用例中没有最近一次失败的；没有测试点时退回关联用例口径并标 `cases_only`，界面显示“用例通过”而不是“已验证”；什么都没有为 `none`。只计 `active` 用例。人写的测试点智能体不能改、不能删（403），智能体只能新增或改自己的、用 `dropped` 退场。
+- 配套：迁移 924–927（无外键、索引并发建、各自单文件；删任务 / 用例 / 测试点 / 工作区都清理）；`/api/issues/{id}/test-points`、`/api/test-points/{id}`、`/api/test-cases/{ref}/test-points`；`multica testcase point list|add|update`、`multica testcase cover`；需求页列出测试点、未覆盖高亮、可新增 / 废弃 / 选用例覆盖，用例页列出它验证的测试点；`test_case:updated` 与结果事件会刷新需求页覆盖。
+- 证据：`server/internal/handler/test_point.go`、`test_issue_summary.go`；`packages/views/testing/components/issue-test-points.tsx`、`case-test-points.tsx`；测试 `test_point_test.go`（含“只测正常路径不算已验证”的端到端用例）、`issue-test-coverage.test.tsx`、`case-test-points.test.tsx`、`issue-test-summary-schema.test.ts`。
+
+### TS-039 AI 生成先拆测试点，再逐点设计用例
+
+- 状态：`proposal` / `implemented`（待验收）
+- 问题：生成提示词没有系统的测试设计方法，还写着“宁少勿多”——一条没有下限的引导，运行可以停在一条正常路径；生成结果只报数量，看不出漏了什么。
+- 决定：提示词先要求对 `plan.issues` 的每个任务读已有测试点、按七个类别补缺（人写的不改），再逐点派生用例：每个有效测试点至少一条；有输入的点覆盖等价类与边界值（min、min-1、max、max+1、空）；权限点每个被拒角色一条；状态点每个非法转换一条；“精确不等于少”。提议的 `case.test_points` 只能引用本次范围内任务的测试点（否则 400），存为 id，草稿直接改写与人工接受提议时建立关联；生成结束时服务端写入 `result.coverage`（每个范围内任务的有效 / 已覆盖测试点数与未覆盖列表），智能体自报的放 `declared_coverage`。
+- 与复审草案的偏差：草案曾写“新用例必须声明测试点，否则拒绝”。实现改为**不拒绝、计数上报**（响应 `new_cases_without_test_points`）：守护进程与服务器版本可能不一致，旧守护进程的提示词不知道测试点，硬拒会让整次生成失败；约束改由提示词、需求页的未覆盖清单和结束时的覆盖快照承担。
+- 证据：`server/internal/daemon/prompt.go` `buildTestGenerationPrompt`；`server/internal/handler/test_generation_propose.go`、`test_generation_daemon.go` `testGenerationCoverageSnapshot`；测试 `prompt_test.go`、`TestProposeTestCasesLinksDeclaredTestPoints`、`TestAcceptTestCaseProposalLinksItsTestPoints`、`TestGenerationCoverageSnapshotListsUncoveredPoints`。
+
+### TS-040 回归计划按规则选例
+
+- 状态：`proposal` / `implemented`（待验收）
+- 问题：计划是静态列表，计划建好后新写的用例永远不进它的回归，夜间 autopilot 回归测到的产品范围逐周缩小。
+- 决定：`test_plan.selector`（迁移 928）：模块、优先级、用例类型、要跟随的任务（存 id）或“项目内所有有效用例”；维度之间取交、维度内取并、只选 `active`；`{}` 即无规则。一轮（人工建或 autopilot）先跑列出的用例，再跑规则此刻匹配到的有效用例（去重）；什么都选不出时拒绝建轮次。`GET /api/test-plans/{id}/selection` 预览下一轮及每条用例的来源，计划页可编辑规则并显示“下一轮将执行 N 条”。
+- 证据：`server/internal/handler/test_plan_selector.go`、`test_run.go` `CreateTestRun`、`autopilot_test_run.go`；`packages/views/testing/components/plan-rule-section.tsx`；测试 `test_plan_selector_test.go`、`TestAutopilotRoundFollowsThePlansRule`、`plan-rule-section.test.tsx`。
+
+### TS-041 用例类型拆成正交维度
+
+- 状态：`proposal`（未实现）
+- 问题：`case_type` 一个枚举混了三件不同的事——测试层级（`api` / `ui` / `e2e`）、设计技术（`boundary` / `exception` / `permission`）、质量属性（`performance` / `security` / `compatibility`）。一条“接口层的边界值用例”只能选一个，覆盖统计因此失真，按类型的回归规则也选不准。
+- 建议：拆成 `level`、`technique`（可多值）、`quality_attribute`；测试点类别（TS-038）承担“设计技术”的大部分职责后，`technique` 可以从测试点推出，不必让人重复填写。需要数据迁移与筛选 / 统计口径的同步修改，先讨论。
+
+### TS-042 验证会过期：结果要绑定构建
+
+- 状态：`proposal`（未实现）
+- 问题：“已验证”只看最近一次结果，不看那次结果测的是哪个版本。需求合入新的 PR、部署新的构建之后，旧的通过仍然算数。
+- 建议：结果写入时记录轮次的 `build_ref`（已有字段）与部署 / 提交；任务关联的 PR 在最近一次通过之后合入，或环境当前构建晚于该次通过所用构建时，“已验证”降级为“待复测”，需求页给出“对新构建重跑覆盖用例”的入口。依赖部署信息的来源，先讨论。
 
 ## 开放问题
 

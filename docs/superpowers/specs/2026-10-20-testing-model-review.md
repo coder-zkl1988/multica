@@ -49,7 +49,8 @@
 - 生成提示词：先为 `plan.issues` 中的每个需求列出测试点（已有测试点先读、只补缺口），再对每个测试点按类别派生用例：正常路径至少一条；有输入的点要覆盖非法输入与边界值；有角色差异的点要覆盖无权限的角色；有状态的点要覆盖非法状态转换。每条新用例必须声明它验证的测试点。
 - 删掉“宁少勿多”这句无下限的引导，改为“精确不等于少：每个测试点都要被覆盖，除非明确说明为何无法用用例验证”。
 - 结果 JSON 增加 `coverage`：每个测试点是否被覆盖、由哪些用例覆盖、未覆盖的原因。
-- 服务端：提议的 `new` 用例若关联了需求，必须至少声明一个该需求的测试点；AI 可以通过同一次提议新增测试点（`origin = ai`）。
+- 服务端：提议的用例用 `case.test_points` 声明它验证的测试点，只能引用本次范围内任务的测试点；AI 先用 `multica testcase point add` 新增测试点（`origin = ai`），再在提议里引用。
+  - 实现时的调整：原本打算“范围内的新用例不声明测试点就拒绝”。守护进程与服务器版本可能不一致，旧守护进程的提示词不认识测试点，硬拒会让整次生成失败，因此改为不拒绝、在响应里计数（`new_cases_without_test_points`），由提示词、需求页未覆盖清单与结束时的覆盖快照承担约束。
 
 ### 3.3 用例质量门槛
 
@@ -78,9 +79,9 @@
 
 | 步骤 | 内容 | 提交 |
 | --- | --- | --- |
-| 1 | 结果可信与用例门槛（3.3、3.4）+ 契约文本 | `fix(testing): …` |
-| 2 | 需求测试点与覆盖口径（3.1）+ AI 生成（3.2）+ CLI + 需求页 | `feat(testing): …` |
-| 3 | 动态回归计划（3.5） | `feat(testing): …` |
-| 4 | README §5、决策台账 TS-036 起 | `docs(testing): …` |
+| 1 | 结果可信与用例门槛（3.3、3.4）+ 契约文本 | `fix(testing): make recorded results and active cases trustworthy` |
+| 2 | 需求测试点与覆盖口径（3.1）+ AI 生成（3.2）+ CLI + 需求页 | `feat(testing): count coverage against requirement test points` |
+| 3 | 动态回归计划（3.5） | `feat(testing): let regression plans select cases by rule` |
+| 4 | README §5、决策台账 TS-036 至 TS-042 | `docs(testing): record the testing model review decisions` |
 
 每一步：Go 单元与 DB 测试（独立库 `multica_testing_review`）、`pnpm typecheck`、相关前端测试；契约变化同 PR 更新 `builtin_skills/multica-test-cases` 与 `multica-running-tests` 的 references。
