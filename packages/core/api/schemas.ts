@@ -5808,9 +5808,10 @@ const TestPointSummarySchema = z.object({
   covered: z.number().default(0),
   passed: z.number().default(0),
   failing: z.number().default(0),
+  in_review: z.number().default(0),
 }).loose();
 
-const EMPTY_TEST_POINT_SUMMARY = { active: 0, covered: 0, passed: 0, failing: 0 };
+const EMPTY_TEST_POINT_SUMMARY = { active: 0, covered: 0, passed: 0, failing: 0, in_review: 0 };
 
 export const ListIssueTestPointsResponseSchema = z.object({
   test_points: z.array(z.object({
@@ -5856,6 +5857,7 @@ export const ProjectCoverageResponseSchema = z.object({
     failing_cases: z.number().default(0),
     active_points: z.number().default(0),
     covered_points: z.number().default(0),
+    review_points: z.number().default(0),
     passed_points: z.number().default(0),
     failing_points: z.number().default(0),
     // A row a server sent half of must not read as covered.
@@ -6022,7 +6024,7 @@ export const EMPTY_ISSUE_TEST_SUMMARY: IssueTestSummary = {
   cases: 0,
   verified: false,
   basis: "none",
-  test_points: { active: 0, covered: 0, passed: 0, failing: 0 },
+  test_points: { active: 0, covered: 0, passed: 0, failing: 0, in_review: 0 },
   latest_run: null,
   defects: [],
   found_by: [],

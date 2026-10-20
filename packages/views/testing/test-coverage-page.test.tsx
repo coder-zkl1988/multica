@@ -5,13 +5,13 @@ import { renderWithI18n } from "../test/i18n";
 import { NavigationProvider, type NavigationAdapter } from "../navigation";
 import { TestCoveragePage } from "./test-coverage-page";
 
-const mocks = vi.hoisted(() => ({ coverage: undefined as unknown }));
+const mocks = vi.hoisted(() => ({ coverage: undefined as unknown, projectId: "proj-1" }));
 
 vi.mock("@tanstack/react-query", () => ({
   useQuery: (opts: { queryKey: readonly unknown[] }) =>
     opts.queryKey.includes("project-coverage")
       ? { data: mocks.coverage, isLoading: false }
-      : { data: [{ id: "proj-1", title: "Shop" }], isLoading: false },
+      : { data: [{ id: "proj-1", title: "Shop" }, { id: "proj-2", title: "Admin" }], isLoading: false },
 }));
 
 vi.mock("@multica/core/hooks", () => ({ useWorkspaceId: () => "ws-1" }));
@@ -31,7 +31,7 @@ vi.mock("@multica/core/testing", () => ({
   PROJECT_COVERAGE_STATE_TONE: { failing: "", no_tests: "", gaps: "", no_points: "", not_run: "", verified: "" },
   projectTestCoverageOptions: () => ({ queryKey: ["issue-test-cases", "ws-1", "project-coverage", "proj-1"] }),
   useTestCaseViewStore: (selector: (state: { projectId: string; setProjectId: () => void }) => unknown) =>
-    selector({ projectId: "proj-1", setProjectId: () => {} }),
+    selector({ projectId: mocks.projectId, setProjectId: () => {} }),
 }));
 
 function makeAdapter(): NavigationAdapter {
@@ -65,6 +65,7 @@ function issue(overrides: Record<string, unknown>) {
 }
 
 beforeEach(() => {
+  mocks.projectId = "proj-1";
   mocks.coverage = {
     issues: [
       issue({ issue_id: "i-9", issue_number: 9, issue_identifier: "MUL-9", title: "Verified flow", active_cases: 2, active_points: 2, covered_points: 2, passed_points: 2, state: "verified" }),
@@ -99,5 +100,22 @@ describe("TestCoveragePage", () => {
     const rows = screen.getAllByRole("row").slice(1);
     expect(rows).toHaveLength(1);
     expect(within(rows[0]!).getByText("Untested requirement")).toBeTruthy();
+  });
+});
+
+describe("TestCoveragePage project switch", () => {
+  it("drops a state filter picked on another project", async () => {
+    const view = renderPage();
+    await userEvent.click(await screen.findByRole("button", { name: /No tests|没有测试/ }));
+    expect(screen.getAllByRole("row").slice(1)).toHaveLength(1);
+
+    mocks.projectId = "proj-2";
+    view.rerender(
+      <NavigationProvider value={makeAdapter()}>
+        <TestCoveragePage />
+      </NavigationProvider>,
+    );
+    expect(await screen.findByRole("button", { name: /^(All|全部)/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getAllByRole("row").slice(1)).toHaveLength(3);
   });
 });

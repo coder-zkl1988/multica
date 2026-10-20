@@ -125,7 +125,7 @@ export function IssueTestPoints({
           />
           <NativeSelect
             value={category}
-            aria-label={t(($) => $.coverage.points.section)}
+            aria-label={t(($) => $.coverage.points.categoryLabel)}
             onChange={(event) => setCategory(event.target.value as TestPointCategory)}
             className="h-7 w-36 text-caption"
           >

@@ -258,12 +258,32 @@ func (h *Handler) UnlinkTestCaseIssue(w http.ResponseWriter, r *http.Request) {
 	if _, ok := h.loadIssueInWorkspaceAndAuthorize(w, r, issueUUID, testCase.WorkspaceID, "test_case_issue_unlink"); !ok {
 		return
 	}
-	if err := h.Queries.UnlinkTestCaseIssue(r.Context(), db.UnlinkTestCaseIssueParams{
+	// The case's claim on the issue's test points goes with the issue link:
+	// otherwise it keeps counting toward an issue it no longer covers.
+	tx, err := h.TxStarter.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to start transaction")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	qtx := h.Queries.WithTx(tx)
+	if err := qtx.DeleteTestCaseTestPointLinksForCaseAndIssue(r.Context(), db.DeleteTestCaseTestPointLinksForCaseAndIssueParams{
+		TestCaseID: testCase.ID, IssueID: issueUUID, WorkspaceID: testCase.WorkspaceID,
+	}); err != nil {
+		slog.Error("unlink test case test points failed", append(logger.RequestAttrs(r), "error", err)...)
+		writeError(w, http.StatusInternalServerError, "failed to unlink the issue")
+		return
+	}
+	if err := qtx.UnlinkTestCaseIssue(r.Context(), db.UnlinkTestCaseIssueParams{
 		TestCaseID:  testCase.ID,
 		IssueID:     issueUUID,
 		WorkspaceID: testCase.WorkspaceID,
 	}); err != nil {
 		slog.Error("unlink test case issue failed", append(logger.RequestAttrs(r), "error", err)...)
+		writeError(w, http.StatusInternalServerError, "failed to unlink the issue")
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to unlink the issue")
 		return
 	}

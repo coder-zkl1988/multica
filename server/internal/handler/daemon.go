@@ -5290,24 +5290,7 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 			if lookupErr != nil {
 				return lookupErr
 			}
-			summary, hasSummary := parseTestGenerationResultSummary(req.Output)
-			status := "completed"
-			if summary.Status == "blocked" || summary.Status == "failed" {
-				status = "failed"
-			}
-			jobResult := unmarshalJSONObject(job.Result)
-			jobResult["output"] = req.Output
-			jobResult["session_id"] = req.SessionID
-			jobResult["work_dir"] = req.WorkDir
-			if hasSummary {
-				jobResult["summary"] = summary.Summary
-				jobResult["blockers"] = summary.Blockers
-				if len(summary.Stats) > 0 {
-					jobResult["declared_stats"] = summary.Stats
-				}
-			} else {
-				jobResult["warning"] = "missing_test_generation_result_json"
-			}
+			status, jobResult := h.testGenerationCompletion(r.Context(), job, req)
 			_, updateErr := qtx.UpdateTestGenerationJob(r.Context(), db.UpdateTestGenerationJobParams{ID: job.ID, WorkspaceID: job.WorkspaceID, Status: pgtype.Text{String: status, Valid: true}, Result: marshalJSONColumn(jobResult, "{}")})
 			return updateErr
 		})

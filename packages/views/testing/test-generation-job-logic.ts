@@ -190,6 +190,8 @@ export interface JobIssueCoverage {
   issueId: string;
   active: number;
   covered: number;
+  /** Points only the run's draft cases verify, awaiting approval. */
+  inReview: string[];
   uncovered: string[];
 }
 
@@ -207,9 +209,14 @@ export function readJobCoverage(result: Record<string, unknown> | null | undefin
     const record = entry as Record<string, unknown>;
     const issueId = typeof record.issue_id === "string" ? record.issue_id : "";
     if (!issueId) return [];
-    const uncovered = Array.isArray(record.uncovered)
-      ? record.uncovered.filter((key): key is string => typeof key === "string")
-      : [];
-    return [{ issueId, active: count(record.active), covered: count(record.covered), uncovered }];
+    const keys = (value: unknown) =>
+      Array.isArray(value) ? value.filter((key): key is string => typeof key === "string") : [];
+    return [{
+      issueId,
+      active: count(record.active),
+      covered: count(record.covered),
+      inReview: keys(record.in_review),
+      uncovered: keys(record.uncovered),
+    }];
   });
 }

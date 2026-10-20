@@ -1167,6 +1167,11 @@ export function useRealtimeSync(
         if (issue.status) {
           onInboxIssueStatusChanged(qc, wsId, issue.id, issue.status);
         }
+        // Cancelling or moving an issue changes which issues a project's
+        // test coverage lists.
+        if (payload.status_changed || payload.project_changed) {
+          qc.invalidateQueries({ queryKey: issueTestCaseKeys.projectCoverageAll(wsId) });
+        }
       }
     });
 
@@ -1174,7 +1179,10 @@ export function useRealtimeSync(
       const { issue } = p as IssueCreatedPayload;
       if (!issue) return;
       const wsId = getCurrentWsId();
-      if (wsId) onIssueCreated(qc, wsId, issue);
+      if (wsId) {
+        onIssueCreated(qc, wsId, issue);
+        qc.invalidateQueries({ queryKey: issueTestCaseKeys.projectCoverageAll(wsId) });
+      }
     });
 
     const unsubIssueDeleted = ws.on("issue:deleted", (p) => {
@@ -1184,6 +1192,7 @@ export function useRealtimeSync(
       if (wsId) {
         onIssueDeleted(qc, wsId, issue_id);
         void onInboxIssueDeleted(qc, wsId, issue_id);
+        qc.invalidateQueries({ queryKey: issueTestCaseKeys.projectCoverageAll(wsId) });
       }
     });
 

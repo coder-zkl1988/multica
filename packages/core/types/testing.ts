@@ -725,7 +725,7 @@ export type TestPointCategory =
   | "non_functional";
 export type TestPointStatus = "active" | "dropped";
 /** Where a point stands; server-driven, so unknown values must still render. */
-export type TestPointState = "uncovered" | "not_run" | "failing" | "passed" | "dropped";
+export type TestPointState = "uncovered" | "in_review" | "not_run" | "failing" | "passed" | "dropped";
 
 export interface TestPoint {
   id: string;
@@ -767,6 +767,8 @@ export interface TestPointSummary {
   covered: number;
   passed: number;
   failing: number;
+  /** Points only draft cases verify — covered once someone approves them. */
+  in_review: number;
 }
 
 /** GET /api/issues/{id}/test-points */
@@ -802,7 +804,7 @@ export interface UpdateTestPointRequest {
 }
 
 /** Where one issue of a project stands, worst first; server-driven. */
-export type ProjectCoverageState = "failing" | "no_tests" | "gaps" | "no_points" | "not_run" | "verified";
+export type ProjectCoverageState = "failing" | "no_tests" | "gaps" | "in_review" | "no_points" | "not_run" | "verified";
 
 export interface ProjectCoverageIssue {
   issue_id: string;
@@ -814,6 +816,8 @@ export interface ProjectCoverageIssue {
   failing_cases: number;
   active_points: number;
   covered_points: number;
+  /** Points only draft cases verify. */
+  review_points: number;
   passed_points: number;
   failing_points: number;
   state: ProjectCoverageState | (string & {});

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Target } from "lucide-react";
 import { projectListOptions } from "@multica/core/projects/queries";
@@ -49,6 +49,8 @@ export function TestCoveragePage() {
     enabled: selectedProjectId.length > 0,
   });
   const [filter, setFilter] = useState<string>("all");
+  // A state filter belongs to the project it was picked on.
+  useEffect(() => setFilter("all"), [selectedProjectId]);
 
   const issues = useMemo(
     () =>

@@ -65,6 +65,7 @@ type TestPointCaseResponse struct {
 // it stands. State is the one word the issue page renders:
 //
 //	uncovered  no active case verifies it — nothing would catch a bug here
+//	in_review  only draft cases verify it: covered once someone approves them
 //	not_run    covered, but no covering case has passed yet
 //	failing    a covering case's latest result is failed
 //	passed     a covering case passed and none is failing
@@ -79,10 +80,11 @@ type TestPointCoverageResponse struct {
 
 // TestPointSummaryResponse counts an issue's active points.
 type TestPointSummaryResponse struct {
-	Active  int `json:"active"`
-	Covered int `json:"covered"`
-	Passed  int `json:"passed"`
-	Failing int `json:"failing"`
+	Active   int `json:"active"`
+	Covered  int `json:"covered"`
+	Passed   int `json:"passed"`
+	Failing  int `json:"failing"`
+	InReview int `json:"in_review"`
 }
 
 // TestPointForCaseResponse is a point one case verifies, with its issue.
@@ -138,8 +140,12 @@ func testPointState(status string, cases []TestPointCaseResponse) (covered, pass
 	if status == "dropped" {
 		return false, false, "dropped"
 	}
-	anyPassed, anyFailed := false, false
+	anyPassed, anyFailed, anyDraft := false, false, false
 	for _, c := range cases {
+		if c.CaseStatus == "draft" {
+			anyDraft = true
+			continue
+		}
 		if c.CaseStatus != "active" {
 			continue
 		}
@@ -155,6 +161,10 @@ func testPointState(status string, cases []TestPointCaseResponse) (covered, pass
 		}
 	}
 	switch {
+	case !covered && anyDraft:
+		// A generation run's cases land as drafts; until a person approves
+		// one, the point is written for but not yet tested.
+		return false, false, "in_review"
 	case !covered:
 		return false, false, "uncovered"
 	case anyFailed:
@@ -210,8 +220,11 @@ func (h *Handler) issueTestPointCoverage(ctx context.Context, issue db.Issue) ([
 			if passed {
 				summary.Passed++
 			}
-			if state == "failing" {
+			switch state {
+			case "failing":
 				summary.Failing++
+			case "in_review":
+				summary.InReview++
 			}
 		}
 		out = append(out, TestPointCoverageResponse{
@@ -391,6 +404,11 @@ func (h *Handler) UpdateTestPoint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	params := db.UpdateIssueTestPointParams{ID: point.ID, WorkspaceID: point.WorkspaceID}
+	// A person who rewrites an AI point makes it theirs: a later generation
+	// run may no longer overwrite the correction.
+	if actorType != "agent" && point.Origin == "ai" && (req.Title != nil || req.Description != nil || req.Category != nil) {
+		params.Origin = pgtype.Text{String: "human", Valid: true}
+	}
 	if req.Title != nil {
 		title := strings.TrimSpace(*req.Title)
 		if title == "" {
@@ -615,6 +633,27 @@ func linkCaseToTestPoints(r *http.Request, qtx *db.Queries, caseID, wsUUID pgtyp
 		}
 	}
 	return nil
+}
+
+// replaceCaseAITestPoints is linkCaseToTestPoints for a revised case: the
+// revision names the full set of points it verifies, so links an earlier run
+// drew that the revision no longer claims are removed. A revision that names
+// no point (an older daemon's) leaves the links as they are, and links a
+// person drew are never removed.
+func replaceCaseAITestPoints(r *http.Request, qtx *db.Queries, caseID, wsUUID pgtype.UUID, points []db.IssueTestPoint, origin string, createdBy pgtype.UUID) error {
+	if len(points) == 0 {
+		return nil
+	}
+	keep := make([]pgtype.UUID, len(points))
+	for i, point := range points {
+		keep[i] = point.ID
+	}
+	if err := qtx.DeleteAITestPointLinksForCaseExcept(r.Context(), db.DeleteAITestPointLinksForCaseExceptParams{
+		TestCaseID: caseID, WorkspaceID: wsUUID, KeepPointIds: keep,
+	}); err != nil {
+		return err
+	}
+	return linkCaseToTestPoints(r, qtx, caseID, wsUUID, points, origin, createdBy)
 }
 
 // UnlinkTestCaseTestPoint answers DELETE /api/test-cases/{ref}/test-points/{pointId}.

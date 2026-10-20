@@ -294,7 +294,8 @@
       "coverage": "Test point coverage",
       "coverageLine": "{{covered}}/{{active}} covered",
       "noPoints": "Not split into test points",
-      "uncovered": "Uncovered"
+      "uncovered": "Uncovered",
+      "inReview": "Awaiting review"
     }
   },
   "proposals": {
@@ -591,13 +592,15 @@
       },
       "state": {
         "uncovered": "Uncovered",
+        "in_review": "Drafts only",
         "not_run": "Not run",
         "failing": "Failing",
         "passed": "Passed",
         "dropped": "Dropped"
       },
       "caseSection": "Verifies",
-      "caseEmpty": "Not declared against any test point yet"
+      "caseEmpty": "Not declared against any test point yet",
+      "categoryLabel": "Category"
     },
     "casesPass": "Cases pass",
     "casesPassHint": "Every linked case passed, but this issue has no test points, so nobody listed what must be checked"
@@ -622,6 +625,7 @@
       "failing": "Failing",
       "no_tests": "No tests",
       "gaps": "Uncovered points",
+      "in_review": "Awaiting review",
       "no_points": "No test points",
       "not_run": "Not all passed",
       "verified": "Verified"
@@ -630,6 +634,7 @@
       "failing": "A covering case's latest result is failed",
       "no_tests": "No active case and no test point — nothing would catch a bug here",
       "gaps": "Some test points have no active case",
+      "in_review": "Every point has a case, but some only draft cases waiting for approval",
       "no_points": "Cases exist, but nobody listed what must be checked",
       "not_run": "Every point is covered; not every one has passed yet",
       "verified": "Every test point is covered by a case that passed"

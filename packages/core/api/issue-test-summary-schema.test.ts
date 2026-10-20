@@ -48,7 +48,7 @@ describe("IssueTestSummarySchema verification basis", () => {
       test_points: { active: 4, covered: 3, passed: 2, failing: 1 },
     });
     expect(parsed.basis).toBe("test_points");
-    expect(parsed.test_points).toEqual({ active: 4, covered: 3, passed: 2, failing: 1 });
+    expect(parsed.test_points).toEqual({ active: 4, covered: 3, passed: 2, failing: 1, in_review: 0 });
   });
 
   // A server older than test points decided verified on linked cases alone;
@@ -77,7 +77,7 @@ describe("ListIssueTestPointsResponseSchema", () => {
   it("defaults a point a server sent half of to uncovered, never covered", () => {
     const parsed = ListIssueTestPointsResponseSchema.parse({ test_points: [{ id: "p1", title: "x" }] });
     expect(parsed.test_points[0]).toMatchObject({ covered: false, passed: false, state: "uncovered", cases: [] });
-    expect(parsed.summary).toEqual({ active: 0, covered: 0, passed: 0, failing: 0 });
+    expect(parsed.summary).toEqual({ active: 0, covered: 0, passed: 0, failing: 0, in_review: 0 });
   });
 
   it("recovers from a malformed response via parseWithFallback", () => {
@@ -99,7 +99,7 @@ describe("ProjectCoverageResponseSchema", () => {
       ],
       summary: { gaps: 1 },
     });
-    expect(parsed.issues[0]).toMatchObject({ state: "gaps", active_points: 3, covered_points: 2, passed_points: 0 });
+    expect(parsed.issues[0]).toMatchObject({ state: "gaps", active_points: 3, covered_points: 2, review_points: 0, passed_points: 0 });
     expect(parsed.issues[1]?.state).toBe("no_tests");
     expect(parsed.truncated).toBe(false);
   });

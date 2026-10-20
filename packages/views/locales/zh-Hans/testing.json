@@ -294,7 +294,8 @@
       "coverage": "测试点覆盖",
       "coverageLine": "已覆盖 {{covered}}/{{active}}",
       "noPoints": "没有拆分测试点",
-      "uncovered": "未覆盖"
+      "uncovered": "未覆盖",
+      "inReview": "待审核"
     }
   },
   "proposals": {
@@ -590,13 +591,15 @@
       },
       "state": {
         "uncovered": "未覆盖",
+        "in_review": "仅草稿覆盖",
         "not_run": "未执行",
         "failing": "失败",
         "passed": "通过",
         "dropped": "已废弃"
       },
       "caseSection": "验证的测试点",
-      "caseEmpty": "还没有声明验证哪个测试点"
+      "caseEmpty": "还没有声明验证哪个测试点",
+      "categoryLabel": "类别"
     },
     "casesPass": "用例通过",
     "casesPassHint": "关联用例都已通过，但这条任务还没有拆测试点，没人列出必须验证什么"
@@ -621,6 +624,7 @@
       "failing": "失败",
       "no_tests": "没有测试",
       "gaps": "有未覆盖测试点",
+      "in_review": "待审核",
       "no_points": "没有测试点",
       "not_run": "未全部通过",
       "verified": "已验证"
@@ -629,6 +633,7 @@
       "failing": "覆盖它的用例最近一次执行失败",
       "no_tests": "没有有效用例也没有测试点——这里出 bug 不会被发现",
       "gaps": "部分测试点没有有效用例覆盖",
+      "in_review": "每个测试点都有用例，但部分只有待审核的草稿用例",
       "no_points": "有用例，但没人列出必须验证什么",
       "not_run": "测试点都已覆盖，但还没有全部通过",
       "verified": "每个测试点都有用例覆盖且最近一次通过"

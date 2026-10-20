@@ -234,7 +234,7 @@ func (h *Handler) ProposeTestCases(w http.ResponseWriter, r *http.Request) {
 					h.writeTestGenerationWriteError(w, r, updateErr, "update")
 					return
 				}
-				if err := linkCaseToTestPoints(r, qtx, updated.ID, wsUUID, entry.points, "ai", job.CreatedBy); err != nil {
+				if err := replaceCaseAITestPoints(r, qtx, updated.ID, wsUUID, entry.points, "ai", job.CreatedBy); err != nil {
 					h.writeTestGenerationWriteError(w, r, err, "update")
 					return
 				}
@@ -764,11 +764,16 @@ func (h *Handler) reviewTestCaseProposal(w http.ResponseWriter, r *http.Request,
 				continue
 			}
 			point, getErr := qtx.GetIssueTestPointInWorkspace(r.Context(), db.GetIssueTestPointInWorkspaceParams{ID: id, WorkspaceID: wsUUID})
-			if getErr == nil && point.Status == "active" {
-				stillLive = append(stillLive, point)
+			if getErr != nil || point.Status != "active" {
+				continue
 			}
+			// The person accepting may not see every issue the run could.
+			if h.checkIssueWindowAuthorization(r, point.IssueID, wsUUID, "test_case_proposal_accept") != nil {
+				continue
+			}
+			stillLive = append(stillLive, point)
 		}
-		if err := linkCaseToTestPoints(r, qtx, applied.ID, wsUUID, stillLive, "ai", userUUID); err != nil {
+		if err := replaceCaseAITestPoints(r, qtx, applied.ID, wsUUID, stillLive, "ai", userUUID); err != nil {
 			h.writeTestGenerationWriteError(w, r, err, "update")
 			return
 		}

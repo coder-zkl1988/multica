@@ -110,8 +110,10 @@ export const issueTestCaseKeys = {
   all: (wsId: string) => ["issue-test-cases", wsId] as const,
   /** A project's coverage list; under the issue tree so every coverage
    *  invalidation (links, points, results) refreshes it too. */
+  projectCoverageAll: (wsId: string) =>
+    [...issueTestCaseKeys.all(wsId), "project-coverage"] as const,
   projectCoverage: (wsId: string, projectId: string) =>
-    [...issueTestCaseKeys.all(wsId), "project-coverage", projectId] as const,
+    [...issueTestCaseKeys.projectCoverageAll(wsId), projectId] as const,
   forIssue: (wsId: string, issueId: string) =>
     [...issueTestCaseKeys.all(wsId), issueId] as const,
   /** The issue's test points with their coverage; under forIssue so one

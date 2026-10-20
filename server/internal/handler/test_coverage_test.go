@@ -17,6 +17,8 @@ func TestProjectCoverageState(t *testing.T) {
 		{"nothing covers it", db.ListProjectTestCoverageRow{}, "no_tests"},
 		{"cases but no points", db.ListProjectTestCoverageRow{ActiveCases: 2}, "no_points"},
 		{"a point nobody covers", db.ListProjectTestCoverageRow{ActiveCases: 1, ActivePoints: 2, CoveredPoints: 1, PassedPoints: 1}, "gaps"},
+		{"the rest only drafts cover", db.ListProjectTestCoverageRow{ActiveCases: 1, ActivePoints: 2, CoveredPoints: 1, ReviewPoints: 1, PassedPoints: 1}, "in_review"},
+		{"a draft does not close a gap elsewhere", db.ListProjectTestCoverageRow{ActivePoints: 3, ReviewPoints: 1}, "gaps"},
 		{"covered, not all passed", db.ListProjectTestCoverageRow{ActiveCases: 2, ActivePoints: 2, CoveredPoints: 2, PassedPoints: 1}, "not_run"},
 		{"every point passed", db.ListProjectTestCoverageRow{ActiveCases: 2, ActivePoints: 2, CoveredPoints: 2, PassedPoints: 2}, "verified"},
 		{"a failing case outranks everything", db.ListProjectTestCoverageRow{ActiveCases: 2, FailingCases: 1, ActivePoints: 2, CoveredPoints: 1}, "failing"},

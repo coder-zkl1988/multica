@@ -294,7 +294,8 @@
       "coverage": "Couverture des points de test",
       "coverageLine": "{{covered}}/{{active}} couverts",
       "noPoints": "Pas découpée en points de test",
-      "uncovered": "Non couverts"
+      "uncovered": "Non couverts",
+      "inReview": "En attente de revue"
     }
   },
   "proposals": {
@@ -591,13 +592,15 @@
       },
       "state": {
         "uncovered": "Non couvert",
+        "in_review": "Brouillons seulement",
         "not_run": "Non exécuté",
         "failing": "En échec",
         "passed": "Réussi",
         "dropped": "Abandonné"
       },
       "caseSection": "Vérifie",
-      "caseEmpty": "Aucun point de test déclaré"
+      "caseEmpty": "Aucun point de test déclaré",
+      "categoryLabel": "Catégorie"
     },
     "casesPass": "Cas réussis",
     "casesPassHint": "Tous les cas liés ont réussi, mais cette tâche n'a aucun point de test : personne n'a listé ce qui doit être vérifié"
@@ -622,6 +625,7 @@
       "failing": "En échec",
       "no_tests": "Aucun test",
       "gaps": "Points non couverts",
+      "in_review": "En attente de revue",
       "no_points": "Aucun point de test",
       "not_run": "Pas tous réussis",
       "verified": "Vérifiée"
@@ -630,6 +634,7 @@
       "failing": "Le dernier résultat d'un cas qui la couvre est un échec",
       "no_tests": "Aucun cas actif ni point de test — un bug ici passerait inaperçu",
       "gaps": "Certains points de test n'ont aucun cas actif",
+      "in_review": "Chaque point a un cas, mais certains seulement des brouillons à approuver",
       "no_points": "Des cas existent, mais personne n'a listé ce qui doit être vérifié",
       "not_run": "Tous les points sont couverts, pas encore tous réussis",
       "verified": "Chaque point de test est couvert par un cas réussi"

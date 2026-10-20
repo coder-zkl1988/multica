@@ -31,9 +31,12 @@ type testGenerationResultSummary struct {
 // testGenerationIssueCoverage is where one scoped issue's test points stand
 // when the run ends, computed by the server rather than taken from the agent.
 type testGenerationIssueCoverage struct {
-	IssueID   string   `json:"issue_id"`
-	Active    int      `json:"active"`
-	Covered   int      `json:"covered"`
+	IssueID string `json:"issue_id"`
+	Active  int    `json:"active"`
+	Covered int    `json:"covered"`
+	// InReview are points only the run's draft cases verify — written for,
+	// waiting for a person to approve the drafts.
+	InReview  []string `json:"in_review"`
 	Uncovered []string `json:"uncovered"`
 }
 
@@ -71,10 +74,13 @@ func (h *Handler) testGenerationCoverageSnapshot(ctx context.Context, job db.Tes
 		if err != nil {
 			continue
 		}
-		entry := testGenerationIssueCoverage{IssueID: uuidToString(issue.ID), Active: summary.Active, Covered: summary.Covered, Uncovered: []string{}}
+		entry := testGenerationIssueCoverage{IssueID: uuidToString(issue.ID), Active: summary.Active, Covered: summary.Covered, InReview: []string{}, Uncovered: []string{}}
 		for _, point := range points {
-			if point.State == "uncovered" {
+			switch point.State {
+			case "uncovered":
 				entry.Uncovered = append(entry.Uncovered, point.Key)
+			case "in_review":
+				entry.InReview = append(entry.InReview, point.Key)
 			}
 		}
 		out = append(out, entry)
@@ -138,12 +144,11 @@ func (h *Handler) markTestGenerationJobRunning(ctx context.Context, task db.Agen
 	return err
 }
 
-func (h *Handler) updateTestGenerationJobFromAgentCompletion(ctx context.Context, task db.AgentTaskQueue, req TaskCompleteRequest) error {
-	job, isGeneration, err := h.testGenerationJobForTask(ctx, task)
-	if !isGeneration {
-		return err
-	}
-
+// testGenerationCompletion is what a finished generation task writes onto its
+// job: the status the agent declared and the result, including the server's
+// own coverage snapshot. The daemon's completion handler writes it inside the
+// task's completion transaction.
+func (h *Handler) testGenerationCompletion(ctx context.Context, job db.TestGenerationJob, req TaskCompleteRequest) (string, map[string]any) {
 	summary, hasSummary := parseTestGenerationResultSummary(req.Output)
 	// Only the agent's declared status decides the outcome. design_restore also
 	// scans the raw output for the substring "blocked", which fails a run whose
@@ -175,14 +180,7 @@ func (h *Handler) updateTestGenerationJobFromAgentCompletion(ctx context.Context
 	// What the run left uncovered, from the points themselves: the agent's
 	// report says what it meant to cover, this says what is actually covered.
 	result["coverage"] = h.testGenerationCoverageSnapshot(ctx, job)
-
-	_, err = h.Queries.UpdateTestGenerationJob(ctx, db.UpdateTestGenerationJobParams{
-		ID:          job.ID,
-		WorkspaceID: job.WorkspaceID,
-		Status:      pgtype.Text{String: status, Valid: true},
-		Result:      marshalJSONColumn(result, "{}"),
-	})
-	return err
+	return status, result
 }
 
 func (h *Handler) updateTestGenerationJobFromAgentFailure(ctx context.Context, task db.AgentTaskQueue, req TaskFailRequest) error {

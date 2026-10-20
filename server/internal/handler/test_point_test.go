@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
@@ -27,13 +28,14 @@ func TestTestPointState(t *testing.T) {
 		state   string
 	}{
 		{"no case", "active", nil, false, false, "uncovered"},
-		{"only a passing draft", "active", []TestPointCaseResponse{draft}, false, false, "uncovered"},
+		{"only a passing draft", "active", []TestPointCaseResponse{draft}, false, false, "in_review"},
 		{"covered, never run", "active", []TestPointCaseResponse{active(nil)}, true, false, "not_run"},
 		{"covered, blocked", "active", []TestPointCaseResponse{active(result("blocked"))}, true, false, "not_run"},
 		{"passed", "active", []TestPointCaseResponse{active(result("passed")), active(nil)}, true, true, "passed"},
 		{"a failing case wins over a passing one", "active", []TestPointCaseResponse{active(result("passed")), active(result("failed"))}, true, false, "failing"},
 		{"a deprecated failure does not count", "active", []TestPointCaseResponse{active(result("passed")), retired}, true, true, "passed"},
 		{"dropped", "dropped", []TestPointCaseResponse{active(result("passed"))}, false, false, "dropped"},
+		{"only a run's draft covers it", "active", []TestPointCaseResponse{{CaseStatus: "draft"}}, false, false, "in_review"},
 	} {
 		covered, passed, state := testPointState(tc.status, tc.cases)
 		if covered != tc.covered || passed != tc.passed || state != tc.state {
@@ -302,4 +304,125 @@ func TestGenerationCoverageSnapshotListsUncoveredPoints(t *testing.T) {
 		len(snapshot[0].Uncovered) != 1 || snapshot[0].Uncovered[0] != "TP-2" {
 		t.Fatalf("snapshot = %+v, want the one resolvable issue with TP-2 uncovered", snapshot)
 	}
+}
+
+// Unlinking a case from an issue withdraws its claim on that issue's test
+// points; otherwise an issue with no linked case could still look verified.
+func TestUnlinkingACaseFromAnIssueDropsItsPointLinks(t *testing.T) {
+	projectID := newTestRunProject(t)
+	issueID := createIssueForSummary(t, "Coupon rules", projectID)
+	point := createTestPoint(t, issueID, map[string]any{"title": "One coupon per order"})
+	tc := createTestCaseForRun(t, projectID)
+	linkCaseTestPoints(t, tc.Key, []string{point.ID}).Want(http.StatusOK)
+	round := createTestRunFromCases(t, "Coupon round", []string{tc.ID})
+	setRunCaseResultForSummary(t, runCasesInOrder(t, round.ID)[0].id, "passed")
+	if summary := issueTestSummary(t, issueID); !summary.Verified {
+		t.Fatalf("summary before unlink = %+v, want verified", summary)
+	}
+
+	testutil.Call(t, testHandler.UnlinkTestCaseIssue, withURLParams(
+		newRequest("DELETE", "/api/test-cases/"+tc.Key+"/issues/"+issueID+"?workspace_id="+testWorkspaceID, nil), "ref", tc.Key, "issueId", issueID,
+	)).Want(http.StatusOK)
+	summary := issueTestSummary(t, issueID)
+	if summary.Verified || summary.TestPoints.Covered != 0 {
+		t.Fatalf("summary after unlink = %+v, want the point uncovered and the issue unverified", summary)
+	}
+}
+
+// A generation run's cases land as drafts: the points they verify are written
+// for, not untested, and the run must not be told to cover them again.
+func TestPointsCoveredOnlyByDraftsAreInReview(t *testing.T) {
+	projectID := newTestCaseProject(t)
+	jobID := newTestGenerationJob(t, projectID)
+	issueID := dbfx.Issue(t, "Refunds")
+	dbfx.Exec(t, `UPDATE test_generation_job SET input = jsonb_build_object('issue_ids', jsonb_build_array($1::text)) WHERE id = $2`, issueID, jobID)
+	drafted := createTestPoint(t, issueID, map[string]any{"title": "A refund returns spent points"})
+	createTestPoint(t, issueID, map[string]any{"title": "A partial refund is pro rata", "category": "boundary"})
+	draft := createTestCaseForTest(t, map[string]any{"project_id": projectID, "title": "Refund draft", "status": "draft", "steps": executableSteps})
+	linkCaseTestPoints(t, draft.Key, []string{drafted.ID}).Want(http.StatusOK)
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM test_case_issue WHERE issue_id = $1`, issueID)
+	})
+
+	listed := listIssueTestPoints(t, issueID)
+	if listed.TestPoints[0].State != "in_review" || listed.TestPoints[1].State != "uncovered" || listed.Summary.InReview != 1 || listed.Summary.Covered != 0 {
+		t.Fatalf("points = %+v / %+v, want TP-1 in review and TP-2 uncovered", listed.TestPoints, listed.Summary)
+	}
+	job, err := testHandler.Queries.GetTestGenerationJobInWorkspace(context.Background(), db.GetTestGenerationJobInWorkspaceParams{ID: parseUUID(jobID), WorkspaceID: parseUUID(testWorkspaceID)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, result := testHandler.testGenerationCompletion(context.Background(), job, TaskCompleteRequest{Output: "done\nTEST_GENERATION_RESULT_JSON: {\"status\":\"completed\",\"summary\":\"two points\",\"coverage\":[{\"point\":\"x\"}]}"})
+	coverage, _ := result["coverage"].([]testGenerationIssueCoverage)
+	if status != "completed" || len(coverage) != 1 || len(coverage[0].InReview) != 1 || coverage[0].InReview[0] != "TP-1" ||
+		len(coverage[0].Uncovered) != 1 || coverage[0].Uncovered[0] != "TP-2" || result["declared_coverage"] == nil {
+		t.Fatalf("completion = %s %+v, want TP-1 in review, TP-2 uncovered and the declared coverage kept", status, result)
+	}
+}
+
+// A revision names the full set of points it verifies; links an earlier run
+// drew that the revision dropped go, links a person drew stay.
+func TestRevisedDraftReplacesItsAIPointLinks(t *testing.T) {
+	projectID := newTestCaseProject(t)
+	jobID := newTestGenerationJob(t, projectID)
+	bindJobToTask(t, jobID, testGenerationTaskUUID)
+	issueID := dbfx.Issue(t, "Balance checkout")
+	dbfx.Exec(t, `UPDATE test_generation_job SET input = jsonb_build_object('issue_ids', jsonb_build_array($1::text)) WHERE id = $2`, issueID, jobID)
+	first := createTestPoint(t, issueID, map[string]any{"title": "Within balance succeeds"})
+	second := createTestPoint(t, issueID, map[string]any{"title": "Over balance refused", "category": "negative"})
+	human := createTestPoint(t, issueID, map[string]any{"title": "Zero balance shows top-up"})
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM test_case_issue WHERE issue_id = $1`, issueID)
+	})
+
+	w := proposeRequest(t, jobID, testGenerationTaskUUID, []map[string]any{
+		{"kind": "new", "case": map[string]any{"title": "Balance draft", "steps": executableSteps, "test_points": []string{first.ID}}},
+	})
+	if w.Code != http.StatusCreated {
+		t.Fatalf("propose: %d %s", w.Code, w.Body.String())
+	}
+	var created struct {
+		TestCases []TestCaseResponse `json:"test_cases"`
+	}
+	json.NewDecoder(w.Body).Decode(&created)
+	draft := created.TestCases[0]
+	linkCaseTestPoints(t, draft.Key, []string{human.ID}).Want(http.StatusOK)
+
+	if w := proposeRequest(t, jobID, testGenerationTaskUUID, []map[string]any{
+		{"kind": "update", "target": draft.Key, "case": map[string]any{"title": "Balance draft, refined", "steps": executableSteps, "test_points": []string{second.ID}}},
+	}); w.Code != http.StatusCreated {
+		t.Fatalf("revise: %d %s", w.Code, w.Body.String())
+	}
+	links := map[string]string{}
+	rows, err := testPool.Query(context.Background(), `SELECT test_point_id, origin FROM test_case_test_point WHERE test_case_id = $1`, draft.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var id, origin string
+		rows.Scan(&id, &origin)
+		links[id] = origin
+	}
+	rows.Close()
+	if _, stale := links[first.ID]; stale || links[second.ID] != "ai" || links[human.ID] != "human" || len(links) != 2 {
+		t.Fatalf("links after revision = %v, want the new AI point and the person's link only", links)
+	}
+}
+
+// A person who rewrites an AI point makes it theirs.
+func TestEditingAnAIPointMakesItAPersons(t *testing.T) {
+	issueID := dbfx.Issue(t, "Search")
+	agentHeaders := []string{"X-Actor-Source", "task_token", "X-Agent-ID", "00000000-0000-0000-0000-0000000000a2"}
+	point := createTestPoint(t, issueID, map[string]any{"title": "Empty query shows hints"}, agentHeaders...)
+	var updated TestPointResponse
+	testutil.Call(t, testHandler.UpdateTestPoint, withURLParam(
+		newRequest("PATCH", "/api/test-points/"+point.ID+"?workspace_id="+testWorkspaceID, map[string]any{"title": "An empty query shows recent searches"}), "pointId", point.ID,
+	)).Want(http.StatusOK).JSON(&updated)
+	if updated.Origin != "human" {
+		t.Fatalf("origin after a person's edit = %q, want human", updated.Origin)
+	}
+	req := withURLParam(newRequest("PATCH", "/api/test-points/"+point.ID+"?workspace_id="+testWorkspaceID, map[string]any{"title": "reverted"}), "pointId", point.ID)
+	req.Header.Set(agentHeaders[0], agentHeaders[1])
+	req.Header.Set(agentHeaders[2], agentHeaders[3])
+	testutil.Call(t, testHandler.UpdateTestPoint, req).Want(http.StatusForbidden)
 }

@@ -291,7 +291,7 @@ describe("IssueTestCoverage test points", () => {
 
     const title = await screen.findByRole("textbox", { name: /Add point|添加测试点/ });
     fireEvent.change(title, { target: { value: "Paying over the balance is refused" } });
-    fireEvent.change(screen.getByRole("combobox", { name: /Test points|测试点/ }), { target: { value: "negative" } });
+    fireEvent.change(screen.getByRole("combobox", { name: /^(Category|类别)$/ }), { target: { value: "negative" } });
     fireEvent.submit(title.closest("form")!);
     expect(mocks.createPoint).toHaveBeenCalledWith({ title: "Paying over the balance is refused", category: "negative" });
   });

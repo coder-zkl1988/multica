@@ -70,6 +70,28 @@ func (q *Queries) CreateIssueTestPoint(ctx context.Context, arg CreateIssueTestP
 	return i, err
 }
 
+const deleteAITestPointLinksForCaseExcept = `-- name: DeleteAITestPointLinksForCaseExcept :exec
+DELETE FROM test_case_test_point
+WHERE test_case_id = $1
+  AND workspace_id = $2
+  AND origin = 'ai'
+  AND NOT (test_point_id = ANY($3::uuid[]))
+`
+
+type DeleteAITestPointLinksForCaseExceptParams struct {
+	TestCaseID   pgtype.UUID   `json:"test_case_id"`
+	WorkspaceID  pgtype.UUID   `json:"workspace_id"`
+	KeepPointIds []pgtype.UUID `json:"keep_point_ids"`
+}
+
+// A revised case declares the full set of points it verifies; the links a
+// generation run drew before and the revision no longer claims go. Links a
+// person drew are never touched.
+func (q *Queries) DeleteAITestPointLinksForCaseExcept(ctx context.Context, arg DeleteAITestPointLinksForCaseExceptParams) error {
+	_, err := q.db.Exec(ctx, deleteAITestPointLinksForCaseExcept, arg.TestCaseID, arg.WorkspaceID, arg.KeepPointIds)
+	return err
+}
+
 const deleteIssueTestPoint = `-- name: DeleteIssueTestPoint :exec
 DELETE FROM issue_test_point WHERE id = $1 AND workspace_id = $2
 `
@@ -109,6 +131,30 @@ type DeleteTestCaseTestPointLinksForCaseParams struct {
 
 func (q *Queries) DeleteTestCaseTestPointLinksForCase(ctx context.Context, arg DeleteTestCaseTestPointLinksForCaseParams) error {
 	_, err := q.db.Exec(ctx, deleteTestCaseTestPointLinksForCase, arg.TestCaseID, arg.WorkspaceID)
+	return err
+}
+
+const deleteTestCaseTestPointLinksForCaseAndIssue = `-- name: DeleteTestCaseTestPointLinksForCaseAndIssue :exec
+DELETE FROM test_case_test_point AS tctp
+WHERE tctp.test_case_id = $1
+  AND tctp.workspace_id = $2
+  AND tctp.test_point_id IN (
+      SELECT p.id FROM issue_test_point p
+      WHERE p.issue_id = $3 AND p.workspace_id = $2
+  )
+`
+
+type DeleteTestCaseTestPointLinksForCaseAndIssueParams struct {
+	TestCaseID  pgtype.UUID `json:"test_case_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	IssueID     pgtype.UUID `json:"issue_id"`
+}
+
+// Unlinking a case from an issue withdraws its claim on that issue's test
+// points too; a point link without the issue link would keep counting the
+// case toward an issue it no longer covers.
+func (q *Queries) DeleteTestCaseTestPointLinksForCaseAndIssue(ctx context.Context, arg DeleteTestCaseTestPointLinksForCaseAndIssueParams) error {
+	_, err := q.db.Exec(ctx, deleteTestCaseTestPointLinksForCaseAndIssue, arg.TestCaseID, arg.WorkspaceID, arg.IssueID)
 	return err
 }
 
@@ -309,6 +355,11 @@ relevant_cases AS (
     JOIN issue_test_point p ON p.id = tctp.test_point_id
     WHERE p.workspace_id = $1 AND p.issue_id IN (SELECT id FROM project_issues)
 ),
+draft_cases AS (
+    SELECT tc.id FROM test_case tc
+    WHERE tc.workspace_id = $1 AND tc.status = 'draft'
+      AND tc.id IN (SELECT test_case_id FROM relevant_cases)
+),
 active_case_latest AS (
     SELECT tc.id AS test_case_id,
            COALESCE((
@@ -324,11 +375,13 @@ active_case_latest AS (
 point_state AS (
     SELECT p.issue_id, p.id,
            bool_or(acl.test_case_id IS NOT NULL) AS covered,
+           bool_or(dc.id IS NOT NULL) AS draft_covered,
            bool_or(acl.latest = 'passed') AS any_passed,
            bool_or(acl.latest = 'failed') AS any_failed
     FROM issue_test_point p
     LEFT JOIN test_case_test_point tctp ON tctp.test_point_id = p.id AND tctp.workspace_id = p.workspace_id
     LEFT JOIN active_case_latest acl ON acl.test_case_id = tctp.test_case_id
+    LEFT JOIN draft_cases dc ON dc.id = tctp.test_case_id
     WHERE p.workspace_id = $1 AND p.status = 'active'
       AND p.issue_id IN (SELECT id FROM project_issues)
     GROUP BY p.issue_id, p.id
@@ -340,6 +393,8 @@ SELECT pi.id AS issue_id, pi.number AS issue_number, pi.title AS issue_title, pi
         WHERE tci.issue_id = pi.id AND tci.workspace_id = $1 AND acl.latest = 'failed')::int AS failing_cases,
        (SELECT count(*) FROM point_state ps WHERE ps.issue_id = pi.id)::int AS active_points,
        (SELECT count(*) FROM point_state ps WHERE ps.issue_id = pi.id AND COALESCE(ps.covered, false))::int AS covered_points,
+       (SELECT count(*) FROM point_state ps WHERE ps.issue_id = pi.id
+          AND NOT COALESCE(ps.covered, false) AND COALESCE(ps.draft_covered, false))::int AS review_points,
        (SELECT count(*) FROM point_state ps WHERE ps.issue_id = pi.id
           AND COALESCE(ps.any_passed, false) AND NOT COALESCE(ps.any_failed, false))::int AS passed_points,
        (SELECT count(*) FROM point_state ps WHERE ps.issue_id = pi.id AND COALESCE(ps.any_failed, false))::int AS failing_points
@@ -362,6 +417,7 @@ type ListProjectTestCoverageRow struct {
 	FailingCases  int32       `json:"failing_cases"`
 	ActivePoints  int32       `json:"active_points"`
 	CoveredPoints int32       `json:"covered_points"`
+	ReviewPoints  int32       `json:"review_points"`
 	PassedPoints  int32       `json:"passed_points"`
 	FailingPoints int32       `json:"failing_points"`
 }
@@ -388,6 +444,7 @@ func (q *Queries) ListProjectTestCoverage(ctx context.Context, arg ListProjectTe
 			&i.FailingCases,
 			&i.ActivePoints,
 			&i.CoveredPoints,
+			&i.ReviewPoints,
 			&i.PassedPoints,
 			&i.FailingPoints,
 		); err != nil {
@@ -570,8 +627,9 @@ UPDATE issue_test_point SET
     description = COALESCE($2, description),
     category    = COALESCE($3, category),
     status      = COALESCE($4, status),
+    origin      = COALESCE($5, origin),
     updated_at  = now()
-WHERE id = $5 AND workspace_id = $6
+WHERE id = $6 AND workspace_id = $7
 RETURNING id, workspace_id, issue_id, number, title, description, category, origin, status, generation_job_id, created_by_type, created_by, created_at, updated_at
 `
 
@@ -580,6 +638,7 @@ type UpdateIssueTestPointParams struct {
 	Description pgtype.Text `json:"description"`
 	Category    pgtype.Text `json:"category"`
 	Status      pgtype.Text `json:"status"`
+	Origin      pgtype.Text `json:"origin"`
 	ID          pgtype.UUID `json:"id"`
 	WorkspaceID pgtype.UUID `json:"workspace_id"`
 }
@@ -590,6 +649,7 @@ func (q *Queries) UpdateIssueTestPoint(ctx context.Context, arg UpdateIssueTestP
 		arg.Description,
 		arg.Category,
 		arg.Status,
+		arg.Origin,
 		arg.ID,
 		arg.WorkspaceID,
 	)

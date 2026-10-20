@@ -691,6 +691,11 @@ function JobIssueCoverageRow({ wsId, entry }: { wsId: string; entry: JobIssueCov
           ? t(($) => $.job.result.noPoints)
           : t(($) => $.job.result.coverageLine, { covered: entry.covered, active: entry.active })}
       </span>
+      {entry.inReview.length > 0 ? (
+        <span className="text-muted-foreground">
+          {t(($) => $.job.result.inReview)}: {entry.inReview.join(", ")}
+        </span>
+      ) : null}
       {entry.uncovered.length > 0 ? (
         <span className="text-muted-foreground">
           {t(($) => $.job.result.uncovered)}: {entry.uncovered.join(", ")}

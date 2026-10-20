@@ -122,12 +122,13 @@ export const TEST_POINT_CATEGORIES: TestPointCategory[] = [
   "non_functional",
 ];
 
-export const TEST_POINT_STATES: TestPointState[] = ["uncovered", "not_run", "failing", "passed", "dropped"];
+export const TEST_POINT_STATES: TestPointState[] = ["uncovered", "in_review", "not_run", "failing", "passed", "dropped"];
 
 /** An uncovered point is what nobody tests — it reads as a warning, not as
  *  neutral; a failing one is a bug that tests already found. */
 export const TEST_POINT_STATE_TONE: Record<TestPointState, string> = {
   uncovered: "text-warning",
+  in_review: "text-muted-foreground",
   not_run: "text-muted-foreground",
   failing: "text-destructive",
   passed: "text-success",
@@ -139,6 +140,7 @@ export const PROJECT_COVERAGE_STATES: ProjectCoverageState[] = [
   "failing",
   "no_tests",
   "gaps",
+  "in_review",
   "no_points",
   "not_run",
   "verified",
@@ -148,6 +150,7 @@ export const PROJECT_COVERAGE_STATE_TONE: Record<ProjectCoverageState, string> =
   failing: "text-destructive",
   no_tests: "text-warning",
   gaps: "text-warning",
+  in_review: "text-muted-foreground",
   no_points: "text-muted-foreground",
   not_run: "text-muted-foreground",
   verified: "text-success",

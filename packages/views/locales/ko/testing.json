@@ -294,7 +294,8 @@
       "coverage": "테스트 포인트 커버리지",
       "coverageLine": "커버 {{covered}}/{{active}}",
       "noPoints": "테스트 포인트로 나누지 않았습니다",
-      "uncovered": "미커버"
+      "uncovered": "미커버",
+      "inReview": "검토 대기"
     }
   },
   "proposals": {
@@ -590,13 +591,15 @@
       },
       "state": {
         "uncovered": "미커버",
+        "in_review": "초안만",
         "not_run": "미실행",
         "failing": "실패",
         "passed": "통과",
         "dropped": "폐기됨"
       },
       "caseSection": "검증하는 테스트 포인트",
-      "caseEmpty": "아직 어떤 테스트 포인트도 선언하지 않았습니다"
+      "caseEmpty": "아직 어떤 테스트 포인트도 선언하지 않았습니다",
+      "categoryLabel": "유형"
     },
     "casesPass": "케이스 통과",
     "casesPassHint": "연결된 케이스는 모두 통과했지만 테스트 포인트가 없어 무엇을 확인해야 하는지 아무도 정하지 않았습니다"
@@ -621,6 +624,7 @@
       "failing": "실패",
       "no_tests": "테스트 없음",
       "gaps": "미커버 포인트 있음",
+      "in_review": "검토 대기",
       "no_points": "테스트 포인트 없음",
       "not_run": "모두 통과하지 않음",
       "verified": "검증됨"
@@ -629,6 +633,7 @@
       "failing": "커버하는 케이스의 최근 결과가 실패입니다",
       "no_tests": "활성 케이스도 테스트 포인트도 없습니다 — 여기서 생긴 버그는 발견되지 않습니다",
       "gaps": "일부 테스트 포인트에 활성 케이스가 없습니다",
+      "in_review": "모든 포인트에 케이스가 있지만 일부는 승인 대기 중인 초안뿐입니다",
       "no_points": "케이스는 있지만 무엇을 확인해야 하는지 정하지 않았습니다",
       "not_run": "모두 커버되었지만 아직 모두 통과하지 않았습니다",
       "verified": "모든 테스트 포인트가 통과한 케이스로 커버됩니다"
