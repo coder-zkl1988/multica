@@ -205,3 +205,36 @@ ORDER BY position ASC;
 SELECT id, case_number, title, status
 FROM test_case
 WHERE workspace_id = sqlc.arg(workspace_id) AND id = ANY(sqlc.arg(case_ids)::uuid[]);
+
+-- name: SettleOpenTestRunCase :one
+-- The task hooks' fallback settle: only a case nobody recorded yet. A verdict
+-- the agent's CLI write committed meanwhile is never overwritten; no row
+-- means it was already recorded. executed_at is left alone when the round
+-- was aborted (a NULL argument), so that settle never becomes the case's
+-- latest result.
+UPDATE test_run_case SET
+    result           = sqlc.arg(result),
+    notes            = sqlc.arg(notes),
+    executed_by_type = sqlc.arg(executed_by_type),
+    executed_by_id   = sqlc.narg(executed_by_id),
+    executed_at      = COALESCE(sqlc.narg(executed_at), executed_at),
+    updated_at       = now()
+WHERE id = sqlc.arg(id) AND workspace_id = sqlc.arg(workspace_id)
+  AND result IN ('pending', 'running')
+RETURNING *;
+
+-- name: CompleteOpenTestRun :one
+-- Completes a round only if it is still open. Two convergers racing (an HTTP
+-- write and a case task's hook) or an abort committing in between cannot both
+-- complete it: no row means another caller did, or the round was aborted.
+UPDATE test_run SET
+    status       = 'completed',
+    completed_at = now(),
+    updated_at   = now()
+WHERE id = $1 AND workspace_id = $2
+  AND status NOT IN ('completed', 'aborted')
+RETURNING *;
+
+-- name: DeleteTestPlanCasesForCase :exec
+-- A deleted case leaves every plan that listed it.
+DELETE FROM test_plan_case WHERE test_case_id = $1 AND workspace_id = $2;

@@ -339,14 +339,39 @@ func (h *Handler) requireTestRunTaskToken(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusConflict, "this test run has not been dispatched to an agent")
 		return false
 	}
-	if strings.EqualFold(boundTaskID, uuidToString(run.AgentTaskID)) {
+	if rc != nil && rc.AgentTaskID.Valid && strings.EqualFold(boundTaskID, uuidToString(rc.AgentTaskID)) {
 		return true
 	}
-	if rc != nil && rc.AgentTaskID.Valid && strings.EqualFold(boundTaskID, uuidToString(rc.AgentTaskID)) {
+	if strings.EqualFold(boundTaskID, uuidToString(run.AgentTaskID)) {
+		// Per-case dispatch stamps the first case's task onto the round for
+		// older readers; that task still owns only its own case.
+		if rc != nil && h.taskExecutesAnotherCase(r.Context(), boundTaskID, rc.ID) {
+			writeError(w, http.StatusForbidden, "this task executes another case of the round; record only against your own run_case_id")
+			return false
+		}
 		return true
 	}
 	writeError(w, http.StatusForbidden, "this task token does not own the test run")
 	return false
+}
+
+// taskExecutesAnotherCase reports whether a per-case task (its context names a
+// run_case_id) is reaching for a different case. A whole-round task names no
+// case and owns them all.
+func (h *Handler) taskExecutesAnotherCase(ctx context.Context, taskID string, runCaseID pgtype.UUID) bool {
+	id, err := util.ParseUUID(taskID)
+	if err != nil {
+		return true
+	}
+	task, err := h.Queries.GetAgentTask(ctx, id)
+	if err != nil {
+		return true
+	}
+	runCtx, ok := testRunContextForTask(task)
+	if !ok || runCtx.RunCaseID == "" {
+		return false
+	}
+	return !strings.EqualFold(runCtx.RunCaseID, uuidToString(runCaseID))
 }
 
 // buildRunExecutionStatus follows the same pattern as
@@ -1468,14 +1493,31 @@ func (h *Handler) UpdateTestRunCaseResult(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "an agent can only record passed, failed, blocked or skipped")
 		return
 	}
+	snapshotIndexes := snapshotStepIndexes(rc.CaseSnapshot)
+	// A case frozen without steps gives an agent nothing to check a pass
+	// against — the legacy shape an active case can no longer take. A person
+	// may still record one; an agent records blocked and says why.
+	if isAgentCall && req.Result == "passed" && len(snapshotIndexes) == 0 {
+		writeError(w, http.StatusBadRequest, "this case was frozen without steps, so a pass cannot be checked; record blocked and ask for the case's steps to be written")
+		return
+	}
 	var stepResults []TestRunStepResult
 	if req.StepResults != nil {
 		stepResults = *req.StepResults
 	}
 	requireComplete := isAgentCall && agentVerdictNeedsEvidence(req.Result)
-	if problem := stepResultsProblem(req.Result, stepResults, snapshotStepIndexes(rc.CaseSnapshot), requireComplete); problem != "" {
+	if problem := stepResultsProblem(req.Result, stepResults, snapshotIndexes, requireComplete); problem != "" {
 		writeError(w, http.StatusBadRequest, problem)
 		return
+	}
+	// A write that leaves the step results out keeps the stored ones, so the
+	// verdict must agree with them too: a case cannot be marked passed while
+	// a recorded step says it failed.
+	if req.StepResults == nil && !requireComplete {
+		if problem := stepResultsProblem(req.Result, storedStepResults(rc.StepResults, snapshotIndexes), nil, false); problem != "" {
+			writeError(w, http.StatusBadRequest, problem+"; change the step results with the verdict")
+			return
+		}
 	}
 	// An agent's pass or fail rests on what it saw; without a single captured
 	// frame or trace nobody can check it. Evidence is uploaded first
@@ -1501,7 +1543,13 @@ func (h *Handler) UpdateTestRunCaseResult(w http.ResponseWriter, r *http.Request
 		Result:         pgtype.Text{String: req.Result, Valid: true},
 		ExecutedByType: pgtype.Text{String: executedByType, Valid: true},
 		ExecutedByID:   executedByID,
-		ExecutedAt:     pgtype.Timestamptz{Time: time.Now(), Valid: true},
+	}
+	// executed_at orders a case's results across rounds ("latest result" for
+	// coverage and verification). It is stamped when the case is first
+	// executed; a later note, step edit or correction of an old round fixes
+	// that execution's record and must not make it the newest.
+	if !rc.ExecutedAt.Valid {
+		params.ExecutedAt = pgtype.Timestamptz{Time: time.Now(), Valid: true}
 	}
 	if req.Notes != nil {
 		params.Notes = pgtype.Text{String: *req.Notes, Valid: true}

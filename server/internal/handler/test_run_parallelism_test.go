@@ -83,7 +83,7 @@ func settleCase(t *testing.T, taskID string, result string) {
 		t.Fatal(err)
 	}
 	output := "done\nTEST_RUN_CASE_RESULT_JSON: {\"result\":\"" + result + "\",\"summary\":\"ok\"}"
-	if err := testHandler.completeTestRunTask(ctx, testHandler.Queries, task, output); err != nil {
+	if _, err := testHandler.completeTestRunTask(ctx, testHandler.Queries, task, output); err != nil {
 		t.Fatal(err)
 	}
 }

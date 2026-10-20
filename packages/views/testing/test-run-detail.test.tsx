@@ -412,3 +412,69 @@ describe("TestRunDetail case procedure", () => {
     expect(mocks.downloadAttachment).not.toHaveBeenCalled();
   });
 });
+
+describe("TestRunDetail step drafts", () => {
+  beforeEach(() => {
+    mocks.run = makeRun({ status: "running" });
+    mocks.cases = [
+      {
+        id: "rc-1",
+        run_id: "run-1",
+        test_case_id: "tc-1",
+        case_snapshot: {
+          title: "Coupon checkout",
+          key: "TC-9",
+          steps: [
+            { index: 1, action: "Apply coupon SAVE10", expected: "The total drops by 10%" },
+            { index: 2, action: "Pay", expected: "The confirmation shows 90.00" },
+          ],
+        },
+        position: 0,
+        result: "failed",
+        notes: "",
+        evidence: [],
+        step_results: [
+          { index: 1, result: "passed", actual: "", note: "coupon field was slow" },
+          { index: 2, result: "failed", actual: "The confirmation shows 100.00", note: "" },
+        ],
+        duration_ms: null,
+        executed_by_type: "agent",
+        executed_by_id: "agent-1",
+        executed_at: "2024-01-01T00:00:00Z",
+        defect_issue_id: null,
+        created_at: "2024-01-01T00:00:00Z",
+        updated_at: "2024-01-01T00:00:00Z",
+      },
+    ];
+  });
+
+  // Re-sending what is stored would rewrite an agent's record on every note
+  // save; untouched step results stay out of the write.
+  it("leaves the agent's step results alone when only the notes change", async () => {
+    renderPage();
+    await userEvent.click(await screen.findByText("Coupon checkout"));
+    await userEvent.type(screen.getByRole("textbox", { name: "" }), "checked again");
+    await userEvent.click(screen.getByRole("button", { name: /^(Save notes|保存备注)$/ }));
+    const [call] = mocks.updateCaseResult.mock.calls;
+    expect(call?.[0].data).not.toHaveProperty("step_results");
+  });
+
+  it("keeps each step's note when a person corrects a step", async () => {
+    renderPage();
+    await userEvent.click(await screen.findByText("Coupon checkout"));
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: /Result of step 2|第 2 步的结果/ }), "blocked");
+    const failedButtons = screen.getAllByRole("button", { name: /^(Failed|失败|실패)$/ });
+    await userEvent.click(failedButtons[0]!);
+    expect(mocks.updateCaseResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          step_results: [
+            { index: 1, result: "passed", note: "coupon field was slow" },
+            { index: 2, result: "blocked", actual: "The confirmation shows 100.00" },
+          ],
+        }),
+      }),
+      expect.anything(),
+    );
+  });
+});

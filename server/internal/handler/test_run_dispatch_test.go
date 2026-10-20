@@ -409,7 +409,7 @@ func TestPerCaseTaskHooksSettleCasesAndConvergeTheRun(t *testing.T) {
 
 	taskB := loadTask(b.ID)
 	output := "Checked everything.\nTEST_RUN_CASE_RESULT_JSON: {\"result\":\"passed\",\"summary\":\"expected text visible on the final frame\"}"
-	if err := testHandler.completeTestRunTask(ctx, testHandler.Queries, taskB, output); err != nil {
+	if _, err := testHandler.completeTestRunTask(ctx, testHandler.Queries, taskB, output); err != nil {
 		t.Fatal(err)
 	}
 	if got, notes := caseResult(b.ID); got != "blocked" || !strings.Contains(notes, "expected text visible on the final frame") {

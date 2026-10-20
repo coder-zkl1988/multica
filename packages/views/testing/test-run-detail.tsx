@@ -562,10 +562,20 @@ function RunCaseRow({
   // result button the tester presses.
   const canSaveNotesAlone = runCase.result !== "pending" && runCase.result !== "running";
 
+  // Step results are sent only when the person edited them: re-sending what
+  // is stored would rewrite an agent's record on every note save, and a row
+  // the server would now refuse could block unrelated saves. The draft that
+  // was sent becomes the synced value, so the server's echo resyncs it.
+  function stepsToSend(): StepResultInput[] | undefined {
+    if (!stepsDirty) return undefined;
+    syncedSteps.current = steps;
+    return draftToRequest(steps);
+  }
+
   async function saveNotes() {
     setSavingNotes(true);
     try {
-      await onSaveDraft(notes, draftToRequest(steps));
+      await onSaveDraft(notes, stepsToSend());
     } catch {
       // the toast is raised by the caller; the draft stays for a retry
     } finally {
@@ -620,7 +630,7 @@ function RunCaseRow({
               aria-label={t(($) => $.run.result[result as keyof typeof $.run.result])}
               data-active={runCase.result === result || undefined}
               disabled={resultsLocked}
-              onClick={() => onSetResult(result, notes, draftToRequest(steps))}
+              onClick={() => onSetResult(result, notes, stepsToSend())}
               className={`rounded-sm px-2 py-0.5 text-caption transition-colors data-active:font-medium disabled:pointer-events-none disabled:opacity-50
                 ${result === "passed"
                   ? "text-success hover:bg-success/10 data-active:bg-success/20"
@@ -668,10 +678,11 @@ function RunCaseRow({
             onChange={(index, patch) =>
               setSteps((current) => {
                 const next = { ...current };
-                const previous: { result: string; actual: string } | undefined = current[index];
+                const previous: StepDraft[number] | undefined = current[index];
                 const merged = {
                   result: patch.result ?? previous?.result ?? "",
                   actual: patch.actual ?? previous?.actual ?? "",
+                  note: previous?.note ?? "",
                 };
                 if (!merged.result && !merged.actual.trim()) delete next[index];
                 else next[index] = merged;
@@ -811,14 +822,15 @@ function isKnownStepVerdict(result: string): result is KnownStepVerdict {
   return (STEP_VERDICTS as readonly string[]).includes(result);
 }
 
-/** One step's verdict as a person is editing it. */
-type StepDraft = Record<number, { result: string; actual: string }>;
+/** One step's verdict as a person is editing it; `note` is the executor's
+ *  own remark on the step, kept so a correction never erases it. */
+type StepDraft = Record<number, { result: string; actual: string; note: string }>;
 /** What the result write sends for one step. */
-type StepResultInput = { index: number; result: KnownStepVerdict; actual?: string };
+type StepResultInput = { index: number; result: KnownStepVerdict; actual?: string; note?: string };
 
 function draftFromRecorded(steps: TestRunStepResult[]): StepDraft {
   const draft: StepDraft = {};
-  for (const step of steps) draft[step.index] = { result: step.result, actual: step.actual };
+  for (const step of steps) draft[step.index] = { result: step.result, actual: step.actual, note: step.note };
   return draft;
 }
 
@@ -841,6 +853,7 @@ function draftToRequest(draft: StepDraft): StepResultInput[] | undefined {
       index: Number(index),
       result: step.result as KnownStepVerdict,
       ...(step.actual.trim() ? { actual: step.actual.trim() } : {}),
+      ...(step.note.trim() ? { note: step.note.trim() } : {}),
     }))
     .sort((a, b) => a.index - b.index);
   return entries.length > 0 ? entries : undefined;

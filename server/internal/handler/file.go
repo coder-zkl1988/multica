@@ -685,6 +685,18 @@ func (h *Handler) UploadFile(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusForbidden, "invalid task token for test_run")
 				return
 			}
+			// The round's task id is the first case's task under per-case
+			// dispatch; it may only attach evidence to its own case.
+			if !ownsCase && h.taskExecutesAnotherCase(r.Context(), uuidToString(taskUUID), runCase.ID) {
+				writeError(w, http.StatusForbidden, "this task executes another case of the round; attach evidence only to your own run_case_id")
+				return
+			}
+			// Evidence follows the same rule as results: an agent task cannot
+			// change a round that was aborted or has already settled.
+			if accepted, reason := runAcceptsResultWrite(run.Status, true); !accepted {
+				writeError(w, http.StatusConflict, reason)
+				return
+			}
 			// Gate 3: the uploader must be the run's executor agent.
 			if uploaderType != "agent" || !run.ExecutorID.Valid || uuidToString(run.ExecutorID) != uploaderID {
 				writeError(w, http.StatusForbidden, "test_run_case_id upload requires the run's own agent")

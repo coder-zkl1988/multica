@@ -43,6 +43,53 @@ func (q *Queries) AddTestPlanCase(ctx context.Context, arg AddTestPlanCaseParams
 	return i, err
 }
 
+const completeOpenTestRun = `-- name: CompleteOpenTestRun :one
+UPDATE test_run SET
+    status       = 'completed',
+    completed_at = now(),
+    updated_at   = now()
+WHERE id = $1 AND workspace_id = $2
+  AND status NOT IN ('completed', 'aborted')
+RETURNING id, workspace_id, project_id, plan_id, title, executor_type, executor_id, agent_task_id, environment, build_ref, capability_binding, status, source_run_id, retry_scope, error, started_at, completed_at, created_by, created_at, updated_at, parallelism
+`
+
+type CompleteOpenTestRunParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+// Completes a round only if it is still open. Two convergers racing (an HTTP
+// write and a case task's hook) or an abort committing in between cannot both
+// complete it: no row means another caller did, or the round was aborted.
+func (q *Queries) CompleteOpenTestRun(ctx context.Context, arg CompleteOpenTestRunParams) (TestRun, error) {
+	row := q.db.QueryRow(ctx, completeOpenTestRun, arg.ID, arg.WorkspaceID)
+	var i TestRun
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.ProjectID,
+		&i.PlanID,
+		&i.Title,
+		&i.ExecutorType,
+		&i.ExecutorID,
+		&i.AgentTaskID,
+		&i.Environment,
+		&i.BuildRef,
+		&i.CapabilityBinding,
+		&i.Status,
+		&i.SourceRunID,
+		&i.RetryScope,
+		&i.Error,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Parallelism,
+	)
+	return i, err
+}
+
 const countDispatchedActiveTestRunCases = `-- name: CountDispatchedActiveTestRunCases :one
 SELECT count(*) FROM test_run_case
 WHERE run_id = $1 AND workspace_id = $2
@@ -306,6 +353,21 @@ type DeleteTestPlanCasesParams struct {
 
 func (q *Queries) DeleteTestPlanCases(ctx context.Context, arg DeleteTestPlanCasesParams) error {
 	_, err := q.db.Exec(ctx, deleteTestPlanCases, arg.PlanID, arg.WorkspaceID)
+	return err
+}
+
+const deleteTestPlanCasesForCase = `-- name: DeleteTestPlanCasesForCase :exec
+DELETE FROM test_plan_case WHERE test_case_id = $1 AND workspace_id = $2
+`
+
+type DeleteTestPlanCasesForCaseParams struct {
+	TestCaseID  pgtype.UUID `json:"test_case_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+// A deleted case leaves every plan that listed it.
+func (q *Queries) DeleteTestPlanCasesForCase(ctx context.Context, arg DeleteTestPlanCasesForCaseParams) error {
+	_, err := q.db.Exec(ctx, deleteTestPlanCasesForCase, arg.TestCaseID, arg.WorkspaceID)
 	return err
 }
 
@@ -999,6 +1061,68 @@ type RemoveTestPlanCaseParams struct {
 func (q *Queries) RemoveTestPlanCase(ctx context.Context, arg RemoveTestPlanCaseParams) error {
 	_, err := q.db.Exec(ctx, removeTestPlanCase, arg.PlanID, arg.WorkspaceID, arg.TestCaseID)
 	return err
+}
+
+const settleOpenTestRunCase = `-- name: SettleOpenTestRunCase :one
+UPDATE test_run_case SET
+    result           = $1,
+    notes            = $2,
+    executed_by_type = $3,
+    executed_by_id   = $4,
+    executed_at      = COALESCE($5, executed_at),
+    updated_at       = now()
+WHERE id = $6 AND workspace_id = $7
+  AND result IN ('pending', 'running')
+RETURNING id, workspace_id, run_id, test_case_id, case_snapshot, position, result, notes, evidence, step_results, duration_ms, executed_by_type, executed_by_id, executed_at, defect_issue_id, created_at, updated_at, agent_task_id
+`
+
+type SettleOpenTestRunCaseParams struct {
+	Result         string             `json:"result"`
+	Notes          string             `json:"notes"`
+	ExecutedByType pgtype.Text        `json:"executed_by_type"`
+	ExecutedByID   pgtype.UUID        `json:"executed_by_id"`
+	ExecutedAt     pgtype.Timestamptz `json:"executed_at"`
+	ID             pgtype.UUID        `json:"id"`
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+}
+
+// The task hooks' fallback settle: only a case nobody recorded yet. A verdict
+// the agent's CLI write committed meanwhile is never overwritten; no row
+// means it was already recorded. executed_at is left alone when the round
+// was aborted (a NULL argument), so that settle never becomes the case's
+// latest result.
+func (q *Queries) SettleOpenTestRunCase(ctx context.Context, arg SettleOpenTestRunCaseParams) (TestRunCase, error) {
+	row := q.db.QueryRow(ctx, settleOpenTestRunCase,
+		arg.Result,
+		arg.Notes,
+		arg.ExecutedByType,
+		arg.ExecutedByID,
+		arg.ExecutedAt,
+		arg.ID,
+		arg.WorkspaceID,
+	)
+	var i TestRunCase
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.RunID,
+		&i.TestCaseID,
+		&i.CaseSnapshot,
+		&i.Position,
+		&i.Result,
+		&i.Notes,
+		&i.Evidence,
+		&i.StepResults,
+		&i.DurationMs,
+		&i.ExecutedByType,
+		&i.ExecutedByID,
+		&i.ExecutedAt,
+		&i.DefectIssueID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.AgentTaskID,
+	)
+	return i, err
 }
 
 const skipUndispatchedTestRunCases = `-- name: SkipUndispatchedTestRunCases :many

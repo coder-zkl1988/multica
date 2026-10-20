@@ -100,6 +100,30 @@ func stepResultsProblem(result string, steps []TestRunStepResult, snapshotIndexe
 	return ""
 }
 
+// storedStepResults reads the step results already on a run case, keeping only
+// entries this build understands — rows written before step results had a
+// shape may hold anything, and an unreadable entry asserts nothing.
+func storedStepResults(raw []byte, snapshotIndexes []int32) []TestRunStepResult {
+	var entries []json.RawMessage
+	if len(raw) == 0 || json.Unmarshal(raw, &entries) != nil {
+		return nil
+	}
+	out := make([]TestRunStepResult, 0, len(entries))
+	seen := map[int32]bool{}
+	for _, entry := range entries {
+		var step TestRunStepResult
+		if json.Unmarshal(entry, &step) != nil || !slices.Contains(validTestRunStepResults, step.Result) || seen[step.Index] {
+			continue
+		}
+		if len(snapshotIndexes) > 0 && !slices.Contains(snapshotIndexes, step.Index) {
+			continue
+		}
+		seen[step.Index] = true
+		out = append(out, step)
+	}
+	return out
+}
+
 // agentVerdictNeedsEvidence: the verdicts whose truth rests on what the agent
 // saw. `blocked` and `skipped` describe the environment or applicability, and a
 // device that is gone may leave nothing to capture.

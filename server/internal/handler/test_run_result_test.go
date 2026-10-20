@@ -8,8 +8,10 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/multica-ai/multica/server/internal/testutil"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/dbid"
 )
 
@@ -249,7 +251,7 @@ func TestMarkerFallbackNeverYieldsAPass(t *testing.T) {
 			t.Fatal(err)
 		}
 		output := "TEST_RUN_CASE_RESULT_JSON: {\"result\":\"" + tc.marker + "\",\"summary\":\"the total looked right\"}"
-		if err := testHandler.completeTestRunTask(ctx, testHandler.Queries, task, output); err != nil {
+		if _, err := testHandler.completeTestRunTask(ctx, testHandler.Queries, task, output); err != nil {
 			t.Fatal(err)
 		}
 		var result, notes string
@@ -326,5 +328,230 @@ func TestMembersCanAttachEvidenceToARunCase(t *testing.T) {
 	dbfx.Exec(t, `UPDATE test_run SET status = 'aborted' WHERE id = $1`, run.ID)
 	if w := uploadRunCaseEvidence(t, &h, runCaseID); w.Code != http.StatusConflict {
 		t.Fatalf("upload to an aborted round: %d, want 409: %s", w.Code, w.Body.String())
+	}
+}
+
+// Per-case dispatch stamps the first case's task onto the round; that task
+// still owns only its own case and cannot record or attach for a sibling.
+func TestPerCaseTaskCannotWriteASiblingCase(t *testing.T) {
+	ctx := context.Background()
+	projectID := newTestRunProject(t)
+	a := createTestCaseForRun(t, projectID)
+	b := createTestCaseForRun(t, projectID)
+	run := createTestRunFromCases(t, "Sibling round", []string{a.ID, b.ID})
+	runtimeID := dbfx.Runtime(t, "sibling-runtime", testutil.Cols{"daemon_id": "daemon-sibling"})
+	agentID := dbfx.Agent(t, "sibling-agent", runtimeID)
+	if w := dispatchRun(t, run.ID, agentID); w.Code != http.StatusCreated {
+		t.Fatalf("dispatch: %d %s", w.Code, w.Body.String())
+	}
+	cases := runCasesInOrder(t, run.ID)
+	var roundTask string
+	if err := testPool.QueryRow(ctx, `SELECT agent_task_id FROM test_run WHERE id = $1`, run.ID).Scan(&roundTask); err != nil {
+		t.Fatal(err)
+	}
+	if roundTask != *cases[0].taskID {
+		t.Fatalf("round task = %s, want the first case's task %s", roundTask, *cases[0].taskID)
+	}
+
+	resp := testutil.Call(t, testHandler.UpdateTestRunCaseResult, agentResultRequest(cases[1].id, roundTask, map[string]any{"result": "blocked"})).
+		Want(http.StatusForbidden)
+	if !strings.Contains(resp.Text(), "another case") {
+		t.Errorf("sibling write refused with %q", resp.Text())
+	}
+	testutil.Call(t, testHandler.UpdateTestRunCaseResult, agentResultRequest(cases[0].id, roundTask, map[string]any{"result": "blocked"})).
+		Want(http.StatusOK)
+
+	h := *testHandler
+	h.Storage = &mockStorage{}
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, _ := writer.CreateFormFile("file", "x.png")
+	part.Write([]byte("\x89PNG\r\n\x1a\n"))
+	writer.WriteField("test_run_case_id", cases[1].id)
+	writer.Close()
+	req := httptest.NewRequest(http.MethodPost, "/api/upload-file", &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("X-User-ID", testUserID)
+	req.Header.Set("X-Workspace-ID", testWorkspaceID)
+	req.Header.Set("X-Actor-Source", "task_token")
+	req.Header.Set("X-Agent-ID", agentID)
+	req.Header.Set("X-Task-ID", roundTask)
+	w := httptest.NewRecorder()
+	h.UploadFile(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("sibling evidence upload: %d, want 403: %s", w.Code, w.Body.String())
+	}
+}
+
+// executed_at orders a case's results across rounds; a note or a correction
+// on an old round fixes that execution's record and must not make it newest.
+func TestCorrectingARecordedResultKeepsItsExecutionTime(t *testing.T) {
+	projectID := newTestRunProject(t)
+	tc := createTestCaseForRun(t, projectID)
+	run := createTestRunFromCases(t, "Old round", []string{tc.ID})
+	runCaseID := listRunCases(t, run.ID)[0].ID
+	setRunCaseResult(t, runCaseID, "failed")
+	dbfx.Exec(t, `UPDATE test_run_case SET executed_at = now() - interval '7 days' WHERE id = $1`, runCaseID)
+	var before time.Time
+	dbfx.QueryRow(t, `SELECT executed_at FROM test_run_case WHERE id = $1`, runCaseID).Scan(&before)
+
+	testutil.Call(t, testHandler.UpdateTestRunCaseResult, withURLParam(
+		newRequest("PUT", "/api/test-run-cases/"+runCaseID+"/result?workspace_id="+testWorkspaceID, map[string]any{"result": "failed", "notes": "flaky on retry"}),
+		"id", runCaseID,
+	)).Want(http.StatusOK)
+	var after time.Time
+	dbfx.QueryRow(t, `SELECT executed_at FROM test_run_case WHERE id = $1`, runCaseID).Scan(&after)
+	if !after.Equal(before) {
+		t.Fatalf("executed_at moved from %s to %s on a note save", before, after)
+	}
+}
+
+// A write without step results keeps the stored ones, so its verdict must
+// agree with them: no pass over a recorded failed step.
+func TestVerdictMustAgreeWithStoredStepResults(t *testing.T) {
+	projectID := newTestRunProject(t)
+	tc := createTestCaseForRun(t, projectID)
+	run := createTestRunFromCases(t, "Stored steps", []string{tc.ID})
+	runCaseID := listRunCases(t, run.ID)[0].ID
+	testutil.Call(t, testHandler.UpdateTestRunCaseResult, withURLParam(
+		newRequest("PUT", "/api/test-run-cases/"+runCaseID+"/result?workspace_id="+testWorkspaceID, map[string]any{
+			"result": "failed", "step_results": []map[string]any{{"index": 1, "result": "failed", "actual": "blank page"}},
+		}), "id", runCaseID,
+	)).Want(http.StatusOK)
+	resp := testutil.Call(t, testHandler.UpdateTestRunCaseResult, withURLParam(
+		newRequest("PUT", "/api/test-run-cases/"+runCaseID+"/result?workspace_id="+testWorkspaceID, map[string]any{"result": "passed"}), "id", runCaseID,
+	)).Want(http.StatusBadRequest)
+	if !strings.Contains(resp.Text(), "step 1 is failed") {
+		t.Errorf("refused with %q", resp.Text())
+	}
+	testutil.Call(t, testHandler.UpdateTestRunCaseResult, withURLParam(
+		newRequest("PUT", "/api/test-run-cases/"+runCaseID+"/result?workspace_id="+testWorkspaceID, map[string]any{
+			"result": "passed", "step_results": []map[string]any{{"index": 1, "result": "passed"}},
+		}), "id", runCaseID,
+	)).Want(http.StatusOK)
+}
+
+// A case frozen before steps were required gives an agent nothing to check.
+func TestAgentCannotPassACaseFrozenWithoutSteps(t *testing.T) {
+	taskID := uuidToString(dbid.NewV7())
+	_, runCaseID := agentOwnedRunCase(t, taskID)
+	dbfx.Exec(t, `UPDATE test_run_case SET case_snapshot = case_snapshot - 'steps' WHERE id = $1`, runCaseID)
+	addRunCaseEvidence(t, runCaseID)
+	resp := testutil.Call(t, testHandler.UpdateTestRunCaseResult, agentResultRequest(runCaseID, taskID, map[string]any{"result": "passed"})).
+		Want(http.StatusBadRequest)
+	if !strings.Contains(resp.Text(), "frozen without steps") {
+		t.Errorf("refused with %q", resp.Text())
+	}
+	testutil.Call(t, testHandler.UpdateTestRunCaseResult, agentResultRequest(runCaseID, taskID, map[string]any{"result": "blocked", "notes": "no steps"})).
+		Want(http.StatusOK)
+}
+
+// A stale task cannot change the evidence of a round that settled.
+func TestAgentEvidenceUploadRefusedOnSettledRounds(t *testing.T) {
+	taskID := uuidToString(dbid.NewV7())
+	runID, runCaseID := agentOwnedRunCase(t, taskID)
+	var executor string
+	dbfx.QueryRow(t, `SELECT executor_id FROM test_run WHERE id = $1`, runID).Scan(&executor)
+	dbfx.Exec(t, `UPDATE test_run SET status = 'aborted' WHERE id = $1`, runID)
+	h := *testHandler
+	h.Storage = &mockStorage{}
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, _ := writer.CreateFormFile("file", "late.png")
+	part.Write([]byte("\x89PNG\r\n\x1a\n"))
+	writer.WriteField("test_run_case_id", runCaseID)
+	writer.Close()
+	req := httptest.NewRequest(http.MethodPost, "/api/upload-file", &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("X-User-ID", testUserID)
+	req.Header.Set("X-Workspace-ID", testWorkspaceID)
+	req.Header.Set("X-Actor-Source", "task_token")
+	req.Header.Set("X-Agent-ID", executor)
+	req.Header.Set("X-Task-ID", taskID)
+	w := httptest.NewRecorder()
+	h.UploadFile(w, req)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("upload into an aborted round: %d, want 409: %s", w.Code, w.Body.String())
+	}
+}
+
+// The hooks' fallback settle never overwrites a verdict recorded meanwhile,
+// and in an aborted round it leaves executed_at unset.
+func TestHookSettleOnlyTouchesOpenCases(t *testing.T) {
+	ctx := context.Background()
+	projectID := newTestRunProject(t)
+	tc := createTestCaseForRun(t, projectID)
+	run := createTestRunFromCases(t, "Hook settle", []string{tc.ID})
+	runCaseID := listRunCases(t, run.ID)[0].ID
+	setRunCaseResult(t, runCaseID, "passed")
+	dbRun, err := testHandler.Queries.GetTestRunInWorkspace(ctx, db.GetTestRunInWorkspaceParams{ID: parseUUID(run.ID), WorkspaceID: parseUUID(testWorkspaceID)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rc, err := testHandler.Queries.GetTestRunCaseInWorkspace(ctx, db.GetTestRunCaseInWorkspaceParams{ID: parseUUID(runCaseID), WorkspaceID: parseUUID(testWorkspaceID)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The hook read the case while it was still running.
+	rc.Result = "running"
+	settled, err := settleOpenTestRunCase(ctx, testHandler.Queries, dbRun, rc, "blocked", "never recorded")
+	if err != nil || settled != nil {
+		t.Fatalf("settle over a recorded pass = %v, %v; want no write", settled, err)
+	}
+	var result string
+	dbfx.QueryRow(t, `SELECT result FROM test_run_case WHERE id = $1`, runCaseID).Scan(&result)
+	if result != "passed" {
+		t.Fatalf("result = %s, want the recorded pass kept", result)
+	}
+
+	second := createTestCaseForRun(t, projectID)
+	aborted := createTestRunFromCases(t, "Aborted hook settle", []string{second.ID})
+	abortedCase := listRunCases(t, aborted.ID)[0].ID
+	dbfx.Exec(t, `UPDATE test_run SET status = 'aborted' WHERE id = $1`, aborted.ID)
+	abortedRun, _ := testHandler.Queries.GetTestRunInWorkspace(ctx, db.GetTestRunInWorkspaceParams{ID: parseUUID(aborted.ID), WorkspaceID: parseUUID(testWorkspaceID)})
+	abortedRC, _ := testHandler.Queries.GetTestRunCaseInWorkspace(ctx, db.GetTestRunCaseInWorkspaceParams{ID: parseUUID(abortedCase), WorkspaceID: parseUUID(testWorkspaceID)})
+	if settled, err := settleOpenTestRunCase(ctx, testHandler.Queries, abortedRun, abortedRC, "blocked", "task died"); err != nil || settled == nil {
+		t.Fatalf("settle in an aborted round = %v, %v; want the case closed", settled, err)
+	}
+	var executedAt *time.Time
+	dbfx.QueryRow(t, `SELECT executed_at FROM test_run_case WHERE id = $1`, abortedCase).Scan(&executedAt)
+	if executedAt != nil {
+		t.Fatalf("executed_at = %v in an aborted round, want unset so it is never the latest result", executedAt)
+	}
+}
+
+// A converger holding a stale snapshot cannot complete a round that was
+// aborted in between, nor complete one twice.
+func TestConvergeNeverRevivesAnAbortedRound(t *testing.T) {
+	ctx := context.Background()
+	projectID := newTestRunProject(t)
+	tc := createTestCaseForRun(t, projectID)
+	run := createTestRunFromCases(t, "Converge race", []string{tc.ID})
+	runCaseID := listRunCases(t, run.ID)[0].ID
+	dbfx.Exec(t, `UPDATE test_run SET status = 'running' WHERE id = $1`, run.ID)
+	stale, err := testHandler.Queries.GetTestRunInWorkspace(ctx, db.GetTestRunInWorkspaceParams{ID: parseUUID(run.ID), WorkspaceID: parseUUID(testWorkspaceID)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dbfx.Exec(t, `UPDATE test_run_case SET result = 'passed' WHERE id = $1`, runCaseID)
+	dbfx.Exec(t, `UPDATE test_run SET status = 'aborted' WHERE id = $1`, run.ID)
+	completed, err := testHandler.convergeTestRun(ctx, testHandler.Queries, stale)
+	if err != nil || completed != nil {
+		t.Fatalf("converge over an abort = %v, %v; want nothing", completed, err)
+	}
+	var status string
+	dbfx.QueryRow(t, `SELECT status FROM test_run WHERE id = $1`, run.ID).Scan(&status)
+	if status != "aborted" {
+		t.Fatalf("status = %s, want aborted kept", status)
+	}
+
+	dbfx.Exec(t, `UPDATE test_run SET status = 'running' WHERE id = $1`, run.ID)
+	first, err := testHandler.convergeTestRun(ctx, testHandler.Queries, stale)
+	if err != nil || first == nil {
+		t.Fatalf("first converge = %v, %v; want it to complete the round", first, err)
+	}
+	second, err := testHandler.convergeTestRun(ctx, testHandler.Queries, stale)
+	if err != nil || second != nil {
+		t.Fatalf("second converge = %v, %v; want only one completion", second, err)
 	}
 }
