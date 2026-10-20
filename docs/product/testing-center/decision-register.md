@@ -328,6 +328,7 @@
 - 问题：智能体可以不带任何步骤结果、不传一张截图就记 `passed`；兜底标记 `TEST_RUN_CASE_RESULT_JSON` 里一个 `passed` 就能结案；中止后的轮次被晚到的写入翻成 `completed`；最后一条结果经 HTTP 写入时轮次完成但没有结算 autopilot，夜间回归永远停在 `running`。
 - 决定：`step_results` 有结构（`index` 对齐冻结快照、`result ∈ passed|failed|blocked|skipped|not_run`、`actual`、`note`）；智能体记 `passed` / `failed` 必须覆盖快照的每一步，且该用例已有至少一份证据（先 `evidence add` 再 `result set`）；`passed` 不得含 `failed` / `blocked` / `not_run` 步骤，`failed` 要指出失败的那一步；人工记录可以不填步骤，但填了就按同一规则校验。`aborted` 轮次拒绝一切写入；`completed` / `blocked` 轮次拒绝智能体写入、允许人工更正。兜底标记里的 `passed` 记为 `blocked` 并保留智能体摘要（失败可以靠标记结案，通过不行）。HTTP 写入后经 `convergeTestRun` 收敛，与任务钩子同一条路径。
 - 配套：`multica test result set --step <index>=<result>[:<实际>]`；两份执行提示词与 `multica-running-tests` 技能写明契约；`GET /api/test-run-cases/{id}/evidence`；轮次详情展开用例时显示冻结步骤、每步结论与实际值、证据文件（点开预览）。
+- 人工执行同等对待：工作区成员可以给轮次用例上传证据（智能体仍走 task token 三重门，`aborted` 轮次拒绝）；轮次未中止时每个冻结步骤都有结论选择与“实际看到了什么”输入，草稿随用例结论一起提交、按同一规则校验；任何证据上传都会推送 `test_run_case:updated`，打开的轮次页随之刷新。
 - 证据：`server/internal/handler/test_run_result.go`、`test_run.go` `UpdateTestRunCaseResult`、`test_run_daemon.go` `completeTestRunTask`；测试 `test_run_result_test.go`、`autopilot_test_run_test.go` `TestRecordingTheLastResultSettlesTheAutopilotRun`（去掉结算时该测试失败，已验证）。
 
 ### TS-037 有效用例必须可执行
@@ -349,7 +350,7 @@
 
 - 状态：`proposal` / `implemented`（待验收）
 - 问题：生成提示词没有系统的测试设计方法，还写着“宁少勿多”——一条没有下限的引导，运行可以停在一条正常路径；生成结果只报数量，看不出漏了什么。
-- 决定：提示词先要求对 `plan.issues` 的每个任务读已有测试点、按七个类别补缺（人写的不改），再逐点派生用例：每个有效测试点至少一条；有输入的点覆盖等价类与边界值（min、min-1、max、max+1、空）；权限点每个被拒角色一条；状态点每个非法转换一条；“精确不等于少”。提议的 `case.test_points` 只能引用本次范围内任务的测试点（否则 400），存为 id，草稿直接改写与人工接受提议时建立关联；生成结束时服务端写入 `result.coverage`（每个范围内任务的有效 / 已覆盖测试点数与未覆盖列表），智能体自报的放 `declared_coverage`。
+- 决定：提示词先要求对 `plan.issues` 的每个任务读已有测试点、按七个类别补缺（人写的不改），再逐点派生用例：每个有效测试点至少一条；有输入的点覆盖等价类与边界值（min、min-1、max、max+1、空）；权限点每个被拒角色一条；状态点每个非法转换一条；“精确不等于少”。提议的 `case.test_points` 只能引用本次范围内任务的测试点（否则 400），存为 id，草稿直接改写与人工接受提议时建立关联；生成结束时服务端写入 `result.coverage`（每个范围内任务的有效 / 已覆盖测试点数与未覆盖列表），智能体自报的放 `declared_coverage`；生成任务页的结果区按任务列出“已覆盖 X/Y”与未覆盖的测试点，没拆测试点的任务单独标出。
 - 与复审草案的偏差：草案曾写“新用例必须声明测试点，否则拒绝”。实现改为**不拒绝、计数上报**（响应 `new_cases_without_test_points`）：守护进程与服务器版本可能不一致，旧守护进程的提示词不知道测试点，硬拒会让整次生成失败；约束改由提示词、需求页的未覆盖清单和结束时的覆盖快照承担。
 - 证据：`server/internal/daemon/prompt.go` `buildTestGenerationPrompt`；`server/internal/handler/test_generation_propose.go`、`test_generation_daemon.go` `testGenerationCoverageSnapshot`；测试 `prompt_test.go`、`TestProposeTestCasesLinksDeclaredTestPoints`、`TestAcceptTestCaseProposalLinksItsTestPoints`、`TestGenerationCoverageSnapshotListsUncoveredPoints`。
 
