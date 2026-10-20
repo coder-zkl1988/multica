@@ -354,7 +354,25 @@
       "passRate": "통과율",
       "matrixTitle": "최근 라운드의 모듈별 결과",
       "moduleColumn": "모듈",
-      "moduleUnnamed": "(모듈 없음)"
+      "moduleUnnamed": "(모듈 없음)",
+      "rule": {
+        "title": "선택 규칙",
+        "hint": "조건에 맞는 활성 케이스는 계획 이후에 작성된 것까지 매 라운드에 자동으로 들어갑니다.",
+        "none": "규칙 없음: 라운드는 여기 나열된 케이스만 실행합니다.",
+        "allActive": "프로젝트의 모든 활성 케이스",
+        "modules": "모듈",
+        "noModules": "아직 모듈이 없습니다",
+        "priorities": "우선순위",
+        "caseTypes": "케이스 유형",
+        "issues": "태스크를 커버하는 케이스",
+        "addIssue": "태스크 추가",
+        "removeIssue": "{{issue}} 추적 중지",
+        "pickerTitle": "태스크 추적",
+        "pickerDescription": "이 계획의 라운드는 연결된 모든 활성 케이스를 실행합니다.",
+        "save": "규칙 저장",
+        "reset": "되돌리기",
+        "preview": "다음 라운드 {{total}}건 · 규칙에서 {{rule}}건"
+      }
     }
   },
   "run": {

@@ -355,7 +355,25 @@
       "passRate": "Taux de réussite",
       "matrixTitle": "Modules de la dernière série",
       "moduleColumn": "Module",
-      "moduleUnnamed": "(sans module)"
+      "moduleUnnamed": "(sans module)",
+      "rule": {
+        "title": "Règle de sélection",
+        "hint": "Les cas actifs qui correspondent rejoignent chaque tour automatiquement — y compris ceux écrits après le plan.",
+        "none": "Aucune règle : les tours n'exécutent que les cas listés ici.",
+        "allActive": "Tous les cas actifs du projet",
+        "modules": "Modules",
+        "noModules": "Aucun module",
+        "priorities": "Priorités",
+        "caseTypes": "Types de cas",
+        "issues": "Cas couvrant des tâches",
+        "addIssue": "Suivre une tâche",
+        "removeIssue": "Ne plus suivre {{issue}}",
+        "pickerTitle": "Suivre une tâche",
+        "pickerDescription": "Les tours de ce plan exécuteront chaque cas actif qui lui est lié.",
+        "save": "Enregistrer la règle",
+        "reset": "Réinitialiser",
+        "preview": "Prochain tour : {{total}} cas · {{rule}} par la règle"
+      }
     }
   },
   "run": {

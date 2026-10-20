@@ -437,6 +437,8 @@ export function useAddTestPlanCases() {
       api.addTestPlanCases(planId, data),
     onSettled: (_data, _error, { planId }) => {
       qc.invalidateQueries({ queryKey: testPlanKeys.cases(wsId, planId) });
+      // The next-round preview lives under the plan's detail key.
+      qc.invalidateQueries({ queryKey: testPlanKeys.detail(wsId, planId) });
     },
   });
 }
@@ -450,6 +452,7 @@ export function useRemoveTestPlanCase() {
       api.removeTestPlanCase(planId, caseId),
     onSettled: (_data, _error, { planId }) => {
       qc.invalidateQueries({ queryKey: testPlanKeys.cases(wsId, planId) });
+      qc.invalidateQueries({ queryKey: testPlanKeys.detail(wsId, planId) });
     },
   });
 }

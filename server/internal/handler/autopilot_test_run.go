@@ -33,18 +33,17 @@ func (l autopilotTestRunLauncher) LaunchAutopilotTestRun(ctx context.Context, in
 	if err != nil {
 		return service.AutopilotTestRunResult{}, fmt.Errorf("the autopilot's test plan no longer exists")
 	}
-	planCases, err := h.Queries.ListTestPlanCases(ctx, db.ListTestPlanCasesParams{PlanID: plan.ID, WorkspaceID: wsUUID})
+	// The same selection a person's round of this plan gets: the listed
+	// cases, then every active case its rule matches today — so a nightly
+	// regression picks up cases written since the plan was built.
+	sources, err := h.planRoundCases(ctx, plan)
 	if err != nil {
-		return service.AutopilotTestRunResult{}, fmt.Errorf("list the plan's cases: %w", err)
+		return service.AutopilotTestRunResult{}, err
 	}
-	if len(planCases) == 0 {
-		return service.AutopilotTestRunResult{}, errors.New("the test plan has no cases")
+	if len(sources) == 0 {
+		return service.AutopilotTestRunResult{}, errors.New("the test plan selects no cases")
 	}
-	rawIDs := make([]string, len(planCases))
-	for i, pc := range planCases {
-		rawIDs[i] = uuidToString(pc.TestCaseID)
-	}
-	cases, reposByCase, _, err := h.loadCasesForRun(ctx, wsUUID, rawIDs)
+	cases, reposByCase, _, err := h.loadCasesForRun(ctx, wsUUID, planRoundCaseIDs(sources))
 	if err != nil {
 		return service.AutopilotTestRunResult{}, err
 	}

@@ -109,6 +109,15 @@ export function testPlanDetailOptions(wsId: string, id: string) {
   });
 }
 
+/** Under the plan's detail key: saving the rule or the list refreshes it. */
+export function testPlanSelectionOptions(wsId: string, planId: string) {
+  return queryOptions({
+    queryKey: [...testPlanKeys.detail(wsId, planId), "selection"] as const,
+    queryFn: () => api.getTestPlanSelection(planId),
+    enabled: planId.length > 0,
+  });
+}
+
 export function testPlanCasesOptions(wsId: string, planId: string) {
   return queryOptions({
     queryKey: testPlanKeys.cases(wsId, planId),

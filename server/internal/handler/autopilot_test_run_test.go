@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -235,5 +236,40 @@ func TestRecordingTheLastResultSettlesTheAutopilotRun(t *testing.T) {
 	}
 	if settled != "completed" || !strings.Contains(result, "failed") {
 		t.Errorf("autopilot run after the last recorded result = %s %s, want completed with the result counts", settled, result)
+	}
+}
+
+// A nightly regression over a rule-only plan runs whatever the rule matches
+// that night, including cases written after the plan was built.
+func TestAutopilotRoundFollowsThePlansRule(t *testing.T) {
+	ctx := context.Background()
+	projectID := newTestRunProject(t)
+	plan := createTestPlanForRun(t, projectID)
+	updatePlanSelector(t, plan.ID, map[string]any{"all_active": true}).Want(http.StatusOK)
+	first := createTestCaseForRun(t, projectID)
+	second := createTestCaseForRun(t, projectID)
+	retired := createTestCaseForRun(t, projectID)
+	dbfx.Exec(t, `UPDATE test_case SET status = 'deprecated' WHERE id = $1`, retired.ID)
+
+	runtimeID := dbfx.Runtime(t, "autopilot-rule-runtime")
+	agentID := dbfx.Agent(t, "autopilot-rule-agent", runtimeID)
+	testPool.Exec(ctx, "UPDATE agent_runtime SET status = 'online' WHERE id = $1", runtimeID)
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), "DELETE FROM agent_task_queue WHERE agent_id = $1", agentID)
+	})
+	ap := createTestRunAutopilot(t, map[string]any{
+		"title": "Nightly by rule", "assignee_id": agentID, "execution_mode": "test_run", "test_plan_id": plan.ID,
+	})
+	w := httptest.NewRecorder()
+	testHandler.TriggerAutopilot(w, withURLParam(newRequest("POST", "/api/autopilots/"+ap.ID+"/trigger?workspace_id="+testWorkspaceID, map[string]any{}), "id", ap.ID))
+	if w.Code >= 300 {
+		t.Fatalf("trigger: got %d: %s", w.Code, w.Body.String())
+	}
+	var testRunID *string
+	if err := testPool.QueryRow(ctx, "SELECT test_run_id FROM autopilot_run WHERE autopilot_id = $1 ORDER BY created_at DESC LIMIT 1", ap.ID).Scan(&testRunID); err != nil || testRunID == nil {
+		t.Fatalf("autopilot run has no round: %v", err)
+	}
+	if got := roundCaseIDs(t, *testRunID); !slices.Equal(got, []string{first.ID, second.ID}) {
+		t.Fatalf("nightly round cases = %v, want the two active cases and not the deprecated one", got)
 	}
 }

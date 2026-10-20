@@ -354,7 +354,25 @@
       "passRate": "通过率",
       "matrixTitle": "最近一轮的模块结果",
       "moduleColumn": "模块",
-      "moduleUnnamed": "（未分模块）"
+      "moduleUnnamed": "（未分模块）",
+      "rule": {
+        "title": "选例规则",
+        "hint": "符合规则的有效用例会自动进入每一轮，包括计划建好之后新写的用例。",
+        "none": "没有规则：每轮只执行这里列出的用例。",
+        "allActive": "项目内所有有效用例",
+        "modules": "模块",
+        "noModules": "还没有模块",
+        "priorities": "优先级",
+        "caseTypes": "用例类型",
+        "issues": "覆盖这些任务的用例",
+        "addIssue": "添加任务",
+        "removeIssue": "不再跟随 {{issue}}",
+        "pickerTitle": "跟随任务",
+        "pickerDescription": "这个计划的每一轮都会执行关联到该任务的所有有效用例。",
+        "save": "保存规则",
+        "reset": "还原",
+        "preview": "下一轮将执行 {{total}} 条用例 · 规则匹配 {{rule}} 条"
+      }
     }
   },
   "run": {

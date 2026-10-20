@@ -284,6 +284,20 @@ export type TestRunRetryScope = "all" | "failed_only" | "selected";
 export type TestCapabilityKind = "android_device" | "ios_device" | "computer_use" | "browser";
 export type TestCapabilityStatus = "available" | "busy" | "offline" | "unknown";
 
+/**
+ * A plan's rule for picking cases beside its hand-picked list. Dimensions
+ * combine with AND, values inside one with OR; only active cases match. The
+ * empty object is no rule.
+ */
+export interface TestPlanSelector {
+  all_active?: boolean;
+  modules?: string[];
+  priorities?: TestCasePriority[];
+  case_types?: TestCaseType[];
+  /** Cases linked to any of these issues (stored as ids). */
+  issue_ids?: string[];
+}
+
 export interface TestPlan {
   id: string;
   workspace_id: string;
@@ -291,6 +305,7 @@ export interface TestPlan {
   title: string;
   description: string;
   status: TestPlanStatus;
+  selector: TestPlanSelector;
   created_by: string | null;
   created_at: string;
   updated_at: string;
@@ -456,12 +471,32 @@ export interface CreateTestPlanRequest {
   title: string;
   description?: string;
   status?: TestPlanStatus;
+  selector?: TestPlanSelector;
 }
 
 export interface UpdateTestPlanRequest {
   title?: string;
   description?: string;
   status?: TestPlanStatus;
+  /** Replaces the rule; `{}` clears it. */
+  selector?: TestPlanSelector;
+}
+
+/** One case the next round of a plan will run, and why it is in it. */
+export interface TestPlanSelectionCase {
+  test_case_id: string;
+  case_key: string;
+  title: string;
+  status: string;
+  source: "manual" | "rule" | (string & {});
+}
+
+/** GET /api/test-plans/{id}/selection */
+export interface TestPlanSelection {
+  cases: TestPlanSelectionCase[];
+  manual: number;
+  rule: number;
+  total: number;
 }
 
 export interface AddTestPlanCasesRequest {

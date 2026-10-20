@@ -12,6 +12,7 @@ import {
   testPlanDetailOptions,
   testPlanCasesOptions,
   testPlanStatsOptions,
+  testPlanSelectionOptions,
   useCreateTestRun,
   useDeleteTestPlan,
   useRemoveTestPlanCase,
@@ -37,6 +38,7 @@ import { BreadcrumbHeader } from "../layout/breadcrumb-header";
 import { AppLink, useNavigation } from "../navigation";
 import type { TestPlanStats } from "@multica/core/types";
 import { useT } from "../i18n";
+import { PlanRuleSection } from "./components/plan-rule-section";
 
 export function TestPlanDetail({ planId }: { planId: string }) {
   const { t } = useT("testing");
@@ -61,6 +63,10 @@ export function TestPlanDetail({ planId }: { planId: string }) {
 
   const { data: cases = [] } = useQuery(testPlanCasesOptions(wsId, planId));
   const { data: stats } = useQuery(testPlanStatsOptions(wsId, planId));
+  // What a round would run: the list plus the rule's matches. A plan with no
+  // listed case can still run when its rule picks cases.
+  const { data: selection } = useQuery(testPlanSelectionOptions(wsId, planId));
+  const roundSize = selection?.total ?? cases.length;
 
   // A plan row carries only the case id. The library for the plan's project is
   // the same list the cases tab already caches, so resolving key and title
@@ -378,7 +384,7 @@ export function TestPlanDetail({ planId }: { planId: string }) {
 
                   <Button
                     className="w-full"
-                    disabled={isCreatingRun || createRun.isPending || cases.length === 0}
+                    disabled={isCreatingRun || createRun.isPending || roundSize === 0}
                     onClick={() => void handleCreateRun()}
                   >
                     <Play className="h-3.5 w-3.5" />
@@ -386,6 +392,8 @@ export function TestPlanDetail({ planId }: { planId: string }) {
                   </Button>
                 </div>
               </section>
+
+              <PlanRuleSection plan={plan} wsId={wsId} />
 
               {/* Plan settings — a plan could be created and executed but never
                   renamed, archived or removed. */}

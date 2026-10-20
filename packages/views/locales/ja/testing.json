@@ -354,7 +354,25 @@
       "passRate": "合格率",
       "matrixTitle": "最新ラウンドのモジュール別結果",
       "moduleColumn": "モジュール",
-      "moduleUnnamed": "（モジュールなし）"
+      "moduleUnnamed": "（モジュールなし）",
+      "rule": {
+        "title": "選択ルール",
+        "hint": "条件に合う有効なケースは、計画作成後に書かれたものも含めて毎回のラウンドに自動で入ります。",
+        "none": "ルールなし：ラウンドはここに並んだケースだけを実行します。",
+        "allActive": "プロジェクト内のすべての有効なケース",
+        "modules": "モジュール",
+        "noModules": "モジュールはまだありません",
+        "priorities": "優先度",
+        "caseTypes": "ケース種別",
+        "issues": "タスクをカバーするケース",
+        "addIssue": "タスクを追加",
+        "removeIssue": "{{issue}} の追跡をやめる",
+        "pickerTitle": "タスクを追跡",
+        "pickerDescription": "この計画のラウンドは、リンクされた有効なケースをすべて実行します。",
+        "save": "ルールを保存",
+        "reset": "元に戻す",
+        "preview": "次のラウンドは {{total}} 件 · ルールから {{rule}} 件"
+      }
     }
   },
   "run": {

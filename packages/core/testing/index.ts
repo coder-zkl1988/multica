@@ -25,6 +25,7 @@ export {
   testPlanDetailOptions,
   testPlanCasesOptions,
   testPlanStatsOptions,
+  testPlanSelectionOptions,
   testRunListOptions,
   testRunDetailOptions,
   testRunCasesOptions,

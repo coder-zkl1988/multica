@@ -35,15 +35,18 @@ import (
 
 // TestPlanResponse is the outbound representation of a test_plan row.
 type TestPlanResponse struct {
-	ID          string  `json:"id"`
-	WorkspaceID string  `json:"workspace_id"`
-	ProjectID   string  `json:"project_id"`
-	Title       string  `json:"title"`
-	Description string  `json:"description"`
-	Status      string  `json:"status"`
-	CreatedBy   *string `json:"created_by"`
-	CreatedAt   string  `json:"created_at"`
-	UpdatedAt   string  `json:"updated_at"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
+	ProjectID   string `json:"project_id"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	Status      string `json:"status"`
+	// Selector is the plan's rule for picking cases beside its list; the
+	// zero value is no rule.
+	Selector  TestPlanSelector `json:"selector"`
+	CreatedBy *string          `json:"created_by"`
+	CreatedAt string           `json:"created_at"`
+	UpdatedAt string           `json:"updated_at"`
 }
 
 // TestPlanCaseResponse is the outbound representation of a test_plan_case row.
@@ -135,6 +138,7 @@ func testPlanToResponse(plan db.TestPlan) TestPlanResponse {
 		Title:       plan.Title,
 		Description: plan.Description,
 		Status:      plan.Status,
+		Selector:    decodeTestPlanSelector(plan.Selector),
 		CreatedBy:   uuidToPtr(plan.CreatedBy),
 		CreatedAt:   timestampToString(plan.CreatedAt),
 		UpdatedAt:   timestampToString(plan.UpdatedAt),
@@ -596,10 +600,11 @@ func (h *Handler) ListTestPlans(w http.ResponseWriter, r *http.Request) {
 }
 
 type CreateTestPlanRequest struct {
-	ProjectID   string `json:"project_id"`
-	Title       string `json:"title"`
-	Description string `json:"description"`
-	Status      string `json:"status"`
+	ProjectID   string            `json:"project_id"`
+	Title       string            `json:"title"`
+	Description string            `json:"description"`
+	Status      string            `json:"status"`
+	Selector    *TestPlanSelector `json:"selector"`
 }
 
 // CreateTestPlan creates a new test plan inside the caller's workspace. The
@@ -645,6 +650,15 @@ func (h *Handler) CreateTestPlan(w http.ResponseWriter, r *http.Request) {
 	if !validateTestCaseEnum(w, "status", status, validTestPlanStatuses) {
 		return
 	}
+	var selector TestPlanSelector
+	if req.Selector != nil {
+		normalized, problem := h.normalizeTestPlanSelector(r, wsUUID, *req.Selector)
+		if problem != "" {
+			writeError(w, http.StatusBadRequest, problem)
+			return
+		}
+		selector = normalized
+	}
 	plan, err := h.Queries.CreateTestPlan(r.Context(), db.CreateTestPlanParams{
 		WorkspaceID: wsUUID,
 		ProjectID:   projectUUID,
@@ -652,6 +666,7 @@ func (h *Handler) CreateTestPlan(w http.ResponseWriter, r *http.Request) {
 		Description: req.Description,
 		Status:      status,
 		CreatedBy:   userUUID,
+		Selector:    marshalJSONColumn(selector, "{}"),
 	})
 	if err != nil {
 		slog.Error("create test plan failed", append(logger.RequestAttrs(r), "error", err)...)
@@ -676,6 +691,8 @@ type UpdateTestPlanRequest struct {
 	Title       *string `json:"title"`
 	Description *string `json:"description"`
 	Status      *string `json:"status"`
+	// Selector replaces the rule; `{}` clears it, omitted keeps it.
+	Selector *TestPlanSelector `json:"selector"`
 }
 
 // UpdateTestPlan applies a partial update to a plan. Any omitted field is
@@ -711,6 +728,14 @@ func (h *Handler) UpdateTestPlan(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		params.Status = pgtype.Text{String: *req.Status, Valid: true}
+	}
+	if req.Selector != nil {
+		normalized, problem := h.normalizeTestPlanSelector(r, wsUUID, *req.Selector)
+		if problem != "" {
+			writeError(w, http.StatusBadRequest, problem)
+			return
+		}
+		params.Selector = marshalJSONColumn(normalized, "{}")
 	}
 	updated, err := h.Queries.UpdateTestPlan(r.Context(), params)
 	if err != nil {
@@ -1016,23 +1041,17 @@ func (h *Handler) CreateTestRun(w http.ResponseWriter, r *http.Request) {
 		planUUID = plan.ID
 		projectUUID = plan.ProjectID
 
-		planCases, err := h.Queries.ListTestPlanCases(r.Context(), db.ListTestPlanCasesParams{
-			PlanID: plan.ID, WorkspaceID: wsUUID,
-		})
+		sources, err := h.planRoundCases(r.Context(), plan)
 		if err != nil {
 			slog.Error("list test plan cases for run failed", append(logger.RequestAttrs(r), "error", err)...)
 			writeError(w, http.StatusInternalServerError, "failed to list plan cases")
 			return
 		}
-		if len(planCases) == 0 {
-			writeError(w, http.StatusBadRequest, "the test plan has no cases")
+		if len(sources) == 0 {
+			writeError(w, http.StatusBadRequest, "the test plan selects no cases: add cases to it, or give it a rule that matches active cases")
 			return
 		}
-		rawIDs := make([]string, len(planCases))
-		for i, pc := range planCases {
-			rawIDs[i] = uuidToString(pc.TestCaseID)
-		}
-		cases, reposByCase, _, ok = h.fetchCasesForIDs(r.Context(), w, wsUUID, rawIDs)
+		cases, reposByCase, _, ok = h.fetchCasesForIDs(r.Context(), w, wsUUID, planRoundCaseIDs(sources))
 		if !ok {
 			return
 		}

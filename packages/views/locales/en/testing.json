@@ -355,7 +355,25 @@
       "passRate": "Pass rate",
       "matrixTitle": "Modules in the latest round",
       "moduleColumn": "Module",
-      "moduleUnnamed": "(no module)"
+      "moduleUnnamed": "(no module)",
+      "rule": {
+        "title": "Selection rule",
+        "hint": "Active cases that match join every round automatically — including cases written after the plan.",
+        "none": "No rule: rounds run only the cases listed here.",
+        "allActive": "Every active case in the project",
+        "modules": "Modules",
+        "noModules": "No modules yet",
+        "priorities": "Priorities",
+        "caseTypes": "Case types",
+        "issues": "Cases covering issues",
+        "addIssue": "Follow issue",
+        "removeIssue": "Stop following {{issue}}",
+        "pickerTitle": "Follow an issue",
+        "pickerDescription": "Rounds of this plan will run every active case linked to it.",
+        "save": "Save rule",
+        "reset": "Reset",
+        "preview": "Next round runs {{total}} cases · {{rule}} from the rule"
+      }
     }
   },
   "run": {

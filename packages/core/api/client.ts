@@ -347,6 +347,7 @@ import type {
   TestPoint,
   CreateTestPointRequest,
   UpdateTestPointRequest,
+  TestPlanSelection,
   TestCaseResultTimelineResponse,
   ListTestCapabilitiesResponse,
   RuntimeCapabilityScanResponse,
@@ -701,6 +702,7 @@ import {
   ListIssueTestPointsResponseSchema,
   ListTestCaseTestPointsResponseSchema,
   TestPointSchema,
+  TestPlanSelectionSchema,
   TestCaseResultTimelineResponseSchema,
   ListTestCapabilitiesResponseSchema,
   ListTestCaseIssuesResponseSchema,
@@ -716,6 +718,7 @@ import {
   EMPTY_LIST_TEST_RUN_CASE_EVIDENCE_RESPONSE,
   EMPTY_LIST_ISSUE_TEST_POINTS_RESPONSE,
   EMPTY_TEST_POINT,
+  EMPTY_TEST_PLAN_SELECTION,
   EMPTY_LIST_TEST_CASE_TEST_POINTS_RESPONSE,
   EMPTY_TEST_CASE_RESULT_TIMELINE_RESPONSE,
   EMPTY_LIST_TEST_CAPABILITIES_RESPONSE,
@@ -6848,6 +6851,14 @@ export class ApiClient {
     const raw = await this.fetch<unknown>(`/api/test-plans/${encodeURIComponent(id)}`);
     return parseWithFallback(raw, TestPlanSchema, { ...EMPTY_TEST_PLAN, id }, {
       endpoint: "GET /api/test-plans/:id",
+    });
+  }
+
+  /** What the next round of a plan runs: its list plus its rule's matches. */
+  async getTestPlanSelection(id: string): Promise<TestPlanSelection> {
+    const raw = await this.fetch<unknown>(`/api/test-plans/${encodeURIComponent(id)}/selection`);
+    return parseWithFallback(raw, TestPlanSelectionSchema, EMPTY_TEST_PLAN_SELECTION, {
+      endpoint: "GET /api/test-plans/:id/selection",
     });
   }
 

@@ -119,9 +119,9 @@ func (q *Queries) CountTestRunResults(ctx context.Context, arg CountTestRunResul
 }
 
 const createTestPlan = `-- name: CreateTestPlan :one
-INSERT INTO test_plan (workspace_id, project_id, title, description, status, created_by)
-VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, workspace_id, project_id, title, description, status, created_by, created_at, updated_at
+INSERT INTO test_plan (workspace_id, project_id, title, description, status, created_by, selector)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING id, workspace_id, project_id, title, description, status, created_by, created_at, updated_at, selector
 `
 
 type CreateTestPlanParams struct {
@@ -131,6 +131,7 @@ type CreateTestPlanParams struct {
 	Description string      `json:"description"`
 	Status      string      `json:"status"`
 	CreatedBy   pgtype.UUID `json:"created_by"`
+	Selector    []byte      `json:"selector"`
 }
 
 func (q *Queries) CreateTestPlan(ctx context.Context, arg CreateTestPlanParams) (TestPlan, error) {
@@ -141,6 +142,7 @@ func (q *Queries) CreateTestPlan(ctx context.Context, arg CreateTestPlanParams) 
 		arg.Description,
 		arg.Status,
 		arg.CreatedBy,
+		arg.Selector,
 	)
 	var i TestPlan
 	err := row.Scan(
@@ -153,6 +155,7 @@ func (q *Queries) CreateTestPlan(ctx context.Context, arg CreateTestPlanParams) 
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Selector,
 	)
 	return i, err
 }
@@ -335,7 +338,7 @@ func (q *Queries) DeleteTestRunCases(ctx context.Context, arg DeleteTestRunCases
 }
 
 const getTestPlanInWorkspace = `-- name: GetTestPlanInWorkspace :one
-SELECT id, workspace_id, project_id, title, description, status, created_by, created_at, updated_at FROM test_plan WHERE id = $1 AND workspace_id = $2
+SELECT id, workspace_id, project_id, title, description, status, created_by, created_at, updated_at, selector FROM test_plan WHERE id = $1 AND workspace_id = $2
 `
 
 type GetTestPlanInWorkspaceParams struct {
@@ -356,6 +359,7 @@ func (q *Queries) GetTestPlanInWorkspace(ctx context.Context, arg GetTestPlanInW
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Selector,
 	)
 	return i, err
 }
@@ -571,6 +575,68 @@ func (q *Queries) ListTestCaseResultTimeline(ctx context.Context, arg ListTestCa
 	return items, nil
 }
 
+const listTestCasesMatchingPlanSelector = `-- name: ListTestCasesMatchingPlanSelector :many
+SELECT tc.id, tc.case_number
+FROM test_case tc
+WHERE tc.workspace_id = $1
+  AND tc.project_id = $2
+  AND tc.status = 'active'
+  AND (cardinality($3::text[]) = 0 OR tc.module = ANY($3::text[]))
+  AND (cardinality($4::text[]) = 0 OR tc.priority = ANY($4::text[]))
+  AND (cardinality($5::text[]) = 0 OR tc.case_type = ANY($5::text[]))
+  AND (cardinality($6::uuid[]) = 0 OR EXISTS (
+      SELECT 1 FROM test_case_issue tci
+      WHERE tci.test_case_id = tc.id
+        AND tci.workspace_id = tc.workspace_id
+        AND tci.issue_id = ANY($6::uuid[])
+  ))
+ORDER BY tc.case_number ASC
+`
+
+type ListTestCasesMatchingPlanSelectorParams struct {
+	WorkspaceID pgtype.UUID   `json:"workspace_id"`
+	ProjectID   pgtype.UUID   `json:"project_id"`
+	Modules     []string      `json:"modules"`
+	Priorities  []string      `json:"priorities"`
+	CaseTypes   []string      `json:"case_types"`
+	IssueIds    []pgtype.UUID `json:"issue_ids"`
+}
+
+type ListTestCasesMatchingPlanSelectorRow struct {
+	ID         pgtype.UUID `json:"id"`
+	CaseNumber int32       `json:"case_number"`
+}
+
+// The active cases of a project a plan's rule picks. An empty array means the
+// dimension is not constrained; the handler never calls this for a plan with
+// no rule at all.
+func (q *Queries) ListTestCasesMatchingPlanSelector(ctx context.Context, arg ListTestCasesMatchingPlanSelectorParams) ([]ListTestCasesMatchingPlanSelectorRow, error) {
+	rows, err := q.db.Query(ctx, listTestCasesMatchingPlanSelector,
+		arg.WorkspaceID,
+		arg.ProjectID,
+		arg.Modules,
+		arg.Priorities,
+		arg.CaseTypes,
+		arg.IssueIds,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListTestCasesMatchingPlanSelectorRow{}
+	for rows.Next() {
+		var i ListTestCasesMatchingPlanSelectorRow
+		if err := rows.Scan(&i.ID, &i.CaseNumber); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTestPlanCases = `-- name: ListTestPlanCases :many
 SELECT plan_id, workspace_id, test_case_id, position, created_at FROM test_plan_case
 WHERE plan_id = $1 AND workspace_id = $2
@@ -609,7 +675,7 @@ func (q *Queries) ListTestPlanCases(ctx context.Context, arg ListTestPlanCasesPa
 }
 
 const listTestPlans = `-- name: ListTestPlans :many
-SELECT id, workspace_id, project_id, title, description, status, created_by, created_at, updated_at FROM test_plan
+SELECT id, workspace_id, project_id, title, description, status, created_by, created_at, updated_at, selector FROM test_plan
 WHERE workspace_id = $1
   AND ($2::uuid IS NULL OR project_id = $2)
   AND ($3::text IS NULL OR status = $3)
@@ -641,6 +707,7 @@ func (q *Queries) ListTestPlans(ctx context.Context, arg ListTestPlansParams) ([
 			&i.CreatedBy,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Selector,
 		); err != nil {
 			return nil, err
 		}
@@ -947,9 +1014,10 @@ UPDATE test_plan SET
     title       = COALESCE($3, title),
     description = COALESCE($4, description),
     status      = COALESCE($5, status),
+    selector    = COALESCE($6, selector),
     updated_at  = now()
 WHERE id = $1 AND workspace_id = $2
-RETURNING id, workspace_id, project_id, title, description, status, created_by, created_at, updated_at
+RETURNING id, workspace_id, project_id, title, description, status, created_by, created_at, updated_at, selector
 `
 
 type UpdateTestPlanParams struct {
@@ -958,6 +1026,7 @@ type UpdateTestPlanParams struct {
 	Title       pgtype.Text `json:"title"`
 	Description pgtype.Text `json:"description"`
 	Status      pgtype.Text `json:"status"`
+	Selector    []byte      `json:"selector"`
 }
 
 func (q *Queries) UpdateTestPlan(ctx context.Context, arg UpdateTestPlanParams) (TestPlan, error) {
@@ -967,6 +1036,7 @@ func (q *Queries) UpdateTestPlan(ctx context.Context, arg UpdateTestPlanParams) 
 		arg.Title,
 		arg.Description,
 		arg.Status,
+		arg.Selector,
 	)
 	var i TestPlan
 	err := row.Scan(
@@ -979,6 +1049,7 @@ func (q *Queries) UpdateTestPlan(ctx context.Context, arg UpdateTestPlanParams) 
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Selector,
 	)
 	return i, err
 }

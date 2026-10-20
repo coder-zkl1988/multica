@@ -9,8 +9,8 @@ ORDER BY created_at DESC;
 SELECT * FROM test_plan WHERE id = $1 AND workspace_id = $2;
 
 -- name: CreateTestPlan :one
-INSERT INTO test_plan (workspace_id, project_id, title, description, status, created_by)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO test_plan (workspace_id, project_id, title, description, status, created_by, selector)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 RETURNING *;
 
 -- name: UpdateTestPlan :one
@@ -18,9 +18,30 @@ UPDATE test_plan SET
     title       = COALESCE(sqlc.narg('title'), title),
     description = COALESCE(sqlc.narg('description'), description),
     status      = COALESCE(sqlc.narg('status'), status),
+    selector    = COALESCE(sqlc.narg('selector'), selector),
     updated_at  = now()
 WHERE id = $1 AND workspace_id = $2
 RETURNING *;
+
+-- name: ListTestCasesMatchingPlanSelector :many
+-- The active cases of a project a plan's rule picks. An empty array means the
+-- dimension is not constrained; the handler never calls this for a plan with
+-- no rule at all.
+SELECT tc.id, tc.case_number
+FROM test_case tc
+WHERE tc.workspace_id = sqlc.arg(workspace_id)
+  AND tc.project_id = sqlc.arg(project_id)
+  AND tc.status = 'active'
+  AND (cardinality(sqlc.arg(modules)::text[]) = 0 OR tc.module = ANY(sqlc.arg(modules)::text[]))
+  AND (cardinality(sqlc.arg(priorities)::text[]) = 0 OR tc.priority = ANY(sqlc.arg(priorities)::text[]))
+  AND (cardinality(sqlc.arg(case_types)::text[]) = 0 OR tc.case_type = ANY(sqlc.arg(case_types)::text[]))
+  AND (cardinality(sqlc.arg(issue_ids)::uuid[]) = 0 OR EXISTS (
+      SELECT 1 FROM test_case_issue tci
+      WHERE tci.test_case_id = tc.id
+        AND tci.workspace_id = tc.workspace_id
+        AND tci.issue_id = ANY(sqlc.arg(issue_ids)::uuid[])
+  ))
+ORDER BY tc.case_number ASC;
 
 -- name: DeleteTestPlan :exec
 DELETE FROM test_plan WHERE id = $1 AND workspace_id = $2;

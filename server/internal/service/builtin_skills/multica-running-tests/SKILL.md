@@ -245,8 +245,11 @@ the code and stop.
 
 ## 9. Test plans (informational)
 
-Test plans group cases into a named release scope. You can read them but you
-do not modify plans during a run:
+Test plans group cases into a named release scope. A round of a plan runs the
+plan's listed cases and then every active case its `selector` rule matches at
+that moment (modules, priorities, case types, covered issues, or all active),
+so the round you execute may include cases written after the plan was built.
+You can read plans but you do not modify them during a run:
 
     multica test plan list --output json
     multica test plan get <plan-id> --output json

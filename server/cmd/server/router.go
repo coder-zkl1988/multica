@@ -2356,6 +2356,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Put("/", h.UpdateTestPlan)
 					r.Delete("/", h.DeleteTestPlan)
 					r.Get("/cases", h.ListTestPlanCases)
+					// What the next round runs: listed cases plus the rule's matches.
+					r.Get("/selection", h.GetTestPlanSelection)
 					r.Get("/stats", h.GetTestPlanStats)
 					r.Post("/cases", h.AddTestPlanCases)
 					r.Delete("/cases/{caseId}", h.RemoveTestPlanCase)

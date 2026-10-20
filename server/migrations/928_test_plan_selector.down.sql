@@ -1,0 +1,1 @@
+ALTER TABLE test_plan DROP COLUMN IF EXISTS selector;

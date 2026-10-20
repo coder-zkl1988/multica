@@ -14,6 +14,7 @@ import type {
   ListIssueTestPointsResponse,
   ListTestCaseTestPointsResponse,
   TestPoint,
+  TestPlanSelection,
   AutopilotRun,
   BillingBalance,
   BillingBatchesPage,
@@ -5442,6 +5443,15 @@ export const DispatchTestGenerationJobResponseSchema = z.object({
 // Test plans, runs and capabilities — Phase 3/4
 // ---------------------------------------------------------------------------
 
+// A server older than plan rules sends no selector: the plan is its list.
+const TestPlanSelectorSchema = z.object({
+  all_active: z.boolean().optional(),
+  modules: z.array(z.string()).optional(),
+  priorities: z.array(z.string()).optional(),
+  case_types: z.array(z.string()).optional(),
+  issue_ids: z.array(z.string()).optional(),
+}).loose();
+
 export const TestPlanSchema = z.object({
   id: z.string().default(""),
   workspace_id: z.string().default(""),
@@ -5449,10 +5459,26 @@ export const TestPlanSchema = z.object({
   title: z.string().default(""),
   description: z.string().default(""),
   status: z.string().default("draft"),
+  selector: TestPlanSelectorSchema.catch({}).default({}),
   created_by: z.string().nullable().default(null),
   created_at: z.string().default(""),
   updated_at: z.string().default(""),
 }).loose();
+
+export const TestPlanSelectionSchema = z.object({
+  cases: z.array(z.object({
+    test_case_id: z.string().default(""),
+    case_key: z.string().default(""),
+    title: z.string().default(""),
+    status: z.string().default(""),
+    source: z.string().default("manual"),
+  }).loose()).default([]),
+  manual: z.number().default(0),
+  rule: z.number().default(0),
+  total: z.number().default(0),
+}).loose();
+
+export const EMPTY_TEST_PLAN_SELECTION: TestPlanSelection = { cases: [], manual: 0, rule: 0, total: 0 };
 
 export const TestPlanCaseSchema = z.object({
   plan_id: z.string().default(""),
@@ -5868,6 +5894,7 @@ export const EMPTY_TEST_PLAN: TestPlan = {
   title: "",
   description: "",
   status: "draft",
+  selector: {},
   created_by: null,
   created_at: "",
   updated_at: "",
