@@ -288,6 +288,26 @@ func normalizeTestCaseSteps(steps []TestCaseStep) []TestCaseStep {
 	return normalized
 }
 
+// agentCannotActivateTestCase is the refusal for an agent that tries to make
+// a case live. A draft is the review gate between "an AI wrote this" and
+// "rounds execute this and coverage counts it"; the author cannot be its own
+// reviewer.
+const agentCannotActivateTestCase = "an agent's test case stays a draft until a member approves it; tell the person which drafts are ready for review"
+
+// agentCannotRetireTestCase is the refusal for an agent that tries to take a
+// live case out of rounds and coverage. A case that fails is the signal the
+// round exists to produce; retiring it is a member's call.
+const agentCannotRetireTestCase = "an agent cannot deprecate or delete an active test case; tell the person which case should be retired and why"
+
+// testCaseOriginFor records who wrote a case: an agent's case is "ai" on every
+// path, not only through a generation run.
+func testCaseOriginFor(actorType string) string {
+	if actorType == "agent" {
+		return "ai"
+	}
+	return "human"
+}
+
 // testCaseStepsProblem reports why a procedure cannot be executed, or "" when
 // it can. A case is the thing a tester or an agent checks the product against:
 // with no step, or a step whose expected result is blank, there is nothing to
@@ -567,17 +587,25 @@ func (h *Handler) CreateTestCase(w http.ResponseWriter, r *http.Request) {
 		executionMode = "manual"
 	}
 	steps := normalizeTestCaseSteps(req.Steps)
-	// A hand-authored case is live on creation once it can be executed. One
-	// with nothing to check yet — the issue page's "new case" button creates
-	// it from a title alone and opens the editor — lands as a draft and is
-	// activated when its steps are filled in. An author who wants to park a
-	// case may still pass status explicitly.
+	// A person's case is live on creation once it can be executed. One with
+	// nothing to check yet — the issue page's "new case" button creates it
+	// from a title alone and opens the editor — lands as a draft, and the save
+	// that makes its steps executable activates it (UpdateTestCase). An author
+	// who wants to park a case may still pass status explicitly. An agent's
+	// case is AI-written whichever path wrote it, so it lands as a draft a
+	// member approves, exactly like a generation run's.
+	actorType, actorID := h.resolveActor(r, userID, workspaceID)
+	isAgent := actorType == "agent"
 	status := req.Status
 	if status == "" {
 		status = "active"
-		if testCaseStepsProblem(steps) != "" {
+		if isAgent || testCaseStepsProblem(steps) != "" {
 			status = "draft"
 		}
+	}
+	if isAgent && status == "active" {
+		writeError(w, http.StatusForbidden, agentCannotActivateTestCase)
+		return
 	}
 	if !validateTestCaseEnum(w, "priority", priority, validTestCasePriorities) ||
 		!validateTestCaseEnum(w, "case_type", caseType, validTestCaseTypes) ||
@@ -645,7 +673,7 @@ func (h *Handler) CreateTestCase(w http.ResponseWriter, r *http.Request) {
 		RequiredCapabilities: marshalJSONColumn(capabilities, "[]"),
 		BusinessRulesRef:     marshalJSONColumn(businessRules, "[]"),
 		Status:               status,
-		Origin:               "human",
+		Origin:               testCaseOriginFor(actorType),
 		SourceRefs:           []byte("{}"),
 		CreatedBy:            userUUID,
 		UpdatedBy:            userUUID,
@@ -673,7 +701,7 @@ func (h *Handler) CreateTestCase(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := testCaseToResponse(testCase, repos)
-	h.publish(protocol.EventTestCaseCreated, workspaceID, "member", userID, map[string]any{"test_case": resp})
+	h.publish(protocol.EventTestCaseCreated, workspaceID, actorType, actorID, map[string]any{"test_case": resp})
 	writeJSON(w, http.StatusCreated, resp)
 }
 
@@ -763,6 +791,28 @@ func (h *Handler) UpdateTestCase(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	actorType, actorID := h.resolveActor(r, userID, workspaceID)
+	if actorType == "agent" && params.Status.Valid && params.Status.String != current.Status {
+		switch {
+		case params.Status.String == "active":
+			writeError(w, http.StatusForbidden, agentCannotActivateTestCase)
+			return
+		case current.Status == "active":
+			writeError(w, http.StatusForbidden, agentCannotRetireTestCase)
+			return
+		}
+	}
+	// A person's draft that was a draft only because it had nothing to check
+	// goes live with the save that gives it executable steps: nobody else
+	// reviews a person's own case, and leaving it in draft would keep it out
+	// of every round and every coverage count without anyone noticing. A save
+	// that names a status keeps it; an AI-written draft still waits for
+	// approval.
+	if actorType != "agent" && !params.Status.Valid && current.Status == "draft" && current.Origin == "human" &&
+		stepsChanged && testCaseStepsProblem(decodeTestCaseSteps(current.Steps)) != "" &&
+		testCaseStepsProblem(normalizeTestCaseSteps(*req.Steps)) == "" {
+		params.Status = pgtype.Text{String: "active", Valid: true}
+	}
 	if req.TestData != nil {
 		params.TestData = marshalJSONColumn(*req.TestData, "{}")
 	}
@@ -793,7 +843,7 @@ func (h *Handler) UpdateTestCase(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := testCaseToResponse(updated, repos)
-	h.publish(protocol.EventTestCaseUpdated, workspaceID, "member", userID, map[string]any{"test_case": resp})
+	h.publish(protocol.EventTestCaseUpdated, workspaceID, actorType, actorID, map[string]any{"test_case": resp})
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -879,15 +929,19 @@ func (h *Handler) ApproveTestCase(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "only a draft test case can be approved")
 		return
 	}
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	workspaceID := h.resolveWorkspaceID(r)
+	if actorType, _ := h.resolveActor(r, userID, workspaceID); actorType == "agent" {
+		writeError(w, http.StatusForbidden, agentCannotActivateTestCase)
+		return
+	}
 	// Approval is the gate between "someone wrote this" and "rounds execute
 	// this": a draft that cannot be checked step by step is not approved.
 	if problem := testCaseStepsProblem(decodeTestCaseSteps(current.Steps)); problem != "" {
 		writeError(w, http.StatusBadRequest, problem)
-		return
-	}
-	workspaceID := h.resolveWorkspaceID(r)
-	userID, ok := requireUserID(w, r)
-	if !ok {
 		return
 	}
 	userUUID, ok := parseUUIDOrBadRequest(w, userID, "user id")
@@ -926,6 +980,13 @@ func (h *Handler) DeleteTestCase(w http.ResponseWriter, r *http.Request) {
 	workspaceID := h.resolveWorkspaceID(r)
 	userID, ok := requireUserID(w, r)
 	if !ok {
+		return
+	}
+	// An agent may clean up a draft nobody approved; anything a round could
+	// execute is a member's to remove.
+	actorType, actorID := h.resolveActor(r, userID, workspaceID)
+	if actorType == "agent" && testCase.Status != "draft" {
+		writeError(w, http.StatusForbidden, agentCannotRetireTestCase)
 		return
 	}
 
@@ -990,7 +1051,7 @@ func (h *Handler) DeleteTestCase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.publish(protocol.EventTestCaseDeleted, workspaceID, "member", userID,
+	h.publish(protocol.EventTestCaseDeleted, workspaceID, actorType, actorID,
 		map[string]any{"test_case_id": uuidToString(testCase.ID)})
 	writeJSON(w, http.StatusOK, map[string]any{"success": true})
 }

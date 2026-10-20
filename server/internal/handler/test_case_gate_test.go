@@ -88,3 +88,106 @@ func TestLegacyActiveCaseStaysEditable(t *testing.T) {
 	testutil.Call(t, testHandler.UpdateTestCase, withURLParam(newRequest("PUT", "/api/test-cases/"+legacy.Key+"?workspace_id="+testWorkspaceID,
 		map[string]any{"steps": []map[string]any{{"action": "Open the page"}}}), "ref", legacy.Key)).Want(http.StatusBadRequest)
 }
+
+// A person's case created from a title alone is a draft only because there
+// was nothing to check yet. The save that gives it executable steps makes it
+// live; otherwise it would sit outside every round and coverage count.
+func TestPersonsDraftGoesLiveWhenItsStepsAreFilledIn(t *testing.T) {
+	projectID := newTestCaseProject(t)
+	update := func(key string, body map[string]any, headers ...string) TestCaseResponse {
+		req := withURLParam(newRequest("PUT", "/api/test-cases/"+key+"?workspace_id="+testWorkspaceID, body), "ref", key)
+		for i := 0; i+1 < len(headers); i += 2 {
+			req.Header.Set(headers[i], headers[i+1])
+		}
+		var out TestCaseResponse
+		testutil.Call(t, testHandler.UpdateTestCase, req).Want(http.StatusOK).JSON(&out)
+		return out
+	}
+
+	filled := createTestCaseForTest(t, map[string]any{"project_id": projectID, "title": "Coupon stacking"})
+	if got := update(filled.Key, map[string]any{"steps": executableSteps}); got.Status != "active" {
+		t.Errorf("a person's draft with its steps filled in is %q, want active", got.Status)
+	}
+
+	// A save that names the status keeps the author's choice.
+	parked := createTestCaseForTest(t, map[string]any{"project_id": projectID, "title": "Coupon expiry"})
+	if got := update(parked.Key, map[string]any{"steps": executableSteps, "status": "draft"}); got.Status != "draft" {
+		t.Errorf("a draft saved with status draft is %q, want draft", got.Status)
+	}
+
+	// Editing a draft that already had executable steps is not the moment it
+	// became checkable; it stays where its author left it.
+	explicit := createTestCaseForTest(t, map[string]any{"project_id": projectID, "title": "Coupon limits", "status": "draft", "steps": executableSteps})
+	if got := update(explicit.Key, map[string]any{"steps": []map[string]any{{"action": "Open the cart", "expected": "Two coupons"}}}); got.Status != "draft" {
+		t.Errorf("an explicitly parked draft became %q after an edit, want draft", got.Status)
+	}
+
+	// An AI-written draft still waits for a member's approval.
+	agentDraft := createTestCaseAsAgent(t, map[string]any{"project_id": projectID, "title": "Coupon reuse"})
+	if got := update(agentDraft.Key, map[string]any{"steps": executableSteps}); got.Status != "draft" {
+		t.Errorf("an AI draft with its steps filled in by a member is %q, want draft until approved", got.Status)
+	}
+}
+
+var testCaseAgentHeaders = []string{"X-Actor-Source", "task_token", "X-Agent-ID", "00000000-0000-0000-0000-0000000000a3"}
+
+func asTestCaseAgent(req *http.Request) *http.Request {
+	for i := 0; i+1 < len(testCaseAgentHeaders); i += 2 {
+		req.Header.Set(testCaseAgentHeaders[i], testCaseAgentHeaders[i+1])
+	}
+	return req
+}
+
+func createTestCaseAsAgent(t *testing.T, body map[string]any) TestCaseResponse {
+	t.Helper()
+	var out TestCaseResponse
+	testutil.Call(t, testHandler.CreateTestCase, asTestCaseAgent(newRequest("POST", "/api/test-cases?workspace_id="+testWorkspaceID, body))).
+		Want(http.StatusCreated).JSON(&out)
+	return out
+}
+
+// An agent's case is AI-written whichever command wrote it. It lands as a
+// draft with origin ai and goes live only when a member approves it — the
+// same review gate a generation run's cases pass through.
+func TestAgentCaseWaitsForAMembersApproval(t *testing.T) {
+	projectID := newTestCaseProject(t)
+	draft := createTestCaseAsAgent(t, map[string]any{"project_id": projectID, "title": "Refund to card", "steps": executableSteps})
+	if draft.Status != "draft" || draft.Origin != "ai" {
+		t.Fatalf("agent case = status %q origin %q, want a draft with origin ai", draft.Status, draft.Origin)
+	}
+	testutil.Call(t, testHandler.CreateTestCase, asTestCaseAgent(newRequest("POST", "/api/test-cases?workspace_id="+testWorkspaceID,
+		map[string]any{"project_id": projectID, "title": "Refund to wallet", "status": "active", "steps": executableSteps}))).
+		Want(http.StatusForbidden)
+
+	approvePath := "/api/test-cases/" + draft.Key + "/approve?workspace_id=" + testWorkspaceID
+	testutil.Call(t, testHandler.ApproveTestCase, asTestCaseAgent(withURLParam(newRequest("POST", approvePath, nil), "ref", draft.Key))).
+		Want(http.StatusForbidden)
+	testutil.Call(t, testHandler.UpdateTestCase, asTestCaseAgent(withURLParam(newRequest("PUT", "/api/test-cases/"+draft.Key+"?workspace_id="+testWorkspaceID,
+		map[string]any{"status": "active"}), "ref", draft.Key))).Want(http.StatusForbidden)
+	// The agent may still refine its own draft.
+	testutil.Call(t, testHandler.UpdateTestCase, asTestCaseAgent(withURLParam(newRequest("PUT", "/api/test-cases/"+draft.Key+"?workspace_id="+testWorkspaceID,
+		map[string]any{"title": "Refund to the original card"}), "ref", draft.Key))).Want(http.StatusOK)
+
+	var approved TestCaseResponse
+	testutil.Call(t, testHandler.ApproveTestCase, withURLParam(newRequest("POST", approvePath, nil), "ref", draft.Key)).
+		Want(http.StatusOK).JSON(&approved)
+	if approved.Status != "active" {
+		t.Fatalf("member approval left the case %q, want active", approved.Status)
+	}
+}
+
+// A failing case is the signal a round exists to produce; an agent cannot
+// make it go away by retiring the case.
+func TestAgentCannotRetireAnActiveCase(t *testing.T) {
+	projectID := newTestCaseProject(t)
+	active := createTestCaseForTest(t, map[string]any{"project_id": projectID, "title": "Refund keeps the order", "steps": executableSteps})
+	testutil.Call(t, testHandler.UpdateTestCase, asTestCaseAgent(withURLParam(newRequest("PUT", "/api/test-cases/"+active.Key+"?workspace_id="+testWorkspaceID,
+		map[string]any{"status": "deprecated"}), "ref", active.Key))).Want(http.StatusForbidden)
+	testutil.Call(t, testHandler.DeleteTestCase, asTestCaseAgent(withURLParam(newRequest("DELETE", "/api/test-cases/"+active.Key+"?workspace_id="+testWorkspaceID, nil), "ref", active.Key))).
+		Want(http.StatusForbidden)
+
+	// Its own unapproved draft is the agent's to clean up.
+	draft := createTestCaseAsAgent(t, map[string]any{"project_id": projectID, "title": "Duplicate refund case"})
+	testutil.Call(t, testHandler.DeleteTestCase, asTestCaseAgent(withURLParam(newRequest("DELETE", "/api/test-cases/"+draft.Key+"?workspace_id="+testWorkspaceID, nil), "ref", draft.Key))).
+		Want(http.StatusOK)
+}

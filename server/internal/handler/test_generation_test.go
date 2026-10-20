@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/multica-ai/multica/server/internal/testutil"
 )
 
 // Fixed task ids for the writeback gate. They never have to exist as rows: the
@@ -665,5 +667,40 @@ func TestAcceptTestCaseProposalLinksItsTestPoints(t *testing.T) {
 	if err := testPool.QueryRow(context.Background(),
 		`SELECT count(*) FROM test_case_test_point WHERE test_case_id = $1 AND test_point_id = $2`, existing.ID, point.ID).Scan(&linked); err != nil || linked != 1 {
 		t.Fatalf("point links after accept = %d (%v), want 1", linked, err)
+	}
+}
+
+// A proposal is a suggestion for a member to decide; an agent deciding one
+// would be AI reviewing AI output.
+func TestAgentCannotReviewATestCaseProposal(t *testing.T) {
+	projectID := newTestCaseProject(t)
+	jobID := newTestGenerationJob(t, projectID)
+	bindJobToTask(t, jobID, testGenerationTaskUUID)
+	existing := createTestCaseForTest(t, map[string]any{"project_id": projectID, "title": "原始用例", "steps": executableSteps})
+	if w := proposeRequest(t, jobID, testGenerationTaskUUID, []map[string]any{
+		{"kind": "update", "target": existing.Key, "case": map[string]any{"title": "智能体想要的标题", "steps": executableSteps}},
+	}); w.Code != http.StatusCreated {
+		t.Fatalf("seed proposal: %s", w.Body.String())
+	}
+	var proposalID string
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT id FROM test_case_proposal WHERE target_case_id = $1`, existing.ID).Scan(&proposalID); err != nil {
+		t.Fatalf("read proposal id: %v", err)
+	}
+	for _, review := range []struct {
+		name    string
+		handler http.HandlerFunc
+	}{{"accept", testHandler.AcceptTestCaseProposal}, {"reject", testHandler.RejectTestCaseProposal}} {
+		req := withURLParam(newRequest("POST", "/api/test-case-proposals/"+proposalID+"/"+review.name+"?workspace_id="+testWorkspaceID, nil), "id", proposalID)
+		req.Header.Set("X-Actor-Source", "task_token")
+		req.Header.Set("X-Agent-ID", "00000000-0000-0000-0000-0000000000a4")
+		testutil.Call(t, review.handler, req).Want(http.StatusForbidden)
+	}
+	var status string
+	if err := testPool.QueryRow(context.Background(), `SELECT status FROM test_case_proposal WHERE id = $1`, proposalID).Scan(&status); err != nil {
+		t.Fatalf("read proposal status: %v", err)
+	}
+	if status != "pending" {
+		t.Fatalf("proposal status = %q after agent review attempts, want pending", status)
 	}
 }

@@ -658,6 +658,12 @@ func (h *Handler) reviewTestCaseProposal(w http.ResponseWriter, r *http.Request,
 	if !ok {
 		return
 	}
+	// A proposal is an agent's suggestion for a member to decide; an agent
+	// deciding one would be reviewing AI output with AI.
+	if actorType, _ := h.resolveActor(r, userID, workspaceID); actorType == "agent" {
+		writeError(w, http.StatusForbidden, "an agent cannot accept or reject a test case proposal; a member reviews it")
+		return
+	}
 	userUUID, ok := parseUUIDOrBadRequest(w, userID, "user id")
 	if !ok {
 		return
