@@ -203,7 +203,7 @@ func TestAgentCaseWaitsForAMembersApproval(t *testing.T) {
 		map[string]any{"status": "deprecated"}), "ref", draft.Key)).Want(http.StatusOK)
 	resp := testutil.Call(t, testHandler.UpdateTestCase, asTestCaseAgent(withURLParam(newRequest("PUT", "/api/test-cases/"+draft.Key+"?workspace_id="+testWorkspaceID,
 		map[string]any{"status": "active"}), "ref", draft.Key))).Want(http.StatusForbidden)
-	if !strings.Contains(resp.Text(), "reactivate") {
+	if !strings.Contains(resp.Text(), "deprecated") {
 		t.Errorf("reactivation refused with %q, want it to say a person reactivates it", resp.Text())
 	}
 }
@@ -295,4 +295,50 @@ func TestDroppingAnAIPointMakesItAPersons(t *testing.T) {
 	}
 	testutil.Call(t, testHandler.UpdateTestPoint, asTestCaseAgent(withURLParam(newRequest("PATCH", "/api/test-points/"+point.ID+"?workspace_id="+testWorkspaceID,
 		map[string]any{"status": "active"}), "pointId", point.ID))).Want(http.StatusForbidden)
+}
+
+// Linking an active case is a coverage claim its past passes back at once;
+// an agent's claim is reviewed like any other AI output.
+func TestAgentCannotClaimThatAnActiveCaseCoversARequirement(t *testing.T) {
+	projectID := newTestCaseProject(t)
+	issueID := dbfx.Issue(t, "Refund claims", testutil.Cols{"project_id": projectID})
+	t.Cleanup(func() {
+		testPool.Exec(t.Context(), `DELETE FROM test_case_test_point WHERE test_point_id IN (SELECT id FROM issue_test_point WHERE issue_id = $1)`, issueID)
+		testPool.Exec(t.Context(), `DELETE FROM test_case_issue WHERE issue_id = $1`, issueID)
+		testPool.Exec(t.Context(), `DELETE FROM issue_test_point WHERE issue_id = $1`, issueID)
+	})
+	point := createTestPoint(t, issueID, map[string]any{"title": "A refund is idempotent"})
+	active := createTestCaseForTest(t, map[string]any{"project_id": projectID, "title": "Refund twice", "steps": executableSteps})
+	testutil.Call(t, testHandler.LinkTestCaseTestPoints, asTestCaseAgent(withURLParam(newRequest("POST", "/api/test-cases/"+active.Key+"/test-points?workspace_id="+testWorkspaceID,
+		map[string]any{"test_points": []string{point.ID}}), "ref", active.Key))).Want(http.StatusForbidden)
+	testutil.Call(t, testHandler.LinkTestCaseIssues, asTestCaseAgent(withURLParam(newRequest("POST", "/api/test-cases/"+active.Key+"/issues?workspace_id="+testWorkspaceID,
+		map[string]any{"issue_ids": []string{issueID}}), "ref", active.Key))).Want(http.StatusForbidden)
+
+	// A draft's links count for nothing until it is approved, so an agent
+	// may draw them — as AI links.
+	draft := createTestCaseAsAgent(t, map[string]any{"project_id": projectID, "title": "Refund twice, draft", "steps": executableSteps})
+	testutil.Call(t, testHandler.LinkTestCaseIssues, asTestCaseAgent(withURLParam(newRequest("POST", "/api/test-cases/"+draft.Key+"/issues?workspace_id="+testWorkspaceID,
+		map[string]any{"issue_ids": []string{issueID}}), "ref", draft.Key))).Want(http.StatusOK)
+	var origin string
+	dbfx.QueryRow(t, `SELECT origin FROM test_case_issue WHERE test_case_id = $1 AND issue_id = $2`, draft.ID, issueID).Scan(&origin)
+	if origin != "ai" {
+		t.Fatalf("an agent's issue link has origin %q, want ai", origin)
+	}
+}
+
+// A member retired the case; the agent may not move it to draft and then
+// delete it with its history, nor delete an AI case a member once approved.
+func TestAgentCannotUndoAMembersDecisionOnACase(t *testing.T) {
+	projectID := newTestCaseProject(t)
+	retired := createTestCaseAsAgent(t, map[string]any{"project_id": projectID, "title": "Refund to points", "steps": executableSteps})
+	testutil.Call(t, testHandler.ApproveTestCase, withURLParam(newRequest("POST", "/api/test-cases/"+retired.Key+"/approve?workspace_id="+testWorkspaceID, nil), "ref", retired.Key)).Want(http.StatusOK)
+	testutil.Call(t, testHandler.UpdateTestCase, withURLParam(newRequest("PUT", "/api/test-cases/"+retired.Key+"?workspace_id="+testWorkspaceID,
+		map[string]any{"status": "deprecated"}), "ref", retired.Key)).Want(http.StatusOK)
+	testutil.Call(t, testHandler.UpdateTestCase, asTestCaseAgent(withURLParam(newRequest("PUT", "/api/test-cases/"+retired.Key+"?workspace_id="+testWorkspaceID,
+		map[string]any{"status": "draft"}), "ref", retired.Key))).Want(http.StatusForbidden)
+	// Even moved back to draft by a member, it was approved once.
+	testutil.Call(t, testHandler.UpdateTestCase, withURLParam(newRequest("PUT", "/api/test-cases/"+retired.Key+"?workspace_id="+testWorkspaceID,
+		map[string]any{"status": "draft"}), "ref", retired.Key)).Want(http.StatusOK)
+	testutil.Call(t, testHandler.DeleteTestCase, asTestCaseAgent(withURLParam(newRequest("DELETE", "/api/test-cases/"+retired.Key+"?workspace_id="+testWorkspaceID, nil), "ref", retired.Key))).
+		Want(http.StatusForbidden)
 }

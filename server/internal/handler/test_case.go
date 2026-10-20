@@ -300,9 +300,16 @@ const agentCannotActivateTestCase = "an agent's test case stays a draft until a 
 // round exists to produce; retiring it is a member's call.
 const agentCannotRetireTestCase = "an agent cannot take an active test case out of coverage — change its status, delete it, or unlink it from an issue or test point; tell the person which case should change and why"
 
-// agentCannotReactivateTestCase is the refusal for an agent bringing back a
-// deprecated case: a member retired it, and a member decides it runs again.
-const agentCannotReactivateTestCase = "an agent cannot reactivate a deprecated test case; tell the person why it should run again"
+// agentCannotReactivateTestCase is the refusal for an agent changing a
+// deprecated case's status: a member retired it, and a member decides what
+// becomes of it (moving it back to draft would let the agent delete it and
+// its history next).
+const agentCannotReactivateTestCase = "an agent cannot change the status of a deprecated test case; tell the person why it should run again"
+
+// agentCannotClaimCoverage is the refusal for an agent linking an active case
+// to an issue or test point: the case's past passes would count for it at
+// once, with nobody having checked the claim.
+const agentCannotClaimCoverage = "an agent cannot claim that an active test case verifies an issue or test point; propose the link in a generation run (an update naming the test points) or tell the person"
 
 // agentCannotNarrowTestPlan is the refusal for an agent that tries to shrink a
 // regression: a plan's cases, rule and status decide what every later round
@@ -312,7 +319,7 @@ const agentCannotNarrowTestPlan = "an agent cannot remove cases from a test plan
 // agentCannotDeleteTestCase is the refusal for an agent deleting a case it may
 // not: a delete sweeps the revisions too, so only an AI-written draft — never
 // a person's — is an agent's to remove.
-const agentCannotDeleteTestCase = "an agent may delete only an AI-written draft; tell the person which case should be removed and why"
+const agentCannotDeleteTestCase = "an agent may delete only an AI-written draft nobody has approved; tell the person which case should be removed and why"
 
 // testCaseAwaitingStepsKey marks, in source_refs, a person's case that was
 // created as a draft only because it had no executable steps yet. Only such a
@@ -844,7 +851,7 @@ func (h *Handler) UpdateTestCase(w http.ResponseWriter, r *http.Request) {
 	actorType, actorID := h.resolveActor(r, userID, workspaceID)
 	if actorType == "agent" && params.Status.Valid && params.Status.String != current.Status {
 		switch {
-		case params.Status.String == "active" && current.Status == "deprecated":
+		case current.Status == "deprecated":
 			writeError(w, http.StatusForbidden, agentCannotReactivateTestCase)
 			return
 		case params.Status.String == "active":
@@ -1074,7 +1081,7 @@ func (h *Handler) DeleteTestCase(w http.ResponseWriter, r *http.Request) {
 		case testCase.Status == "active":
 			writeError(w, http.StatusForbidden, agentCannotRetireTestCase)
 			return
-		case testCase.Status != "draft" || testCase.Origin != "ai":
+		case testCase.Status != "draft" || testCase.Origin != "ai" || testCase.ReviewedAt.Valid:
 			writeError(w, http.StatusForbidden, agentCannotDeleteTestCase)
 			return
 		}
@@ -1096,7 +1103,7 @@ func (h *Handler) DeleteTestCase(w http.ResponseWriter, r *http.Request) {
 			h.writeTestCaseWriteError(w, r, lockErr, "delete")
 			return
 		}
-		if locked.Status != "draft" || locked.Origin != "ai" {
+		if locked.Status != "draft" || locked.Origin != "ai" || locked.ReviewedAt.Valid {
 			writeError(w, http.StatusConflict, "the test case changed while this delete was in flight and is no longer an unapproved AI draft")
 			return
 		}

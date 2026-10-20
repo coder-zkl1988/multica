@@ -173,6 +173,17 @@ func (h *Handler) LinkTestCaseIssues(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// Linking an active case is a coverage claim its past passes back at
+	// once; an agent's goes through review. An agent's link is AI-drawn.
+	actorType, actorID := h.resolveActor(r, userID, workspaceID)
+	if actorType == "agent" && testCase.Status == "active" {
+		writeError(w, http.StatusForbidden, agentCannotClaimCoverage)
+		return
+	}
+	linkOrigin := "human"
+	if actorType == "agent" {
+		linkOrigin = "ai"
+	}
 
 	var req LinkTestCaseIssuesRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -219,7 +230,7 @@ func (h *Handler) LinkTestCaseIssues(w http.ResponseWriter, r *http.Request) {
 			TestCaseID:  testCase.ID,
 			IssueID:     issueUUID,
 			WorkspaceID: testCase.WorkspaceID,
-			Origin:      "human",
+			Origin:      linkOrigin,
 			CreatedBy:   userUUID,
 		}); err != nil && !linkExists(err) {
 			// ON CONFLICT DO NOTHING returns no row for a link that already
@@ -235,7 +246,7 @@ func (h *Handler) LinkTestCaseIssues(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.publish(protocol.EventTestCaseUpdated, workspaceID, "member", userID,
+	h.publish(protocol.EventTestCaseUpdated, workspaceID, actorType, actorID,
 		map[string]any{"test_case_id": uuidToString(testCase.ID)})
 	h.ListTestCaseIssues(w, r)
 }

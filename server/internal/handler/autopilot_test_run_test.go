@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/multica-ai/multica/server/internal/testutil"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -272,4 +273,35 @@ func TestAutopilotRoundFollowsThePlansRule(t *testing.T) {
 	if got := roundCaseIDs(t, *testRunID); !slices.Equal(got, []string{first.ID, second.ID}) {
 		t.Fatalf("nightly round cases = %v, want the two active cases and not the deprecated one", got)
 	}
+}
+
+// Pausing the nightly regression or pointing it at a narrower plan takes
+// failing cases out of regression as surely as removing them from the plan.
+func TestAgentCannotRetargetOrPauseARegressionAutopilot(t *testing.T) {
+	projectID := newTestRunProject(t)
+	plan := createTestPlanForRun(t, projectID)
+	narrower := createTestPlanForRun(t, projectID)
+	addCaseToPlan(t, plan.ID, createTestCaseForRun(t, projectID).ID, 1)
+	runtimeID := dbfx.Runtime(t, "autopilot-gate-runtime")
+	agentID := dbfx.Agent(t, "autopilot-gate-agent", runtimeID)
+	ap := createTestRunAutopilot(t, map[string]any{
+		"title": "Nightly regression", "assignee_id": agentID, "execution_mode": "test_run", "test_plan_id": plan.ID,
+	})
+	// The agent acts for the member who created the autopilot, so the write
+	// gate admits it; what it may change is the question.
+	asAgent := actingCaller{authUserID: testUserID, agentID: agentID, taskID: callerTask(t, agentID, testUserID)}
+	update := func(body map[string]any, agent bool) *testutil.Response {
+		req := withURLParam(newRequest("PATCH", "/api/autopilots/"+ap.ID+"?workspace_id="+testWorkspaceID, body), "id", ap.ID)
+		if agent {
+			req = withURLParam(asAgent.request("PATCH", "/api/autopilots/"+ap.ID+"?workspace_id="+testWorkspaceID, body), "id", ap.ID)
+		}
+		return testutil.Call(t, testHandler.UpdateAutopilot, req)
+	}
+	if resp := update(map[string]any{"test_plan_id": narrower.ID}, true).Want(http.StatusForbidden); !strings.Contains(resp.Text(), "regression autopilot") {
+		t.Fatalf("retarget refused with %q, want the regression-autopilot refusal", resp.Text())
+	}
+	update(map[string]any{"status": "paused"}, true).Want(http.StatusForbidden)
+	update(map[string]any{"execution_mode": "run_only"}, true).Want(http.StatusForbidden)
+	update(map[string]any{"title": "Nightly regression (web)"}, true).Want(http.StatusOK)
+	update(map[string]any{"status": "paused"}, false).Want(http.StatusOK)
 }

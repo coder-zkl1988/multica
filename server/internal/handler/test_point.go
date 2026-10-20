@@ -483,7 +483,7 @@ func (h *Handler) DeleteTestPoint(w http.ResponseWriter, r *http.Request) {
 	workspaceID := uuidToString(point.WorkspaceID)
 	actorType, actorID := h.resolveActor(r, userID, workspaceID)
 	if actorType == "agent" {
-		writeError(w, http.StatusForbidden, "an agent cannot delete a test point; set its status to dropped")
+		writeError(w, http.StatusForbidden, "an agent cannot delete a test point; set its status to dropped (refused too while an active case verifies it — then tell the person)")
 		return
 	}
 	tx, err := h.TxStarter.Begin(r.Context())
@@ -575,6 +575,13 @@ func (h *Handler) LinkTestCaseTestPoints(w http.ResponseWriter, r *http.Request)
 	userID, _ := requireUserID(w, r)
 	workspaceID := uuidToString(testCase.WorkspaceID)
 	actorType, actorID := h.resolveActor(r, userID, workspaceID)
+	// An active case's past passes would count for a point the moment it is
+	// linked: an agent's claim that a live case verifies a point is reviewed
+	// like any other AI output (an update proposal, or a person).
+	if actorType == "agent" && testCase.Status == "active" {
+		writeError(w, http.StatusForbidden, agentCannotClaimCoverage)
+		return
+	}
 	var req LinkTestCaseTestPointsRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")

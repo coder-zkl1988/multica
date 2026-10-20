@@ -779,6 +779,23 @@ func (h *Handler) requireAutopilotActingMember(w http.ResponseWriter, r *http.Re
 	return member, true
 }
 
+// refuseAgentOnRegressionAutopilot answers 403 when an agent tries to change
+// what a test_run autopilot runs or when it runs — its plan, mode, project,
+// status, schedule — or to delete it. Retargeting the nightly regression to a
+// narrower plan, or pausing it, takes failing cases out of regression as
+// surely as removing them from the plan (TS-043). It reports whether it
+// refused.
+func (h *Handler) refuseAgentOnRegressionAutopilot(w http.ResponseWriter, r *http.Request, ap db.Autopilot, workspaceID string) bool {
+	if ap.ExecutionMode != "test_run" {
+		return false
+	}
+	if actorType, _ := h.resolveActor(r, "", workspaceID); actorType != "agent" {
+		return false
+	}
+	writeError(w, http.StatusForbidden, "an agent cannot retarget, pause, reschedule or delete a regression autopilot; tell the person what should change and why")
+	return true
+}
+
 // requireAutopilotWrite enforces memberCanWriteAutopilot for a mutating/
 // executing request, judging the member the request acts for
 // (requireAutopilotActingMember). On failure it writes the response (404 when a
@@ -1083,6 +1100,16 @@ func (h *Handler) UpdateAutopilot(w http.ResponseWriter, r *http.Request) {
 	}
 	var rawFields map[string]json.RawMessage
 	json.Unmarshal(bodyBytes, &rawFields)
+	// What a regression autopilot runs, and whether it runs, is a member's
+	// call; an agent may still rename or describe it.
+	for _, field := range []string{"status", "execution_mode", "test_plan_id", "project_id"} {
+		if _, sent := rawFields[field]; sent {
+			if h.refuseAgentOnRegressionAutopilot(w, r, prev, workspaceID) {
+				return
+			}
+			break
+		}
+	}
 
 	params := db.UpdateAutopilotParams{
 		ID:                 prev.ID,
@@ -1411,6 +1438,9 @@ func (h *Handler) DeleteAutopilot(w http.ResponseWriter, r *http.Request) {
 	}
 	actor, ok := h.requireAutopilotWrite(w, r, ap, workspaceID)
 	if !ok {
+		return
+	}
+	if h.refuseAgentOnRegressionAutopilot(w, r, ap, workspaceID) {
 		return
 	}
 	userID := uuidToString(actor.UserID)
@@ -1938,6 +1968,9 @@ func (h *Handler) UpdateAutopilotTrigger(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
+	if h.refuseAgentOnRegressionAutopilot(w, r, ap, workspaceID) {
+		return
+	}
 
 	triggerUUID, ok := parseUUIDOrBadRequest(w, triggerID, "trigger id")
 	if !ok {
@@ -2125,6 +2158,9 @@ func (h *Handler) DeleteAutopilotTrigger(w http.ResponseWriter, r *http.Request)
 	}
 	actor, ok := h.requireAutopilotWrite(w, r, ap, workspaceID)
 	if !ok {
+		return
+	}
+	if h.refuseAgentOnRegressionAutopilot(w, r, ap, workspaceID) {
 		return
 	}
 
