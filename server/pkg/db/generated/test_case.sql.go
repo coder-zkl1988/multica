@@ -1050,6 +1050,54 @@ func (q *Queries) ListTestCasesForIssue(ctx context.Context, arg ListTestCasesFo
 	return items, nil
 }
 
+const lockTestCase = `-- name: LockTestCase :one
+SELECT id, workspace_id, project_id, case_number, title, module, preconditions, steps, expected_result, test_data, priority, case_type, scope, execution_mode, required_capabilities, business_rules_ref, status, origin, source_refs, generation_job_id, version, created_by, updated_by, reviewed_by, reviewed_at, created_at, updated_at, steps_changed_at FROM test_case WHERE id = $1 AND workspace_id = $2 FOR UPDATE
+`
+
+type LockTestCaseParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+// Re-reads a case under a row lock inside a write transaction, so a decision
+// made on the status read before the transaction (who may change it, which
+// gate applies) still holds when the write lands.
+func (q *Queries) LockTestCase(ctx context.Context, arg LockTestCaseParams) (TestCase, error) {
+	row := q.db.QueryRow(ctx, lockTestCase, arg.ID, arg.WorkspaceID)
+	var i TestCase
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.ProjectID,
+		&i.CaseNumber,
+		&i.Title,
+		&i.Module,
+		&i.Preconditions,
+		&i.Steps,
+		&i.ExpectedResult,
+		&i.TestData,
+		&i.Priority,
+		&i.CaseType,
+		&i.Scope,
+		&i.ExecutionMode,
+		&i.RequiredCapabilities,
+		&i.BusinessRulesRef,
+		&i.Status,
+		&i.Origin,
+		&i.SourceRefs,
+		&i.GenerationJobID,
+		&i.Version,
+		&i.CreatedBy,
+		&i.UpdatedBy,
+		&i.ReviewedBy,
+		&i.ReviewedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.StepsChangedAt,
+	)
+	return i, err
+}
+
 const unlinkTestCaseIssue = `-- name: UnlinkTestCaseIssue :exec
 DELETE FROM test_case_issue
 WHERE test_case_id = $1 AND issue_id = $2 AND workspace_id = $3

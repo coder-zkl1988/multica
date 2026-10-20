@@ -147,6 +147,7 @@
     "version": "Version {{version}}",
     "separator": " · ",
     "human_edit": "Manual edit",
+    "agent_edit": "Agent edit",
     "proposal_accepted": "AI suggestion accepted",
     "status_change": "Status change",
     "restore": "Restore"

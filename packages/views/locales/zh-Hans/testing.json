@@ -147,6 +147,7 @@
     "version": "版本 {{version}}",
     "separator": " · ",
     "human_edit": "人工编辑",
+    "agent_edit": "智能体修改",
     "proposal_accepted": "采纳 AI 建议",
     "status_change": "状态变更",
     "restore": "回退"

@@ -361,7 +361,9 @@ export function TestCaseDetail({ refId }: TestCaseDetailProps) {
                       {t(($) => $.revisions.version, { version: revision.version })}
                     </span>
                     {t(($) => $.revisions.separator)}
-                    {t(($) => $.revisions[revision.change_kind as TestCaseChangeKind])}
+                    {revision.change_kind === "human_edit" && revision.changed_by_type === "agent"
+                      ? t(($) => $.revisions.agent_edit)
+                      : t(($) => $.revisions[revision.change_kind as TestCaseChangeKind])}
                   </li>
                 ))}
               </ul>

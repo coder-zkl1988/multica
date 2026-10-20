@@ -147,6 +147,7 @@
     "version": "バージョン {{version}}",
     "separator": " · ",
     "human_edit": "手動編集",
+    "agent_edit": "エージェントによる編集",
     "proposal_accepted": "AI 提案を採用",
     "status_change": "ステータス変更",
     "restore": "復元"

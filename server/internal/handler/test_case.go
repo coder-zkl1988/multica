@@ -295,9 +295,58 @@ func normalizeTestCaseSteps(steps []TestCaseStep) []TestCaseStep {
 const agentCannotActivateTestCase = "an agent's test case stays a draft until a member approves it; tell the person which drafts are ready for review"
 
 // agentCannotRetireTestCase is the refusal for an agent that tries to take a
-// live case out of rounds and coverage. A case that fails is the signal the
+// live case out of rounds and coverage — by deprecating or deleting it, or by
+// unlinking it from what it verifies. A case that fails is the signal the
 // round exists to produce; retiring it is a member's call.
-const agentCannotRetireTestCase = "an agent cannot deprecate or delete an active test case; tell the person which case should be retired and why"
+const agentCannotRetireTestCase = "an agent cannot take an active test case out of coverage — change its status, delete it, or unlink it from an issue or test point; tell the person which case should change and why"
+
+// agentCannotReactivateTestCase is the refusal for an agent bringing back a
+// deprecated case: a member retired it, and a member decides it runs again.
+const agentCannotReactivateTestCase = "an agent cannot reactivate a deprecated test case; tell the person why it should run again"
+
+// agentCannotNarrowTestPlan is the refusal for an agent that tries to shrink a
+// regression: a plan's cases, rule and status decide what every later round
+// runs.
+const agentCannotNarrowTestPlan = "an agent cannot remove cases from a test plan, change its rule or status, or delete it; tell the person what should change and why"
+
+// agentCannotDeleteTestCase is the refusal for an agent deleting a case it may
+// not: a delete sweeps the revisions too, so only an AI-written draft — never
+// a person's — is an agent's to remove.
+const agentCannotDeleteTestCase = "an agent may delete only an AI-written draft; tell the person which case should be removed and why"
+
+// testCaseAwaitingStepsKey marks, in source_refs, a person's case that was
+// created as a draft only because it had no executable steps yet. Only such a
+// draft goes live on its own when its steps are filled in; a draft its author
+// parked, or one that already had executable steps, waits for approval.
+const testCaseAwaitingStepsKey = "awaiting_steps"
+
+func testCaseAwaitingSteps(sourceRefs []byte) bool {
+	var refs map[string]any
+	if json.Unmarshal(sourceRefs, &refs) != nil {
+		return false
+	}
+	awaiting, _ := refs[testCaseAwaitingStepsKey].(bool)
+	return awaiting
+}
+
+// withoutAwaitingSteps is source_refs with the marker removed, keeping every
+// other key.
+func withoutAwaitingSteps(sourceRefs []byte) []byte {
+	refs := map[string]any{}
+	_ = json.Unmarshal(sourceRefs, &refs)
+	delete(refs, testCaseAwaitingStepsKey)
+	return marshalJSONColumn(refs, "{}")
+}
+
+// testCaseChangedByType is the revision's changed_by_type for an actor: an
+// agent's edit is recorded as an agent's (the UI shows it as such), so the
+// history TS-043 leans on says who changed a case.
+func testCaseChangedByType(actorType string) string {
+	if actorType == "agent" {
+		return "agent"
+	}
+	return "member"
+}
 
 // testCaseOriginFor records who wrote a case: an agent's case is "ai" on every
 // path, not only through a generation run.
@@ -597,10 +646,15 @@ func (h *Handler) CreateTestCase(w http.ResponseWriter, r *http.Request) {
 	actorType, actorID := h.resolveActor(r, userID, workspaceID)
 	isAgent := actorType == "agent"
 	status := req.Status
+	sourceRefs := []byte("{}")
 	if status == "" {
 		status = "active"
-		if isAgent || testCaseStepsProblem(steps) != "" {
+		switch {
+		case isAgent:
 			status = "draft"
+		case testCaseStepsProblem(steps) != "":
+			status = "draft"
+			sourceRefs = marshalJSONColumn(map[string]any{testCaseAwaitingStepsKey: true}, "{}")
 		}
 	}
 	if isAgent && status == "active" {
@@ -674,7 +728,7 @@ func (h *Handler) CreateTestCase(w http.ResponseWriter, r *http.Request) {
 		BusinessRulesRef:     marshalJSONColumn(businessRules, "[]"),
 		Status:               status,
 		Origin:               testCaseOriginFor(actorType),
-		SourceRefs:           []byte("{}"),
+		SourceRefs:           sourceRefs,
 		CreatedBy:            userUUID,
 		UpdatedBy:            userUUID,
 	})
@@ -784,6 +838,23 @@ func (h *Handler) UpdateTestCase(w http.ResponseWriter, r *http.Request) {
 	if stepsChanged {
 		params.StepsChanged = pgtype.Bool{Bool: true, Valid: true}
 	}
+	// Who may change the status is decided before what the steps allow: an
+	// agent asking to make a case live is told it cannot, not that a step is
+	// missing.
+	actorType, actorID := h.resolveActor(r, userID, workspaceID)
+	if actorType == "agent" && params.Status.Valid && params.Status.String != current.Status {
+		switch {
+		case params.Status.String == "active" && current.Status == "deprecated":
+			writeError(w, http.StatusForbidden, agentCannotReactivateTestCase)
+			return
+		case params.Status.String == "active":
+			writeError(w, http.StatusForbidden, agentCannotActivateTestCase)
+			return
+		case current.Status == "active":
+			writeError(w, http.StatusForbidden, agentCannotRetireTestCase)
+			return
+		}
+	}
 	if effectiveStatus == "active" && (stepsChanged || (params.Status.Valid && current.Status != "active")) {
 		effectiveSteps := decodeTestCaseSteps(current.Steps)
 		if req.Steps != nil {
@@ -794,27 +865,22 @@ func (h *Handler) UpdateTestCase(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	actorType, actorID := h.resolveActor(r, userID, workspaceID)
-	if actorType == "agent" && params.Status.Valid && params.Status.String != current.Status {
+	// A person's case created as a draft only because it had nothing to check
+	// (marked awaiting_steps) goes live with a person's save that gives it
+	// executable steps: nobody else reviews a person's own case, and leaving
+	// it in draft would keep it out of every round and every coverage count
+	// without anyone noticing. A save that names a status settles the
+	// question instead, and once an agent has written its steps the content is
+	// no longer only the person's, so it waits for approval.
+	if testCaseAwaitingSteps(current.SourceRefs) {
 		switch {
-		case params.Status.String == "active":
-			writeError(w, http.StatusForbidden, agentCannotActivateTestCase)
-			return
-		case current.Status == "active":
-			writeError(w, http.StatusForbidden, agentCannotRetireTestCase)
-			return
+		case params.Status.Valid, actorType == "agent" && stepsChanged:
+			params.SourceRefs = withoutAwaitingSteps(current.SourceRefs)
+		case current.Status == "draft" && current.Origin == "human" && stepsChanged &&
+			testCaseStepsProblem(normalizeTestCaseSteps(*req.Steps)) == "":
+			params.Status = pgtype.Text{String: "active", Valid: true}
+			params.SourceRefs = withoutAwaitingSteps(current.SourceRefs)
 		}
-	}
-	// A person's draft that was a draft only because it had nothing to check
-	// goes live with the save that gives it executable steps: nobody else
-	// reviews a person's own case, and leaving it in draft would keep it out
-	// of every round and every coverage count without anyone noticing. A save
-	// that names a status keeps it; an AI-written draft still waits for
-	// approval.
-	if actorType != "agent" && !params.Status.Valid && current.Status == "draft" && current.Origin == "human" &&
-		stepsChanged && testCaseStepsProblem(decodeTestCaseSteps(current.Steps)) != "" &&
-		testCaseStepsProblem(normalizeTestCaseSteps(*req.Steps)) == "" {
-		params.Status = pgtype.Text{String: "active", Valid: true}
 	}
 	if req.TestData != nil {
 		params.TestData = marshalJSONColumn(*req.TestData, "{}")
@@ -840,7 +906,7 @@ func (h *Handler) UpdateTestCase(w http.ResponseWriter, r *http.Request) {
 		currentRepos = nil
 	}
 
-	updated, repos, ok := h.applyTestCaseUpdate(w, r, current, currentRepos, params, repoParams, req.Repos != nil, "human_edit", req.Note, userUUID)
+	updated, repos, ok := h.applyTestCaseUpdate(w, r, current, currentRepos, params, repoParams, req.Repos != nil, "human_edit", testCaseChangedByType(actorType), req.Note, userUUID)
 	if !ok {
 		return
 	}
@@ -862,6 +928,7 @@ func (h *Handler) applyTestCaseUpdate(
 	repoParams []db.CreateTestCaseRepoParams,
 	replaceRepos bool,
 	changeKind string,
+	changedByType string,
 	note string,
 	actorUUID pgtype.UUID,
 ) (db.TestCase, []db.TestCaseRepo, bool) {
@@ -873,6 +940,19 @@ func (h *Handler) applyTestCaseUpdate(
 	defer tx.Rollback(r.Context())
 	qtx := h.Queries.WithTx(tx)
 
+	// Who may make this change, and which step gate applies, was decided on
+	// the status read before the transaction. An approval or retirement that
+	// landed since makes that decision stale.
+	locked, err := qtx.LockTestCase(r.Context(), db.LockTestCaseParams{ID: current.ID, WorkspaceID: current.WorkspaceID})
+	if err != nil {
+		h.writeTestCaseWriteError(w, r, err, "update")
+		return db.TestCase{}, nil, false
+	}
+	if locked.Status != current.Status {
+		writeError(w, http.StatusConflict, "the test case's status changed while this edit was in flight; reload it and try again")
+		return db.TestCase{}, nil, false
+	}
+
 	snapshot := marshalJSONColumn(testCaseToResponse(current, currentRepos), "{}")
 	if _, err := qtx.CreateTestCaseRevision(r.Context(), db.CreateTestCaseRevisionParams{
 		WorkspaceID:   current.WorkspaceID,
@@ -881,7 +961,7 @@ func (h *Handler) applyTestCaseUpdate(
 		Snapshot:      snapshot,
 		ChangeKind:    changeKind,
 		ChangedBy:     actorUUID,
-		ChangedByType: "member",
+		ChangedByType: changedByType,
 		Note:          note,
 	}); err != nil {
 		h.writeTestCaseWriteError(w, r, err, "update")
@@ -965,7 +1045,7 @@ func (h *Handler) ApproveTestCase(w http.ResponseWriter, r *http.Request) {
 		ReviewedAt:  pgtype.Timestamptz{Time: time.Now(), Valid: true},
 		UpdatedBy:   userUUID,
 	}
-	updated, repos, ok := h.applyTestCaseUpdate(w, r, current, currentRepos, params, nil, false, "status_change", "approved", userUUID)
+	updated, repos, ok := h.applyTestCaseUpdate(w, r, current, currentRepos, params, nil, false, "status_change", "member", "approved", userUUID)
 	if !ok {
 		return
 	}
@@ -985,12 +1065,19 @@ func (h *Handler) DeleteTestCase(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// An agent may clean up a draft nobody approved; anything a round could
-	// execute is a member's to remove.
+	// An agent may clean up an AI-written draft nobody approved. A delete
+	// cannot be undone (the revisions go with it), so a person's draft and
+	// anything a round could execute are a member's to remove.
 	actorType, actorID := h.resolveActor(r, userID, workspaceID)
-	if actorType == "agent" && testCase.Status != "draft" {
-		writeError(w, http.StatusForbidden, agentCannotRetireTestCase)
-		return
+	if actorType == "agent" {
+		switch {
+		case testCase.Status == "active":
+			writeError(w, http.StatusForbidden, agentCannotRetireTestCase)
+			return
+		case testCase.Status != "draft" || testCase.Origin != "ai":
+			writeError(w, http.StatusForbidden, agentCannotDeleteTestCase)
+			return
+		}
 	}
 
 	tx, err := h.TxStarter.Begin(r.Context())
@@ -1000,6 +1087,20 @@ func (h *Handler) DeleteTestCase(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback(r.Context())
 	qtx := h.Queries.WithTx(tx)
+
+	// The agent rule above read the case before the transaction; an approval
+	// that landed since would make the delete remove a live case.
+	if actorType == "agent" {
+		locked, lockErr := qtx.LockTestCase(r.Context(), db.LockTestCaseParams{ID: testCase.ID, WorkspaceID: testCase.WorkspaceID})
+		if lockErr != nil {
+			h.writeTestCaseWriteError(w, r, lockErr, "delete")
+			return
+		}
+		if locked.Status != "draft" || locked.Origin != "ai" {
+			writeError(w, http.StatusConflict, "the test case changed while this delete was in flight and is no longer an unapproved AI draft")
+			return
+		}
+	}
 
 	// Repo bindings, revisions and pending AI proposals have no cascade, so
 	// they are swept here. Atomic with the delete: a partial sweep would orphan

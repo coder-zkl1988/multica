@@ -239,3 +239,9 @@ FROM test_case_repo tcr
 JOIN test_case tc ON tc.id = tcr.test_case_id
 WHERE tc.project_id = $1 AND tc.workspace_id = $2 AND tc.status <> 'deprecated'
 ORDER BY tcr.test_case_id, tcr.alias ASC, tcr.role ASC;
+
+-- name: LockTestCase :one
+-- Re-reads a case under a row lock inside a write transaction, so a decision
+-- made on the status read before the transaction (who may change it, which
+-- gate applies) still holds when the write lands.
+SELECT * FROM test_case WHERE id = $1 AND workspace_id = $2 FOR UPDATE;

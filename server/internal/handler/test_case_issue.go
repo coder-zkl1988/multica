@@ -258,6 +258,13 @@ func (h *Handler) UnlinkTestCaseIssue(w http.ResponseWriter, r *http.Request) {
 	if _, ok := h.loadIssueInWorkspaceAndAuthorize(w, r, issueUUID, testCase.WorkspaceID, "test_case_issue_unlink"); !ok {
 		return
 	}
+	// Unlinking a failing active case leaves the issue verified while the
+	// defect stays, as surely as deprecating the case would.
+	actorType, actorID := h.resolveActor(r, userID, workspaceID)
+	if actorType == "agent" && testCase.Status == "active" {
+		writeError(w, http.StatusForbidden, agentCannotRetireTestCase)
+		return
+	}
 	// The case's claim on the issue's test points goes with the issue link:
 	// otherwise it keeps counting toward an issue it no longer covers.
 	tx, err := h.TxStarter.Begin(r.Context())
@@ -287,7 +294,7 @@ func (h *Handler) UnlinkTestCaseIssue(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to unlink the issue")
 		return
 	}
-	h.publish(protocol.EventTestCaseUpdated, workspaceID, "member", userID,
+	h.publish(protocol.EventTestCaseUpdated, workspaceID, actorType, actorID,
 		map[string]any{"test_case_id": uuidToString(testCase.ID)})
 	writeJSON(w, http.StatusOK, map[string]any{"success": true})
 }

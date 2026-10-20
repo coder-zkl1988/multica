@@ -207,6 +207,18 @@ func (h *Handler) ProposeTestCases(w http.ResponseWriter, r *http.Request) {
 	createdProposals := make([]TestCaseProposalResponse, 0, len(resolved))
 
 	for _, entry := range resolved {
+		// Whether a target is still a draft decides whether this run may
+		// change it directly or must queue a proposal for review. Read it
+		// under a lock: an approval that landed since the batch was resolved
+		// turns the direct rewrite into a proposal.
+		if entry.item.Kind == "update" || entry.item.Kind == "obsolete" {
+			locked, lockErr := qtx.LockTestCase(r.Context(), db.LockTestCaseParams{ID: entry.target.ID, WorkspaceID: wsUUID})
+			if lockErr != nil {
+				h.writeTestGenerationWriteError(w, r, lockErr, "update")
+				return
+			}
+			entry.target = locked
+		}
 		switch entry.item.Kind {
 		case "new":
 			created, repos, createErr := h.insertProposedTestCase(r, qtx, job, wsUUID, entry.item.Case, entry.repos)

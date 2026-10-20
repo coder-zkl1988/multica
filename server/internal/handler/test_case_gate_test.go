@@ -127,6 +127,25 @@ func TestPersonsDraftGoesLiveWhenItsStepsAreFilledIn(t *testing.T) {
 	if got := update(agentDraft.Key, map[string]any{"steps": executableSteps}); got.Status != "draft" {
 		t.Errorf("an AI draft with its steps filled in by a member is %q, want draft until approved", got.Status)
 	}
+
+	// A draft its author created as such, steps or not, was parked on
+	// purpose.
+	parkedEmpty := createTestCaseForTest(t, map[string]any{"project_id": projectID, "title": "Coupon audit", "status": "draft"})
+	if got := update(parkedEmpty.Key, map[string]any{"steps": executableSteps}); got.Status != "draft" {
+		t.Errorf("a draft created as a draft is %q after its steps were filled, want draft", got.Status)
+	}
+	// Once the author has settled the status, a later save does not
+	// promote it either.
+	if got := update(parked.Key, map[string]any{"title": "Coupon expiry, edited", "steps": []map[string]any{{"action": "Open the cart", "expected": "Coupon expired"}}}); got.Status != "draft" {
+		t.Errorf("a draft whose author kept it a draft is %q after a later save, want draft", got.Status)
+	}
+	// Steps an agent wrote into a person's draft are no longer only the
+	// person's: the case waits for approval.
+	filledByAgent := createTestCaseForTest(t, map[string]any{"project_id": projectID, "title": "Coupon stacking limits"})
+	update(filledByAgent.Key, map[string]any{"steps": []map[string]any{{"action": "Stack two coupons", "expected": ""}}}, testCaseAgentHeaders...)
+	if got := update(filledByAgent.Key, map[string]any{"steps": executableSteps}); got.Status != "draft" {
+		t.Errorf("a draft an agent wrote steps into is %q after a person's save, want draft", got.Status)
+	}
 }
 
 var testCaseAgentHeaders = []string{"X-Actor-Source", "task_token", "X-Agent-ID", "00000000-0000-0000-0000-0000000000a3"}
@@ -174,6 +193,19 @@ func TestAgentCaseWaitsForAMembersApproval(t *testing.T) {
 	if approved.Status != "active" {
 		t.Fatalf("member approval left the case %q, want active", approved.Status)
 	}
+
+	// Who may change the status is answered before what the steps allow.
+	stepless := createTestCaseAsAgent(t, map[string]any{"project_id": projectID, "title": "Refund to cash"})
+	testutil.Call(t, testHandler.UpdateTestCase, asTestCaseAgent(withURLParam(newRequest("PUT", "/api/test-cases/"+stepless.Key+"?workspace_id="+testWorkspaceID,
+		map[string]any{"status": "active"}), "ref", stepless.Key))).Want(http.StatusForbidden)
+	// A retired case is brought back by a member, and the agent is told so.
+	testutil.Call(t, testHandler.UpdateTestCase, withURLParam(newRequest("PUT", "/api/test-cases/"+draft.Key+"?workspace_id="+testWorkspaceID,
+		map[string]any{"status": "deprecated"}), "ref", draft.Key)).Want(http.StatusOK)
+	resp := testutil.Call(t, testHandler.UpdateTestCase, asTestCaseAgent(withURLParam(newRequest("PUT", "/api/test-cases/"+draft.Key+"?workspace_id="+testWorkspaceID,
+		map[string]any{"status": "active"}), "ref", draft.Key))).Want(http.StatusForbidden)
+	if !strings.Contains(resp.Text(), "reactivate") {
+		t.Errorf("reactivation refused with %q, want it to say a person reactivates it", resp.Text())
+	}
 }
 
 // A failing case is the signal a round exists to produce; an agent cannot
@@ -186,8 +218,81 @@ func TestAgentCannotRetireAnActiveCase(t *testing.T) {
 	testutil.Call(t, testHandler.DeleteTestCase, asTestCaseAgent(withURLParam(newRequest("DELETE", "/api/test-cases/"+active.Key+"?workspace_id="+testWorkspaceID, nil), "ref", active.Key))).
 		Want(http.StatusForbidden)
 
-	// Its own unapproved draft is the agent's to clean up.
+	// Unlinking a live case from what it verifies takes it out of coverage
+	// as surely as deprecating it.
+	issueID := dbfx.Issue(t, "Refund rules", testutil.Cols{"project_id": projectID})
+	t.Cleanup(func() {
+		testPool.Exec(t.Context(), `DELETE FROM test_case_test_point WHERE test_point_id IN (SELECT id FROM issue_test_point WHERE issue_id = $1)`, issueID)
+		testPool.Exec(t.Context(), `DELETE FROM test_case_issue WHERE issue_id = $1`, issueID)
+		testPool.Exec(t.Context(), `DELETE FROM issue_test_point WHERE issue_id = $1`, issueID)
+	})
+	point := createTestPoint(t, issueID, map[string]any{"title": "A refund keeps the order record"}, testCaseAgentHeaders...)
+	linkCaseTestPoints(t, active.Key, []string{point.ID}).Want(http.StatusOK)
+	testutil.Call(t, testHandler.UnlinkTestCaseTestPoint, asTestCaseAgent(withURLParams(newRequest("DELETE", "/api/test-cases/"+active.Key+"/test-points/"+point.ID+"?workspace_id="+testWorkspaceID, nil),
+		"ref", active.Key, "pointId", point.ID))).Want(http.StatusForbidden)
+	testutil.Call(t, testHandler.UnlinkTestCaseIssue, asTestCaseAgent(withURLParams(newRequest("DELETE", "/api/test-cases/"+active.Key+"/issues/"+issueID+"?workspace_id="+testWorkspaceID, nil),
+		"ref", active.Key, "issueId", issueID))).Want(http.StatusForbidden)
+	// Nor may it drop the condition the live case is checked against.
+	testutil.Call(t, testHandler.UpdateTestPoint, asTestCaseAgent(withURLParam(newRequest("PATCH", "/api/test-points/"+point.ID+"?workspace_id="+testWorkspaceID,
+		map[string]any{"status": "dropped"}), "pointId", point.ID))).Want(http.StatusForbidden)
+	loose := createTestPoint(t, issueID, map[string]any{"title": "A refund is logged"}, testCaseAgentHeaders...)
+	testutil.Call(t, testHandler.UpdateTestPoint, asTestCaseAgent(withURLParam(newRequest("PATCH", "/api/test-points/"+loose.ID+"?workspace_id="+testWorkspaceID,
+		map[string]any{"status": "dropped"}), "pointId", loose.ID))).Want(http.StatusOK)
+
+	// An AI-written draft nobody approved is the agent's to clean up; a
+	// person's draft is not — the delete takes its revisions with it.
 	draft := createTestCaseAsAgent(t, map[string]any{"project_id": projectID, "title": "Duplicate refund case"})
 	testutil.Call(t, testHandler.DeleteTestCase, asTestCaseAgent(withURLParam(newRequest("DELETE", "/api/test-cases/"+draft.Key+"?workspace_id="+testWorkspaceID, nil), "ref", draft.Key))).
 		Want(http.StatusOK)
+	persons := createTestCaseForTest(t, map[string]any{"project_id": projectID, "title": "Refund to a closed card"})
+	testutil.Call(t, testHandler.DeleteTestCase, asTestCaseAgent(withURLParam(newRequest("DELETE", "/api/test-cases/"+persons.Key+"?workspace_id="+testWorkspaceID, nil), "ref", persons.Key))).
+		Want(http.StatusForbidden)
+}
+
+// A plan's cases, rule and status decide what every later round runs.
+func TestAgentCannotNarrowARegressionPlan(t *testing.T) {
+	projectID := newTestRunProject(t)
+	plan := createTestPlanForRun(t, projectID)
+	tc := createTestCaseForRun(t, projectID)
+	addCaseToPlan(t, plan.ID, tc.ID, 1)
+	planPath := "/api/test-plans/" + plan.ID + "?workspace_id=" + testWorkspaceID
+	testutil.Call(t, testHandler.RemoveTestPlanCase, asTestCaseAgent(withURLParams(newRequest("DELETE", "/api/test-plans/"+plan.ID+"/cases/"+tc.ID+"?workspace_id="+testWorkspaceID, nil),
+		"id", plan.ID, "caseId", tc.ID))).Want(http.StatusForbidden)
+	testutil.Call(t, testHandler.UpdateTestPlan, asTestCaseAgent(withURLParam(newRequest("PUT", planPath, map[string]any{"selector": map[string]any{"modules": []string{"checkout"}}}), "id", plan.ID))).
+		Want(http.StatusForbidden)
+	testutil.Call(t, testHandler.UpdateTestPlan, asTestCaseAgent(withURLParam(newRequest("PUT", planPath, map[string]any{"status": "archived"}), "id", plan.ID))).
+		Want(http.StatusForbidden)
+	testutil.Call(t, testHandler.DeleteTestPlan, asTestCaseAgent(withURLParam(newRequest("DELETE", planPath, nil), "id", plan.ID))).
+		Want(http.StatusForbidden)
+	testutil.Call(t, testHandler.UpdateTestPlan, asTestCaseAgent(withURLParam(newRequest("PUT", planPath, map[string]any{"title": "Nightly refunds"}), "id", plan.ID))).
+		Want(http.StatusOK)
+}
+
+// The history TS-043 leans on has to say who changed a case.
+func TestAgentEditsAreRecordedAsTheAgents(t *testing.T) {
+	projectID := newTestCaseProject(t)
+	tc := createTestCaseForTest(t, map[string]any{"project_id": projectID, "title": "Refund note", "steps": executableSteps})
+	testutil.Call(t, testHandler.UpdateTestCase, asTestCaseAgent(withURLParam(newRequest("PUT", "/api/test-cases/"+tc.Key+"?workspace_id="+testWorkspaceID,
+		map[string]any{"title": "Refund note, clarified"}), "ref", tc.Key))).Want(http.StatusOK)
+	var changedByType string
+	dbfx.QueryRow(t, `SELECT changed_by_type FROM test_case_revision WHERE test_case_id = $1 ORDER BY created_at DESC LIMIT 1`, tc.ID).Scan(&changedByType)
+	if changedByType != "agent" {
+		t.Fatalf("revision changed_by_type = %q, want agent", changedByType)
+	}
+}
+
+// A person who drops an AI point has rejected it; a later run may not revive
+// it.
+func TestDroppingAnAIPointMakesItAPersons(t *testing.T) {
+	issueID := dbfx.Issue(t, "Refund points")
+	t.Cleanup(func() { testPool.Exec(t.Context(), `DELETE FROM issue_test_point WHERE issue_id = $1`, issueID) })
+	point := createTestPoint(t, issueID, map[string]any{"title": "A refund notifies the buyer"}, testCaseAgentHeaders...)
+	var dropped TestPointResponse
+	testutil.Call(t, testHandler.UpdateTestPoint, withURLParam(newRequest("PATCH", "/api/test-points/"+point.ID+"?workspace_id="+testWorkspaceID,
+		map[string]any{"status": "dropped"}), "pointId", point.ID)).Want(http.StatusOK).JSON(&dropped)
+	if dropped.Origin != "human" {
+		t.Fatalf("origin after a person dropped it = %q, want human", dropped.Origin)
+	}
+	testutil.Call(t, testHandler.UpdateTestPoint, asTestCaseAgent(withURLParam(newRequest("PATCH", "/api/test-points/"+point.ID+"?workspace_id="+testWorkspaceID,
+		map[string]any{"status": "active"}), "pointId", point.ID))).Want(http.StatusForbidden)
 }

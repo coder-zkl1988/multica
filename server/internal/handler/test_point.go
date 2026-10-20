@@ -417,9 +417,11 @@ func (h *Handler) UpdateTestPoint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	params := db.UpdateIssueTestPointParams{ID: point.ID, WorkspaceID: point.WorkspaceID}
-	// A person who rewrites an AI point makes it theirs: a later generation
-	// run may no longer overwrite the correction.
-	if actorType != "agent" && point.Origin == "ai" && (req.Title != nil || req.Description != nil || req.Category != nil) {
+	// A person who rewrites, drops or restores an AI point makes it theirs: a
+	// later generation run may no longer overwrite the correction (or revive
+	// a point the reviewer rejected).
+	if actorType != "agent" && point.Origin == "ai" && (req.Title != nil || req.Description != nil || req.Category != nil ||
+		(req.Status != nil && *req.Status != point.Status)) {
 		params.Origin = pgtype.Text{String: "human", Valid: true}
 	}
 	if req.Title != nil {
@@ -442,6 +444,20 @@ func (h *Handler) UpdateTestPoint(w http.ResponseWriter, r *http.Request) {
 	if req.Status != nil {
 		if !validateTestCaseEnum(w, "status", *req.Status, validTestPointStatuses) {
 			return
+		}
+		// Dropping a point an active case verifies takes that case's result
+		// out of the requirement's verdict — a failing one included.
+		if actorType == "agent" && *req.Status == "dropped" && point.Status != "dropped" {
+			live, err := h.Queries.CountActiveCasesForTestPoint(r.Context(), db.CountActiveCasesForTestPointParams{TestPointID: point.ID, WorkspaceID: point.WorkspaceID})
+			if err != nil {
+				slog.Error("count active cases for test point failed", append(logger.RequestAttrs(r), "error", err)...)
+				writeError(w, http.StatusInternalServerError, "failed to update the test point")
+				return
+			}
+			if live > 0 {
+				writeError(w, http.StatusForbidden, "an active test case verifies this test point, so an agent cannot drop it; tell the person why the condition no longer applies")
+				return
+			}
 		}
 		params.Status = pgtype.Text{String: *req.Status, Valid: true}
 	}
@@ -683,6 +699,12 @@ func (h *Handler) UnlinkTestCaseTestPoint(w http.ResponseWriter, r *http.Request
 	userID, _ := requireUserID(w, r)
 	workspaceID := uuidToString(testCase.WorkspaceID)
 	actorType, actorID := h.resolveActor(r, userID, workspaceID)
+	// Unlinking a failing active case flips its point to passed as surely as
+	// deprecating the case would.
+	if actorType == "agent" && testCase.Status == "active" {
+		writeError(w, http.StatusForbidden, agentCannotRetireTestCase)
+		return
+	}
 	if err := h.Queries.UnlinkTestCaseTestPoint(r.Context(), db.UnlinkTestCaseTestPointParams{
 		TestCaseID: testCase.ID, TestPointID: point.ID, WorkspaceID: testCase.WorkspaceID,
 	}); err != nil {

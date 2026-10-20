@@ -147,6 +147,7 @@
     "version": "Version {{version}}",
     "separator": " · ",
     "human_edit": "Modification manuelle",
+    "agent_edit": "Modification par un agent",
     "proposal_accepted": "Suggestion IA acceptée",
     "status_change": "Changement de statut",
     "restore": "Restaurer"

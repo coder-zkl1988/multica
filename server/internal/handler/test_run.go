@@ -737,6 +737,13 @@ func (h *Handler) UpdateTestPlan(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// A plan's rule and status decide what every later round runs; an agent
+	// may rename or describe a plan, not shrink its regression.
+	actorType, actorID := h.resolveActor(r, userID, workspaceID)
+	if actorType == "agent" && (req.Selector != nil || req.Status != nil) {
+		writeError(w, http.StatusForbidden, agentCannotNarrowTestPlan)
+		return
+	}
 	params := db.UpdateTestPlanParams{ID: plan.ID, WorkspaceID: wsUUID}
 	if req.Title != nil {
 		if strings.TrimSpace(*req.Title) == "" {
@@ -769,7 +776,7 @@ func (h *Handler) UpdateTestPlan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp := testPlanToResponse(updated)
-	h.publish(protocol.EventTestPlanUpdated, workspaceID, "member", userID, map[string]any{"test_plan": resp})
+	h.publish(protocol.EventTestPlanUpdated, workspaceID, actorType, actorID, map[string]any{"test_plan": resp})
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -783,6 +790,10 @@ func (h *Handler) DeleteTestPlan(w http.ResponseWriter, r *http.Request) {
 	workspaceID := h.resolveWorkspaceID(r)
 	userID, ok := requireUserID(w, r)
 	if !ok {
+		return
+	}
+	if actorType, _ := h.resolveActor(r, userID, workspaceID); actorType == "agent" {
+		writeError(w, http.StatusForbidden, agentCannotNarrowTestPlan)
 		return
 	}
 	tx, err := h.TxStarter.Begin(r.Context())
@@ -917,6 +928,10 @@ func (h *Handler) RemoveTestPlanCase(w http.ResponseWriter, r *http.Request) {
 	workspaceID := h.resolveWorkspaceID(r)
 	userID, ok := requireUserID(w, r)
 	if !ok {
+		return
+	}
+	if actorType, _ := h.resolveActor(r, userID, workspaceID); actorType == "agent" {
+		writeError(w, http.StatusForbidden, agentCannotNarrowTestPlan)
 		return
 	}
 	if err := h.Queries.RemoveTestPlanCase(r.Context(), db.RemoveTestPlanCaseParams{
