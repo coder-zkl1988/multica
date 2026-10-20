@@ -343,7 +343,7 @@
 - 状态：`proposal` / `implemented`（待验收）；验收后替代 TS-030 的“已验证”定义
 - 问题：覆盖率的分母不存在——“已验证”只看关联用例是否全部通过，一条正常路径用例通过，需求就显示已验证，而拒绝路径、边界、权限没人测，也没有任何地方列出“没测什么”。
 - 决定：新增测试点 `issue_test_point`（每个任务内 `TP-<n>`，类别 `positive|negative|boundary|permission|state|data|non_functional`，`origin ai|human`，`active|dropped`）与用例声明 `test_case_test_point`（声明测试点同时关联其任务）。测试点状态：无有效用例覆盖 = `uncovered`，有覆盖用例最近一次 `failed` = `failing`，有覆盖用例最近一次 `passed` 且无失败 = `passed`，否则 `not_run`。“已验证”按 `basis` 判定：有有效测试点时（`test_points`）每个都已覆盖并通过、且任务的有效关联用例中没有最近一次失败的；没有测试点时退回关联用例口径并标 `cases_only`，界面显示“用例通过”而不是“已验证”；什么都没有为 `none`。只计 `active` 用例。人写的测试点智能体不能改、不能删（403），智能体只能新增或改自己的、用 `dropped` 退场。
-- 配套：迁移 924–927（无外键、索引并发建、各自单文件；删任务 / 用例 / 测试点 / 工作区都清理）；`/api/issues/{id}/test-points`、`/api/test-points/{id}`、`/api/test-cases/{ref}/test-points`；`multica testcase point list|add|update`、`multica testcase cover`；需求页列出测试点、未覆盖高亮、可新增 / 废弃 / 选用例覆盖，用例页列出它验证的测试点；`test_case:updated` 与结果事件会刷新需求页覆盖。
+- 配套：迁移 924–927（无外键、索引并发建、各自单文件；删任务 / 用例 / 测试点 / 工作区都清理）；`/api/issues/{id}/test-points`、`/api/test-points/{id}`、`/api/test-cases/{ref}/test-points`；`multica testcase point list|add|update`、`multica testcase cover`；需求页列出测试点、未覆盖高亮、可新增 / 废弃 / 选用例覆盖，用例页列出它验证的测试点；`test_case:updated` 与结果事件会刷新需求页覆盖。项目级“覆盖”页（测试 → 覆盖，`/tests/coverage`，`GET /api/test-coverage?project_id=`）列出项目内所有未取消的任务，按 `failing`（覆盖用例失败）、`no_tests`（没有有效用例也没有测试点）、`gaps`（有测试点未覆盖）、`no_points`（有用例但没拆测试点）、`not_run`、`verified` 从坏到好排序并可筛选——发版前要逐条处理的漏测清单。
 - 证据：`server/internal/handler/test_point.go`、`test_issue_summary.go`；`packages/views/testing/components/issue-test-points.tsx`、`case-test-points.tsx`；测试 `test_point_test.go`（含“只测正常路径不算已验证”的端到端用例）、`issue-test-coverage.test.tsx`、`case-test-points.test.tsx`、`issue-test-summary-schema.test.ts`。
 
 ### TS-039 AI 生成先拆测试点，再逐点设计用例
