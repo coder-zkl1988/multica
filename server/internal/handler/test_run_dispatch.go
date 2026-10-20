@@ -397,6 +397,14 @@ func (h *Handler) dispatchNextTestRunCases(ctx context.Context, q *db.Queries, r
 	if !run.Parallelism.Valid || run.Parallelism.Int32 <= 0 {
 		return nil
 	}
+	// Two cases settling at once would otherwise each count the other's case
+	// as still running, list the same waiting case and bind it twice — the
+	// task that lost the bind could then never record or complete. The lock
+	// makes the second hook count and list after the first has committed.
+	run, err := q.LockTestRun(ctx, db.LockTestRunParams{ID: run.ID, WorkspaceID: run.WorkspaceID})
+	if err != nil {
+		return err
+	}
 	if run.Status == "completed" || run.Status == "aborted" || run.Status == "blocked" {
 		return nil
 	}

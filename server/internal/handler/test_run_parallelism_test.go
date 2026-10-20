@@ -7,7 +7,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/multica-ai/multica/server/internal/testutil"
 )
 
@@ -276,5 +278,84 @@ func TestUpdateAgentRuntimeTogglesTheTestHostFlag(t *testing.T) {
 	}
 	if !stored {
 		t.Error("the flag was not persisted")
+	}
+}
+
+// Two cases of a capped round settling at the same moment must release
+// different waiting cases. Without the round lock each hook counted the
+// other's case as still running, listed the same waiting case and bound it
+// twice; the task that lost the bind could never record or complete.
+func TestConcurrentSettlesReleaseDistinctCases(t *testing.T) {
+	projectID := newTestRunProject(t)
+	var ids []string
+	for i := 0; i < 4; i++ {
+		ids = append(ids, createTestCaseForRun(t, projectID).ID)
+	}
+	run := createCappedRun(t, "Concurrent settles", ids, 2)
+	runtimeID := dbfx.Runtime(t, "concurrent-runtime", testutil.Cols{"daemon_id": "daemon-concurrent"})
+	agentID := dbfx.Agent(t, "concurrent-agent", runtimeID)
+	if w := dispatchRun(t, run.ID, agentID); w.Code != http.StatusCreated {
+		t.Fatalf("dispatch: got %d: %s", w.Code, w.Body.String())
+	}
+	cases := runCasesInOrder(t, run.ID)
+	ctx := context.Background()
+	hook := func(taskID string) (pgx.Tx, error) {
+		task, err := testHandler.Queries.GetAgentTask(ctx, parseUUID(taskID))
+		if err != nil {
+			return nil, err
+		}
+		if err := testHandler.markTestRunRunning(ctx, task); err != nil {
+			return nil, err
+		}
+		tx, err := testPool.Begin(ctx)
+		if err != nil {
+			return nil, err
+		}
+		output := "done\nTEST_RUN_CASE_RESULT_JSON: {\"result\":\"failed\",\"summary\":\"diverged\"}"
+		_, err = testHandler.completeTestRunTask(ctx, testHandler.Queries.WithTx(tx), task, output)
+		return tx, err
+	}
+	first, err := hook(*cases[0].taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type outcome struct {
+		tx  pgx.Tx
+		err error
+	}
+	second := make(chan outcome, 1)
+	go func() {
+		tx, err := hook(*cases[1].taskID)
+		second <- outcome{tx, err}
+	}()
+	select {
+	case got := <-second:
+		if got.tx != nil {
+			got.tx.Rollback(ctx)
+		}
+		first.Rollback(ctx)
+		t.Fatalf("the second hook did not wait for the first one's round lock (err=%v)", got.err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	if err := first.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	got := <-second
+	if got.err != nil {
+		t.Fatal(got.err)
+	}
+	if err := got.tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	cases = runCasesInOrder(t, run.ID)
+	for _, rc := range cases[2:] {
+		if rc.taskID == nil {
+			t.Fatalf("a waiting case was not released: %+v", cases)
+		}
+		var tasks int
+		dbfx.QueryRow(t, `SELECT count(*) FROM agent_task_queue WHERE context->>'run_case_id' = $1`, rc.id).Scan(&tasks)
+		if tasks != 1 {
+			t.Fatalf("case %s has %d agent tasks, want exactly 1", rc.id, tasks)
+		}
 	}
 }

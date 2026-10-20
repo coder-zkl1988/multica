@@ -1196,16 +1196,17 @@ func (h *Handler) AbortTestRun(w http.ResponseWriter, r *http.Request) {
 	// A body is optional; an abort with no stated reason is still a valid abort.
 	_ = json.NewDecoder(r.Body).Decode(&req)
 
-	params := db.UpdateTestRunParams{
-		ID:          run.ID,
-		WorkspaceID: wsUUID,
-		Status:      pgtype.Text{String: "aborted", Valid: true},
-		CompletedAt: pgtype.Timestamptz{Time: time.Now(), Valid: true},
-	}
+	// Conditional: the round may have completed since it was read, and an
+	// abort must not rewrite a finished round.
+	params := db.AbortOpenTestRunParams{ID: run.ID, WorkspaceID: wsUUID}
 	if strings.TrimSpace(req.Reason) != "" {
 		params.Error = pgtype.Text{String: req.Reason, Valid: true}
 	}
-	updated, err := h.Queries.UpdateTestRun(r.Context(), params)
+	updated, err := h.Queries.AbortOpenTestRun(r.Context(), params)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusConflict, "this run has already finished")
+		return
+	}
 	if err != nil {
 		slog.Error("abort test run failed", append(logger.RequestAttrs(r), "error", err)...)
 		writeError(w, http.StatusInternalServerError, "failed to abort test run")

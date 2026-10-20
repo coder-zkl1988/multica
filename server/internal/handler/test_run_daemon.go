@@ -240,6 +240,15 @@ func (h *Handler) completeTestRunTask(ctx context.Context, q *db.Queries, task d
 		return settled, err
 	}
 	if !isCase {
+		// A round aborted or finished while this whole-round task ran keeps
+		// what it became.
+		locked, err := q.LockTestRun(ctx, db.LockTestRunParams{ID: run.ID, WorkspaceID: run.WorkspaceID})
+		if err != nil {
+			return settled, err
+		}
+		if locked.Status == "completed" || locked.Status == "aborted" {
+			return settled, nil
+		}
 		summary, _ := parseTestRunResultSummary(output)
 		status := "completed"
 		if summary.Status == "blocked" {
@@ -300,6 +309,15 @@ func (h *Handler) completeTestRunTask(ctx context.Context, q *db.Queries, task d
 // completed it, nil otherwise — so exactly one caller settles the autopilot
 // run and publishes the change.
 func (h *Handler) convergeTestRun(ctx context.Context, q *db.Queries, run db.TestRun) (*db.TestRun, error) {
+	// Taken before counting: a settle racing this one (another case's hook,
+	// or a result write) has either committed by the time the lock is ours,
+	// so the count sees it, or will take the lock after us and complete the
+	// round itself. Without it two concurrent settles could each see the
+	// other's case still running and leave the round open forever.
+	run, err := q.LockTestRun(ctx, db.LockTestRunParams{ID: run.ID, WorkspaceID: run.WorkspaceID})
+	if err != nil {
+		return nil, err
+	}
 	if run.Status == "completed" || run.Status == "aborted" {
 		return nil, nil
 	}
@@ -335,33 +353,58 @@ func (h *Handler) updateTestRunFromAgentFailure(ctx context.Context, task db.Age
 		return err
 	}
 	if !isCase {
-		aborted, err := h.Queries.UpdateTestRun(ctx, db.UpdateTestRunParams{
+		// Conditional: a round that completed or was aborted meanwhile is
+		// not rewritten.
+		aborted, err := h.Queries.AbortOpenTestRun(ctx, db.AbortOpenTestRunParams{
 			ID:          run.ID,
 			WorkspaceID: run.WorkspaceID,
-			Status:      pgtype.Text{String: "aborted", Valid: true},
-			CompletedAt: pgtype.Timestamptz{Time: time.Now(), Valid: true},
 			Error:       pgtype.Text{String: req.Error, Valid: req.Error != ""},
 		})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
 		if err != nil {
 			return err
 		}
 		h.settleAutopilotTestRun(ctx, h.Queries, aborted)
 		return nil
 	}
+	// Settle, release the next cases and converge in one transaction, like
+	// the completion hook, so the round lock is held across all three.
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	qtx := h.Queries.WithTx(tx)
 	var settled testRunSettlement
 	if !isTerminalRunCaseResult(rc.Result) {
 		notes := "the agent task failed before recording a result"
 		if strings.TrimSpace(req.Error) != "" {
 			notes += ": " + strings.TrimSpace(req.Error)
 		}
-		if settled.runCase, err = settleOpenTestRunCase(ctx, h.Queries, run, rc, "blocked", notes); err != nil {
+		if settled.runCase, err = settleOpenTestRunCase(ctx, qtx, run, rc, "blocked", notes); err != nil {
 			return err
 		}
 	}
-	if err := h.dispatchNextTestRunCases(ctx, h.Queries, run); err != nil {
+	// A failed release must not undo the settle: it runs under a savepoint,
+	// and the round stays open for a later hook to release the rest.
+	if sp, spErr := tx.Begin(ctx); spErr != nil {
+		return spErr
+	} else if err := h.dispatchNextTestRunCases(ctx, h.Queries.WithTx(sp), run); err != nil {
 		slog.Warn("dispatch next test run cases failed", "run_id", uuidToString(run.ID), "error", err)
+		if rbErr := sp.Rollback(ctx); rbErr != nil {
+			return rbErr
+		}
+	} else if err := sp.Commit(ctx); err != nil {
+		return err
 	}
-	settled.run, err = h.convergeTestRun(ctx, h.Queries, run)
+	if settled.run, err = h.convergeTestRun(ctx, qtx, run); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
 	h.publishTestRunSettlement(uuidToString(run.WorkspaceID), settled)
-	return err
+	return nil
 }

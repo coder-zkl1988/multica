@@ -11,6 +11,54 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const abortOpenTestRun = `-- name: AbortOpenTestRun :one
+UPDATE test_run SET
+    status       = 'aborted',
+    completed_at = now(),
+    error        = COALESCE($1, error),
+    updated_at   = now()
+WHERE id = $2 AND workspace_id = $3
+  AND status NOT IN ('completed', 'aborted')
+RETURNING id, workspace_id, project_id, plan_id, title, executor_type, executor_id, agent_task_id, environment, build_ref, capability_binding, status, source_run_id, retry_scope, error, started_at, completed_at, created_by, created_at, updated_at, parallelism
+`
+
+type AbortOpenTestRunParams struct {
+	Error       pgtype.Text `json:"error"`
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+// Aborts a round only while it is still open, so an abort racing the round's
+// completion never rewrites a finished round (no rows = already settled).
+func (q *Queries) AbortOpenTestRun(ctx context.Context, arg AbortOpenTestRunParams) (TestRun, error) {
+	row := q.db.QueryRow(ctx, abortOpenTestRun, arg.Error, arg.ID, arg.WorkspaceID)
+	var i TestRun
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.ProjectID,
+		&i.PlanID,
+		&i.Title,
+		&i.ExecutorType,
+		&i.ExecutorID,
+		&i.AgentTaskID,
+		&i.Environment,
+		&i.BuildRef,
+		&i.CapabilityBinding,
+		&i.Status,
+		&i.SourceRunID,
+		&i.RetryScope,
+		&i.Error,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Parallelism,
+	)
+	return i, err
+}
+
 const addTestPlanCase = `-- name: AddTestPlanCase :one
 INSERT INTO test_plan_case (plan_id, workspace_id, test_case_id, position)
 VALUES ($1, $2, $3, $4)
@@ -1046,6 +1094,49 @@ func (q *Queries) ListUndispatchedTestRunCases(ctx context.Context, arg ListUndi
 		return nil, err
 	}
 	return items, nil
+}
+
+const lockTestRun = `-- name: LockTestRun :one
+SELECT id, workspace_id, project_id, plan_id, title, executor_type, executor_id, agent_task_id, environment, build_ref, capability_binding, status, source_run_id, retry_scope, error, started_at, completed_at, created_by, created_at, updated_at, parallelism FROM test_run WHERE id = $1 AND workspace_id = $2 FOR UPDATE
+`
+
+type LockTestRunParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+// Serializes the writers of one round: every case task's completion hook,
+// the failure hook and a result write take this lock before they count the
+// round's cases, release the next ones or complete it, so two hooks never
+// bind the same waiting case and the last settle always sees the others.
+// Returns the round as it is now, not as the caller read it earlier.
+func (q *Queries) LockTestRun(ctx context.Context, arg LockTestRunParams) (TestRun, error) {
+	row := q.db.QueryRow(ctx, lockTestRun, arg.ID, arg.WorkspaceID)
+	var i TestRun
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.ProjectID,
+		&i.PlanID,
+		&i.Title,
+		&i.ExecutorType,
+		&i.ExecutorID,
+		&i.AgentTaskID,
+		&i.Environment,
+		&i.BuildRef,
+		&i.CapabilityBinding,
+		&i.Status,
+		&i.SourceRunID,
+		&i.RetryScope,
+		&i.Error,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Parallelism,
+	)
+	return i, err
 }
 
 const removeTestPlanCase = `-- name: RemoveTestPlanCase :exec

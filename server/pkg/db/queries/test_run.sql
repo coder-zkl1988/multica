@@ -238,3 +238,23 @@ RETURNING *;
 -- name: DeleteTestPlanCasesForCase :exec
 -- A deleted case leaves every plan that listed it.
 DELETE FROM test_plan_case WHERE test_case_id = $1 AND workspace_id = $2;
+
+-- name: LockTestRun :one
+-- Serializes the writers of one round: every case task's completion hook,
+-- the failure hook and a result write take this lock before they count the
+-- round's cases, release the next ones or complete it, so two hooks never
+-- bind the same waiting case and the last settle always sees the others.
+-- Returns the round as it is now, not as the caller read it earlier.
+SELECT * FROM test_run WHERE id = $1 AND workspace_id = $2 FOR UPDATE;
+
+-- name: AbortOpenTestRun :one
+-- Aborts a round only while it is still open, so an abort racing the round's
+-- completion never rewrites a finished round (no rows = already settled).
+UPDATE test_run SET
+    status       = 'aborted',
+    completed_at = now(),
+    error        = COALESCE(sqlc.narg('error'), error),
+    updated_at   = now()
+WHERE id = sqlc.arg(id) AND workspace_id = sqlc.arg(workspace_id)
+  AND status NOT IN ('completed', 'aborted')
+RETURNING *;
