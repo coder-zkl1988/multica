@@ -11,6 +11,8 @@ import { Callout } from "fumadocs-ui/components/callout";
 
 每条用例有 `TC-<n>` 编号、用于分组的模块、前置条件、有序步骤（每步一个操作和一条可核对的预期），以及类型。类型比看上去重要：`business_flow`、`permission`、`data_consistency` 的存在，是为了让用例库不至于悄悄退化成只测代码。
 
+只有每一步都有操作和预期的用例才能是**有效**用例。没有可核对的预期，执行结果只可能是“通过”，所以这样的用例会停在 `draft`，直到补齐步骤。
+
 用例还记录**它涉及哪几个仓库**。一个项目可以绑定多个仓库，用例按角色指明相关的那些：
 
 | 角色 | 含义 |
@@ -22,11 +24,21 @@ import { Callout } from "fumadocs-ui/components/callout";
 
 跨系统的场景把 `scope` 设为 `cross_repo` —— 在后台改价，在移动端验证。这类用例至少需要两个角色不同的仓库，否则服务端会拒绝：只有一个角色的"跨仓库"用例没有任何东西可关联。
 
+## 测试点：覆盖率按什么算
+
+用例关联到任务，只说明它和这条需求有关，说不出它验证了需求的哪一条条件——过去一条正常路径用例通过，任务就显示已验证，而拒绝路径、边界、权限可能一条用例都没有。
+
+所以一个任务可以拆成若干**测试点**（`TP-1`、`TP-2`……）：每个都是能单独判定对错的条件，比如“余额不足时下单被拒并提示”。测试点有类别——正常路径、异常、边界、权限、状态、数据一致性、非功能——用例声明自己验证哪些测试点。没有有效用例验证时，测试点是**未覆盖**；覆盖它的用例最近一次失败，是**失败**；最近一次通过且没有失败，是**通过**。
+
+有测试点的任务，只有每个有效测试点都已覆盖并通过、且它的有效用例没有失败时才算**已验证**。没有测试点的任务退回按关联用例判断，显示**用例通过**而不是**已验证**：没人列出必须验证什么。草稿和已废弃用例从不计入。
+
+**测试 → 覆盖**按从坏到好列出项目内所有未取消的任务：失败、没有任何测试、有未覆盖的测试点、没有测试点、未全部通过、已验证。发版前按这张表逐条处理。
+
 ## 用智能体生成用例
 
 在测试页点**AI 生成用例**。这会创建一个生成任务并打开它的**覆盖范围**供你确认 —— 此时还没有开始跑。
 
-范围由项目自身的资源推导：每个绑定的仓库成为可读代码，每个 `document` 资源成为业务知识引用。批准前先收窄它 —— 路径范围、指定 issue、指定模块。
+范围由项目自身的资源推导：每个绑定的仓库成为可读代码，每个 `document` 资源成为业务知识引用。批准前先收窄它 —— 路径范围、指定任务、指定模块。
 
 <Callout type="warn">
 审批是硬闸门，没有绕过的开关。范围错了的一次生成，会在任何人发现之前烧掉整个上下文窗口。
@@ -39,6 +51,8 @@ import { Callout } from "fumadocs-ui/components/callout";
 - **obsolete** —— 已不存在的行为。
 
 已定稿的用例永远不会被静默改写。这正是审查的意义。
+
+写用例之前，智能体先把范围内的每个任务拆成测试点——先读已有的，再按类别补缺——然后逐点派生用例：有输入的覆盖等价类和边界值，权限点覆盖每个被拒角色，状态点覆盖每个非法转换。每条用例都声明它验证的测试点，人写的测试点不会被智能体改写。生成结束后，生成任务页会列出还没有用例覆盖的测试点。
 
 ## 让智能体理解你的业务
 
@@ -54,11 +68,15 @@ import { Callout } from "fumadocs-ui/components/callout";
 
 轮次开始时会为每条用例冻结快照。之后再改用例，不会改变那一轮实际执行过什么 —— 否则回归历史会自己悄悄改写。
 
-逐条记录 `passed`、`failed`、`blocked` 或 `skipped`。`blocked` 表示你根本没能执行它，它不是 `failed` 的委婉说法；那样用会把回归问题藏起来。失败的用例可一键创建缺陷 issue，issue 里带着快照和回到该轮次的链接。
+逐条记录 `passed`、`failed`、`blocked` 或 `skipped`。`blocked` 表示你根本没能执行它，它不是 `failed` 的委婉说法；那样用会把回归问题藏起来。失败的用例可一键创建缺陷任务，任务里带着快照和回到该轮次的链接。
 
 **重跑是新建一个轮次**，指回它来自的那一轮。原轮次不会被重置。可以全部重跑、只重跑失败项，或重跑选中项。
 
 每条用例的详情页会显示它在历次轮次中的结果，并链接回每一轮。这条时间线正是用例库值得维护的理由。
+
+计划还可以带一条**规则**：模块、优先级、用例类型、要跟随的任务，或项目内所有有效用例。一轮会先执行计划列出的用例，再执行规则此刻匹配到的有效用例，所以计划建好之后新写的用例不会被落下。已废弃的用例会被跳过。
+
+人工执行时，展开一条用例就能看到冻结的步骤：逐步记录结论和实际看到的情况，用**添加证据**上传截图或日志。步骤结果随用例结论一起保存，并按与智能体相同的规则校验——有失败的步骤，用例就不能记为通过。
 
 ## 让智能体执行轮次
 
@@ -72,6 +90,8 @@ import { Callout } from "fumadocs-ui/components/callout";
 浏览器能力今天即可使用 —— 在运行时上配置 `playwright` 或 `chrome-devtools` MCP 服务器即可。Android、iOS 和 computer-use 已注册但尚未实现，需要这几类能力的轮次会以"能力未注册"被拒绝，而不是在没有设备的情况下静默运行。
 </Callout>
 
+智能体记 `passed` 或 `failed` 时，必须给出快照里**每一步**的结论，并且这条用例已经至少上传过一份证据——所以它先传证据、再记结论。智能体结束时什么都没记录的话，收尾摘要里的 `passed` 会记为 `blocked`：通过需要摘要里没有的证据。
+
 ## CLI
 
 任何智能体都能读取用例库；只有某轮次自己的智能体能写该轮次的结果。
@@ -80,11 +100,14 @@ import { Callout } from "fumadocs-ui/components/callout";
 multica testcase list --project <id> --digest --output json
 multica testcase get TC-42 --output json
 multica testcase proposal list --case TC-42
+multica testcase point list --issue MUL-12
+multica testcase point add --issue MUL-12 --title "…" --category negative
+multica testcase cover TC-42 MUL-12/TP-3
 
 multica test run get <run-id> --output json
 multica test capability list --run <run-id> --output json
-multica test result set <run-case-id> --result passed --note "…"
 multica test evidence add <run-case-id> --file ./shot.png --kind screenshot
+multica test result set <run-case-id> --result failed --step 1=passed --step "2=failed:实际看到的"
 multica test defect open <run-case-id> --title "…"
 ```
 

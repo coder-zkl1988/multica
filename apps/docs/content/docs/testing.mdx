@@ -11,6 +11,8 @@ The **Tests** tab holds one library of test cases per project. A case is a struc
 
 Each case carries a `TC-<n>` key, a module for grouping, preconditions, an ordered list of steps (each with an action and a checkable expectation), and a type. The type matters more than it looks: `business_flow`, `permission` and `data_consistency` exist so a library does not silently collapse into code-level checks.
 
+A case is only **active** when every step has an action and an expected result. Without them an execution can only ever come back "passed", so a case without checkable steps is kept as a `draft` until it has them.
+
 A case also records **which repositories it touches**. A project can bind several, and a case names the ones it relates to by role:
 
 | Role | Meaning |
@@ -21,6 +23,16 @@ A case also records **which repositories it touches**. A project can bind severa
 | `fixture` | Where the case prepares data |
 
 Set `scope` to `cross_repo` when a case spans systems — change a price in the admin backend, verify it in the mobile app. Such a case needs at least two repositories with different roles; the server rejects it otherwise, because a single-role "cross-repo" case has nothing to correlate.
+
+## Test points: what coverage is counted against
+
+Linking a case to an issue says it is about that requirement. It does not say which of the requirement's conditions it checks — and one passing happy-path case used to be enough to mark an issue verified while its refusals, limits and permissions had no case at all.
+
+So an issue can be split into **test points** (`TP-1`, `TP-2`, …): conditions that can each be judged right or wrong on their own, such as "an order over the balance is refused with a message". Each point has a category — positive, negative, boundary, permission, state, data, non-functional — and cases declare which points they verify. A point is **uncovered** until an active case verifies it, **failing** when a covering case last failed, and **passed** when one last passed and none is failing.
+
+An issue with test points is **verified** only when every active point is covered and passed and none of its active cases is failing. An issue without points falls back to its linked cases and shows **Cases pass** instead of **Verified**: nobody listed what had to be checked. Drafts and deprecated cases never count.
+
+**Tests → Coverage** lists every live issue of a project, worst first: failing, no tests at all, uncovered points, no test points, not all passed, verified. It is the list to work down before a release.
 
 ## Generating cases with an agent
 
@@ -39,6 +51,8 @@ Once approved, dispatch the job to an agent. The agent pulls the existing-case d
 - **obsolete** — behaviour that no longer exists.
 
 An approved case is never rewritten silently. That is the whole point of review.
+
+Before writing cases, the agent splits every issue in scope into test points — reading the ones that exist and adding what is missing, category by category — and derives cases point by point: equivalence classes and boundary values for inputs, every refused role for permissions, every illegal transition for states. Each case names the points it verifies, and a point a person wrote is never rewritten by an agent. When the job ends, its page lists the points no case covers yet.
 
 ## Teaching an agent your business
 
@@ -60,6 +74,10 @@ Record each case as `passed`, `failed`, `blocked` or `skipped`. `blocked` means 
 
 Each case's detail page shows its result across every round it appeared in, with a link back to each one. That timeline is the reason a case library is worth maintaining.
 
+A plan can also carry a **rule** — modules, priorities, case types, issues whose cases to follow, or every active case of the project. A round of the plan runs its listed cases and then every active case the rule matches at that moment, so cases written after the plan was built are not left out of its regression. Deprecated cases are skipped.
+
+When you execute a round by hand, expand a case to see its frozen steps: record each step's result and what you observed, and attach screenshots or logs with **Add evidence**. The step results are saved with the case's result and checked the same way as an agent's — a case cannot pass while one of its steps failed.
+
 ## Letting an agent execute a run
 
 Dispatch a run to an agent and it executes the frozen snapshots, recording results through the CLI as it goes.
@@ -72,6 +90,8 @@ The agent may only drive what was bound to the run. It is told never to go looki
 Browser capabilities work today via a `playwright` or `chrome-devtools` MCP server on the runtime. Android, iOS and computer-use are registered but not yet implemented — a run needing one of those is refused with "capability not registered" rather than silently running without a device.
 </Callout>
 
+An agent's `passed` or `failed` is only accepted with a result for **every** step of the snapshot and at least one evidence file already uploaded for that case, so it uploads evidence first and records the verdict second. If an agent finishes without recording anything, a `passed` in its closing summary is recorded as `blocked`: a pass needs the evidence the summary does not carry.
+
 ## CLI
 
 Any agent can read the library; only a run's own agent can write that run's results.
@@ -80,11 +100,14 @@ Any agent can read the library; only a run's own agent can write that run's resu
 multica testcase list --project <id> --digest --output json
 multica testcase get TC-42 --output json
 multica testcase proposal list --case TC-42
+multica testcase point list --issue MUL-12
+multica testcase point add --issue MUL-12 --title "…" --category negative
+multica testcase cover TC-42 MUL-12/TP-3
 
 multica test run get <run-id> --output json
 multica test capability list --run <run-id> --output json
-multica test result set <run-case-id> --result passed --note "…"
 multica test evidence add <run-case-id> --file ./shot.png --kind screenshot
+multica test result set <run-case-id> --result failed --step 1=passed --step "2=failed:what you saw"
 multica test defect open <run-case-id> --title "…"
 ```
 
