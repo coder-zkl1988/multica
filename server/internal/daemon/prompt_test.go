@@ -2104,6 +2104,7 @@ func TestBuildTestGenerationPromptCarriesTheIncrementContract(t *testing.T) {
 		// The run's own drafts cover points as in_review; re-covering them
 		// would duplicate every case it just wrote.
 		"show `in_review` — that is done",
+		"named in an `update` of an active case still shows `uncovered` until a member accepts",
 		"\"coverage\":[",
 	} {
 		if !strings.Contains(prompt, want) {

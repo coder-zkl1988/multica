@@ -50,6 +50,24 @@ func (h *Handler) testGenerationCoverageSnapshot(ctx context.Context, job db.Tes
 	} else {
 		refs = stringsFromAny(unmarshalJSONObject(job.Input)["issue_ids"])
 	}
+	// A point the run covered by revising an active case waits in a queued
+	// proposal until a member accepts it; until then no link exists, but the
+	// run did its part — it is in review, not uncovered.
+	proposed := map[string]struct{}{}
+	if proposals, err := h.Queries.ListTestCaseProposalsForJob(ctx, db.ListTestCaseProposalsForJobParams{JobID: job.ID, WorkspaceID: job.WorkspaceID}); err == nil {
+		for _, proposal := range proposals {
+			if proposal.Status != "pending" || proposal.Kind != "update" {
+				continue
+			}
+			var payload TestCaseProposalCasePayload
+			if json.Unmarshal(proposal.Payload, &payload) != nil {
+				continue
+			}
+			for _, id := range payload.TestPoints {
+				proposed[id] = struct{}{}
+			}
+		}
+	}
 	out := make([]testGenerationIssueCoverage, 0, len(refs))
 	seen := map[pgtype.UUID]struct{}{}
 	for _, raw := range refs {
@@ -76,11 +94,12 @@ func (h *Handler) testGenerationCoverageSnapshot(ctx context.Context, job db.Tes
 		}
 		entry := testGenerationIssueCoverage{IssueID: uuidToString(issue.ID), Active: summary.Active, Covered: summary.Covered, InReview: []string{}, Uncovered: []string{}}
 		for _, point := range points {
-			switch point.State {
-			case "uncovered":
-				entry.Uncovered = append(entry.Uncovered, point.Key)
-			case "in_review":
+			_, inProposal := proposed[point.ID]
+			switch {
+			case point.State == "in_review", point.State == "uncovered" && inProposal:
 				entry.InReview = append(entry.InReview, point.Key)
+			case point.State == "uncovered":
+				entry.Uncovered = append(entry.Uncovered, point.Key)
 			}
 		}
 		out = append(out, entry)

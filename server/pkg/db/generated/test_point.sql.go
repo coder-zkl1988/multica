@@ -93,24 +93,41 @@ func (q *Queries) CreateIssueTestPoint(ctx context.Context, arg CreateIssueTestP
 }
 
 const deleteAITestPointLinksForCaseExcept = `-- name: DeleteAITestPointLinksForCaseExcept :exec
-DELETE FROM test_case_test_point
-WHERE test_case_id = $1
-  AND workspace_id = $2
-  AND origin = 'ai'
-  AND NOT (test_point_id = ANY($3::uuid[]))
+DELETE FROM test_case_test_point AS tctp
+WHERE tctp.test_case_id = $1
+  AND tctp.workspace_id = $2
+  AND tctp.origin = 'ai'
+  AND NOT (tctp.test_point_id = ANY(COALESCE($3::uuid[], '{}'::uuid[])))
+  AND (
+      COALESCE(cardinality($4::uuid[]), 0) = 0
+      OR tctp.test_point_id IN (
+          SELECT p.id FROM issue_test_point p
+          WHERE p.workspace_id = tctp.workspace_id
+            AND p.issue_id = ANY($4::uuid[])
+      )
+  )
 `
 
 type DeleteAITestPointLinksForCaseExceptParams struct {
-	TestCaseID   pgtype.UUID   `json:"test_case_id"`
-	WorkspaceID  pgtype.UUID   `json:"workspace_id"`
-	KeepPointIds []pgtype.UUID `json:"keep_point_ids"`
+	TestCaseID    pgtype.UUID   `json:"test_case_id"`
+	WorkspaceID   pgtype.UUID   `json:"workspace_id"`
+	KeepPointIds  []pgtype.UUID `json:"keep_point_ids"`
+	ScopeIssueIds []pgtype.UUID `json:"scope_issue_ids"`
 }
 
-// A revised case declares the full set of points it verifies; the links a
-// generation run drew before and the revision no longer claims go. Links a
-// person drew are never touched.
+// A revised case declares the full set of points it verifies among the
+// issues the revising run could see; the links a generation run drew before
+// that the revision no longer claims go. Links a person drew, and links to
+// points of issues outside the run's scope (a run scoped to MUL-10 cannot
+// speak for MUL-11), are never touched. An empty scope means the run could
+// name any point.
 func (q *Queries) DeleteAITestPointLinksForCaseExcept(ctx context.Context, arg DeleteAITestPointLinksForCaseExceptParams) error {
-	_, err := q.db.Exec(ctx, deleteAITestPointLinksForCaseExcept, arg.TestCaseID, arg.WorkspaceID, arg.KeepPointIds)
+	_, err := q.db.Exec(ctx, deleteAITestPointLinksForCaseExcept,
+		arg.TestCaseID,
+		arg.WorkspaceID,
+		arg.KeepPointIds,
+		arg.ScopeIssueIds,
+	)
 	return err
 }
 

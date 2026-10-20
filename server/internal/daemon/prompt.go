@@ -1253,7 +1253,7 @@ func buildTestGenerationPrompt(task Task) string {
 	b.WriteString("4. For each issue id in `plan.issues`, run `multica issue get <id> --output json` and read its comment thread. Run `multica issue search <keyword>` for decisions that only ever got recorded in comments.\n")
 	b.WriteString("5. Split every issue in `plan.issues` into test points BEFORE writing any case (see below).\n")
 	b.WriteString("6. Derive cases from the points, then write them back with `multica testcase propose --job <job_id> --stdin`.\n")
-	b.WriteString("7. Run `multica testcase point list --issue <id>` again for every issue. Your new cases land as drafts, so the points they verify show `in_review` — that is done; do not add more cases for them. A point still `uncovered` needs a case, or a line in your report saying why no case can check it.\n\n")
+	b.WriteString("7. Run `multica testcase point list --issue <id>` again for every issue. Your new cases land as drafts, so the points they verify show `in_review` — that is done; do not add more cases for them. A point you named in an `update` of an active case still shows `uncovered` until a member accepts that revision — it is done too; do not write a second case for it. Any other point still `uncovered` needs a case, or a line in your report saying why no case can check it.\n\n")
 
 	b.WriteString("Test points — the conditions a requirement is accepted on:\n")
 	b.WriteString("- A test point is ONE condition that can be judged right or wrong on its own: \"an order over the balance is refused with a message\", not \"checkout works\". Coverage is counted per point: an issue is verified only when every active point is covered by a passing case.\n")

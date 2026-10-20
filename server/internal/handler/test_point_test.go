@@ -310,6 +310,20 @@ func TestGenerationCoverageSnapshotListsUncoveredPoints(t *testing.T) {
 		len(snapshot[0].Uncovered) != 1 || snapshot[0].Uncovered[0] != "TP-2" {
 		t.Fatalf("snapshot = %+v, want the one resolvable issue with TP-2 uncovered", snapshot)
 	}
+
+	// The run covers TP-2 by revising the active case; the revision waits in
+	// the review queue, and the point is in review, not uncovered.
+	bindJobToTask(t, jobID, testGenerationTaskUUID)
+	refused := listIssueTestPoints(t, issueID).TestPoints[1]
+	if w := proposeRequest(t, jobID, testGenerationTaskUUID, []map[string]any{
+		{"kind": "update", "target": tc.Key, "case": map[string]any{"title": "Balance case, both paths", "steps": executableSteps, "test_points": []string{covered.ID, refused.ID}}},
+	}); w.Code != http.StatusCreated {
+		t.Fatalf("propose: %d %s", w.Code, w.Body.String())
+	}
+	snapshot = testHandler.testGenerationCoverageSnapshot(context.Background(), job)
+	if len(snapshot[0].Uncovered) != 0 || len(snapshot[0].InReview) != 1 || snapshot[0].InReview[0] != "TP-2" {
+		t.Fatalf("snapshot after an update proposal = %+v, want TP-2 in review", snapshot)
+	}
 }
 
 // Unlinking a case from an issue withdraws its claim on that issue's test
@@ -431,4 +445,45 @@ func TestEditingAnAIPointMakesItAPersons(t *testing.T) {
 	req.Header.Set(agentHeaders[0], agentHeaders[1])
 	req.Header.Set(agentHeaders[2], agentHeaders[3])
 	testutil.Call(t, testHandler.UpdateTestPoint, req).Want(http.StatusForbidden)
+}
+
+// A run scoped to one issue speaks only for that issue's points: revising a
+// case it shares with another requirement must not cut that requirement's
+// coverage.
+func TestARevisionKeepsAIPointLinksOutsideItsRunsScope(t *testing.T) {
+	projectID := newTestCaseProject(t)
+	jobID := newTestGenerationJob(t, projectID)
+	bindJobToTask(t, jobID, testGenerationTaskUUID)
+	inScope := dbfx.Issue(t, "Checkout balance")
+	outside := dbfx.Issue(t, "Wallet top-up")
+	dbfx.Exec(t, `UPDATE test_generation_job SET input = jsonb_build_object('issue_ids', jsonb_build_array($1::text, $2::text)) WHERE id = $3`, inScope, outside, jobID)
+	mine := createTestPoint(t, inScope, map[string]any{"title": "Over balance refused", "category": "negative"})
+	theirs := createTestPoint(t, outside, map[string]any{"title": "Top-up credits the wallet"})
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM test_case_issue WHERE issue_id IN ($1, $2)`, inScope, outside)
+	})
+	w := proposeRequest(t, jobID, testGenerationTaskUUID, []map[string]any{
+		{"kind": "new", "case": map[string]any{"title": "Shared draft", "steps": executableSteps, "test_points": []string{mine.ID, theirs.ID}}},
+	})
+	if w.Code != http.StatusCreated {
+		t.Fatalf("propose: %d %s", w.Code, w.Body.String())
+	}
+	var created struct {
+		TestCases []TestCaseResponse `json:"test_cases"`
+	}
+	json.NewDecoder(w.Body).Decode(&created)
+	draft := created.TestCases[0]
+
+	// A later run sees only the first issue.
+	dbfx.Exec(t, `UPDATE test_generation_job SET input = jsonb_build_object('issue_ids', jsonb_build_array($1::text)) WHERE id = $2`, inScope, jobID)
+	if w := proposeRequest(t, jobID, testGenerationTaskUUID, []map[string]any{
+		{"kind": "update", "target": draft.Key, "case": map[string]any{"title": "Shared draft, refined", "steps": executableSteps, "test_points": []string{mine.ID}}},
+	}); w.Code != http.StatusCreated {
+		t.Fatalf("revise: %d %s", w.Code, w.Body.String())
+	}
+	var kept int
+	dbfx.QueryRow(t, `SELECT count(*) FROM test_case_test_point WHERE test_case_id = $1 AND test_point_id IN ($2, $3)`, draft.ID, mine.ID, theirs.ID).Scan(&kept)
+	if kept != 2 {
+		t.Fatalf("links after a revision scoped to one issue = %d, want both kept", kept)
+	}
 }

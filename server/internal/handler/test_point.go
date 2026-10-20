@@ -669,20 +669,47 @@ func linkCaseToTestPoints(r *http.Request, qtx *db.Queries, caseID, wsUUID pgtyp
 // drew that the revision no longer claims are removed. A revision that names
 // no point (an older daemon's) leaves the links as they are, and links a
 // person drew are never removed.
-func replaceCaseAITestPoints(r *http.Request, qtx *db.Queries, caseID, wsUUID pgtype.UUID, points []db.IssueTestPoint, origin string, createdBy pgtype.UUID) error {
-	if len(points) == 0 {
+func replaceCaseAITestPoints(r *http.Request, qtx *db.Queries, caseID, wsUUID pgtype.UUID, revision caseTestPointRevision, origin string, createdBy pgtype.UUID) error {
+	// A revision from an older daemon names no point at all; it says
+	// nothing about the links, so they stay.
+	if !revision.named {
 		return nil
 	}
+	keep := make([]pgtype.UUID, 0, len(revision.keep))
+	keep = append(keep, revision.keep...)
+	scope := make([]pgtype.UUID, 0, len(revision.scope))
+	for issueID := range revision.scope {
+		scope = append(scope, issueID)
+	}
+	if err := qtx.DeleteAITestPointLinksForCaseExcept(r.Context(), db.DeleteAITestPointLinksForCaseExceptParams{
+		TestCaseID: caseID, WorkspaceID: wsUUID, KeepPointIds: keep, ScopeIssueIds: scope,
+	}); err != nil {
+		return err
+	}
+	return linkCaseToTestPoints(r, qtx, caseID, wsUUID, revision.link, origin, createdBy)
+}
+
+// caseTestPointRevision is what a revised case says about the points it
+// verifies. named: the revision named points at all. keep: every named point
+// whose existing link must survive, including one the accepting person cannot
+// see — not seeing an issue is no reason to cut another's coverage. link: the
+// named points to (re)link now. scope: the issues the revising run could
+// name points of; links outside it are not the revision's to remove (nil =
+// any issue).
+type caseTestPointRevision struct {
+	named bool
+	keep  []pgtype.UUID
+	link  []db.IssueTestPoint
+	scope map[pgtype.UUID]struct{}
+}
+
+// revisionOf is the common case: every named point is kept and linked.
+func revisionOf(named bool, points []db.IssueTestPoint, scope map[pgtype.UUID]struct{}) caseTestPointRevision {
 	keep := make([]pgtype.UUID, len(points))
 	for i, point := range points {
 		keep[i] = point.ID
 	}
-	if err := qtx.DeleteAITestPointLinksForCaseExcept(r.Context(), db.DeleteAITestPointLinksForCaseExceptParams{
-		TestCaseID: caseID, WorkspaceID: wsUUID, KeepPointIds: keep,
-	}); err != nil {
-		return err
-	}
-	return linkCaseToTestPoints(r, qtx, caseID, wsUUID, points, origin, createdBy)
+	return caseTestPointRevision{named: named, keep: keep, link: points, scope: scope}
 }
 
 // UnlinkTestCaseTestPoint answers DELETE /api/test-cases/{ref}/test-points/{pointId}.

@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/logger"
+	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -246,7 +248,7 @@ func (h *Handler) ProposeTestCases(w http.ResponseWriter, r *http.Request) {
 					h.writeTestGenerationWriteError(w, r, updateErr, "update")
 					return
 				}
-				if err := replaceCaseAITestPoints(r, qtx, updated.ID, wsUUID, entry.points, "ai", job.CreatedBy); err != nil {
+				if err := replaceCaseAITestPoints(r, qtx, updated.ID, wsUUID, revisionOf(len(entry.item.Case.TestPoints) > 0, entry.points, scopeIssues), "ai", job.CreatedBy); err != nil {
 					h.writeTestGenerationWriteError(w, r, err, "update")
 					return
 				}
@@ -520,6 +522,17 @@ func (h *Handler) insertProposedTestCase(
 	return testCase, repos, nil
 }
 
+// proposalScopeIssues is the issue scope of the run that queued a proposal:
+// the issues whose points it could name, and so the ones whose AI links its
+// revision may replace. nil (no job, or an unscoped run) means any issue.
+func (h *Handler) proposalScopeIssues(r *http.Request, proposal db.TestCaseProposal, wsUUID pgtype.UUID) map[pgtype.UUID]struct{} {
+	job, err := h.Queries.GetTestGenerationJobInWorkspace(r.Context(), db.GetTestGenerationJobInWorkspaceParams{ID: proposal.JobID, WorkspaceID: wsUUID})
+	if err != nil {
+		return nil
+	}
+	return h.resolveScopeIssues(r, wsUUID, h.testGenerationScopeIssueRefs(r, job, wsUUID))
+}
+
 // testGenerationScopeIssueRefs reads the issue scope the agent actually worked
 // under. The approved plan wins because a reviewer can edit the scope there
 // before approving; the job's original input is only the fallback for a job
@@ -779,24 +792,35 @@ func (h *Handler) reviewTestCaseProposal(w http.ResponseWriter, r *http.Request,
 		}
 		// The points the run said this revision verifies. One dropped or
 		// deleted since the proposal was queued is no longer a condition of
-		// its requirement, so it is skipped rather than failing the accept.
-		var stillLive []db.IssueTestPoint
+		// its requirement, so it is not linked rather than failing the accept.
+		// One on an issue the accepting person cannot see keeps any link it
+		// already has — not seeing an issue is no reason to cut its coverage —
+		// but is not newly linked by them.
+		revision := caseTestPointRevision{named: len(proposedPoints) > 0, scope: h.proposalScopeIssues(r, proposal, wsUUID)}
 		for _, ref := range proposedPoints {
 			id, parseErr := util.ParseUUID(ref)
 			if parseErr != nil {
 				continue
 			}
 			point, getErr := qtx.GetIssueTestPointInWorkspace(r.Context(), db.GetIssueTestPointInWorkspaceParams{ID: id, WorkspaceID: wsUUID})
-			if getErr != nil || point.Status != "active" {
+			if getErr != nil {
 				continue
 			}
-			// The person accepting may not see every issue the run could.
-			if h.checkIssueWindowAuthorization(r, point.IssueID, wsUUID, "test_case_proposal_accept") != nil {
+			revision.keep = append(revision.keep, point.ID)
+			if point.Status != "active" {
 				continue
 			}
-			stillLive = append(stillLive, point)
+			if windowErr := h.checkIssueWindowAuthorization(r, point.IssueID, wsUUID, "test_case_proposal_accept"); windowErr != nil {
+				var outside *service.IssueOutsideCreationWindowError
+				if !errors.As(windowErr, &outside) {
+					writeIssueWindowAuthorizationError(w, windowErr)
+					return
+				}
+				continue
+			}
+			revision.link = append(revision.link, point)
 		}
-		if err := replaceCaseAITestPoints(r, qtx, applied.ID, wsUUID, stillLive, "ai", userUUID); err != nil {
+		if err := replaceCaseAITestPoints(r, qtx, applied.ID, wsUUID, revision, "ai", userUUID); err != nil {
 			h.writeTestGenerationWriteError(w, r, err, "update")
 			return
 		}

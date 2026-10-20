@@ -73,14 +73,25 @@ WHERE tctp.test_case_id = sqlc.arg(test_case_id)
   );
 
 -- name: DeleteAITestPointLinksForCaseExcept :exec
--- A revised case declares the full set of points it verifies; the links a
--- generation run drew before and the revision no longer claims go. Links a
--- person drew are never touched.
-DELETE FROM test_case_test_point
-WHERE test_case_id = sqlc.arg(test_case_id)
-  AND workspace_id = sqlc.arg(workspace_id)
-  AND origin = 'ai'
-  AND NOT (test_point_id = ANY(sqlc.arg(keep_point_ids)::uuid[]));
+-- A revised case declares the full set of points it verifies among the
+-- issues the revising run could see; the links a generation run drew before
+-- that the revision no longer claims go. Links a person drew, and links to
+-- points of issues outside the run's scope (a run scoped to MUL-10 cannot
+-- speak for MUL-11), are never touched. An empty scope means the run could
+-- name any point.
+DELETE FROM test_case_test_point AS tctp
+WHERE tctp.test_case_id = sqlc.arg(test_case_id)
+  AND tctp.workspace_id = sqlc.arg(workspace_id)
+  AND tctp.origin = 'ai'
+  AND NOT (tctp.test_point_id = ANY(COALESCE(sqlc.arg(keep_point_ids)::uuid[], '{}'::uuid[])))
+  AND (
+      COALESCE(cardinality(sqlc.arg(scope_issue_ids)::uuid[]), 0) = 0
+      OR tctp.test_point_id IN (
+          SELECT p.id FROM issue_test_point p
+          WHERE p.workspace_id = tctp.workspace_id
+            AND p.issue_id = ANY(sqlc.arg(scope_issue_ids)::uuid[])
+      )
+  );
 
 -- name: DeleteTestCaseTestPointLinksForIssue :exec
 DELETE FROM test_case_test_point AS tctp
