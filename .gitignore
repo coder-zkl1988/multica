@@ -39,6 +39,8 @@ dist-electron
 
 # test coverage
 coverage
+# …but not the Tests → Coverage page of the web app.
+!apps/web/app/**/tests/coverage/
 
 # Go
 server/bin/
