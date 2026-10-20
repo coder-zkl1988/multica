@@ -668,7 +668,11 @@ function RunCaseRow({
             onChange={(index, patch) =>
               setSteps((current) => {
                 const next = { ...current };
-                const merged = { result: "", actual: "", ...current[index], ...patch };
+                const previous: { result: string; actual: string } | undefined = current[index];
+                const merged = {
+                  result: patch.result ?? previous?.result ?? "",
+                  actual: patch.actual ?? previous?.actual ?? "",
+                };
                 if (!merged.result && !merged.actual.trim()) delete next[index];
                 else next[index] = merged;
                 return next;
