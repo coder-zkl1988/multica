@@ -91,6 +91,9 @@ export const testCaseKeys = {
     [...testCaseKeys.all(wsId), "revisions", ref] as const,
   proposals: (wsId: string, ref: string) =>
     [...testCaseKeys.all(wsId), "proposals", ref] as const,
+  /** The test points one case verifies. */
+  testPoints: (wsId: string, ref: string) =>
+    [...testCaseKeys.all(wsId), "test-points", ref] as const,
   /** The issues one case covers. Under the case tree so a case-wide
    *  invalidation refreshes coverage along with everything else. */
   issues: (wsId: string, ref: string) =>
@@ -107,6 +110,10 @@ export const issueTestCaseKeys = {
   all: (wsId: string) => ["issue-test-cases", wsId] as const,
   forIssue: (wsId: string, issueId: string) =>
     [...issueTestCaseKeys.all(wsId), issueId] as const,
+  /** The issue's test points with their coverage; under forIssue so one
+   *  invalidation refreshes the cases, the summary and the points together. */
+  testPoints: (wsId: string, issueId: string) =>
+    [...issueTestCaseKeys.forIssue(wsId, issueId), "test-points"] as const,
 };
 
 export interface TestGenerationJobListFilters {

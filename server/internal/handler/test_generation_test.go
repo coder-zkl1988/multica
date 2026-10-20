@@ -579,3 +579,91 @@ func TestAcceptTestCaseProposalRefusesToEmptyAnActiveCase(t *testing.T) {
 		t.Fatalf("title = %q, want the case untouched", storedTitle)
 	}
 }
+
+// A generated case says which conditions of its requirement it verifies, and
+// may only claim conditions of the requirements the run was scoped to.
+func TestProposeTestCasesLinksDeclaredTestPoints(t *testing.T) {
+	projectID := newTestCaseProject(t)
+	jobID := newTestGenerationJob(t, projectID)
+	bindJobToTask(t, jobID, testGenerationTaskUUID)
+	inScope := dbfx.Issue(t, "Balance checkout")
+	outOfScope := dbfx.Issue(t, "Unrelated requirement")
+	dbfx.Exec(t, `UPDATE test_generation_job SET input = jsonb_build_object('issue_ids', jsonb_build_array($1::text)) WHERE id = $2`, inScope, jobID)
+	refusal := createTestPoint(t, inScope, map[string]any{"title": "Paying over the balance is refused", "category": "negative"})
+	foreign := createTestPoint(t, outOfScope, map[string]any{"title": "Something else"})
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM test_case_test_point WHERE test_point_id IN ($1, $2)`, refusal.ID, foreign.ID)
+		testPool.Exec(context.Background(), `DELETE FROM test_case_issue WHERE issue_id IN ($1, $2)`, inScope, outOfScope)
+	})
+
+	w := proposeRequest(t, jobID, testGenerationTaskUUID, []map[string]any{
+		{"kind": "new", "case": map[string]any{"title": "Over-balance order", "steps": executableSteps, "test_points": []string{foreign.ID}}},
+	})
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "outside this run's scope") {
+		t.Fatalf("out-of-scope point: status = %d, want 400 naming the scope: %s", w.Code, w.Body.String())
+	}
+
+	w = proposeRequest(t, jobID, testGenerationTaskUUID, []map[string]any{
+		{"kind": "new", "case": map[string]any{"title": "Over-balance order", "case_type": "exception", "steps": executableSteps,
+			"test_points": []string{issueIdentifier(t, inScope) + "/TP-1"}}},
+		{"kind": "new", "case": map[string]any{"title": "Says nothing about points", "steps": executableSteps}},
+	})
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		TestCases     []TestCaseResponse `json:"test_cases"`
+		WithoutPoints int                `json:"new_cases_without_test_points"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.WithoutPoints != 1 {
+		t.Errorf("new_cases_without_test_points = %d, want 1", resp.WithoutPoints)
+	}
+	var origin string
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT origin FROM test_case_test_point WHERE test_case_id = $1 AND test_point_id = $2`, resp.TestCases[0].ID, refusal.ID).Scan(&origin); err != nil || origin != "ai" {
+		t.Fatalf("point link of the generated case = %q (%v), want an ai link", origin, err)
+	}
+}
+
+// A queued proposal against an approved case carries its points as ids and
+// links them when a person accepts it.
+func TestAcceptTestCaseProposalLinksItsTestPoints(t *testing.T) {
+	projectID := newTestCaseProject(t)
+	jobID := newTestGenerationJob(t, projectID)
+	bindJobToTask(t, jobID, testGenerationTaskUUID)
+	issueID := dbfx.Issue(t, "Refund rules")
+	point := createTestPoint(t, issueID, map[string]any{"title": "A refund returns spent points"})
+	existing := createTestCaseForTest(t, map[string]any{"project_id": projectID, "title": "Refund", "steps": executableSteps})
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM test_case_test_point WHERE test_case_id = $1`, existing.ID)
+		testPool.Exec(context.Background(), `DELETE FROM test_case_issue WHERE test_case_id = $1`, existing.ID)
+	})
+
+	if w := proposeRequest(t, jobID, testGenerationTaskUUID, []map[string]any{
+		{"kind": "update", "target": existing.Key, "case": map[string]any{"title": "Refund returns points", "steps": executableSteps,
+			"test_points": []string{issueIdentifier(t, issueID) + "/TP-1"}}},
+	}); w.Code != http.StatusCreated {
+		t.Fatalf("seed proposal: %s", w.Body.String())
+	}
+	var proposalID, storedRef string
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT id, payload->'test_points'->>0 FROM test_case_proposal WHERE target_case_id = $1`, existing.ID).Scan(&proposalID, &storedRef); err != nil {
+		t.Fatal(err)
+	}
+	if storedRef != point.ID {
+		t.Fatalf("stored point ref = %q, want the point's id %s", storedRef, point.ID)
+	}
+	w := httptest.NewRecorder()
+	testHandler.AcceptTestCaseProposal(w, withURLParam(newRequest("POST", "/api/test-case-proposals/"+proposalID+"/accept?workspace_id="+testWorkspaceID, nil), "id", proposalID))
+	if w.Code != http.StatusOK {
+		t.Fatalf("accept: %d %s", w.Code, w.Body.String())
+	}
+	var linked int
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT count(*) FROM test_case_test_point WHERE test_case_id = $1 AND test_point_id = $2`, existing.ID, point.ID).Scan(&linked); err != nil || linked != 1 {
+		t.Fatalf("point links after accept = %d (%v), want 1", linked, err)
+	}
+}

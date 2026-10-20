@@ -946,6 +946,12 @@ func (h *Handler) DeleteTestCase(w http.ResponseWriter, r *http.Request) {
 		h.writeTestCaseWriteError(w, r, err, "delete")
 		return
 	}
+	if err := qtx.DeleteTestCaseTestPointLinksForCase(r.Context(), db.DeleteTestCaseTestPointLinksForCaseParams{
+		TestCaseID: testCase.ID, WorkspaceID: testCase.WorkspaceID,
+	}); err != nil {
+		h.writeTestCaseWriteError(w, r, err, "delete")
+		return
+	}
 	if err := qtx.DeleteTestCase(r.Context(), db.DeleteTestCaseParams{
 		ID: testCase.ID, WorkspaceID: testCase.WorkspaceID,
 	}); err != nil {

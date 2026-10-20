@@ -342,6 +342,11 @@ import type {
   ListTestRunsResponse,
   ListTestRunCasesResponse,
   ListTestRunCaseEvidenceResponse,
+  ListIssueTestPointsResponse,
+  ListTestCaseTestPointsResponse,
+  TestPoint,
+  CreateTestPointRequest,
+  UpdateTestPointRequest,
   TestCaseResultTimelineResponse,
   ListTestCapabilitiesResponse,
   RuntimeCapabilityScanResponse,
@@ -693,6 +698,9 @@ import {
   ListTestRunsResponseSchema,
   ListTestRunCasesResponseSchema,
   ListTestRunCaseEvidenceResponseSchema,
+  ListIssueTestPointsResponseSchema,
+  ListTestCaseTestPointsResponseSchema,
+  TestPointSchema,
   TestCaseResultTimelineResponseSchema,
   ListTestCapabilitiesResponseSchema,
   ListTestCaseIssuesResponseSchema,
@@ -706,6 +714,9 @@ import {
   EMPTY_LIST_TEST_RUNS_RESPONSE,
   EMPTY_LIST_TEST_RUN_CASES_RESPONSE,
   EMPTY_LIST_TEST_RUN_CASE_EVIDENCE_RESPONSE,
+  EMPTY_LIST_ISSUE_TEST_POINTS_RESPONSE,
+  EMPTY_TEST_POINT,
+  EMPTY_LIST_TEST_CASE_TEST_POINTS_RESPONSE,
   EMPTY_TEST_CASE_RESULT_TIMELINE_RESPONSE,
   EMPTY_LIST_TEST_CAPABILITIES_RESPONSE,
   EMPTY_RUNTIME_CAPABILITY_SCAN_RESPONSE,
@@ -7050,6 +7061,62 @@ export class ApiClient {
     return parseWithFallback(raw, TestPlanStatsSchema, EMPTY_TEST_PLAN_STATS, {
       endpoint: "GET /api/test-plans/:id/stats",
     });
+  }
+
+  async listIssueTestPoints(issueId: string): Promise<ListIssueTestPointsResponse> {
+    const raw = await this.fetch<unknown>(`/api/issues/${encodeURIComponent(issueId)}/test-points`);
+    return parseWithFallback(raw, ListIssueTestPointsResponseSchema, EMPTY_LIST_ISSUE_TEST_POINTS_RESPONSE, {
+      endpoint: "GET /api/issues/:id/test-points",
+    });
+  }
+
+  async createIssueTestPoint(issueId: string, data: CreateTestPointRequest): Promise<TestPoint> {
+    const raw = await this.fetch<unknown>(`/api/issues/${encodeURIComponent(issueId)}/test-points`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, TestPointSchema, { ...EMPTY_TEST_POINT, issue_id: issueId }, {
+      endpoint: "POST /api/issues/:id/test-points",
+    });
+  }
+
+  async updateTestPoint(pointId: string, data: UpdateTestPointRequest): Promise<TestPoint> {
+    const raw = await this.fetch<unknown>(`/api/test-points/${encodeURIComponent(pointId)}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, TestPointSchema, { ...EMPTY_TEST_POINT, id: pointId }, {
+      endpoint: "PATCH /api/test-points/:id",
+    });
+  }
+
+  async deleteTestPoint(pointId: string): Promise<void> {
+    await this.fetch(`/api/test-points/${encodeURIComponent(pointId)}`, { method: "DELETE" });
+  }
+
+  async listTestCaseTestPoints(ref: string): Promise<ListTestCaseTestPointsResponse> {
+    const raw = await this.fetch<unknown>(`/api/test-cases/${encodeURIComponent(ref)}/test-points`);
+    return parseWithFallback(raw, ListTestCaseTestPointsResponseSchema, EMPTY_LIST_TEST_CASE_TEST_POINTS_RESPONSE, {
+      endpoint: "GET /api/test-cases/:ref/test-points",
+    });
+  }
+
+  /** Declare which test points a case verifies (ids or "<issue>/TP-<n>"). */
+  async linkTestCaseTestPoints(ref: string, testPoints: string[]): Promise<ListTestCaseTestPointsResponse> {
+    const raw = await this.fetch<unknown>(`/api/test-cases/${encodeURIComponent(ref)}/test-points`, {
+      method: "POST",
+      body: JSON.stringify({ test_points: testPoints }),
+    });
+    return parseWithFallback(raw, ListTestCaseTestPointsResponseSchema, EMPTY_LIST_TEST_CASE_TEST_POINTS_RESPONSE, {
+      endpoint: "POST /api/test-cases/:ref/test-points",
+    });
+  }
+
+  async unlinkTestCaseTestPoint(ref: string, pointId: string): Promise<void> {
+    await this.fetch(
+      `/api/test-cases/${encodeURIComponent(ref)}/test-points/${encodeURIComponent(pointId)}`,
+      { method: "DELETE" },
+    );
   }
 
   async listIssueTestCases(issueId: string): Promise<ListIssueTestCasesResponse> {

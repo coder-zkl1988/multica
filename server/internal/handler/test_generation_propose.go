@@ -41,6 +41,10 @@ type TestCaseProposalCasePayload struct {
 	BusinessRulesRef     []string              `json:"business_rules_ref"`
 	Repos                []TestCaseRepoPayload `json:"repos"`
 	SourceRefs           map[string]any        `json:"source_refs"`
+	// TestPoints are the requirement test points this case verifies, as ids
+	// or "<issue>/TP-<n>". They must belong to the run's issue scope; the
+	// server stores them as ids.
+	TestPoints []string `json:"test_points,omitempty"`
 }
 
 type TestCaseProposalItem struct {
@@ -115,7 +119,13 @@ func (h *Handler) ProposeTestCases(w http.ResponseWriter, r *http.Request) {
 		item   TestCaseProposalItem
 		target db.TestCase
 		repos  []db.CreateTestCaseRepoParams
+		points []db.IssueTestPoint
 	}
+	// A case may only claim test points of the requirements this run was
+	// scoped to; an empty scope leaves every accessible issue open.
+	scopeIssueRefs := h.testGenerationScopeIssueRefs(r, job, wsUUID)
+	scopeIssues := h.resolveScopeIssues(r, wsUUID, scopeIssueRefs)
+	newWithoutPoints := 0
 	resolved := make([]resolvedItem, 0, len(req.Items))
 	for i, item := range req.Items {
 		prefix := fmt.Sprintf("items[%d]: ", i)
@@ -161,6 +171,25 @@ func (h *Handler) ProposeTestCases(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			entry.repos = repos
+			if len(item.Case.TestPoints) > 0 {
+				points, problem := h.resolveTestPointRefs(r, wsUUID, uuidToString(wsUUID), item.Case.TestPoints, scopeIssues)
+				if problem != "" {
+					writeError(w, http.StatusBadRequest, prefix+"case."+problem)
+					return
+				}
+				entry.points = points
+				// Stored as ids: a queued proposal must still name the same
+				// points when someone accepts it later.
+				ids := make([]string, len(points))
+				for j, point := range points {
+					ids[j] = uuidToString(point.ID)
+				}
+				caseCopy := *item.Case
+				caseCopy.TestPoints = ids
+				entry.item.Case = &caseCopy
+			} else if item.Kind == "new" && len(scopeIssueRefs) > 0 {
+				newWithoutPoints++
+			}
 		}
 		resolved = append(resolved, entry)
 	}
@@ -188,6 +217,10 @@ func (h *Handler) ProposeTestCases(w http.ResponseWriter, r *http.Request) {
 				h.writeTestGenerationWriteError(w, r, createErr, "create")
 				return
 			}
+			if err := linkCaseToTestPoints(r, qtx, created.ID, wsUUID, entry.points, "ai", job.CreatedBy); err != nil {
+				h.writeTestGenerationWriteError(w, r, err, "create")
+				return
+			}
 			stats["new"]++
 			createdCases = append(createdCases, testCaseToResponse(created, repos))
 
@@ -199,6 +232,10 @@ func (h *Handler) ProposeTestCases(w http.ResponseWriter, r *http.Request) {
 				updated, repos, updateErr := h.rewriteDraftTestCase(r, qtx, wsUUID, entry.target, entry.item.Case, entry.repos)
 				if updateErr != nil {
 					h.writeTestGenerationWriteError(w, r, updateErr, "update")
+					return
+				}
+				if err := linkCaseToTestPoints(r, qtx, updated.ID, wsUUID, entry.points, "ai", job.CreatedBy); err != nil {
+					h.writeTestGenerationWriteError(w, r, err, "update")
 					return
 				}
 				stats["updated"]++
@@ -281,7 +318,31 @@ func (h *Handler) ProposeTestCases(w http.ResponseWriter, r *http.Request) {
 		"stats":      stats,
 		"test_cases": createdCases,
 		"proposals":  createdProposals,
+		// New cases written under an issue scope that name no test point:
+		// coverage cannot count them toward any condition of the requirement.
+		"new_cases_without_test_points": newWithoutPoints,
 	})
+}
+
+// resolveScopeIssues turns a run's issue scope into the set of issues its
+// cases may claim test points of. nil means the scope is empty and any
+// accessible issue is allowed; an entry that resolves to nothing is skipped,
+// as linkGeneratedCaseIssues does.
+func (h *Handler) resolveScopeIssues(r *http.Request, wsUUID pgtype.UUID, refs []string) map[pgtype.UUID]struct{} {
+	if len(refs) == 0 {
+		return nil
+	}
+	out := make(map[pgtype.UUID]struct{}, len(refs))
+	for _, raw := range refs {
+		ref := strings.TrimSpace(raw)
+		if ref == "" {
+			continue
+		}
+		if issueUUID, ok := h.resolveGeneratedIssueRef(r, wsUUID, uuidToString(wsUUID), ref); ok {
+			out[issueUUID] = struct{}{}
+		}
+	}
+	return out
 }
 
 func mergeProposalStats(previous map[string]any, delta map[string]int) map[string]any {
@@ -655,6 +716,7 @@ func (h *Handler) reviewTestCaseProposal(w http.ResponseWriter, r *http.Request,
 		}
 
 		params := db.UpdateTestCaseParams{ID: current.ID, WorkspaceID: wsUUID, UpdatedBy: userUUID}
+		var proposedPoints []string
 		if proposal.Kind == "obsolete" {
 			params.Status = pgtype.Text{String: "deprecated", Valid: true}
 		} else {
@@ -672,6 +734,7 @@ func (h *Handler) reviewTestCaseProposal(w http.ResponseWriter, r *http.Request,
 					return
 				}
 			}
+			proposedPoints = payload.TestPoints
 			priority, caseType, scope, executionMode := proposalCaseDefaults(&payload)
 			params.Title = pgtype.Text{String: strings.TrimSpace(payload.Title), Valid: true}
 			params.Module = pgtype.Text{String: payload.Module, Valid: true}
@@ -689,6 +752,24 @@ func (h *Handler) reviewTestCaseProposal(w http.ResponseWriter, r *http.Request,
 		applied, updateErr := qtx.UpdateTestCase(r.Context(), params)
 		if updateErr != nil {
 			h.writeTestGenerationWriteError(w, r, updateErr, "update")
+			return
+		}
+		// The points the run said this revision verifies. One dropped or
+		// deleted since the proposal was queued is no longer a condition of
+		// its requirement, so it is skipped rather than failing the accept.
+		var stillLive []db.IssueTestPoint
+		for _, ref := range proposedPoints {
+			id, parseErr := util.ParseUUID(ref)
+			if parseErr != nil {
+				continue
+			}
+			point, getErr := qtx.GetIssueTestPointInWorkspace(r.Context(), db.GetIssueTestPointInWorkspaceParams{ID: id, WorkspaceID: wsUUID})
+			if getErr == nil && point.Status == "active" {
+				stillLive = append(stillLive, point)
+			}
+		}
+		if err := linkCaseToTestPoints(r, qtx, applied.ID, wsUUID, stillLive, "ai", userUUID); err != nil {
+			h.writeTestGenerationWriteError(w, r, err, "update")
 			return
 		}
 		repos, reposErr := qtx.ListTestCaseRepos(r.Context(), applied.ID)

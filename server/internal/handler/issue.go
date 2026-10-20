@@ -4752,6 +4752,17 @@ func (h *Handler) deleteIssuesAndCollectAttachmentURLs(ctx context.Context, issu
 		}); err != nil {
 			return issueDeleteResult{}, fmt.Errorf("delete test coverage links: %w", err)
 		}
+		// Its test points go with it, and the case links to those points first.
+		if err := qtx.DeleteTestCaseTestPointLinksForIssue(ctx, db.DeleteTestCaseTestPointLinksForIssueParams{
+			IssueID: issue.ID, WorkspaceID: issue.WorkspaceID,
+		}); err != nil {
+			return issueDeleteResult{}, fmt.Errorf("delete test point links: %w", err)
+		}
+		if err := qtx.DeleteIssueTestPointsForIssue(ctx, db.DeleteIssueTestPointsForIssueParams{
+			IssueID: issue.ID, WorkspaceID: issue.WorkspaceID,
+		}); err != nil {
+			return issueDeleteResult{}, fmt.Errorf("delete test points: %w", err)
+		}
 		if err := qtx.DeleteIssue(ctx, db.DeleteIssueParams{ID: issue.ID, WorkspaceID: issue.WorkspaceID}); err != nil {
 			return issueDeleteResult{}, fmt.Errorf("delete issue: %w", err)
 		}

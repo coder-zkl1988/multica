@@ -523,7 +523,7 @@
     "failingCount": "실패 {{count}}건",
     "untestedCount": "미실행 {{count}}건",
     "verified": "검증됨",
-    "verifiedHint": "연결된 모든 케이스가 최근 실행에서 통과했습니다",
+    "verifiedHint": "모든 테스트 포인트가 최근 실행에서 통과한 케이스로 커버됩니다",
     "latestRun": "최근 라운드",
     "defectsSection": "테스트로 발견한 결함",
     "foundBySection": "발견한 테스트 실행",
@@ -532,6 +532,41 @@
     "newCaseTitle": "검증: {{title}}",
     "noCoverage": "아직 테스트 커버리지가 없습니다",
     "generateFailed": "케이스 생성을 시작하지 못했습니다",
-    "newCaseFailed": "케이스를 만들지 못했습니다"
+    "newCaseFailed": "케이스를 만들지 못했습니다",
+    "points": {
+      "section": "테스트 포인트",
+      "summary": "커버 {{covered}}/{{active}} · 통과 {{passed}}",
+      "hint": "이 태스크가 수용되는 조건입니다. 커버리지와 검증은 이 단위로 집계합니다.",
+      "add": "포인트 추가",
+      "addPlaceholder": "단독으로 옳고 그름을 판정할 수 있는 조건. 예: 잔액을 초과하는 주문은 메시지와 함께 거부된다",
+      "addFailed": "테스트 포인트를 추가하지 못했습니다",
+      "empty": "아직 테스트 포인트가 없습니다. 태스크를 수용 조건으로 나누세요. 그렇지 않으면 정상 경로 케이스 하나만 통과해도 검증된 것처럼 보입니다.",
+      "drop": "폐기",
+      "restore": "복원",
+      "updateFailed": "테스트 포인트를 업데이트하지 못했습니다",
+      "cover": "커버할 케이스…",
+      "coverFailed": "케이스를 테스트 포인트에 연결하지 못했습니다",
+      "droppedCount": "폐기 {{count}}개",
+      "category": {
+        "positive": "정상 경로",
+        "negative": "예외",
+        "boundary": "경계값",
+        "permission": "권한",
+        "state": "상태",
+        "data": "데이터 정합성",
+        "non_functional": "비기능"
+      },
+      "state": {
+        "uncovered": "미커버",
+        "not_run": "미실행",
+        "failing": "실패",
+        "passed": "통과",
+        "dropped": "폐기됨"
+      },
+      "caseSection": "검증하는 테스트 포인트",
+      "caseEmpty": "아직 어떤 테스트 포인트도 선언하지 않았습니다"
+    },
+    "casesPass": "케이스 통과",
+    "casesPassHint": "연결된 케이스는 모두 통과했지만 테스트 포인트가 없어 무엇을 확인해야 하는지 아무도 정하지 않았습니다"
   }
 }

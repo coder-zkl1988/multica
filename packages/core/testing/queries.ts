@@ -207,6 +207,23 @@ export function issueTestCasesOptions(wsId: string, issueId: string) {
   });
 }
 
+export function issueTestPointsOptions(wsId: string, issueId: string) {
+  return queryOptions({
+    queryKey: issueTestCaseKeys.testPoints(wsId, issueId),
+    queryFn: () => api.listIssueTestPoints(issueId),
+    enabled: issueId.length > 0,
+  });
+}
+
+export function testCaseTestPointsOptions(wsId: string, ref: string) {
+  return queryOptions({
+    queryKey: testCaseKeys.testPoints(wsId, ref),
+    queryFn: () => api.listTestCaseTestPoints(ref),
+    select: (data) => data.test_points,
+    enabled: ref.length > 0,
+  });
+}
+
 export function issueTestSummaryOptions(wsId: string, issueId: string) {
   return queryOptions({
     queryKey: [...issueTestCaseKeys.forIssue(wsId, issueId), "summary"] as const,

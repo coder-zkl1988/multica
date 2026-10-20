@@ -524,7 +524,7 @@
     "failingCount": "{{count}} failing",
     "untestedCount": "{{count}} not run",
     "verified": "Verified",
-    "verifiedHint": "Every covering case passed in its latest run",
+    "verifiedHint": "Every test point is covered by a case that passed in its latest run",
     "latestRun": "Latest round",
     "defectsSection": "Defects found by tests",
     "foundBySection": "Found by test run",
@@ -533,6 +533,41 @@
     "newCaseTitle": "Verify: {{title}}",
     "noCoverage": "No test coverage yet",
     "generateFailed": "Could not start case generation",
-    "newCaseFailed": "Could not create the case"
+    "newCaseFailed": "Could not create the case",
+    "points": {
+      "section": "Test points",
+      "summary": "{{covered}}/{{active}} covered · {{passed}} passed",
+      "hint": "The conditions this issue is accepted on. Coverage and verification are counted against them.",
+      "add": "Add point",
+      "addPlaceholder": "One condition that can be judged right or wrong, e.g. an order over the balance is refused",
+      "addFailed": "Could not add the test point",
+      "empty": "No test points yet. Split the issue into the conditions it is accepted on — otherwise one passing happy-path case is enough to look verified.",
+      "drop": "Drop",
+      "restore": "Restore",
+      "updateFailed": "Could not update the test point",
+      "cover": "Cover with…",
+      "coverFailed": "Could not link the case to the test point",
+      "droppedCount": "{{count}} dropped",
+      "category": {
+        "positive": "Positive",
+        "negative": "Negative",
+        "boundary": "Boundary",
+        "permission": "Permission",
+        "state": "State",
+        "data": "Data",
+        "non_functional": "Non-functional"
+      },
+      "state": {
+        "uncovered": "Uncovered",
+        "not_run": "Not run",
+        "failing": "Failing",
+        "passed": "Passed",
+        "dropped": "Dropped"
+      },
+      "caseSection": "Verifies",
+      "caseEmpty": "Not declared against any test point yet"
+    },
+    "casesPass": "Cases pass",
+    "casesPassHint": "Every linked case passed, but this issue has no test points, so nobody listed what must be checked"
   }
 }

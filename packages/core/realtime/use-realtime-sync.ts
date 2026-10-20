@@ -12,7 +12,7 @@ import { defaultStorage } from "../platform/storage";
 import { getCurrentWsId, getCurrentSlug } from "../platform/workspace-storage";
 import { issueKeys } from "../issues/queries";
 import { projectKeys } from "../projects/queries";
-import { testCaseKeys, testGenerationJobKeys, testPlanKeys, testRunKeys, testCapabilityKeys } from "../testing/keys";
+import { issueTestCaseKeys, testCaseKeys, testGenerationJobKeys, testPlanKeys, testRunKeys, testCapabilityKeys } from "../testing/keys";
 import { designKeys } from "../designs/keys";
 import { pinKeys } from "../pins/queries";
 import { autopilotKeys } from "../autopilots/queries";
@@ -854,8 +854,13 @@ export function useRealtimeSync(
         if (wsId) qc.invalidateQueries({ queryKey: projectKeys.all(wsId) });
       },
       test_case: () => {
+        // Coverage links and test points change what an issue's test block
+        // shows, and that block is keyed under the issue, not the case tree.
         const wsId = getCurrentWsId();
-        if (wsId) qc.invalidateQueries({ queryKey: testCaseKeys.all(wsId) });
+        if (wsId) {
+          qc.invalidateQueries({ queryKey: testCaseKeys.all(wsId) });
+          qc.invalidateQueries({ queryKey: issueTestCaseKeys.all(wsId) });
+        }
       },
       test_generation_job: () => {
         const wsId = getCurrentWsId();
@@ -885,6 +890,8 @@ export function useRealtimeSync(
         if (wsId) {
           qc.invalidateQueries({ queryKey: testRunKeys.all(wsId) });
           qc.invalidateQueries({ queryKey: testCaseKeys.all(wsId) });
+          // A recorded result moves an issue's points between passed and failing.
+          qc.invalidateQueries({ queryKey: issueTestCaseKeys.all(wsId) });
         }
       },
       test_capability: () => {

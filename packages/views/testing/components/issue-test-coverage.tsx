@@ -3,13 +3,14 @@
 import { useState } from "react";
 import { toast } from "sonner";
 import { useQuery } from "@tanstack/react-query";
-import { BadgeCheck, FilePlus2, Sparkles } from "lucide-react";
+import { BadgeCheck, FilePlus2, ListChecks, Sparkles } from "lucide-react";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
 import {
   TEST_RUN_RESULTS,
   TEST_RUN_RESULT_TONE,
   issueTestCasesOptions,
+  issueTestPointsOptions,
   issueTestSummaryOptions,
   useCreateTestCase,
   useCreateTestGenerationJob,
@@ -20,12 +21,14 @@ import { Button } from "@multica/ui/components/ui/button";
 import { AppLink, useNavigation } from "../../navigation";
 import { useT } from "../../i18n";
 import { knownEnumKey } from "../case-summary";
+import { IssueTestPoints } from "./issue-test-points";
 
 /**
  * The requirement loop on a task card (09-02 §8): the cases covering this
- * issue with their latest outcome, the latest round that executed them, a
- * "verified" badge when every covering case passed (a badge only — the issue
- * status stays a person's decision), the defects those rounds opened, and,
+ * issue with their latest outcome, the latest round that executed them, the
+ * test points the issue is accepted on with where each stands, a "verified"
+ * badge when every point is covered by a passing case (a badge only — the
+ * issue status stays a person's decision), the defects those rounds opened, and,
  * when the issue itself is a defect, the round and case that found it. The
  * two entry points — generate cases for this issue, or start one by hand
  * already linked — live here because the requirement page is where the gap
@@ -50,14 +53,19 @@ export function IssueTestCoverage({
 
   const { data: cases = [] } = useQuery(issueTestCasesOptions(wsId, issueId));
   const { data: summary } = useQuery(issueTestSummaryOptions(wsId, issueId));
+  const { data: points } = useQuery(issueTestPointsOptions(wsId, issueId));
   const createJob = useCreateTestGenerationJob();
   const createCase = useCreateTestCase();
   const linkIssues = useLinkTestCaseIssues();
   const [busy, setBusy] = useState<"generate" | "new" | null>(null);
+  // An issue with nothing yet shows one line; adding the first test point
+  // opens the full block, because splitting the requirement comes first.
+  const [pointsOpen, setPointsOpen] = useState(false);
 
   const defects = summary?.defects ?? [];
   const foundBy = summary?.found_by ?? [];
-  const hasContext = cases.length > 0 || defects.length > 0 || foundBy.length > 0;
+  const hasPoints = (points?.test_points.length ?? 0) > 0;
+  const hasContext = cases.length > 0 || defects.length > 0 || foundBy.length > 0 || hasPoints;
   const canCreate = typeof projectId === "string" && projectId.length > 0;
 
   if (!hasContext && !canCreate) return null;
@@ -117,10 +125,21 @@ export function IssueTestCoverage({
         <FilePlus2 className="h-3 w-3" />
         {t(($) => $.coverage.newCase)}
       </Button>
+      {!hasContext && !pointsOpen ? (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-6 gap-1 px-1.5 text-caption"
+          onClick={() => setPointsOpen(true)}
+        >
+          <ListChecks className="h-3 w-3" />
+          {t(($) => $.coverage.points.add)}
+        </Button>
+      ) : null}
     </span>
   ) : null;
 
-  if (!hasContext) {
+  if (!hasContext && !pointsOpen) {
     return (
       <div className="flex items-center gap-2 px-2 py-1 text-caption text-muted-foreground">
         <span>{t(($) => $.coverage.noCoverage)}</span>
@@ -137,13 +156,24 @@ export function IssueTestCoverage({
         <div className="mb-2 flex items-center gap-2 px-2 py-1 text-caption font-medium">
           <span>{t(($) => $.coverage.issueSection)}</span>
           <span className="text-muted-foreground tabular-nums">{cases.length}</span>
-          {summary?.verified === true ? (
+          {/* Verified is only as strong as what it was decided on: with test
+              points it means every condition passed; without, only that the
+              linked cases did — which says nothing about what was never
+              listed, so it does not get the same badge. */}
+          {summary?.verified === true && summary.basis === "test_points" ? (
             <span
               className="inline-flex items-center gap-1 rounded-sm bg-success/15 px-1.5 text-micro font-medium text-success"
               title={t(($) => $.coverage.verifiedHint)}
             >
               <BadgeCheck className="h-3 w-3" />
               {t(($) => $.coverage.verified)}
+            </span>
+          ) : summary?.verified === true ? (
+            <span
+              className="inline-flex items-center gap-1 rounded-sm bg-muted px-1.5 text-micro font-medium text-muted-foreground"
+              title={t(($) => $.coverage.casesPassHint)}
+            >
+              {t(($) => $.coverage.casesPass)}
             </span>
           ) : null}
           {/* Two numbers earn their place next to the count: a failing case is
@@ -165,6 +195,10 @@ export function IssueTestCoverage({
 
       {summary?.latest_run ? (
         <LatestRunLine run={summary.latest_run} href={paths.testRunDetail(summary.latest_run.id)} />
+      ) : null}
+
+      {hasPoints || canCreate ? (
+        <IssueTestPoints issueId={issueId} data={points} linkedCases={cases} startAdding={pointsOpen && !hasPoints} />
       ) : null}
 
       {cases.length > 0 ? (

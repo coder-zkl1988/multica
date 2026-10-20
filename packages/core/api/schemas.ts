@@ -11,6 +11,9 @@ import type {
   AgentBuilderSessionSummary,
   Attachment,
   ListTestRunCaseEvidenceResponse,
+  ListIssueTestPointsResponse,
+  ListTestCaseTestPointsResponse,
+  TestPoint,
   AutopilotRun,
   BillingBalance,
   BillingBatchesPage,
@@ -5730,10 +5733,99 @@ export const IssueFoundBySchema = z.object({
   executed_at: z.string().nullable().default(null),
 }).loose();
 
+const TestPointFieldsSchema = {
+  id: z.string().default(""),
+  issue_id: z.string().default(""),
+  number: z.number().default(0),
+  key: z.string().default(""),
+  title: z.string().default(""),
+  description: z.string().default(""),
+  category: z.string().default("positive"),
+  origin: z.string().default("human"),
+  status: z.string().default("active"),
+  created_by_type: z.string().default("member"),
+  created_at: z.string().default(""),
+  updated_at: z.string().default(""),
+};
+
+export const TestPointSchema = z.object(TestPointFieldsSchema).loose();
+
+export const EMPTY_TEST_POINT: TestPoint = {
+  id: "",
+  issue_id: "",
+  number: 0,
+  key: "",
+  title: "",
+  description: "",
+  category: "positive",
+  origin: "human",
+  status: "active",
+  created_by_type: "member",
+  created_at: "",
+  updated_at: "",
+};
+
+const TestPointCaseSchema = z.object({
+  test_case_id: z.string().default(""),
+  case_key: z.string().default(""),
+  case_title: z.string().default(""),
+  case_status: z.string().default(""),
+  case_priority: z.string().default(""),
+  case_type: z.string().default(""),
+  latest_result: z.string().nullable().default(null),
+  origin: z.string().default("human"),
+}).loose();
+
+const TestPointSummarySchema = z.object({
+  active: z.number().default(0),
+  covered: z.number().default(0),
+  passed: z.number().default(0),
+  failing: z.number().default(0),
+}).loose();
+
+const EMPTY_TEST_POINT_SUMMARY = { active: 0, covered: 0, passed: 0, failing: 0 };
+
+export const ListIssueTestPointsResponseSchema = z.object({
+  test_points: z.array(z.object({
+    ...TestPointFieldsSchema,
+    cases: z.array(TestPointCaseSchema).default([]),
+    // A backend that cannot say must not claim coverage.
+    covered: z.boolean().default(false),
+    passed: z.boolean().default(false),
+    state: z.string().default("uncovered"),
+  }).loose()).default([]),
+  summary: TestPointSummarySchema.default(EMPTY_TEST_POINT_SUMMARY),
+}).loose();
+
+export const EMPTY_LIST_ISSUE_TEST_POINTS_RESPONSE: ListIssueTestPointsResponse = {
+  test_points: [],
+  summary: { ...EMPTY_TEST_POINT_SUMMARY },
+};
+
+export const ListTestCaseTestPointsResponseSchema = z.object({
+  test_points: z.array(z.object({
+    ...TestPointFieldsSchema,
+    issue_number: z.number().default(0),
+    issue_identifier: z.string().default(""),
+    issue_title: z.string().default(""),
+    link_origin: z.string().default("human"),
+  }).loose()).default([]),
+  total: z.number().default(0),
+}).loose();
+
+export const EMPTY_LIST_TEST_CASE_TEST_POINTS_RESPONSE: ListTestCaseTestPointsResponse = {
+  test_points: [],
+  total: 0,
+};
+
 export const IssueTestSummarySchema = z.object({
   cases: z.number().default(0),
   // A backend that cannot say must not claim verification.
   verified: z.boolean().default(false),
+  // A server older than test points sends no basis; its verified flag was
+  // decided on the linked cases alone.
+  basis: z.string().default("cases_only"),
+  test_points: TestPointSummarySchema.default(EMPTY_TEST_POINT_SUMMARY),
   latest_run: IssueTestRunSummarySchema.nullable().default(null),
   defects: z.array(IssueTestDefectSchema).default([]),
   found_by: z.array(IssueFoundBySchema).default([]),
@@ -5879,6 +5971,8 @@ export const EMPTY_LIST_TEST_CASE_ISSUES_RESPONSE: ListTestCaseIssuesResponse = 
 export const EMPTY_ISSUE_TEST_SUMMARY: IssueTestSummary = {
   cases: 0,
   verified: false,
+  basis: "none",
+  test_points: { active: 0, covered: 0, passed: 0, failing: 0 },
   latest_run: null,
   defects: [],
   found_by: [],

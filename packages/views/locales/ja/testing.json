@@ -523,7 +523,7 @@
     "failingCount": "失敗 {{count}} 件",
     "untestedCount": "未実行 {{count}} 件",
     "verified": "検証済み",
-    "verifiedHint": "関連するすべてのケースが最新の実行で合格しました",
+    "verifiedHint": "すべてのテストポイントが、直近の実行で合格したケースでカバーされています",
     "latestRun": "最新ラウンド",
     "defectsSection": "テストで見つかった不具合",
     "foundBySection": "発見したテスト実行",
@@ -532,6 +532,41 @@
     "newCaseTitle": "検証：{{title}}",
     "noCoverage": "テストカバレッジはまだありません",
     "generateFailed": "ケース生成を開始できませんでした",
-    "newCaseFailed": "ケースを作成できませんでした"
+    "newCaseFailed": "ケースを作成できませんでした",
+    "points": {
+      "section": "テストポイント",
+      "summary": "カバー {{covered}}/{{active}} · 合格 {{passed}}",
+      "hint": "このタスクが受け入れられる条件です。カバレッジと検証はこの単位で数えます。",
+      "add": "ポイントを追加",
+      "addPlaceholder": "単独で正誤を判定できる条件。例：残高を超える注文はメッセージ付きで拒否される",
+      "addFailed": "テストポイントを追加できませんでした",
+      "empty": "テストポイントがまだありません。タスクを受け入れ条件に分解してください。そうしないと、正常系のケースが 1 件合格しただけで検証済みに見えます。",
+      "drop": "廃止",
+      "restore": "復元",
+      "updateFailed": "テストポイントを更新できませんでした",
+      "cover": "カバーするケース…",
+      "coverFailed": "ケースをテストポイントにリンクできませんでした",
+      "droppedCount": "廃止 {{count}} 件",
+      "category": {
+        "positive": "正常系",
+        "negative": "異常系",
+        "boundary": "境界値",
+        "permission": "権限",
+        "state": "状態",
+        "data": "データ整合性",
+        "non_functional": "非機能"
+      },
+      "state": {
+        "uncovered": "未カバー",
+        "not_run": "未実行",
+        "failing": "失敗",
+        "passed": "合格",
+        "dropped": "廃止"
+      },
+      "caseSection": "検証するテストポイント",
+      "caseEmpty": "まだどのテストポイントも宣言していません"
+    },
+    "casesPass": "ケース合格",
+    "casesPassHint": "リンクされたケースはすべて合格しましたが、テストポイントがないため、何を確認すべきかは誰も挙げていません"
   }
 }

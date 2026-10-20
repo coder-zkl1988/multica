@@ -31,6 +31,8 @@ import type {
   DispatchTestRunRequest,
   UpdateTestRunCaseResultRequest,
   OpenTestRunCaseDefectRequest,
+  CreateTestPointRequest,
+  UpdateTestPointRequest,
 } from "../types";
 
 /**
@@ -643,6 +645,72 @@ export function useUnlinkTestCaseIssue() {
     onSettled: (_data, _error, { ref, issueId }) => {
       qc.invalidateQueries({ queryKey: testCaseKeys.issues(wsId, ref) });
       qc.invalidateQueries({ queryKey: issueTestCaseKeys.forIssue(wsId, issueId) });
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Test points — the conditions a requirement is accepted on
+// ---------------------------------------------------------------------------
+
+/**
+ * Add a test point to an issue. Not optimistic: the server allocates TP-<n>,
+ * and the point's coverage state is computed from links the client does not
+ * hold. Invalidating the issue's tree refreshes the points and the summary
+ * whose `verified` they decide.
+ */
+export function useCreateIssueTestPoint(issueId: string) {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: (data: CreateTestPointRequest) => api.createIssueTestPoint(issueId, data),
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: issueTestCaseKeys.forIssue(wsId, issueId) });
+    },
+  });
+}
+
+/** Edit, drop or restore a point of `issueId`. */
+export function useUpdateTestPoint(issueId: string) {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: ({ pointId, data }: { pointId: string; data: UpdateTestPointRequest }) =>
+      api.updateTestPoint(pointId, data),
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: issueTestCaseKeys.forIssue(wsId, issueId) });
+      qc.invalidateQueries({ queryKey: testCaseKeys.all(wsId) });
+    },
+  });
+}
+
+/**
+ * Declare that a case verifies some points. Covering a point also links the
+ * case to its issue, so both sides of the issue coverage go stale.
+ */
+export function useLinkTestCaseTestPoints(issueId: string) {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: ({ ref, testPoints }: { ref: string; testPoints: string[] }) =>
+      api.linkTestCaseTestPoints(ref, testPoints),
+    onSettled: (_data, _error, { ref }) => {
+      qc.invalidateQueries({ queryKey: issueTestCaseKeys.forIssue(wsId, issueId) });
+      qc.invalidateQueries({ queryKey: testCaseKeys.testPoints(wsId, ref) });
+      qc.invalidateQueries({ queryKey: testCaseKeys.issues(wsId, ref) });
+    },
+  });
+}
+
+export function useUnlinkTestCaseTestPoint(issueId: string) {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: ({ ref, pointId }: { ref: string; pointId: string }) =>
+      api.unlinkTestCaseTestPoint(ref, pointId),
+    onSettled: (_data, _error, { ref }) => {
+      qc.invalidateQueries({ queryKey: issueTestCaseKeys.forIssue(wsId, issueId) });
+      qc.invalidateQueries({ queryKey: testCaseKeys.testPoints(wsId, ref) });
     },
   });
 }

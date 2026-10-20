@@ -524,7 +524,7 @@
     "failingCount": "{{count}} en échec",
     "untestedCount": "{{count}} non exécutés",
     "verified": "Vérifié",
-    "verifiedHint": "Tous les cas couvrants ont réussi lors de leur dernière série",
+    "verifiedHint": "Chaque point de test est couvert par un cas réussi lors de sa dernière exécution",
     "latestRun": "Dernière série",
     "defectsSection": "Anomalies trouvées par les tests",
     "foundBySection": "Trouvée par une série de tests",
@@ -533,6 +533,41 @@
     "newCaseTitle": "Vérifier : {{title}}",
     "noCoverage": "Aucune couverture de test",
     "generateFailed": "Impossible de démarrer la génération de cas",
-    "newCaseFailed": "Impossible de créer le cas"
+    "newCaseFailed": "Impossible de créer le cas",
+    "points": {
+      "section": "Points de test",
+      "summary": "{{covered}}/{{active}} couverts · {{passed}} réussis",
+      "hint": "Les conditions d'acceptation de cette tâche. La couverture et la vérification se comptent par point.",
+      "add": "Ajouter un point",
+      "addPlaceholder": "Une condition jugeable seule, p. ex. une commande au-delà du solde est refusée avec un message",
+      "addFailed": "Impossible d'ajouter le point de test",
+      "empty": "Aucun point de test. Découpez la tâche en conditions d'acceptation — sinon un seul cas nominal réussi suffit à paraître vérifié.",
+      "drop": "Abandonner",
+      "restore": "Restaurer",
+      "updateFailed": "Impossible de mettre à jour le point de test",
+      "cover": "Couvrir avec…",
+      "coverFailed": "Impossible de lier le cas au point de test",
+      "droppedCount": "{{count}} abandonné(s)",
+      "category": {
+        "positive": "Nominal",
+        "negative": "Négatif",
+        "boundary": "Limite",
+        "permission": "Permission",
+        "state": "État",
+        "data": "Données",
+        "non_functional": "Non fonctionnel"
+      },
+      "state": {
+        "uncovered": "Non couvert",
+        "not_run": "Non exécuté",
+        "failing": "En échec",
+        "passed": "Réussi",
+        "dropped": "Abandonné"
+      },
+      "caseSection": "Vérifie",
+      "caseEmpty": "Aucun point de test déclaré"
+    },
+    "casesPass": "Cas réussis",
+    "casesPassHint": "Tous les cas liés ont réussi, mais cette tâche n'a aucun point de test : personne n'a listé ce qui doit être vérifié"
   }
 }

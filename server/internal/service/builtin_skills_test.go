@@ -941,8 +941,12 @@ func TestTestCasesSkillCoversTheDataContract(t *testing.T) {
 		// An active case is executable: every step has an action and an expected result.
 		"An `active` case must be executable",
 		"a round skips `deprecated`",
-		// Verification counts live coverage only.
-		"only through its `active` linked cases",
+		// Coverage is counted per test point; verified depends on the basis.
+		"multica testcase point add --issue",
+		"multica testcase cover TC-42",
+		"`test_points`",
+		"| `cases_only` |",
+		"Only `active` cases count.",
 		// Multi-repo semantics are the reason roles exist at all.
 		"under_test",
 		"driver",

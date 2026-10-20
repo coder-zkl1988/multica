@@ -676,10 +676,109 @@ export interface IssueFoundBy {
   executed_at: string | null;
 }
 
+// ---------------------------------------------------------------------------
+// Test points — the conditions a requirement is accepted on
+// ---------------------------------------------------------------------------
+
+export type TestPointCategory =
+  | "positive"
+  | "negative"
+  | "boundary"
+  | "permission"
+  | "state"
+  | "data"
+  | "non_functional";
+export type TestPointStatus = "active" | "dropped";
+/** Where a point stands; server-driven, so unknown values must still render. */
+export type TestPointState = "uncovered" | "not_run" | "failing" | "passed" | "dropped";
+
+export interface TestPoint {
+  id: string;
+  issue_id: string;
+  number: number;
+  /** TP-<n> inside its issue. */
+  key: string;
+  title: string;
+  description: string;
+  category: TestPointCategory | (string & {});
+  origin: TestCaseOrigin | (string & {});
+  status: TestPointStatus | (string & {});
+  created_by_type: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TestPointCase {
+  test_case_id: string;
+  case_key: string;
+  case_title: string;
+  case_status: string;
+  case_priority: string;
+  case_type: string;
+  /** null when the case never ran. */
+  latest_result: string | null;
+  origin: string;
+}
+
+export interface TestPointCoverage extends TestPoint {
+  cases: TestPointCase[];
+  covered: boolean;
+  passed: boolean;
+  state: TestPointState | (string & {});
+}
+
+export interface TestPointSummary {
+  active: number;
+  covered: number;
+  passed: number;
+  failing: number;
+}
+
+/** GET /api/issues/{id}/test-points */
+export interface ListIssueTestPointsResponse {
+  test_points: TestPointCoverage[];
+  summary: TestPointSummary;
+}
+
+export interface TestPointForCase extends TestPoint {
+  issue_number: number;
+  issue_identifier: string;
+  issue_title: string;
+  link_origin: string;
+}
+
+/** GET /api/test-cases/{ref}/test-points */
+export interface ListTestCaseTestPointsResponse {
+  test_points: TestPointForCase[];
+  total: number;
+}
+
+export interface CreateTestPointRequest {
+  title: string;
+  description?: string;
+  category?: TestPointCategory;
+}
+
+export interface UpdateTestPointRequest {
+  title?: string;
+  description?: string;
+  category?: TestPointCategory;
+  status?: TestPointStatus;
+}
+
+/**
+ * What `verified` was decided on: every active test point covered and passing
+ * (`test_points`), only the linked cases because no point was listed
+ * (`cases_only` — a weaker claim), or nothing covers the issue (`none`).
+ */
+export type IssueTestVerificationBasis = "test_points" | "cases_only" | "none";
+
 export interface IssueTestSummary {
   cases: number;
-  /** Every covering case's latest recorded result is passed (and there is at least one). */
+  /** Decided on `basis`; see IssueTestVerificationBasis. */
   verified: boolean;
+  basis: IssueTestVerificationBasis | (string & {});
+  test_points: TestPointSummary;
   latest_run: IssueTestRunSummary | null;
   /** Defects opened by rounds that executed a covering case, newest first. */
   defects: IssueTestDefect[];

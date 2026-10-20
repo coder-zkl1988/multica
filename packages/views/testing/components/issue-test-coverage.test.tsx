@@ -11,6 +11,10 @@ import { IssueTestCoverage } from "./issue-test-coverage";
 const mocks = vi.hoisted(() => ({
   cases: [] as unknown[],
   summary: null as unknown,
+  points: undefined as unknown,
+  createPoint: vi.fn(),
+  updatePoint: vi.fn(),
+  linkPoints: vi.fn(),
   createJob: vi.fn(),
   createCase: vi.fn(),
   linkIssues: vi.fn(),
@@ -21,7 +25,9 @@ vi.mock("@tanstack/react-query", () => ({
   useQuery: (opts: { queryKey: readonly unknown[] }) =>
     opts.queryKey.includes("summary")
       ? { data: mocks.summary, isLoading: false }
-      : { data: mocks.cases, isLoading: false },
+      : opts.queryKey.includes("test-points")
+        ? { data: mocks.points, isLoading: false }
+        : { data: mocks.cases, isLoading: false },
 }));
 
 vi.mock("@multica/core/hooks", () => ({ useWorkspaceId: () => "ws-1" }));
@@ -38,6 +44,13 @@ vi.mock("@multica/core/paths", () => ({
 vi.mock("@multica/core/testing", () => ({
   issueTestCasesOptions: () => ({ queryKey: ["issue-test-cases", "ws-1", "i-1"] }),
   issueTestSummaryOptions: () => ({ queryKey: ["issue-test-cases", "ws-1", "i-1", "summary"] }),
+  issueTestPointsOptions: () => ({ queryKey: ["issue-test-cases", "ws-1", "i-1", "test-points"] }),
+  useCreateIssueTestPoint: () => ({ mutateAsync: mocks.createPoint, isPending: false }),
+  useUpdateTestPoint: () => ({ mutate: mocks.updatePoint, isPending: false }),
+  useLinkTestCaseTestPoints: () => ({ mutate: mocks.linkPoints, isPending: false }),
+  TEST_POINT_CATEGORIES: ["positive", "negative", "boundary", "permission", "state", "data", "non_functional"],
+  TEST_POINT_STATES: ["uncovered", "not_run", "failing", "passed", "dropped"],
+  TEST_POINT_STATE_TONE: { uncovered: "", not_run: "", failing: "", passed: "", dropped: "" },
   useCreateTestGenerationJob: () => ({ mutateAsync: mocks.createJob }),
   useCreateTestCase: () => ({ mutateAsync: mocks.createCase }),
   useLinkTestCaseIssues: () => ({ mutateAsync: mocks.linkIssues }),
@@ -89,6 +102,8 @@ function makeSummary(overrides = {}) {
   return {
     cases: 1,
     verified: true,
+    basis: "test_points",
+    test_points: { active: 1, covered: 1, passed: 1, failing: 0 },
     latest_run: {
       id: "r-9",
       title: "Sprint 12 regression",
@@ -107,6 +122,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.cases = [];
   mocks.summary = null;
+  mocks.points = undefined;
 });
 
 describe("IssueTestCoverage", () => {
@@ -205,5 +221,86 @@ describe("IssueTestCoverage", () => {
       </NavigationProvider>,
     );
     expect(screen.queryByText(/^AI( 生成)?$/)).toBeNull();
+  });
+});
+
+function makePoint(overrides = {}) {
+  return {
+    id: "p-1",
+    issue_id: "i-1",
+    number: 1,
+    key: "TP-1",
+    title: "Paying within the balance succeeds",
+    description: "",
+    category: "positive",
+    origin: "human",
+    status: "active",
+    created_by_type: "member",
+    created_at: "",
+    updated_at: "",
+    cases: [],
+    covered: false,
+    passed: false,
+    state: "uncovered",
+    ...overrides,
+  };
+}
+
+describe("IssueTestCoverage test points", () => {
+  // Without test points the server can only say the linked cases passed; that
+  // must not wear the same badge as every condition of the issue passing.
+  it("labels a cases-only verification as such", async () => {
+    mocks.cases = [makeLink()];
+    mocks.summary = makeSummary({ basis: "cases_only", test_points: { active: 0, covered: 0, passed: 0, failing: 0 } });
+    renderCoverage();
+    expect(await screen.findByText(/^(Cases pass|用例通过)$/)).toBeTruthy();
+    expect(screen.queryByText(/^(Verified|已验证)$/)).toBeNull();
+  });
+
+  it("lists each point with its state and highlights what nobody covers", async () => {
+    mocks.cases = [makeLink(), makeLink({ test_case_id: "c-2", case_key: "TC-2", case_title: "Refusal path" })];
+    mocks.points = {
+      test_points: [
+        makePoint({
+          state: "passed", covered: true, passed: true,
+          cases: [{ test_case_id: "c-1", case_key: "TC-1", case_title: "Checkout succeeds", case_status: "active", latest_result: "passed", origin: "human" }],
+        }),
+        makePoint({ id: "p-2", number: 2, key: "TP-2", title: "Paying over the balance is refused", category: "negative", origin: "ai" }),
+      ],
+      summary: { active: 2, covered: 1, passed: 1, failing: 0 },
+    };
+    mocks.summary = makeSummary({ verified: false, test_points: { active: 2, covered: 1, passed: 1, failing: 0 } });
+    renderCoverage({ projectId: "proj-1" });
+
+    const refused = await screen.findByText("Paying over the balance is refused");
+    expect(refused.closest("li")).toHaveAttribute("data-state", "uncovered");
+    expect(screen.getByText(/1\/2 covered|已覆盖 1\/2/)).toBeTruthy();
+    expect(screen.getAllByText("TC-1")[0]?.closest("a")).toHaveAttribute("href", "/acme/tests/TC-1");
+
+    // The uncovered point can be covered by one of the issue's linked cases
+    // that does not cover it yet.
+    const cover = screen.getAllByRole("combobox", { name: /Cover with|选择覆盖用例/ });
+    fireEvent.change(cover[1]!, { target: { value: "TC-2" } });
+    expect(mocks.linkPoints).toHaveBeenCalledWith({ ref: "TC-2", testPoints: ["p-2"] }, expect.anything());
+  });
+
+  it("adds a point with its category, starting from an issue with no tests at all", async () => {
+    mocks.createPoint.mockResolvedValue(makePoint());
+    renderCoverage({ projectId: "proj-1" });
+    fireEvent.click(await screen.findByRole("button", { name: /Add point|添加测试点/ }));
+
+    const title = await screen.findByRole("textbox", { name: /Add point|添加测试点/ });
+    fireEvent.change(title, { target: { value: "Paying over the balance is refused" } });
+    fireEvent.change(screen.getByRole("combobox", { name: /Test points|测试点/ }), { target: { value: "negative" } });
+    fireEvent.submit(title.closest("form")!);
+    expect(mocks.createPoint).toHaveBeenCalledWith({ title: "Paying over the balance is refused", category: "negative" });
+  });
+
+  it("drops a point that is no longer a condition of the issue", async () => {
+    mocks.cases = [makeLink()];
+    mocks.points = { test_points: [makePoint()], summary: { active: 1, covered: 0, passed: 0, failing: 0 } };
+    renderCoverage();
+    fireEvent.click(await screen.findByRole("button", { name: /^(Drop|废弃)$/ }));
+    expect(mocks.updatePoint).toHaveBeenCalledWith({ pointId: "p-1", data: { status: "dropped" } }, expect.anything());
   });
 });

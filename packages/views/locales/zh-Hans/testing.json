@@ -523,7 +523,7 @@
     "failingCount": "{{count}} 条失败",
     "untestedCount": "{{count}} 条未执行",
     "verified": "已验证",
-    "verifiedHint": "所有关联用例在最近一次执行中全部通过",
+    "verifiedHint": "每个测试点都有用例覆盖，且最近一次执行通过",
     "latestRun": "最近一轮",
     "defectsSection": "测试发现的缺陷",
     "foundBySection": "由测试轮次发现",
@@ -532,6 +532,41 @@
     "newCaseTitle": "验证：{{title}}",
     "noCoverage": "暂无测试覆盖",
     "generateFailed": "无法发起用例生成",
-    "newCaseFailed": "无法创建用例"
+    "newCaseFailed": "无法创建用例",
+    "points": {
+      "section": "测试点",
+      "summary": "已覆盖 {{covered}}/{{active}} · 通过 {{passed}}",
+      "hint": "这条任务被接受的验收条件，覆盖率和验证结论都按测试点统计。",
+      "add": "添加测试点",
+      "addPlaceholder": "一条能单独判定对错的条件，例如：余额不足时下单被拒并提示",
+      "addFailed": "添加测试点失败",
+      "empty": "还没有测试点。把任务拆成可单独判定的验收条件，否则一条通过的正常路径用例就足以显示“已验证”。",
+      "drop": "废弃",
+      "restore": "恢复",
+      "updateFailed": "更新测试点失败",
+      "cover": "选择覆盖用例…",
+      "coverFailed": "关联用例与测试点失败",
+      "droppedCount": "{{count}} 个已废弃",
+      "category": {
+        "positive": "正常路径",
+        "negative": "异常",
+        "boundary": "边界",
+        "permission": "权限",
+        "state": "状态",
+        "data": "数据一致性",
+        "non_functional": "非功能"
+      },
+      "state": {
+        "uncovered": "未覆盖",
+        "not_run": "未执行",
+        "failing": "失败",
+        "passed": "通过",
+        "dropped": "已废弃"
+      },
+      "caseSection": "验证的测试点",
+      "caseEmpty": "还没有声明验证哪个测试点"
+    },
+    "casesPass": "用例通过",
+    "casesPassHint": "关联用例都已通过，但这条任务还没有拆测试点，没人列出必须验证什么"
   }
 }

@@ -51,6 +51,7 @@ import { TestCaseStepsEditor } from "./components/test-case-steps-editor";
 import { TestCaseReposField } from "./components/test-case-repos-field";
 import { TestCaseCapabilitiesField } from "./components/test-case-capabilities-field";
 import { CaseIssueLinks } from "./components/case-issue-links";
+import { CaseTestPoints } from "./components/case-test-points";
 
 interface TestCaseDetailProps {
   /** A TC-<n> key or a UUID; the server resolves both. */
@@ -341,6 +342,12 @@ export function TestCaseDetail({ refId }: TestCaseDetailProps) {
               because it is the question a reviewer asks first. */}
           <Field label={t(($) => $.coverage.caseSection)}>
             <CaseIssueLinks wsId={wsId} caseRef={refId} />
+          </Field>
+
+          {/* Which conditions of those requirements it checks: what coverage
+              is counted from. */}
+          <Field label={t(($) => $.coverage.points.caseSection)}>
+            <CaseTestPoints wsId={wsId} caseRef={refId} />
           </Field>
 
           <Field label={t(($) => $.detail.revisions)}>

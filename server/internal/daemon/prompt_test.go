@@ -2093,10 +2093,23 @@ func TestBuildTestGenerationPromptCarriesTheIncrementContract(t *testing.T) {
 		"TEST_GENERATION_RESULT_JSON:",
 		"cross_repo",
 		"obsolete",
+		// Requirements are split into test points before any case is written,
+		// and every case declares the points it verifies.
+		"multica testcase point list --issue",
+		"multica testcase point add --issue",
+		"`negative`",
+		"`boundary`",
+		"`permission`",
+		"`test_points`",
+		"\"coverage\":[",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("prompt is missing %q", want)
 		}
+	}
+	// "Prefer few" set no floor under coverage; a run could stop at one happy path.
+	if strings.Contains(prompt, "Prefer few precise cases") {
+		t.Error("prompt still tells the run to prefer few cases")
 	}
 	// A generation run must not turn into a code-change run.
 	if !strings.Contains(prompt, "Do NOT write, refactor, or commit product code") {

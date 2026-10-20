@@ -34,6 +34,8 @@ export {
   testCaseIssuesOptions,
   issueTestCasesOptions,
   issueTestSummaryOptions,
+  issueTestPointsOptions,
+  testCaseTestPointsOptions,
 } from "./queries";
 export {
   useCreateTestCase,
@@ -63,6 +65,10 @@ export {
   useLinkTestCaseIssues,
   useUnlinkTestCaseIssue,
   useRequestRuntimeCapabilityScan,
+  useCreateIssueTestPoint,
+  useUpdateTestPoint,
+  useLinkTestCaseTestPoints,
+  useUnlinkTestCaseTestPoint,
 } from "./mutations";
 export * from "./config";
 export {

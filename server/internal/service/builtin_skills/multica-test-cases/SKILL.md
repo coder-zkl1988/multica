@@ -172,7 +172,32 @@ Before proposing anything, pull a compact index of what already exists:
 paying for every step. Use it to detect duplicates and decide what each new
 proposal's `kind` should be.
 
-### Step 2 — produce three kinds of increment
+### Step 2 — split each scoped issue into test points
+
+A test point is one condition a requirement is accepted on, judged right or
+wrong on its own ("an order over the balance is refused with a message", not
+"checkout works"). Read what exists, then add what is missing:
+
+    multica testcase point list --issue MUL-12 --output json
+    multica testcase point add --issue MUL-12 --title "…" --category negative [--description "…"]
+    multica testcase point update MUL-12/TP-3 --status dropped
+
+| category | add a point for |
+| --- | --- |
+| `positive` | each main path and each distinct successful outcome |
+| `negative` | invalid input, refusals, error handling, what must not happen |
+| `boundary` | empty, zero, min, max, one past each, rounding, time zones, long text |
+| `permission` | each role or tenant that must be refused |
+| `state` | illegal transitions, repeated or concurrent submits, retries |
+| `data` | consistency across tables and services, idempotency |
+| `non_functional` | only a measurable target the requirement states |
+
+Points are `TP-<n>` inside their issue and are referenced as `MUL-12/TP-3` or
+by id. A point a person wrote cannot be changed by an agent (403); add a new
+one instead. Agents never delete points; a condition the requirement lost is
+set to `dropped`.
+
+### Step 3 — produce three kinds of increment
 
 | kind | when to use |
 | --- | --- |
@@ -183,7 +208,15 @@ proposal's `kind` should be.
 A generation run must produce only increments relative to the digest, never a
 full dump of cases that already exist.
 
-### Step 3 — submit via `testcase propose`
+Every `new` or `update` case names the points it verifies in `case.test_points`
+(`["MUL-12/TP-3"]`). Every active point needs at least one case: for a point
+with input, each equivalence class and boundary value; for a permission point,
+each refused role; for a state point, each illegal transition. Points must
+belong to the run's issue scope (400 otherwise). The response's
+`new_cases_without_test_points` counts new cases that name none — those cannot
+count toward any requirement's coverage.
+
+### Step 4 — submit via `testcase propose`
 
     multica testcase propose --job <job-id> --stdin < proposals.json
 
@@ -192,7 +225,8 @@ The input must be one complete JSON document (not line-delimited). Shape:
     {
       "items": [
         { "kind": "new", "case": { "title": "…", "module": "…", "steps": [...],
-            "case_type": "business_flow", "repos": [...] } },
+            "case_type": "business_flow", "repos": [...],
+            "test_points": ["MUL-12/TP-3"] } },
         { "kind": "update", "target": "TC-42",
             "case": { ... }, "rationale": "接口新增了分页参数" },
         { "kind": "obsolete", "target": "TC-7",
@@ -267,10 +301,27 @@ An `issue_id` that does not exist in the workspace is rejected with 400 rather
 than stored: the table has no foreign key, so an unchecked id would become a
 link to nothing.
 
-An issue counts as verified only through its `active` linked cases: at least
-one, and every one of them with a latest result of `passed`. A draft nobody
-reviewed cannot verify a requirement, and a deprecated case can neither verify
-it nor hold it back.
+Linking a case to an issue says it is about that requirement; declaring test
+points says which of its conditions it checks:
+
+    multica testcase cover TC-42 MUL-12/TP-1 MUL-12/TP-3
+    GET    /api/issues/<id>/test-points       # points, covering cases, state
+    GET    /api/test-cases/<ref>/test-points  # the points one case verifies
+
+Covering a point also links the case to the point's issue. Each point reports
+a `state`: `uncovered` (no active case verifies it), `not_run`, `failing`,
+`passed`, or `dropped`.
+
+Whether an issue is verified depends on `basis` in its test summary:
+
+| basis | verified when |
+| --- | --- |
+| `test_points` | every active point is covered by an active case whose latest result is `passed`, and no active linked case is failing |
+| `cases_only` | the issue has no points yet: at least one active linked case, all passed — a weaker claim, labelled as such |
+| `none` | nothing active covers the issue; never verified |
+
+Only `active` cases count. A draft nobody reviewed cannot verify a
+requirement, and a deprecated case can neither verify it nor hold it back.
 
 The reverse direction carries `latest_result`, the most recent recorded outcome
 across every round the case appeared in. It is `null` when the case has never

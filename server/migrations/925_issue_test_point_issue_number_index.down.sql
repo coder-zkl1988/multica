@@ -1,0 +1,1 @@
+DROP INDEX CONCURRENTLY IF EXISTS issue_test_point_issue_number_idx;
