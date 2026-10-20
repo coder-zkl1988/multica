@@ -460,7 +460,16 @@
       "blocked": "ブロック",
       "skipped": "スキップ",
       "not_run": "未到達"
-    }
+    },
+    "save": "保存",
+    "draftNeedsResult": "メモとステップ結果は結果と一緒に保存されます。先に結果を選んでください。",
+    "observedPlaceholder": "実際に見えたこと",
+    "observedLabel": "ステップ {{index}} で実際に見えたこと",
+    "stepResultLabel": "ステップ {{index}} の結果",
+    "stepUnset": "未記録",
+    "addEvidence": "証跡を追加",
+    "evidenceTooLarge": "{{name}} は大きすぎてアップロードできません",
+    "evidenceFailed": "証跡をアップロードできませんでした"
   },
   "timeline": {
     "title": "実行履歴",

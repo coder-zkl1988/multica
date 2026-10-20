@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   evidence: [] as unknown[],
   tryOpenPreview: vi.fn(),
   downloadAttachment: vi.fn(),
+  uploadEvidence: vi.fn(),
 }));
 
 vi.mock("@tanstack/react-query", () => ({
@@ -57,6 +58,7 @@ vi.mock("@multica/core/testing", () => ({
   useDispatchTestRun: () => ({ mutateAsync: mocks.dispatchRun, isPending: false }),
   useUpdateTestRunCaseResult: () => ({ mutate: mocks.updateCaseResult, isPending: false }),
   useOpenTestRunCaseDefect: () => ({ mutateAsync: mocks.openDefect, isPending: false }),
+  useUploadTestRunCaseEvidence: () => ({ mutateAsync: mocks.uploadEvidence, isPending: false }),
 }));
 
 vi.mock("@multica/core/workspace/queries", () => ({
@@ -348,7 +350,55 @@ describe("TestRunDetail case procedure", () => {
     expect(screen.getByText("One item in the cart")).toBeInTheDocument();
     expect(screen.getByText("Apply coupon SAVE10")).toBeInTheDocument();
     expect(screen.getByText(/The confirmation shows 90\.00/)).toBeInTheDocument();
+    // An open round lets a person correct what was recorded.
+    expect(screen.getByRole("combobox", { name: /Result of step 2|第 2 步的结果/ })).toHaveValue("failed");
+    expect(screen.getByDisplayValue("The confirmation shows 100.00")).toBeInTheDocument();
+  });
+
+  it("shows the recorded verdicts read-only once the round is aborted", async () => {
+    mocks.run = makeRun({ status: "aborted" });
+    renderPage();
+    await userEvent.click(await screen.findByText("Coupon checkout"));
+    expect(screen.queryByRole("combobox", { name: /Result of step 2|第 2 步的结果/ })).toBeNull();
     expect(screen.getByText("The confirmation shows 100.00")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Add evidence|添加证据/ })).toBeNull();
+  });
+
+  // A person executing by hand records each step; the verdicts ride along
+  // with the case result, as the notes do.
+  it("sends the step verdicts a person recorded with the case result", async () => {
+    mocks.run = makeRun({ status: "running" });
+    mocks.cases = [{ ...(mocks.cases[0] as object), result: "pending", step_results: [] }];
+    renderPage();
+    await userEvent.click(await screen.findByText("Coupon checkout"));
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: /Result of step 1|第 1 步的结果/ }), "passed");
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: /Result of step 2|第 2 步的结果/ }), "failed");
+    await userEvent.type(screen.getByRole("textbox", { name: /What you observed at step 2|第 2 步的实际情况/ }), "Total stayed 100.00");
+
+    const failedButtons = await screen.findAllByRole("button", { name: /^(Failed|失败|실패)$/ });
+    await userEvent.click(failedButtons[0]!);
+    expect(mocks.updateCaseResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "rc-1",
+        data: expect.objectContaining({
+          result: "failed",
+          step_results: [
+            { index: 1, result: "passed" },
+            { index: 2, result: "failed", actual: "Total stayed 100.00" },
+          ],
+        }),
+      }),
+      expect.anything(),
+    );
+  });
+
+  it("uploads evidence a person picked for the case", async () => {
+    mocks.uploadEvidence.mockResolvedValue({});
+    renderPage();
+    await userEvent.click(await screen.findByText("Coupon checkout"));
+    const file = new File(["png"], "seen.png", { type: "image/png" });
+    await userEvent.upload(screen.getByLabelText(/Add evidence|添加证据/, { selector: "input" }), file);
+    expect(mocks.uploadEvidence).toHaveBeenCalledWith({ runCaseId: "rc-1", file });
   });
 
   it("opens an evidence file in the preview", async () => {

@@ -4030,7 +4030,14 @@ export class ApiClient {
   // File Upload & Attachments
   async uploadFile(
     file: File,
-    opts?: { issueId?: string; commentId?: string; chatSessionId?: string },
+    opts?: {
+      issueId?: string;
+      commentId?: string;
+      chatSessionId?: string;
+      /** Evidence for a test run case, with its kind (screenshot, log, video, other). */
+      testRunCaseId?: string;
+      evidenceKind?: string;
+    },
     // Optional abort signal so a module-level upload coordinator (MUL-5181)
     // can cancel an in-flight upload on logout. When aborted, `fetch` rejects
     // with an AbortError, which the coordinator distinguishes from a real
@@ -4042,6 +4049,8 @@ export class ApiClient {
     if (opts?.issueId) formData.append("issue_id", opts.issueId);
     if (opts?.commentId) formData.append("comment_id", opts.commentId);
     if (opts?.chatSessionId) formData.append("chat_session_id", opts.chatSessionId);
+    if (opts?.testRunCaseId) formData.append("test_run_case_id", opts.testRunCaseId);
+    if (opts?.evidenceKind) formData.append("kind", opts.evidenceKind);
 
     const rid = createRequestId();
     const start = Date.now();

@@ -461,7 +461,16 @@
       "blocked": "Blocked",
       "skipped": "Skipped",
       "not_run": "Not reached"
-    }
+    },
+    "save": "Save",
+    "draftNeedsResult": "Notes and step results are saved with a result — pick one first.",
+    "observedPlaceholder": "What you observed",
+    "observedLabel": "What you observed at step {{index}}",
+    "stepResultLabel": "Result of step {{index}}",
+    "stepUnset": "Not recorded",
+    "addEvidence": "Add evidence",
+    "evidenceTooLarge": "{{name}} is too large to upload",
+    "evidenceFailed": "Could not upload the evidence"
   },
   "timeline": {
     "title": "Run History",

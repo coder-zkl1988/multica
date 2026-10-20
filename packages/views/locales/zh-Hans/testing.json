@@ -460,7 +460,16 @@
       "blocked": "阻塞",
       "skipped": "跳过",
       "not_run": "未执行到"
-    }
+    },
+    "save": "保存",
+    "draftNeedsResult": "备注和步骤结果会随结果一起保存，请先选择结果。",
+    "observedPlaceholder": "实际看到了什么",
+    "observedLabel": "第 {{index}} 步的实际情况",
+    "stepResultLabel": "第 {{index}} 步的结果",
+    "stepUnset": "未记录",
+    "addEvidence": "添加证据",
+    "evidenceTooLarge": "{{name}} 太大，无法上传",
+    "evidenceFailed": "上传证据失败"
   },
   "timeline": {
     "title": "历史执行记录",

@@ -70,6 +70,8 @@ export {
   useUpdateTestPoint,
   useLinkTestCaseTestPoints,
   useUnlinkTestCaseTestPoint,
+  useUploadTestRunCaseEvidence,
+  evidenceKindForFile,
 } from "./mutations";
 export * from "./config";
 export {

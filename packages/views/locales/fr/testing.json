@@ -461,7 +461,16 @@
       "blocked": "Bloqué",
       "skipped": "Ignoré",
       "not_run": "Non atteint"
-    }
+    },
+    "save": "Enregistrer",
+    "draftNeedsResult": "Les notes et les résultats d'étape sont enregistrés avec un résultat — choisissez-en un d'abord.",
+    "observedPlaceholder": "Ce que vous avez constaté",
+    "observedLabel": "Ce que vous avez constaté à l'étape {{index}}",
+    "stepResultLabel": "Résultat de l'étape {{index}}",
+    "stepUnset": "Non renseigné",
+    "addEvidence": "Ajouter une preuve",
+    "evidenceTooLarge": "{{name}} est trop volumineux pour être téléversé",
+    "evidenceFailed": "Impossible de téléverser la preuve"
   },
   "timeline": {
     "title": "Historique des séries",

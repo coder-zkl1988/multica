@@ -717,3 +717,27 @@ export function useUnlinkTestCaseTestPoint(issueId: string) {
     },
   });
 }
+
+/** The evidence kind a file reads as; the server stores it beside the file. */
+export function evidenceKindForFile(file: File): "screenshot" | "video" | "log" | "other" {
+  if (file.type.startsWith("image/")) return "screenshot";
+  if (file.type.startsWith("video/")) return "video";
+  if (file.type.startsWith("text/") || /\.(log|txt|json)$/i.test(file.name)) return "log";
+  return "other";
+}
+
+/**
+ * Attach a file a person captured while executing a case by hand. Awaits the
+ * server: the stored attachment is what the evidence list shows.
+ */
+export function useUploadTestRunCaseEvidence() {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: ({ runCaseId, file }: { runCaseId: string; file: File }) =>
+      api.uploadFile(file, { testRunCaseId: runCaseId, evidenceKind: evidenceKindForFile(file) }),
+    onSettled: (_data, _error, { runCaseId }) => {
+      qc.invalidateQueries({ queryKey: testRunKeys.evidence(wsId, runCaseId) });
+    },
+  });
+}

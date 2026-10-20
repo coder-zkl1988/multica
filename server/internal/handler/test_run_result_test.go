@@ -1,8 +1,11 @@
 package handler
 
 import (
+	"bytes"
 	"context"
+	"mime/multipart"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -273,5 +276,55 @@ func TestListTestRunCaseEvidenceReturnsOnlyThatCasesFiles(t *testing.T) {
 	)).Want(http.StatusOK).JSON(&out)
 	if len(out.Evidence) != 1 || out.Evidence[0].Filename != "final.png" || out.Evidence[0].DownloadURL == "" {
 		t.Fatalf("evidence = %+v, want this case's one file with a download URL", out.Evidence)
+	}
+}
+
+func uploadRunCaseEvidence(t *testing.T, h *Handler, runCaseID string) *httptest.ResponseRecorder {
+	t.Helper()
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, _ := writer.CreateFormFile("file", "seen.png")
+	part.Write([]byte("\\x89PNG\\r\\n\\x1a\\nscreen"))
+	writer.WriteField("test_run_case_id", runCaseID)
+	writer.WriteField("kind", "screenshot")
+	writer.Close()
+	req := httptest.NewRequest(http.MethodPost, "/api/upload-file", &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("X-User-ID", testUserID)
+	req.Header.Set("X-Workspace-ID", testWorkspaceID)
+	w := httptest.NewRecorder()
+	h.UploadFile(w, req)
+	return w
+}
+
+// A person executing a round by hand attaches what they saw, as an agent
+// does; without it a manual verdict is as unauditable as a bare agent pass.
+func TestMembersCanAttachEvidenceToARunCase(t *testing.T) {
+	h := *testHandler
+	h.Storage = &mockStorage{}
+	projectID := newTestRunProject(t)
+	tc := createTestCaseForRun(t, projectID)
+	run := createTestRunFromCases(t, "Manual round", []string{tc.ID})
+	runCaseID := listRunCases(t, run.ID)[0].ID
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM attachment WHERE test_run_case_id = $1`, runCaseID)
+	})
+
+	if w := uploadRunCaseEvidence(t, &h, runCaseID); w.Code != http.StatusOK {
+		t.Fatalf("member evidence upload: %d %s", w.Code, w.Body.String())
+	}
+	var out struct {
+		Evidence []AttachmentResponse `json:"evidence"`
+	}
+	testutil.Call(t, testHandler.ListTestRunCaseEvidence, withURLParam(
+		newRequest("GET", "/api/test-run-cases/"+runCaseID+"/evidence?workspace_id="+testWorkspaceID, nil), "id", runCaseID,
+	)).Want(http.StatusOK).JSON(&out)
+	if len(out.Evidence) != 1 || out.Evidence[0].Filename != "seen.png" {
+		t.Fatalf("evidence = %+v, want the uploaded file", out.Evidence)
+	}
+
+	dbfx.Exec(t, `UPDATE test_run SET status = 'aborted' WHERE id = $1`, run.ID)
+	if w := uploadRunCaseEvidence(t, &h, runCaseID); w.Code != http.StatusConflict {
+		t.Fatalf("upload to an aborted round: %d, want 409: %s", w.Code, w.Body.String())
 	}
 }

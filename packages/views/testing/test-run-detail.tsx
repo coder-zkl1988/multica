@@ -2,14 +2,16 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { AlertCircle, ArrowLeft, Bot, Play, RotateCcw, Square } from "lucide-react";
+import { AlertCircle, ArrowLeft, Bot, Paperclip, Play, RotateCcw, Square } from "lucide-react";
 import { toast } from "sonner";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
+import { MAX_FILE_SIZE } from "@multica/core/constants/upload";
 import {
   testRunDetailOptions,
   testRunCasesOptions,
   testRunCaseEvidenceOptions,
+  useUploadTestRunCaseEvidence,
   useStartTestRun,
   useAbortTestRun,
   useRetryTestRun,
@@ -28,6 +30,7 @@ import type {
 import { Badge } from "@multica/ui/components/ui/badge";
 import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
+import { NativeSelect } from "@multica/ui/components/ui/native-select";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { Textarea } from "@multica/ui/components/ui/textarea";
 import { useAttachmentPreview, useDownloadAttachment } from "../editor";
@@ -365,9 +368,13 @@ export function TestRunDetail({ runId }: { runId: string }) {
                             expandedCaseId === runCase.id ? null : runCase.id,
                           )
                         }
-                        onSetResult={(result, notes) =>
+                        onSetResult={(result, notes, stepResults) =>
                           updateCaseResult.mutate(
-                            { id: runCase.id, runId, data: { result, notes } },
+                            {
+                              id: runCase.id,
+                              runId,
+                              data: { result, notes, ...(stepResults ? { step_results: stepResults } : {}) },
+                            },
                             {
                               // The server says why a write is refused (an
                               // aborted round is final); say that, not "failed".
@@ -380,18 +387,30 @@ export function TestRunDetail({ runId }: { runId: string }) {
                             },
                           )
                         }
-                        onSaveNotes={(notes) =>
+                        onSaveDraft={(notes, stepResults) =>
                           new Promise<void>((resolve, reject) => {
                             updateCaseResult.mutate(
-                              { id: runCase.id, runId, data: { result: runCase.result, notes } },
+                              {
+                                id: runCase.id,
+                                runId,
+                                data: {
+                                  result: runCase.result,
+                                  notes,
+                                  ...(stepResults ? { step_results: stepResults } : {}),
+                                },
+                              },
                               {
                                 onSuccess: () => {
                                   toast.success(t(($) => $.toast.runResultSaved));
                                   resolve();
                                 },
-                                onError: () => {
-                                  toast.error(t(($) => $.toast.runResultFailed));
-                                  reject(new Error("save notes failed"));
+                                onError: (err) => {
+                                  toast.error(
+                                    err instanceof Error && err.message
+                                      ? err.message
+                                      : t(($) => $.toast.runResultFailed),
+                                  );
+                                  reject(new Error("save draft failed"));
                                 },
                               },
                             );
@@ -492,7 +511,7 @@ function RunCaseRow({
   expanded,
   onToggleExpand,
   onSetResult,
-  onSaveNotes,
+  onSaveDraft,
   onOpenDefect,
 }: {
   runCase: TestRunCase;
@@ -500,8 +519,8 @@ function RunCaseRow({
   resultsLocked: boolean;
   expanded: boolean;
   onToggleExpand: () => void;
-  onSetResult: (result: TestRunCaseResult, notes: string) => void;
-  onSaveNotes: (notes: string) => Promise<void>;
+  onSetResult: (result: TestRunCaseResult, notes: string, stepResults?: StepResultInput[]) => void;
+  onSaveDraft: (notes: string, stepResults?: StepResultInput[]) => Promise<void>;
   onOpenDefect: (title: string) => Promise<void>;
 }) {
   const { t } = useT("testing");
@@ -523,7 +542,21 @@ function RunCaseRow({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runCase.id, runCase.updated_at]);
 
+  // Step verdicts a person records while executing by hand follow the same
+  // draft rules as the notes: seeded from the server, followed on its change
+  // marker while untouched, sent with the next result write.
+  const [steps, setSteps] = useState<StepDraft>(() => draftFromRecorded(runCase.step_results));
+  const syncedSteps = useRef(draftFromRecorded(runCase.step_results));
+  useEffect(() => {
+    const fresh = draftFromRecorded(runCase.step_results);
+    if (sameDraft(steps, syncedSteps.current)) setSteps(fresh);
+    syncedSteps.current = fresh;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runCase.id, runCase.updated_at]);
+
   const notesDirty = notes !== runCase.notes;
+  const stepsDirty = !sameDraft(steps, draftFromRecorded(runCase.step_results));
+  const draftDirty = notesDirty || stepsDirty;
   // A result write is what stamps execution on the row, so a note is saved
   // with one. Until the case has a result, the note rides along with whichever
   // result button the tester presses.
@@ -532,7 +565,7 @@ function RunCaseRow({
   async function saveNotes() {
     setSavingNotes(true);
     try {
-      await onSaveNotes(notes);
+      await onSaveDraft(notes, draftToRequest(steps));
     } catch {
       // the toast is raised by the caller; the draft stays for a retry
     } finally {
@@ -587,7 +620,7 @@ function RunCaseRow({
               aria-label={t(($) => $.run.result[result as keyof typeof $.run.result])}
               data-active={runCase.result === result || undefined}
               disabled={resultsLocked}
-              onClick={() => onSetResult(result, notes)}
+              onClick={() => onSetResult(result, notes, draftToRequest(steps))}
               className={`rounded-sm px-2 py-0.5 text-caption transition-colors data-active:font-medium disabled:pointer-events-none disabled:opacity-50
                 ${result === "passed"
                   ? "text-success hover:bg-success/10 data-active:bg-success/20"
@@ -628,8 +661,21 @@ function RunCaseRow({
           ) : null}
           {/* What to execute, from the frozen snapshot, with what was
               recorded against each step. */}
-          <RunCaseProcedure snapshot={snapshot} stepResults={runCase.step_results} />
-          <RunCaseEvidence runCaseId={runCase.id} />
+          <RunCaseProcedure
+            snapshot={snapshot}
+            draft={steps}
+            editable={!resultsLocked}
+            onChange={(index, patch) =>
+              setSteps((current) => {
+                const next = { ...current };
+                const merged = { result: "", actual: "", ...current[index], ...patch };
+                if (!merged.result && !merged.actual.trim()) delete next[index];
+                else next[index] = merged;
+                return next;
+              })
+            }
+          />
+          <RunCaseEvidence runCaseId={runCase.id} canUpload={!resultsLocked} />
           {/* Notes */}
           <div>
             <label className="mb-1 block text-caption font-medium text-muted-foreground">
@@ -641,22 +687,25 @@ function RunCaseRow({
               placeholder={t(($) => $.runCase.notesPlaceholder)}
               className="min-h-20 text-caption"
             />
-            {notesDirty ? (
+            {draftDirty && !resultsLocked ? (
               <div className="mt-1.5 flex items-center gap-2">
                 {canSaveNotesAlone ? (
                   <Button size="sm" disabled={savingNotes} onClick={() => void saveNotes()}>
-                    {t(($) => $.runCase.saveNotes)}
+                    {stepsDirty ? t(($) => $.runCase.save) : t(($) => $.runCase.saveNotes)}
                   </Button>
                 ) : (
                   <p className="text-caption text-muted-foreground">
-                    {t(($) => $.runCase.notesNeedResult)}
+                    {stepsDirty ? t(($) => $.runCase.draftNeedsResult) : t(($) => $.runCase.notesNeedResult)}
                   </p>
                 )}
                 <Button
                   size="sm"
                   variant="ghost"
                   disabled={savingNotes}
-                  onClick={() => setNotes(runCase.notes)}
+                  onClick={() => {
+                    setNotes(runCase.notes);
+                    setSteps(draftFromRecorded(runCase.step_results));
+                  }}
                 >
                   {t(($) => $.actions.cancel)}
                 </Button>
@@ -758,17 +807,59 @@ function isKnownStepVerdict(result: string): result is KnownStepVerdict {
   return (STEP_VERDICTS as readonly string[]).includes(result);
 }
 
-/** The snapshot's procedure as a checklist, each step beside its recorded verdict. */
+/** One step's verdict as a person is editing it. */
+type StepDraft = Record<number, { result: string; actual: string }>;
+/** What the result write sends for one step. */
+type StepResultInput = { index: number; result: KnownStepVerdict; actual?: string };
+
+function draftFromRecorded(steps: TestRunStepResult[]): StepDraft {
+  const draft: StepDraft = {};
+  for (const step of steps) draft[step.index] = { result: step.result, actual: step.actual };
+  return draft;
+}
+
+function sameDraft(a: StepDraft, b: StepDraft): boolean {
+  const keys = Object.keys(a);
+  if (keys.length !== Object.keys(b).length) return false;
+  return keys.every((key) => {
+    const x = a[Number(key)];
+    const y = b[Number(key)];
+    return !!x && !!y && x.result === y.result && x.actual === y.actual;
+  });
+}
+
+/** The draft as the server takes it, or undefined when nothing was recorded —
+ *  sending an empty list would erase step results an agent wrote. */
+function draftToRequest(draft: StepDraft): StepResultInput[] | undefined {
+  const entries = Object.entries(draft)
+    .filter(([, step]) => isKnownStepVerdict(step.result))
+    .map(([index, step]) => ({
+      index: Number(index),
+      result: step.result as KnownStepVerdict,
+      ...(step.actual.trim() ? { actual: step.actual.trim() } : {}),
+    }))
+    .sort((a, b) => a.index - b.index);
+  return entries.length > 0 ? entries : undefined;
+}
+
+/**
+ * The snapshot's procedure as a checklist, each step beside its verdict. While
+ * the round is open a person executing by hand records the verdict of each
+ * step and what they observed; the draft is sent with the case's result.
+ */
 function RunCaseProcedure({
   snapshot,
-  stepResults,
+  draft,
+  editable,
+  onChange,
 }: {
   snapshot: Record<string, unknown>;
-  stepResults: TestRunStepResult[];
+  draft: StepDraft;
+  editable: boolean;
+  onChange: (index: number, patch: Partial<{ result: string; actual: string }>) => void;
 }) {
   const { t } = useT("testing");
   const steps = readSnapshotSteps(snapshot);
-  const byIndex = new Map(stepResults.map((step) => [step.index, step]));
   const preconditions = typeof snapshot.preconditions === "string" ? snapshot.preconditions.trim() : "";
   const expectedResult = typeof snapshot.expected_result === "string" ? snapshot.expected_result.trim() : "";
 
@@ -791,7 +882,10 @@ function RunCaseProcedure({
         ) : (
           <ol className="space-y-1.5">
             {steps.map((step) => {
-              const recorded = byIndex.get(step.index);
+              const recorded = draft[step.index];
+              const verdict = recorded?.result ?? "";
+              const showObserved =
+                editable && (verdict === "failed" || verdict === "blocked" || !!recorded?.actual);
               return (
                 <li key={step.index} className="flex gap-2 text-caption">
                   <span className="w-5 shrink-0 text-right tabular-nums text-muted-foreground">
@@ -804,21 +898,38 @@ function RunCaseProcedure({
                         {t(($) => $.steps.expected)}: {step.expected}
                       </p>
                     ) : null}
-                    {recorded?.actual ? (
+                    {showObserved ? (
+                      <Input
+                        value={recorded?.actual ?? ""}
+                        onChange={(event) => onChange(step.index, { actual: event.target.value })}
+                        placeholder={t(($) => $.runCase.observedPlaceholder)}
+                        aria-label={t(($) => $.runCase.observedLabel, { index: step.index })}
+                        className="mt-1 h-7 text-caption"
+                      />
+                    ) : recorded?.actual ? (
                       <p className="whitespace-pre-wrap break-words">
                         <span className="text-muted-foreground">{t(($) => $.runCase.observed)}: </span>
                         {recorded.actual}
                       </p>
                     ) : null}
-                    {recorded?.note ? (
-                      <p className="whitespace-pre-wrap break-words text-muted-foreground">{recorded.note}</p>
-                    ) : null}
                   </div>
-                  {recorded ? (
-                    <span className={`shrink-0 font-medium ${stepResultClass(recorded.result)}`}>
-                      {isKnownStepVerdict(recorded.result)
-                        ? t(($) => $.runCase.stepResult[recorded.result as KnownStepVerdict])
-                        : recorded.result}
+                  {editable ? (
+                    <NativeSelect
+                      value={isKnownStepVerdict(verdict) ? verdict : ""}
+                      aria-label={t(($) => $.runCase.stepResultLabel, { index: step.index })}
+                      onChange={(event) => onChange(step.index, { result: event.target.value })}
+                      className={`h-7 w-28 shrink-0 text-caption ${stepResultClass(verdict)}`}
+                    >
+                      <option value="">{t(($) => $.runCase.stepUnset)}</option>
+                      {STEP_VERDICTS.map((value) => (
+                        <option key={value} value={value}>
+                          {t(($) => $.runCase.stepResult[value])}
+                        </option>
+                      ))}
+                    </NativeSelect>
+                  ) : recorded ? (
+                    <span className={`shrink-0 font-medium ${stepResultClass(verdict)}`}>
+                      {isKnownStepVerdict(verdict) ? t(($) => $.runCase.stepResult[verdict]) : verdict}
                     </span>
                   ) : null}
                 </li>
@@ -840,17 +951,57 @@ function RunCaseProcedure({
 }
 
 /** Files the executor uploaded for this case — what a verdict is checked against. */
-function RunCaseEvidence({ runCaseId }: { runCaseId: string }) {
+function RunCaseEvidence({ runCaseId, canUpload }: { runCaseId: string; canUpload: boolean }) {
   const { t } = useT("testing");
   const wsId = useWorkspaceId();
   const { data: files = [], isLoading } = useQuery(testRunCaseEvidenceOptions(wsId, runCaseId));
   const preview = useAttachmentPreview();
   const download = useDownloadAttachment();
+  const upload = useUploadTestRunCaseEvidence();
+  const fileInput = useRef<HTMLInputElement>(null);
+
+  async function attach(selected: FileList | null) {
+    for (const file of Array.from(selected ?? [])) {
+      if (file.size > MAX_FILE_SIZE) {
+        toast.error(t(($) => $.runCase.evidenceTooLarge, { name: file.name }));
+        continue;
+      }
+      try {
+        await upload.mutateAsync({ runCaseId, file });
+      } catch (err) {
+        toast.error(err instanceof Error && err.message ? err.message : t(($) => $.runCase.evidenceFailed));
+      }
+    }
+    if (fileInput.current) fileInput.current.value = "";
+  }
+
   if (isLoading) return null;
   return (
     <div>
-      <div className="mb-1 text-caption font-medium text-muted-foreground">
-        {t(($) => $.runCase.evidence)}
+      <div className="mb-1 flex items-center gap-2 text-caption font-medium text-muted-foreground">
+        <span>{t(($) => $.runCase.evidence)}</span>
+        {canUpload ? (
+          <>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-6 gap-1 px-1.5 text-caption"
+              disabled={upload.isPending}
+              onClick={() => fileInput.current?.click()}
+            >
+              <Paperclip className="h-3 w-3" />
+              {t(($) => $.runCase.addEvidence)}
+            </Button>
+            <input
+              ref={fileInput}
+              type="file"
+              multiple
+              hidden
+              aria-label={t(($) => $.runCase.addEvidence)}
+              onChange={(event) => void attach(event.target.files)}
+            />
+          </>
+        ) : null}
       </div>
       {files.length === 0 ? (
         <p className="text-caption text-muted-foreground">{t(($) => $.runCase.evidenceEmpty)}</p>
