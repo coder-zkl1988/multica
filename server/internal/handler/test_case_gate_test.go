@@ -75,3 +75,16 @@ func TestApproveTestCaseNeedsExecutableSteps(t *testing.T) {
 		t.Errorf("approve refused with %q, want the reason to name the steps", resp.Text())
 	}
 }
+
+// The editor sends the steps with every save; re-sending a legacy active
+// case's unchanged (empty) steps must not block an unrelated title fix.
+func TestLegacyActiveCaseStaysEditable(t *testing.T) {
+	projectID := newTestCaseProject(t)
+	legacy := createTestCaseForTest(t, map[string]any{"project_id": projectID, "title": "Legacy case", "steps": executableSteps})
+	dbfx.Exec(t, `UPDATE test_case SET steps = '[]'::jsonb WHERE id = $1`, legacy.ID)
+	testutil.Call(t, testHandler.UpdateTestCase, withURLParam(newRequest("PUT", "/api/test-cases/"+legacy.Key+"?workspace_id="+testWorkspaceID,
+		map[string]any{"title": "Legacy case, renamed", "steps": []map[string]any{}}), "ref", legacy.Key)).Want(http.StatusOK)
+	// Changing the steps still has to leave it executable.
+	testutil.Call(t, testHandler.UpdateTestCase, withURLParam(newRequest("PUT", "/api/test-cases/"+legacy.Key+"?workspace_id="+testWorkspaceID,
+		map[string]any{"steps": []map[string]any{{"action": "Open the page"}}}), "ref", legacy.Key)).Want(http.StatusBadRequest)
+}

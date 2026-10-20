@@ -856,10 +856,13 @@ export function useRealtimeSync(
       test_case: () => {
         // Coverage links and test points change what an issue's test block
         // shows, and that block is keyed under the issue, not the case tree.
+        // A case written, approved or retired also changes what a plan's rule
+        // selects, so the next-round preview under the plan tree refreshes too.
         const wsId = getCurrentWsId();
         if (wsId) {
           qc.invalidateQueries({ queryKey: testCaseKeys.all(wsId) });
           qc.invalidateQueries({ queryKey: issueTestCaseKeys.all(wsId) });
+          qc.invalidateQueries({ queryKey: testPlanKeys.all(wsId) });
         }
       },
       test_generation_job: () => {

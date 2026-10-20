@@ -58,12 +58,24 @@ func cleanStrings(values []string) []string {
 	return out
 }
 
+func keepNonBlank(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" && !slices.Contains(out, value) {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
 // normalizeTestPlanSelector validates a rule and stores issues as ids, so a
 // renamed prefix or a renumbered issue cannot silently change what it picks.
 func (h *Handler) normalizeTestPlanSelector(r *http.Request, wsUUID pgtype.UUID, in TestPlanSelector) (TestPlanSelector, string) {
 	out := TestPlanSelector{
-		AllActive:  in.AllActive,
-		Modules:    cleanStrings(in.Modules),
+		AllActive: in.AllActive,
+		// Module names are matched exactly as stored, so they are not
+		// trimmed — only blanks and repeats are dropped.
+		Modules:    keepNonBlank(in.Modules),
 		Priorities: cleanStrings(in.Priorities),
 		CaseTypes:  cleanStrings(in.CaseTypes),
 	}
@@ -107,10 +119,30 @@ func (h *Handler) planRoundCases(ctx context.Context, plan db.TestPlan) ([]testP
 	if err != nil {
 		return nil, fmt.Errorf("list the plan's cases: %w", err)
 	}
+	// A listed case that no longer exists (deleted before plans were swept
+	// on delete) is dropped, as a deprecated one is later: the round runs
+	// what is left instead of failing on a dangling id.
+	manualIDs := make([]pgtype.UUID, len(manual))
+	for i, pc := range manual {
+		manualIDs[i] = pc.TestCaseID
+	}
+	existing := map[string]struct{}{}
+	if len(manualIDs) > 0 {
+		rows, err := h.Queries.ListTestCaseSummariesByIDs(ctx, db.ListTestCaseSummariesByIDsParams{WorkspaceID: plan.WorkspaceID, CaseIds: manualIDs})
+		if err != nil {
+			return nil, fmt.Errorf("resolve the plan's cases: %w", err)
+		}
+		for _, row := range rows {
+			existing[uuidToString(row.ID)] = struct{}{}
+		}
+	}
 	out := make([]testPlanCaseSource, 0, len(manual))
 	seen := make(map[string]struct{}, len(manual))
 	for _, pc := range manual {
 		id := uuidToString(pc.TestCaseID)
+		if _, ok := existing[id]; !ok {
+			continue
+		}
 		seen[id] = struct{}{}
 		out = append(out, testPlanCaseSource{id: id, source: "manual"})
 	}

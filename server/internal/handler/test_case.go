@@ -311,6 +311,20 @@ func testCaseStepsProblem(steps []TestCaseStep) string {
 
 // decodeTestCaseSteps reads the persisted steps column. A malformed column
 // decodes to no steps, which testCaseStepsProblem then reports.
+// sameTestCaseSteps compares two normalized step lists by what an executor
+// reads: action, expected result and repository, in order.
+func sameTestCaseSteps(a, b []TestCaseStep) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Action != b[i].Action || a[i].Expected != b[i].Expected || a[i].Repo != b[i].Repo {
+			return false
+		}
+	}
+	return true
+}
+
 func decodeTestCaseSteps(raw []byte) []TestCaseStep {
 	steps := []TestCaseStep{}
 	if len(raw) == 0 {
@@ -735,7 +749,11 @@ func (h *Handler) UpdateTestCase(w http.ResponseWriter, r *http.Request) {
 	if params.Status.Valid {
 		effectiveStatus = params.Status.String
 	}
-	if effectiveStatus == "active" && (req.Steps != nil || (params.Status.Valid && current.Status != "active")) {
+	// The editor sends the steps with every save, so "the steps changed" is
+	// compared, not assumed: re-sending a legacy case's unchanged steps must
+	// not block a title fix.
+	stepsChanged := req.Steps != nil && !sameTestCaseSteps(normalizeTestCaseSteps(*req.Steps), decodeTestCaseSteps(current.Steps))
+	if effectiveStatus == "active" && (stepsChanged || (params.Status.Valid && current.Status != "active")) {
 		effectiveSteps := decodeTestCaseSteps(current.Steps)
 		if req.Steps != nil {
 			effectiveSteps = normalizeTestCaseSteps(*req.Steps)
@@ -947,6 +965,14 @@ func (h *Handler) DeleteTestCase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := qtx.DeleteTestCaseTestPointLinksForCase(r.Context(), db.DeleteTestCaseTestPointLinksForCaseParams{
+		TestCaseID: testCase.ID, WorkspaceID: testCase.WorkspaceID,
+	}); err != nil {
+		h.writeTestCaseWriteError(w, r, err, "delete")
+		return
+	}
+	// A plan that listed the case would otherwise keep a dangling id, and
+	// every round of that plan would fail on it.
+	if err := qtx.DeleteTestPlanCasesForCase(r.Context(), db.DeleteTestPlanCasesForCaseParams{
 		TestCaseID: testCase.ID, WorkspaceID: testCase.WorkspaceID,
 	}); err != nil {
 		h.writeTestCaseWriteError(w, r, err, "delete")

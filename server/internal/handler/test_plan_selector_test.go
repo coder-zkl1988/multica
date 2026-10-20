@@ -50,10 +50,12 @@ func TestTestPlanSelectorIsValidated(t *testing.T) {
 		updatePlanSelector(t, plan.ID, selector).Want(http.StatusBadRequest)
 	}
 	var updated TestPlanResponse
-	updatePlanSelector(t, plan.ID, map[string]any{"modules": []string{" checkout ", "checkout", ""}, "priorities": []string{"p0"}}).
+	updatePlanSelector(t, plan.ID, map[string]any{"modules": []string{" checkout ", "checkout", "", "checkout"}, "priorities": []string{" p0 ", "p0"}}).
 		Want(http.StatusOK).JSON(&updated)
-	if !slices.Equal(updated.Selector.Modules, []string{"checkout"}) || !slices.Equal(updated.Selector.Priorities, []string{"p0"}) {
-		t.Fatalf("selector = %+v, want trimmed and de-duplicated", updated.Selector)
+	// Modules are matched exactly as stored (TestPlanRuleMatchesModulesExactly),
+	// so they keep their spelling; enum values are trimmed.
+	if !slices.Equal(updated.Selector.Modules, []string{" checkout ", "checkout"}) || !slices.Equal(updated.Selector.Priorities, []string{"p0"}) {
+		t.Fatalf("selector = %+v, want blanks and repeats dropped", updated.Selector)
 	}
 	var cleared TestPlanResponse
 	updatePlanSelector(t, plan.ID, map[string]any{}).Want(http.StatusOK).JSON(&cleared)
@@ -132,5 +134,54 @@ func TestPlanThatSelectsNothingRefusesARound(t *testing.T) {
 	})).Want(http.StatusBadRequest)
 	if !strings.Contains(resp.Text(), "selects no cases") {
 		t.Fatalf("refused with %q, want it to say the plan selects nothing", resp.Text())
+	}
+}
+
+// A deleted case leaves every plan that listed it, and a plan still holding
+// a dangling id from before that sweep runs what is left.
+func TestPlansOutliveTheirDeletedCases(t *testing.T) {
+	projectID := newTestRunProject(t)
+	plan := createTestPlanForRun(t, projectID)
+	kept := createCaseInModule(t, projectID, "orders", "p1", "active")
+	gone := createCaseInModule(t, projectID, "orders", "p1", "active")
+	addCaseToPlan(t, plan.ID, kept.ID, 0)
+	addCaseToPlan(t, plan.ID, gone.ID, 1)
+	testutil.Call(t, testHandler.DeleteTestCase, withURLParam(
+		newRequest("DELETE", "/api/test-cases/"+gone.Key+"?workspace_id="+testWorkspaceID, nil), "ref", gone.Key,
+	)).WantOneOf(http.StatusOK, http.StatusNoContent)
+	var listed int
+	dbfx.QueryRow(t, `SELECT count(*) FROM test_plan_case WHERE plan_id = $1`, plan.ID).Scan(&listed)
+	if listed != 1 {
+		t.Fatalf("plan rows after deleting a listed case = %d, want 1", listed)
+	}
+
+	// A row left behind before deletes swept plans.
+	dbfx.Exec(t, `INSERT INTO test_plan_case (plan_id, workspace_id, test_case_id, position) VALUES ($1, $2, gen_random_uuid(), 2)`, plan.ID, testWorkspaceID)
+	var run TestRunResponse
+	testutil.Call(t, testHandler.CreateTestRun, newRequest("POST", "/api/test-runs?workspace_id="+testWorkspaceID, map[string]any{
+		"plan_id": plan.ID, "title": "After a delete",
+	})).Want(http.StatusCreated).JSON(&run)
+	if got := roundCaseIDs(t, run.ID); !slices.Equal(got, []string{kept.ID}) {
+		t.Fatalf("round cases = %v, want only the case that still exists", got)
+	}
+}
+
+// Module names are matched as stored; a rule must not trim them into a value
+// no case carries.
+func TestPlanRuleMatchesModulesExactly(t *testing.T) {
+	projectID := newTestRunProject(t)
+	plan := createTestPlanForRun(t, projectID)
+	spaced := createCaseInModule(t, projectID, " checkout ", "p1", "active")
+	var updated TestPlanResponse
+	updatePlanSelector(t, plan.ID, map[string]any{"modules": []string{" checkout ", "  "}}).Want(http.StatusOK).JSON(&updated)
+	if !slices.Equal(updated.Selector.Modules, []string{" checkout "}) {
+		t.Fatalf("stored modules = %q, want the module name kept as is", updated.Selector.Modules)
+	}
+	var run TestRunResponse
+	testutil.Call(t, testHandler.CreateTestRun, newRequest("POST", "/api/test-runs?workspace_id="+testWorkspaceID, map[string]any{
+		"plan_id": plan.ID, "title": "Spaced module",
+	})).Want(http.StatusCreated).JSON(&run)
+	if got := roundCaseIDs(t, run.ID); !slices.Equal(got, []string{spaced.ID}) {
+		t.Fatalf("round cases = %v, want the case in the spaced module", got)
 	}
 }
