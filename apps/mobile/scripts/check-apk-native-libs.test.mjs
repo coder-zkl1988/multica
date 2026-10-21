@@ -131,16 +131,16 @@ test("resolves imports through the whole DT_NEEDED tree and reports what is left
 // REQUIRE_ANDROID_TOOLCHAIN=1 so a missing NDK fails instead of skipping.
 function toolchain() {
   try {
-    return { ...findNdk(undefined), zipalign: findZipalign(undefined) };
+    return { tools: { ...findNdk(undefined), zipalign: findZipalign(undefined) }, skip: false };
   } catch (error) {
     if (process.env.REQUIRE_ANDROID_TOOLCHAIN === "1") throw error;
-    return null;
+    return { tools: null, skip: `Android toolchain unavailable: ${error.message}` };
   }
 }
 
-const tools = toolchain();
+const { tools, skip } = toolchain();
 
-test("negative control: flags the fbjni 0.8.1 / NDK r27.1 libc++ skew and 4 KB pages", { skip: tools ? false : "no Android NDK and build-tools 35+ zipalign found" }, (t) => {
+test("negative control: flags the fbjni 0.8.1 / NDK r27.1 libc++ skew and 4 KB pages", { skip }, (t) => {
   const dir = mkdtempSync(join(tmpdir(), "apk-native-libs-e2e-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const clang = join(tools.prebuilt, "bin/clang");
