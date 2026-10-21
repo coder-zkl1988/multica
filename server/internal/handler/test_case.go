@@ -306,10 +306,33 @@ const agentCannotRetireTestCase = "an agent cannot take an active test case out 
 // its history next).
 const agentCannotReactivateTestCase = "an agent cannot change the status of a deprecated test case; tell the person why it should run again"
 
-// agentCannotClaimCoverage is the refusal for an agent linking an active case
-// to an issue or test point: the case's past passes would count for it at
-// once, with nobody having checked the claim.
-const agentCannotClaimCoverage = "an agent cannot claim that an active test case verifies an issue or test point; propose the link in a generation run (an update naming the test points) or tell the person"
+// agentCannotClaimCoverage is the refusal for an agent linking a case that
+// has been live to an issue or test point: the case's past passes would count
+// for it at once (or as soon as a member reactivates it), with nobody having
+// checked the claim.
+const agentCannotClaimCoverage = "an agent may link only a draft nobody approved to an issue or test point; for a case that has been live, propose the link in a generation run (an update naming the test points) or tell the person"
+
+// agentMayLinkTestCase is whether an agent may draw coverage links from a
+// case: only a draft nobody has approved. An active case, a deprecated one, or
+// a draft that was approved before carries results that count for a link once
+// the case is active.
+func agentMayLinkTestCase(tc db.TestCase) bool {
+	return tc.Status == "draft" && !tc.ReviewedAt.Valid
+}
+
+// agentLinkStillAllowed re-reads the case under its row lock inside the link
+// transaction. The gate ran on a read taken before it: an approval that landed
+// in between would turn the agent's link into a claim on a live case. ok is
+// false when it did; the caller answers 409.
+func agentLinkStillAllowed(ctx context.Context, qtx *db.Queries, tc db.TestCase) (bool, error) {
+	locked, err := qtx.LockTestCase(ctx, db.LockTestCaseParams{ID: tc.ID, WorkspaceID: tc.WorkspaceID})
+	if err != nil {
+		return false, err
+	}
+	return agentMayLinkTestCase(locked), nil
+}
+
+const agentLinkRaced = "the test case was approved or changed while this link was in flight; reload it and try again"
 
 // agentCannotNarrowTestPlan is the refusal for an agent that tries to shrink a
 // regression: a plan's cases, rule and status decide what every later round
@@ -700,6 +723,15 @@ func (h *Handler) CreateTestCase(w http.ResponseWriter, r *http.Request) {
 		businessRules = []string{}
 	}
 
+	// A member creating a case live has approved it. The stamp is what tells
+	// it apart, once moved back to draft, from a draft nobody approved.
+	var reviewedBy pgtype.UUID
+	var reviewedAt pgtype.Timestamptz
+	if !isAgent && status == "active" {
+		reviewedBy = userUUID
+		reviewedAt = pgtype.Timestamptz{Time: time.Now(), Valid: true}
+	}
+
 	tx, err := h.TxStarter.Begin(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to start transaction")
@@ -738,6 +770,8 @@ func (h *Handler) CreateTestCase(w http.ResponseWriter, r *http.Request) {
 		SourceRefs:           sourceRefs,
 		CreatedBy:            userUUID,
 		UpdatedBy:            userUUID,
+		ReviewedBy:           reviewedBy,
+		ReviewedAt:           reviewedAt,
 	})
 	if err != nil {
 		h.writeTestCaseWriteError(w, r, err, "create")
@@ -885,6 +919,14 @@ func (h *Handler) UpdateTestCase(w http.ResponseWriter, r *http.Request) {
 			params.Status = pgtype.Text{String: "active", Valid: true}
 			params.SourceRefs = withoutAwaitingSteps(current.SourceRefs)
 		}
+	}
+	// A member making a case live reviews it, whichever control did it: an
+	// update that activates a case stamps the reviewer as approve does, so
+	// "a draft nobody approved" means what it says when the case is moved
+	// back to draft later.
+	if actorType != "agent" && params.Status.Valid && params.Status.String == "active" && current.Status != "active" {
+		params.ReviewedBy = userUUID
+		params.ReviewedAt = pgtype.Timestamptz{Time: time.Now(), Valid: true}
 	}
 	if req.TestData != nil {
 		params.TestData = marshalJSONColumn(*req.TestData, "{}")

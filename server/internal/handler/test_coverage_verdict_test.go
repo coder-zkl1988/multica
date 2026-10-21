@@ -162,6 +162,18 @@ func TestAStepLessDraftLeavesItsPointUncovered(t *testing.T) {
 	if row := projectCoverageRow(t, projectID, issueID); row.ReviewPoints != 0 || row.State != "gaps" {
 		t.Fatalf("coverage row = %+v, want gaps with nothing in review", row)
 	}
+	// Blank is what the approval gate calls blank: Unicode spaces (here a
+	// no-break and an ideographic space) are no more an action than ASCII ones.
+	for _, blank := range []string{"\u00a0", "\u3000", "\u2028 \t"} {
+		testutil.Call(t, testHandler.UpdateTestCase, withURLParam(newRequest("PUT", "/api/test-cases/"+draft.Key+"?workspace_id="+testWorkspaceID,
+			map[string]any{"steps": []map[string]any{{"action": blank, "expected": "Refund is rejected"}}, "status": "draft"}), "ref", draft.Key)).Want(http.StatusOK)
+		if state := pointState(t, issueID); state != "uncovered" {
+			t.Fatalf("point named by a draft whose action is %q = %q, want uncovered", blank, state)
+		}
+		if row := projectCoverageRow(t, projectID, issueID); row.ReviewPoints != 0 || row.State != "gaps" {
+			t.Fatalf("coverage row with action %q = %+v, want gaps with nothing in review", blank, row)
+		}
+	}
 	testutil.Call(t, testHandler.UpdateTestCase, withURLParam(newRequest("PUT", "/api/test-cases/"+draft.Key+"?workspace_id="+testWorkspaceID,
 		map[string]any{"steps": executableSteps, "status": "draft"}), "ref", draft.Key)).Want(http.StatusOK)
 	if state := pointState(t, issueID); state != "in_review" {

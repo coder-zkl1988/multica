@@ -781,7 +781,8 @@ func (h *Handler) requireAutopilotActingMember(w http.ResponseWriter, r *http.Re
 
 // refuseAgentOnRegressionAutopilot answers 403 when an agent tries to change
 // what a test_run autopilot runs or when it runs — its plan, mode, project,
-// status, schedule — or to delete it. Retargeting the nightly regression to a
+// assignee, description (each case task's prompt), status, triggers and their
+// webhook credentials — or to delete it. Retargeting the nightly regression to a
 // narrower plan, or pausing it, takes failing cases out of regression as
 // surely as removing them from the plan (TS-043). It reports whether it
 // refused.
@@ -792,7 +793,7 @@ func (h *Handler) refuseAgentOnRegressionAutopilot(w http.ResponseWriter, r *htt
 	if actorType, _ := h.resolveActor(r, "", workspaceID); actorType != "agent" {
 		return false
 	}
-	writeError(w, http.StatusForbidden, "an agent cannot retarget, pause, reschedule or delete a regression autopilot; tell the person what should change and why")
+	writeError(w, http.StatusForbidden, "an agent cannot change what a regression autopilot runs, who runs it or when, or delete it; tell the person what should change and why")
 	return true
 }
 
@@ -1101,13 +1102,15 @@ func (h *Handler) UpdateAutopilot(w http.ResponseWriter, r *http.Request) {
 	var rawFields map[string]json.RawMessage
 	json.Unmarshal(bodyBytes, &rawFields)
 	// What a regression autopilot runs, who runs it, and whether it runs is
-	// a member's call; an agent may still rename or describe it. Decided on
-	// the decoded fields as well as the raw keys: encoding/json matches keys
-	// case-insensitively, so {"Status": "paused"} must not slip past a
-	// lowercase key lookup.
-	guarded := req.Status != nil || req.ExecutionMode != nil || req.TestPlanID != nil || req.ProjectID != nil || req.AssigneeID != nil
+	// a member's call; an agent may still rename it. The description counts
+	// as what it runs: a round hands it to every case task as its prompt.
+	// Decided on the decoded fields as well as the raw keys: encoding/json
+	// matches keys case-insensitively, so {"Status": "paused"} must not slip
+	// past a lowercase key lookup.
+	guarded := req.Status != nil || req.ExecutionMode != nil || req.TestPlanID != nil || req.ProjectID != nil ||
+		req.AssigneeType != nil || req.AssigneeID != nil || req.Description != nil
 	for key := range rawFields {
-		for _, field := range []string{"status", "execution_mode", "test_plan_id", "project_id", "assignee_id"} {
+		for _, field := range []string{"status", "execution_mode", "test_plan_id", "project_id", "assignee_type", "assignee_id", "description"} {
 			if strings.EqualFold(key, field) {
 				guarded = true
 			}
@@ -1609,6 +1612,9 @@ func (h *Handler) CreateAutopilotTrigger(w http.ResponseWriter, r *http.Request)
 	}
 	actor, ok := h.requireAutopilotWrite(w, r, ap, workspaceID)
 	if !ok {
+		return
+	}
+	if h.refuseAgentOnRegressionAutopilot(w, r, ap, workspaceID) {
 		return
 	}
 	// A new trigger changes what / when the rule fires — a substantive publish, so
@@ -2226,6 +2232,9 @@ func (h *Handler) RotateAutopilotTriggerWebhookToken(w http.ResponseWriter, r *h
 	if !ok {
 		return
 	}
+	if h.refuseAgentOnRegressionAutopilot(w, r, ap, workspaceID) {
+		return
+	}
 
 	triggerUUID, ok := parseUUIDOrBadRequest(w, triggerID, "trigger id")
 	if !ok {
@@ -2293,6 +2302,9 @@ func (h *Handler) SetAutopilotTriggerSigningSecret(w http.ResponseWriter, r *htt
 	}
 	actor, ok := h.requireAutopilotWrite(w, r, ap, workspaceID)
 	if !ok {
+		return
+	}
+	if h.refuseAgentOnRegressionAutopilot(w, r, ap, workspaceID) {
 		return
 	}
 	triggerUUID, ok := parseUUIDOrBadRequest(w, triggerID, "trigger id")

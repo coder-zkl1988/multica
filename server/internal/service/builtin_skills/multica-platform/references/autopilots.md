@@ -111,6 +111,15 @@ unaffected — except that `get` redacts the webhook token unless the human you
 act for may write, since holding that token is equivalent to being able to
 trigger.
 
+A regression (`test_run`) autopilot is narrower still for you, whoever you act
+for: changing its status, mode, plan, project, assignee or description (each
+round hands the description to every case task as its prompt), adding, editing
+or deleting a trigger, rotating a webhook URL, setting a signing secret, and
+deleting the autopilot all answer `403`. Retargeting or pausing the nightly
+regression takes failing cases out of it as surely as removing them from the
+plan. Renaming it and `trigger` stay open. When you are refused,
+tell the person what should change and why.
+
 ## Side effects
 
 These mutate durable state or start work: `create`, `update`, `delete`, trigger

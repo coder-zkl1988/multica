@@ -379,13 +379,30 @@ func (q *Queries) ListIssueTestPoints(ctx context.Context, arg ListIssueTestPoin
 }
 
 const listProjectTestCoverage = `-- name: ListProjectTestCoverage :many
-WITH project_issues AS (
+WITH RECURSIVE issue_window_base AS MATERIALIZED (
+    SELECT w.id, w.parent_issue_id FROM issue w
+    WHERE w.workspace_id = $1
+    ORDER BY w.number DESC
+    LIMIT $2::bigint
+),
+issue_window_visible(id, parent_issue_id) AS (
+    SELECT b.id, b.parent_issue_id FROM issue_window_base b
+    UNION
+    SELECT parent.id, parent.parent_issue_id
+    FROM issue parent
+    JOIN issue_window_visible child ON child.parent_issue_id = parent.id
+    WHERE parent.workspace_id = $1
+),
+project_issues AS (
     SELECT i.id, i.number, i.title, i.status
     FROM issue i
-    WHERE i.workspace_id = $1 AND i.project_id = $2
-      AND NOT (i.status = ANY($3::text[]))
+    WHERE i.workspace_id = $1 AND i.project_id = $3
+      AND NOT (i.status = ANY($4::text[]))
+      -- An enforced issue window (window_limit set) applies before the limit,
+      -- as in every other issue list.
+      AND ($2::bigint IS NULL OR i.id IN (SELECT id FROM issue_window_visible))
     ORDER BY i.number DESC
-    LIMIT $4
+    LIMIT $5
 ),
 relevant_cases AS (
     SELECT tci.test_case_id FROM test_case_issue tci
@@ -404,8 +421,11 @@ draft_cases AS (
       AND jsonb_typeof(tc.steps) = 'array' AND jsonb_array_length(tc.steps) > 0
       AND NOT EXISTS (
           SELECT 1 FROM jsonb_array_elements(tc.steps) s
-          WHERE COALESCE(s->>'action', '') ~ '^\s*$'
-             OR COALESCE(s->>'expected', '') ~ '^\s*$'
+          -- Blank as the approval gate's strings.TrimSpace sees it: the
+          -- class is Go's unicode.IsSpace set, since \s follows the
+          -- database's locale and misses no-break and other Unicode spaces.
+          WHERE COALESCE(s->>'action', '') ~ '^[\t\n\v\f\r \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]*$'
+             OR COALESCE(s->>'expected', '') ~ '^[\t\n\v\f\r \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]*$'
       )
 ),
 active_case_latest AS (
@@ -471,6 +491,7 @@ ORDER BY pi.number DESC
 
 type ListProjectTestCoverageParams struct {
 	WorkspaceID    pgtype.UUID `json:"workspace_id"`
+	WindowLimit    pgtype.Int8 `json:"window_limit"`
 	ProjectID      pgtype.UUID `json:"project_id"`
 	ClosedStatuses []string    `json:"closed_statuses"`
 	RowLimit       int32       `json:"row_limit"`
@@ -501,9 +522,13 @@ type ListProjectTestCoverageRow struct {
 // owed tests and are dropped before the limit, so the limit counts issues the
 // page can show. Every count is aggregated once per issue and joined, so the
 // cost grows with the rows read, not with their square.
+// The issue window: the workspace's newest window_limit issues and all their
+// ancestors, however old. A CTE is only evaluated when read, so with the
+// window off it costs nothing.
 func (q *Queries) ListProjectTestCoverage(ctx context.Context, arg ListProjectTestCoverageParams) ([]ListProjectTestCoverageRow, error) {
 	rows, err := q.db.Query(ctx, listProjectTestCoverage,
 		arg.WorkspaceID,
+		arg.WindowLimit,
 		arg.ProjectID,
 		arg.ClosedStatuses,
 		arg.RowLimit,

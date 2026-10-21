@@ -267,11 +267,30 @@ func (h *Handler) dispatchTestRunCases(ctx context.Context, in testRunDispatchIn
 	}
 	var firstTaskID pgtype.UUID
 	created := 0
+	type boundCase struct {
+		caseID pgtype.UUID
+		taskID pgtype.UUID
+	}
+	var bound []boundCase
 	for _, rc := range runCases[:limit] {
 		agentTask, err := h.createTestRunCaseTask(ctx, h.Queries, input, rc)
 		if err != nil {
+			// The round is only recorded as dispatched after the loop. A
+			// failure part-way would otherwise leave cases bound to live tasks
+			// of a round that is still "pending": every retry would hit the
+			// bound cases, and those tasks could never write. Withdraw them so
+			// the round can simply be dispatched again.
+			for _, b := range bound {
+				if _, cancelErr := h.Queries.CancelAgentTask(ctx, b.taskID); cancelErr != nil && !errors.Is(cancelErr, pgx.ErrNoRows) {
+					slog.Warn("withdraw a test run case task after a failed dispatch", "task_id", uuidToString(b.taskID), "error", cancelErr)
+				}
+				if clearErr := h.Queries.ClearTestRunCaseAgentTask(ctx, db.ClearTestRunCaseAgentTaskParams{ID: b.caseID, WorkspaceID: in.wsUUID, AgentTaskID: b.taskID}); clearErr != nil {
+					slog.Warn("unbind a test run case after a failed dispatch", "run_case_id", uuidToString(b.caseID), "error", clearErr)
+				}
+			}
 			return testRunDispatchOutcome{}, fmt.Errorf("dispatch case %d of %d: %w", created+1, limit, err)
 		}
+		bound = append(bound, boundCase{caseID: rc.ID, taskID: agentTask.ID})
 		if !firstTaskID.Valid {
 			firstTaskID = agentTask.ID
 		}

@@ -212,18 +212,23 @@ WHERE workspace_id = sqlc.arg(workspace_id) AND id = ANY(sqlc.arg(case_ids)::uui
 -- name: SettleOpenTestRunCase :one
 -- The task hooks' fallback settle: only a case nobody recorded yet. A verdict
 -- the agent's CLI write committed meanwhile is never overwritten; no row
--- means it was already recorded. executed_at is left alone when the round
--- was aborted (a NULL argument), so that settle never becomes the case's
--- latest result.
-UPDATE test_run_case SET
+-- means it was already recorded. executed_at is left alone when the round is
+-- aborted — decided here, on the round's status when the settle is written,
+-- not on a status the hook read earlier — so a settle into an aborted round
+-- never becomes the case's latest result.
+UPDATE test_run_case AS rc SET
     result           = sqlc.arg(result),
     notes            = sqlc.arg(notes),
     executed_by_type = sqlc.arg(executed_by_type),
     executed_by_id   = sqlc.narg(executed_by_id),
-    executed_at      = COALESCE(sqlc.narg(executed_at), executed_at),
+    executed_at      = CASE
+        WHEN (SELECT r.status FROM test_run r WHERE r.id = rc.run_id AND r.workspace_id = rc.workspace_id) = 'aborted'
+            THEN rc.executed_at
+        ELSE COALESCE(sqlc.narg(executed_at), rc.executed_at)
+    END,
     updated_at       = now()
-WHERE id = sqlc.arg(id) AND workspace_id = sqlc.arg(workspace_id)
-  AND result IN ('pending', 'running')
+WHERE rc.id = sqlc.arg(id) AND rc.workspace_id = sqlc.arg(workspace_id)
+  AND rc.result IN ('pending', 'running')
 RETURNING *;
 
 -- name: CompleteOpenTestRun :one
@@ -271,3 +276,25 @@ UPDATE test_run SET
     updated_at = now()
 WHERE id = $1 AND workspace_id = $2 AND status = 'pending'
 RETURNING *;
+
+-- name: ClearTestRunCaseAgentTask :exec
+-- Unbinds a case from a task a failed dispatch is withdrawing, only if the
+-- case is still bound to that task, so the round can be dispatched again.
+UPDATE test_run_case SET agent_task_id = NULL, updated_at = now()
+WHERE id = $1 AND workspace_id = $2 AND agent_task_id = $3;
+
+-- name: ListTestRunCasesWithEndedTask :many
+-- Open cases whose agent task failed or was cancelled at least grace_seconds
+-- ago without the daemon's /fail hook settling them: the runtime sweeper,
+-- orphan recovery and cancellations end a task directly. The grace leaves a
+-- hook still in flight to settle its own case.
+SELECT rc.id AS run_case_id, rc.run_id, rc.workspace_id, t.status AS task_status,
+       t.error AS task_error, t.failure_reason AS task_failure_reason
+FROM test_run_case rc
+JOIN agent_task_queue t ON t.id = rc.agent_task_id
+WHERE rc.agent_task_id IS NOT NULL
+  AND rc.result IN ('pending', 'running')
+  AND t.status IN ('failed', 'cancelled')
+  AND t.completed_at < now() - make_interval(secs => sqlc.arg(grace_seconds)::double precision)
+ORDER BY t.completed_at
+LIMIT sqlc.arg(row_limit);

@@ -789,6 +789,10 @@ func main() {
 	// Source-context cleanup is object-store work, so it gets its own goroutine
 	// instead of a slot in the runtime sweep tick.
 	go runSourceContextSweeper(sweepCtx, taskSvc)
+	// Test run cases whose task ended outside the /fail hook (runtime sweeper,
+	// orphan recovery, cancellations) are settled here so their round can
+	// complete.
+	go runTestRunReconciler(sweepCtx, h)
 	go heartbeatScheduler.Run(sweepCtx)
 	go runAutopilotFailureMonitor(autopilotCtx, queries, bus, envFailureMonitorConfig())
 	if autopilotSvc.QuotaEnabled() {

@@ -419,3 +419,55 @@ func TestPerCaseTaskHooksSettleCasesAndConvergeTheRun(t *testing.T) {
 		t.Errorf("run after every case settled = %s, want completed", runStatus())
 	}
 }
+
+// A dispatch that fails part-way withdraws the case tasks it already queued
+// and unbinds their cases: the round is still pending, so a bound case would
+// make every retry fail and its task could never record a result.
+func TestAFailedDispatchWithdrawsTheTasksItQueued(t *testing.T) {
+	projectID := newTestRunProject(t)
+	a := createTestCaseForRun(t, projectID)
+	b := createTestCaseForRun(t, projectID)
+	runtimeID := dbfx.Runtime(t, "withdraw-runtime", testutil.Cols{"daemon_id": "daemon-withdraw"})
+	agentID := dbfx.Agent(t, "withdraw-agent", runtimeID)
+	run := createTestRunFromCases(t, "Withdrawn dispatch", []string{a.ID, b.ID})
+	ctx := context.Background()
+	dispatch := func() *testutil.Response {
+		return testutil.Call(t, testHandler.DispatchTestRun, withURLParam(
+			newRequest("POST", "/api/test-runs/"+run.ID+"/dispatch?workspace_id="+testWorkspaceID, map[string]any{"agent_id": agentID}),
+			"id", run.ID,
+		))
+	}
+	caseTask := func(testCaseID string) *string {
+		var taskID *string
+		if err := testPool.QueryRow(ctx,
+			`SELECT agent_task_id FROM test_run_case WHERE run_id = $1 AND test_case_id = $2`, run.ID, testCaseID,
+		).Scan(&taskID); err != nil {
+			t.Fatal(err)
+		}
+		return taskID
+	}
+
+	// The second case already holds a task, so binding it fails after the
+	// first case's task was queued and bound.
+	foreign := "00000000-0000-0000-0000-00000000f00d"
+	dbfx.Exec(t, `UPDATE test_run_case SET agent_task_id = $3 WHERE run_id = $1 AND test_case_id = $2`, run.ID, b.ID, foreign)
+	dispatch().Want(http.StatusConflict)
+	if taskID := caseTask(a.ID); taskID != nil {
+		t.Fatalf("case A after the failed dispatch is still bound to %s, want it unbound", *taskID)
+	}
+	var live int
+	if err := testPool.QueryRow(ctx,
+		`SELECT count(*) FROM agent_task_queue WHERE context->>'run_id' = $1 AND status NOT IN ('cancelled', 'failed', 'completed')`, run.ID,
+	).Scan(&live); err != nil {
+		t.Fatal(err)
+	}
+	if live != 0 {
+		t.Fatalf("%d case tasks still live after the failed dispatch, want every queued one withdrawn", live)
+	}
+
+	dbfx.Exec(t, `UPDATE test_run_case SET agent_task_id = NULL WHERE run_id = $1 AND test_case_id = $2`, run.ID, b.ID)
+	dispatch().Want(http.StatusCreated)
+	if caseTask(a.ID) == nil || caseTask(b.ID) == nil {
+		t.Fatal("the retried dispatch left a case without its task")
+	}
+}

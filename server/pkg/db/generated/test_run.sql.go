@@ -91,6 +91,24 @@ func (q *Queries) AddTestPlanCase(ctx context.Context, arg AddTestPlanCaseParams
 	return i, err
 }
 
+const clearTestRunCaseAgentTask = `-- name: ClearTestRunCaseAgentTask :exec
+UPDATE test_run_case SET agent_task_id = NULL, updated_at = now()
+WHERE id = $1 AND workspace_id = $2 AND agent_task_id = $3
+`
+
+type ClearTestRunCaseAgentTaskParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	AgentTaskID pgtype.UUID `json:"agent_task_id"`
+}
+
+// Unbinds a case from a task a failed dispatch is withdrawing, only if the
+// case is still bound to that task, so the round can be dispatched again.
+func (q *Queries) ClearTestRunCaseAgentTask(ctx context.Context, arg ClearTestRunCaseAgentTaskParams) error {
+	_, err := q.db.Exec(ctx, clearTestRunCaseAgentTask, arg.ID, arg.WorkspaceID, arg.AgentTaskID)
+	return err
+}
+
 const completeOpenTestRun = `-- name: CompleteOpenTestRun :one
 UPDATE test_run SET
     status       = 'completed',
@@ -976,6 +994,64 @@ func (q *Queries) ListTestRunCasesByResult(ctx context.Context, arg ListTestRunC
 	return items, nil
 }
 
+const listTestRunCasesWithEndedTask = `-- name: ListTestRunCasesWithEndedTask :many
+SELECT rc.id AS run_case_id, rc.run_id, rc.workspace_id, t.status AS task_status,
+       t.error AS task_error, t.failure_reason AS task_failure_reason
+FROM test_run_case rc
+JOIN agent_task_queue t ON t.id = rc.agent_task_id
+WHERE rc.agent_task_id IS NOT NULL
+  AND rc.result IN ('pending', 'running')
+  AND t.status IN ('failed', 'cancelled')
+  AND t.completed_at < now() - make_interval(secs => $1::double precision)
+ORDER BY t.completed_at
+LIMIT $2
+`
+
+type ListTestRunCasesWithEndedTaskParams struct {
+	GraceSeconds float64 `json:"grace_seconds"`
+	RowLimit     int32   `json:"row_limit"`
+}
+
+type ListTestRunCasesWithEndedTaskRow struct {
+	RunCaseID         pgtype.UUID `json:"run_case_id"`
+	RunID             pgtype.UUID `json:"run_id"`
+	WorkspaceID       pgtype.UUID `json:"workspace_id"`
+	TaskStatus        string      `json:"task_status"`
+	TaskError         pgtype.Text `json:"task_error"`
+	TaskFailureReason pgtype.Text `json:"task_failure_reason"`
+}
+
+// Open cases whose agent task failed or was cancelled at least grace_seconds
+// ago without the daemon's /fail hook settling them: the runtime sweeper,
+// orphan recovery and cancellations end a task directly. The grace leaves a
+// hook still in flight to settle its own case.
+func (q *Queries) ListTestRunCasesWithEndedTask(ctx context.Context, arg ListTestRunCasesWithEndedTaskParams) ([]ListTestRunCasesWithEndedTaskRow, error) {
+	rows, err := q.db.Query(ctx, listTestRunCasesWithEndedTask, arg.GraceSeconds, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListTestRunCasesWithEndedTaskRow{}
+	for rows.Next() {
+		var i ListTestRunCasesWithEndedTaskRow
+		if err := rows.Scan(
+			&i.RunCaseID,
+			&i.RunID,
+			&i.WorkspaceID,
+			&i.TaskStatus,
+			&i.TaskError,
+			&i.TaskFailureReason,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTestRuns = `-- name: ListTestRuns :many
 SELECT id, workspace_id, project_id, plan_id, title, executor_type, executor_id, agent_task_id, environment, build_ref, capability_binding, status, source_run_id, retry_scope, error, started_at, completed_at, created_by, created_at, updated_at, parallelism FROM test_run
 WHERE workspace_id = $1
@@ -1155,15 +1231,19 @@ func (q *Queries) RemoveTestPlanCase(ctx context.Context, arg RemoveTestPlanCase
 }
 
 const settleOpenTestRunCase = `-- name: SettleOpenTestRunCase :one
-UPDATE test_run_case SET
+UPDATE test_run_case AS rc SET
     result           = $1,
     notes            = $2,
     executed_by_type = $3,
     executed_by_id   = $4,
-    executed_at      = COALESCE($5, executed_at),
+    executed_at      = CASE
+        WHEN (SELECT r.status FROM test_run r WHERE r.id = rc.run_id AND r.workspace_id = rc.workspace_id) = 'aborted'
+            THEN rc.executed_at
+        ELSE COALESCE($5, rc.executed_at)
+    END,
     updated_at       = now()
-WHERE id = $6 AND workspace_id = $7
-  AND result IN ('pending', 'running')
+WHERE rc.id = $6 AND rc.workspace_id = $7
+  AND rc.result IN ('pending', 'running')
 RETURNING id, workspace_id, run_id, test_case_id, case_snapshot, position, result, notes, evidence, step_results, duration_ms, executed_by_type, executed_by_id, executed_at, defect_issue_id, created_at, updated_at, agent_task_id
 `
 
@@ -1179,9 +1259,10 @@ type SettleOpenTestRunCaseParams struct {
 
 // The task hooks' fallback settle: only a case nobody recorded yet. A verdict
 // the agent's CLI write committed meanwhile is never overwritten; no row
-// means it was already recorded. executed_at is left alone when the round
-// was aborted (a NULL argument), so that settle never becomes the case's
-// latest result.
+// means it was already recorded. executed_at is left alone when the round is
+// aborted — decided here, on the round's status when the settle is written,
+// not on a status the hook read earlier — so a settle into an aborted round
+// never becomes the case's latest result.
 func (q *Queries) SettleOpenTestRunCase(ctx context.Context, arg SettleOpenTestRunCaseParams) (TestRunCase, error) {
 	row := q.db.QueryRow(ctx, settleOpenTestRunCase,
 		arg.Result,
