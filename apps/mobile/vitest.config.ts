@@ -14,7 +14,8 @@ import path from "node:path";
 // Co-located test files (foo.ts + foo.test.ts) match how the rest of the
 // monorepo organises vitest suites.
 // App configuration tests also run here to cover native prebuild options
-// across environment variants without loading React Native.
+// across environment variants without loading React Native, as do the local
+// config plugins under `plugins/` that rewrite the generated native project.
 export default defineConfig({
   resolve: {
     alias: {
@@ -24,7 +25,12 @@ export default defineConfig({
   test: {
     environment: "node",
     globals: true,
-    include: ["app.config.test.ts", "lib/**/*.test.ts", "data/**/*.test.ts"],
+    include: [
+      "app.config.test.ts",
+      "plugins/**/*.test.ts",
+      "lib/**/*.test.ts",
+      "data/**/*.test.ts",
+    ],
     passWithNoTests: true,
   },
 });

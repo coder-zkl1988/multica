@@ -1,0 +1,22 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    // scripts/check-apk-native-libs.test.mjs builds its negative-control
+    // fixtures with the Android NDK and locates it through these variables.
+    // Turbo's strict env mode hides them from the task, which silently skips
+    // that case in Mobile Verify even though the runner image ships the NDK.
+    // Listing them in `env` passes them through and keeps a toolchain-less
+    // (skipped) result from being replayed for a run that has one.
+    "test": {
+      "env": [
+        "ANDROID_HOME",
+        "ANDROID_SDK_ROOT",
+        "ANDROID_NDK_HOME",
+        "ANDROID_NDK_ROOT",
+        "ANDROID_NDK",
+        "REQUIRE_ANDROID_TOOLCHAIN"
+      ]
+    }
+  }
+}
