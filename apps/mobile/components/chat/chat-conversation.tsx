@@ -13,8 +13,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { Alert, View } from "react-native";
-import { router, Stack } from "expo-router";
-import { useFocusEffect, useIsFocused } from "@react-navigation/native";
+import { router, Stack, useFocusEffect, useIsFocused } from "expo-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { Agent, ChatMessage, ChatPendingTask } from "@multica/core/types";
