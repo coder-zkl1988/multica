@@ -35,15 +35,18 @@ import (
 
 // TestPlanResponse is the outbound representation of a test_plan row.
 type TestPlanResponse struct {
-	ID          string  `json:"id"`
-	WorkspaceID string  `json:"workspace_id"`
-	ProjectID   string  `json:"project_id"`
-	Title       string  `json:"title"`
-	Description string  `json:"description"`
-	Status      string  `json:"status"`
-	CreatedBy   *string `json:"created_by"`
-	CreatedAt   string  `json:"created_at"`
-	UpdatedAt   string  `json:"updated_at"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
+	ProjectID   string `json:"project_id"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	Status      string `json:"status"`
+	// Selector is the plan's rule for picking cases beside its list; the
+	// zero value is no rule.
+	Selector  TestPlanSelector `json:"selector"`
+	CreatedBy *string          `json:"created_by"`
+	CreatedAt string           `json:"created_at"`
+	UpdatedAt string           `json:"updated_at"`
 }
 
 // TestPlanCaseResponse is the outbound representation of a test_plan_case row.
@@ -135,6 +138,7 @@ func testPlanToResponse(plan db.TestPlan) TestPlanResponse {
 		Title:       plan.Title,
 		Description: plan.Description,
 		Status:      plan.Status,
+		Selector:    decodeTestPlanSelector(plan.Selector),
 		CreatedBy:   uuidToPtr(plan.CreatedBy),
 		CreatedAt:   timestampToString(plan.CreatedAt),
 		UpdatedAt:   timestampToString(plan.UpdatedAt),
@@ -335,14 +339,39 @@ func (h *Handler) requireTestRunTaskToken(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusConflict, "this test run has not been dispatched to an agent")
 		return false
 	}
-	if strings.EqualFold(boundTaskID, uuidToString(run.AgentTaskID)) {
+	if rc != nil && rc.AgentTaskID.Valid && strings.EqualFold(boundTaskID, uuidToString(rc.AgentTaskID)) {
 		return true
 	}
-	if rc != nil && rc.AgentTaskID.Valid && strings.EqualFold(boundTaskID, uuidToString(rc.AgentTaskID)) {
+	if strings.EqualFold(boundTaskID, uuidToString(run.AgentTaskID)) {
+		// Per-case dispatch stamps the first case's task onto the round for
+		// older readers; that task still owns only its own case.
+		if rc != nil && h.taskExecutesAnotherCase(r.Context(), boundTaskID, rc.ID) {
+			writeError(w, http.StatusForbidden, "this task executes another case of the round; record only against your own run_case_id")
+			return false
+		}
 		return true
 	}
 	writeError(w, http.StatusForbidden, "this task token does not own the test run")
 	return false
+}
+
+// taskExecutesAnotherCase reports whether a per-case task (its context names a
+// run_case_id) is reaching for a different case. A whole-round task names no
+// case and owns them all.
+func (h *Handler) taskExecutesAnotherCase(ctx context.Context, taskID string, runCaseID pgtype.UUID) bool {
+	id, err := util.ParseUUID(taskID)
+	if err != nil {
+		return true
+	}
+	task, err := h.Queries.GetAgentTask(ctx, id)
+	if err != nil {
+		return true
+	}
+	runCtx, ok := testRunContextForTask(task)
+	if !ok || runCtx.RunCaseID == "" {
+		return false
+	}
+	return !strings.EqualFold(runCtx.RunCaseID, uuidToString(runCaseID))
 }
 
 // buildRunExecutionStatus follows the same pattern as
@@ -483,7 +512,19 @@ func (h *Handler) loadCasesForRun(ctx context.Context, wsUUID pgtype.UUID, rawID
 		} else if tc.ProjectID != projectUUID {
 			return nil, nil, pgtype.UUID{}, &runCasesError{status: http.StatusBadRequest, msg: "all test cases must belong to the same project"}
 		}
+		// A deprecated case describes behaviour that no longer exists, so a
+		// round that executes it reports on nothing. It is left out rather
+		// than refused: a plan keeps its list when a member is deprecated, and
+		// a scheduled regression must not stop running because of it. Drafts
+		// stay runnable — a reviewer trying one out is legitimate — and are
+		// kept out of coverage and verification instead.
+		if tc.Status == "deprecated" {
+			continue
+		}
 		cases = append(cases, tc)
+	}
+	if len(cases) == 0 {
+		return nil, nil, pgtype.UUID{}, &runCasesError{status: http.StatusBadRequest, msg: "every selected test case is deprecated; there is nothing to execute"}
 	}
 
 	// Batch-fetch repos for all cases.
@@ -584,10 +625,11 @@ func (h *Handler) ListTestPlans(w http.ResponseWriter, r *http.Request) {
 }
 
 type CreateTestPlanRequest struct {
-	ProjectID   string `json:"project_id"`
-	Title       string `json:"title"`
-	Description string `json:"description"`
-	Status      string `json:"status"`
+	ProjectID   string            `json:"project_id"`
+	Title       string            `json:"title"`
+	Description string            `json:"description"`
+	Status      string            `json:"status"`
+	Selector    *TestPlanSelector `json:"selector"`
 }
 
 // CreateTestPlan creates a new test plan inside the caller's workspace. The
@@ -633,6 +675,15 @@ func (h *Handler) CreateTestPlan(w http.ResponseWriter, r *http.Request) {
 	if !validateTestCaseEnum(w, "status", status, validTestPlanStatuses) {
 		return
 	}
+	var selector TestPlanSelector
+	if req.Selector != nil {
+		normalized, problem := h.normalizeTestPlanSelector(r, wsUUID, *req.Selector)
+		if problem != "" {
+			writeError(w, http.StatusBadRequest, problem)
+			return
+		}
+		selector = normalized
+	}
 	plan, err := h.Queries.CreateTestPlan(r.Context(), db.CreateTestPlanParams{
 		WorkspaceID: wsUUID,
 		ProjectID:   projectUUID,
@@ -640,6 +691,7 @@ func (h *Handler) CreateTestPlan(w http.ResponseWriter, r *http.Request) {
 		Description: req.Description,
 		Status:      status,
 		CreatedBy:   userUUID,
+		Selector:    marshalJSONColumn(selector, "{}"),
 	})
 	if err != nil {
 		slog.Error("create test plan failed", append(logger.RequestAttrs(r), "error", err)...)
@@ -664,6 +716,8 @@ type UpdateTestPlanRequest struct {
 	Title       *string `json:"title"`
 	Description *string `json:"description"`
 	Status      *string `json:"status"`
+	// Selector replaces the rule; `{}` clears it, omitted keeps it.
+	Selector *TestPlanSelector `json:"selector"`
 }
 
 // UpdateTestPlan applies a partial update to a plan. Any omitted field is
@@ -683,6 +737,13 @@ func (h *Handler) UpdateTestPlan(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// A plan's rule and status decide what every later round runs; an agent
+	// may rename or describe a plan, not shrink its regression.
+	actorType, actorID := h.resolveActor(r, userID, workspaceID)
+	if actorType == "agent" && (req.Selector != nil || req.Status != nil) {
+		writeError(w, http.StatusForbidden, agentCannotNarrowTestPlan)
+		return
+	}
 	params := db.UpdateTestPlanParams{ID: plan.ID, WorkspaceID: wsUUID}
 	if req.Title != nil {
 		if strings.TrimSpace(*req.Title) == "" {
@@ -700,6 +761,14 @@ func (h *Handler) UpdateTestPlan(w http.ResponseWriter, r *http.Request) {
 		}
 		params.Status = pgtype.Text{String: *req.Status, Valid: true}
 	}
+	if req.Selector != nil {
+		normalized, problem := h.normalizeTestPlanSelector(r, wsUUID, *req.Selector)
+		if problem != "" {
+			writeError(w, http.StatusBadRequest, problem)
+			return
+		}
+		params.Selector = marshalJSONColumn(normalized, "{}")
+	}
 	updated, err := h.Queries.UpdateTestPlan(r.Context(), params)
 	if err != nil {
 		slog.Error("update test plan failed", append(logger.RequestAttrs(r), "error", err)...)
@@ -707,7 +776,7 @@ func (h *Handler) UpdateTestPlan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp := testPlanToResponse(updated)
-	h.publish(protocol.EventTestPlanUpdated, workspaceID, "member", userID, map[string]any{"test_plan": resp})
+	h.publish(protocol.EventTestPlanUpdated, workspaceID, actorType, actorID, map[string]any{"test_plan": resp})
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -721,6 +790,10 @@ func (h *Handler) DeleteTestPlan(w http.ResponseWriter, r *http.Request) {
 	workspaceID := h.resolveWorkspaceID(r)
 	userID, ok := requireUserID(w, r)
 	if !ok {
+		return
+	}
+	if actorType, _ := h.resolveActor(r, userID, workspaceID); actorType == "agent" {
+		writeError(w, http.StatusForbidden, agentCannotNarrowTestPlan)
 		return
 	}
 	tx, err := h.TxStarter.Begin(r.Context())
@@ -855,6 +928,10 @@ func (h *Handler) RemoveTestPlanCase(w http.ResponseWriter, r *http.Request) {
 	workspaceID := h.resolveWorkspaceID(r)
 	userID, ok := requireUserID(w, r)
 	if !ok {
+		return
+	}
+	if actorType, _ := h.resolveActor(r, userID, workspaceID); actorType == "agent" {
+		writeError(w, http.StatusForbidden, agentCannotNarrowTestPlan)
 		return
 	}
 	if err := h.Queries.RemoveTestPlanCase(r.Context(), db.RemoveTestPlanCaseParams{
@@ -1004,23 +1081,17 @@ func (h *Handler) CreateTestRun(w http.ResponseWriter, r *http.Request) {
 		planUUID = plan.ID
 		projectUUID = plan.ProjectID
 
-		planCases, err := h.Queries.ListTestPlanCases(r.Context(), db.ListTestPlanCasesParams{
-			PlanID: plan.ID, WorkspaceID: wsUUID,
-		})
+		sources, err := h.planRoundCases(r.Context(), plan)
 		if err != nil {
 			slog.Error("list test plan cases for run failed", append(logger.RequestAttrs(r), "error", err)...)
 			writeError(w, http.StatusInternalServerError, "failed to list plan cases")
 			return
 		}
-		if len(planCases) == 0 {
-			writeError(w, http.StatusBadRequest, "the test plan has no cases")
+		if len(sources) == 0 {
+			writeError(w, http.StatusBadRequest, "the test plan selects no cases: add cases to it, or give it a rule that matches active cases")
 			return
 		}
-		rawIDs := make([]string, len(planCases))
-		for i, pc := range planCases {
-			rawIDs[i] = uuidToString(pc.TestCaseID)
-		}
-		cases, reposByCase, _, ok = h.fetchCasesForIDs(r.Context(), w, wsUUID, rawIDs)
+		cases, reposByCase, _, ok = h.fetchCasesForIDs(r.Context(), w, wsUUID, planRoundCaseIDs(sources))
 		if !ok {
 			return
 		}
@@ -1097,12 +1168,11 @@ func (h *Handler) StartTestRun(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	updated, err := h.Queries.UpdateTestRun(r.Context(), db.UpdateTestRunParams{
-		ID:          run.ID,
-		WorkspaceID: wsUUID,
-		Status:      pgtype.Text{String: "running", Valid: true},
-		StartedAt:   pgtype.Timestamptz{Time: time.Now(), Valid: true},
-	})
+	updated, err := h.Queries.StartPendingTestRun(r.Context(), db.StartPendingTestRunParams{ID: run.ID, WorkspaceID: wsUUID})
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusConflict, "only a pending run can be started")
+		return
+	}
 	if err != nil {
 		slog.Error("start test run failed", append(logger.RequestAttrs(r), "error", err)...)
 		writeError(w, http.StatusInternalServerError, "failed to start test run")
@@ -1140,16 +1210,17 @@ func (h *Handler) AbortTestRun(w http.ResponseWriter, r *http.Request) {
 	// A body is optional; an abort with no stated reason is still a valid abort.
 	_ = json.NewDecoder(r.Body).Decode(&req)
 
-	params := db.UpdateTestRunParams{
-		ID:          run.ID,
-		WorkspaceID: wsUUID,
-		Status:      pgtype.Text{String: "aborted", Valid: true},
-		CompletedAt: pgtype.Timestamptz{Time: time.Now(), Valid: true},
-	}
+	// Conditional: the round may have completed since it was read, and an
+	// abort must not rewrite a finished round.
+	params := db.AbortOpenTestRunParams{ID: run.ID, WorkspaceID: wsUUID}
 	if strings.TrimSpace(req.Reason) != "" {
 		params.Error = pgtype.Text{String: req.Reason, Valid: true}
 	}
-	updated, err := h.Queries.UpdateTestRun(r.Context(), params)
+	updated, err := h.Queries.AbortOpenTestRun(r.Context(), params)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusConflict, "this run has already finished")
+		return
+	}
 	if err != nil {
 		slog.Error("abort test run failed", append(logger.RequestAttrs(r), "error", err)...)
 		writeError(w, http.StatusInternalServerError, "failed to abort test run")
@@ -1265,10 +1336,39 @@ func (h *Handler) RetryTestRun(w http.ResponseWriter, r *http.Request) {
 		title = fmt.Sprintf("Retry: %s", sourceRun.Title)
 	}
 
-	// Fetch fresh snapshots for all cases to be retried.
-	rawIDs := make([]string, len(sourceCases))
-	for i, sc := range sourceCases {
-		rawIDs[i] = uuidToString(sc.TestCaseID)
+	// Fetch fresh snapshots for all cases to be retried. A case deleted since
+	// the round ran is dropped from an "all" or "failed only" retry — the
+	// round runs what is left, as a plan round does — and refused only when
+	// someone picked it by hand or nothing is left.
+	rawIDs := make([]string, 0, len(sourceCases))
+	if req.Scope == "selected" {
+		for _, sc := range sourceCases {
+			rawIDs = append(rawIDs, uuidToString(sc.TestCaseID))
+		}
+	} else {
+		ids := make([]pgtype.UUID, len(sourceCases))
+		for i, sc := range sourceCases {
+			ids[i] = sc.TestCaseID
+		}
+		existing, err := h.Queries.ListTestCaseSummariesByIDs(r.Context(), db.ListTestCaseSummariesByIDsParams{CaseIds: ids, WorkspaceID: wsUUID})
+		if err != nil {
+			slog.Error("list retried cases failed", append(logger.RequestAttrs(r), "error", err)...)
+			writeError(w, http.StatusInternalServerError, "failed to load test cases")
+			return
+		}
+		alive := make(map[pgtype.UUID]struct{}, len(existing))
+		for _, row := range existing {
+			alive[row.ID] = struct{}{}
+		}
+		for _, sc := range sourceCases {
+			if _, ok := alive[sc.TestCaseID]; ok {
+				rawIDs = append(rawIDs, uuidToString(sc.TestCaseID))
+			}
+		}
+		if len(rawIDs) == 0 {
+			writeError(w, http.StatusBadRequest, "every case of this scope has been deleted since the round ran; nothing is left to retry")
+			return
+		}
 	}
 	freshCases, freshRepos, _, ok := h.fetchCasesForIDs(r.Context(), w, wsUUID, rawIDs)
 	if !ok {
@@ -1362,11 +1462,11 @@ func (h *Handler) ListTestRunCases(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 type UpdateTestRunCaseResultRequest struct {
-	Result      string  `json:"result"`
-	Notes       *string `json:"notes"`
-	Evidence    []any   `json:"evidence"`
-	StepResults []any   `json:"step_results"`
-	DurationMs  *int32  `json:"duration_ms"`
+	Result      string               `json:"result"`
+	Notes       *string              `json:"notes"`
+	Evidence    []any                `json:"evidence"`
+	StepResults *[]TestRunStepResult `json:"step_results"`
+	DurationMs  *int32               `json:"duration_ms"`
 }
 
 // UpdateTestRunCaseResult writes the outcome of one executed case. It accepts
@@ -1427,6 +1527,61 @@ func (h *Handler) UpdateTestRunCaseResult(w http.ResponseWriter, r *http.Request
 	if !validateTestCaseEnum(w, "result", req.Result, validTestRunCaseResults) {
 		return
 	}
+	if accepted, reason := runAcceptsResultWrite(run.Status, isAgentCall); !accepted {
+		writeError(w, http.StatusConflict, reason)
+		return
+	}
+	// An agent records verdicts; pending and running are the platform's to
+	// set when it dispatches and starts the case task.
+	if isAgentCall && !isTerminalRunCaseResult(req.Result) {
+		writeError(w, http.StatusBadRequest, "an agent can only record passed, failed, blocked or skipped")
+		return
+	}
+	snapshotIndexes := snapshotStepIndexes(rc.CaseSnapshot)
+	// A case frozen without steps gives an agent nothing to check a pass
+	// against — the legacy shape an active case can no longer take. A person
+	// may still record one; an agent records blocked and says why.
+	if isAgentCall && req.Result == "passed" && len(snapshotIndexes) == 0 {
+		writeError(w, http.StatusBadRequest, "this case was frozen without steps, so a pass cannot be checked; record blocked and ask for the case's steps to be written")
+		return
+	}
+	var stepResults []TestRunStepResult
+	if req.StepResults != nil {
+		stepResults = *req.StepResults
+	}
+	requireComplete := isAgentCall && agentVerdictNeedsEvidence(req.Result)
+	if problem := stepResultsProblem(req.Result, stepResults, snapshotIndexes, requireComplete); problem != "" {
+		writeError(w, http.StatusBadRequest, problem)
+		return
+	}
+	// A write that leaves the step results out keeps the stored ones, so a
+	// new verdict must agree with them too: a case cannot be marked passed
+	// while a recorded step says it failed. A write that keeps the verdict (a
+	// note on a row recorded before step results were checked) changes
+	// nothing this protects.
+	if req.StepResults == nil && !requireComplete && req.Result != rc.Result {
+		if problem := stepResultsProblem(req.Result, storedStepResults(rc.StepResults, snapshotIndexes), nil, false); problem != "" {
+			writeError(w, http.StatusBadRequest, problem+"; change the step results with the verdict")
+			return
+		}
+	}
+	// An agent's pass or fail rests on what it saw; without a single captured
+	// frame or trace nobody can check it. Evidence is uploaded first
+	// (`multica test evidence add`), then the verdict is recorded.
+	if requireComplete {
+		files, err := h.Queries.ListAttachmentsByTestRunCase(r.Context(), db.ListAttachmentsByTestRunCaseParams{
+			TestRunCaseID: rc.ID, WorkspaceID: wsUUID,
+		})
+		if err != nil {
+			slog.Error("list run case evidence failed", append(logger.RequestAttrs(r), "error", err)...)
+			writeError(w, http.StatusInternalServerError, "failed to check evidence")
+			return
+		}
+		if len(files) == 0 {
+			writeError(w, http.StatusConflict, "a "+req.Result+" verdict needs evidence: upload what you observed with `multica test evidence add` first, then record the result")
+			return
+		}
+	}
 
 	params := db.UpdateTestRunCaseResultParams{
 		ID:             rc.ID,
@@ -1434,7 +1589,18 @@ func (h *Handler) UpdateTestRunCaseResult(w http.ResponseWriter, r *http.Request
 		Result:         pgtype.Text{String: req.Result, Valid: true},
 		ExecutedByType: pgtype.Text{String: executedByType, Valid: true},
 		ExecutedByID:   executedByID,
-		ExecutedAt:     pgtype.Timestamptz{Time: time.Now(), Valid: true},
+	}
+	// executed_at orders a case's verdicts across rounds (its current verdict
+	// for coverage and verification). It is stamped when the case is first
+	// recorded, and again when a write gives the case a new verdict while its
+	// round is still open (pending, running, or parked as blocked for manual
+	// execution) — that is a new execution. In a finished round a write is a
+	// correction of what was observed then: it keeps the time, so it never
+	// outranks a round that ran since. A new observation belongs in a new
+	// round (retry).
+	roundOpen := run.Status == "pending" || run.Status == "running" || run.Status == "blocked"
+	if !rc.ExecutedAt.Valid || (roundOpen && isTestRunVerdict(req.Result) && req.Result != rc.Result) {
+		params.ExecutedAt = pgtype.Timestamptz{Time: time.Now(), Valid: true}
 	}
 	if req.Notes != nil {
 		params.Notes = pgtype.Text{String: *req.Notes, Valid: true}
@@ -1443,7 +1609,7 @@ func (h *Handler) UpdateTestRunCaseResult(w http.ResponseWriter, r *http.Request
 		params.Evidence = marshalJSONColumn(req.Evidence, "[]")
 	}
 	if req.StepResults != nil {
-		params.StepResults = marshalJSONColumn(req.StepResults, "[]")
+		params.StepResults = marshalJSONColumn(stepResults, "[]")
 	}
 	if req.DurationMs != nil {
 		params.DurationMs = pgtype.Int4{Int32: *req.DurationMs, Valid: true}
@@ -1467,29 +1633,44 @@ func (h *Handler) UpdateTestRunCaseResult(w http.ResponseWriter, r *http.Request
 	h.publish(protocol.EventTestRunCaseUpdated, workspaceID, actorType, actorID,
 		map[string]any{"test_run_case": caseResp, "run_id": uuidToString(run.ID)})
 
-	// Auto-complete the run when no cases remain pending or running.
-	pendingCount, countErr := h.Queries.CountPendingTestRunCases(r.Context(), db.CountPendingTestRunCasesParams{
-		RunID: run.ID, WorkspaceID: wsUUID,
-	})
-	if countErr != nil {
-		slog.Warn("count pending test run cases failed", append(logger.RequestAttrs(r), "error", countErr)...)
-	} else if pendingCount == 0 {
-		completedRun, updateErr := h.Queries.UpdateTestRun(r.Context(), db.UpdateTestRunParams{
-			ID:          run.ID,
-			WorkspaceID: wsUUID,
-			Status:      pgtype.Text{String: "completed", Valid: true},
-			CompletedAt: pgtype.Timestamptz{Time: time.Now(), Valid: true},
-		})
-		if updateErr != nil {
-			slog.Error("auto-complete test run failed", append(logger.RequestAttrs(r), "error", updateErr)...)
-		} else {
-			runResp := testRunToResponse(completedRun)
-			h.publish(protocol.EventTestRunUpdated, workspaceID, actorType, actorID,
-				map[string]any{"test_run": runResp})
-		}
+	// Complete the run once no case is pending or running. This goes through
+	// the same convergence as a finished case task: it never revives an
+	// aborted round, and it settles the autopilot run that launched the round.
+	// The CLI write is the normal last write of a round, so completing it here
+	// without that settle left the autopilot run "running" for good — the
+	// task hook that follows finds the round already completed and stops.
+	if completedRun, convergeErr := h.convergeTestRun(r.Context(), h.Queries, run); convergeErr != nil {
+		slog.Error("auto-complete test run failed", append(logger.RequestAttrs(r), "error", convergeErr)...)
+	} else if completedRun != nil {
+		h.publish(protocol.EventTestRunUpdated, workspaceID, actorType, actorID,
+			map[string]any{"test_run": testRunToResponse(*completedRun)})
 	}
 
 	writeJSON(w, http.StatusOK, caseResp)
+}
+
+// ListTestRunCaseEvidence — GET /api/test-run-cases/{id}/evidence. The files
+// an executor uploaded for one run case: what a reviewer checks the recorded
+// verdict against.
+func (h *Handler) ListTestRunCaseEvidence(w http.ResponseWriter, r *http.Request) {
+	rc, wsUUID, ok := h.loadTestRunCaseForUser(w, r)
+	if !ok {
+		return
+	}
+	files, err := h.Queries.ListAttachmentsByTestRunCase(r.Context(), db.ListAttachmentsByTestRunCaseParams{
+		TestRunCaseID: rc.ID, WorkspaceID: wsUUID,
+	})
+	if err != nil {
+		slog.Error("list run case evidence failed", append(logger.RequestAttrs(r), "error", err)...)
+		writeError(w, http.StatusInternalServerError, "failed to list evidence")
+		return
+	}
+	mode := attachmentURLModeFromRequest(r)
+	resp := make([]AttachmentResponse, len(files))
+	for i, file := range files {
+		resp[i] = h.attachmentToResponse(file, mode)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"evidence": resp})
 }
 
 type OpenTestRunCaseDefectRequest struct {

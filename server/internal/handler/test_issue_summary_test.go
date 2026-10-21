@@ -139,6 +139,7 @@ func TestTestPlanStatsReportsPassRateAndModuleMatrix(t *testing.T) {
 			"project_id": projectID,
 			"title":      "Stats case " + module + " " + t.Name(),
 			"status":     "active",
+			"steps":      executableSteps,
 			"module":     module,
 		})
 		testHandler.CreateTestCase(w, req)
@@ -225,4 +226,32 @@ func createIssueForSummary(t *testing.T, title, projectID string) string {
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, resp.ID)
 	})
 	return resp.ID
+}
+
+// Verified means the requirement's live coverage passed. A draft nobody
+// reviewed, or a deprecated case, must neither make an issue verified nor keep
+// it from being verified.
+func TestIssueVerifiedCountsOnlyActiveCases(t *testing.T) {
+	projectID := newTestRunProject(t)
+	issueID := createIssueForSummary(t, "Coupon requirement", projectID)
+	draft := createTestCaseForTest(t, map[string]any{"project_id": projectID, "title": "Draft coupon case", "status": "draft", "steps": executableSteps})
+	linkCaseToIssue(t, draft.ID, issueID)
+	run := createTestRunFromCases(t, "Draft only", []string{draft.ID})
+	setRunCaseResultForSummary(t, runCasesInOrder(t, run.ID)[0].id, "passed")
+	if summary := issueTestSummary(t, issueID); summary.Verified {
+		t.Errorf("an issue covered only by a passing draft is verified, want unverified")
+	}
+
+	active := createTestCaseForRun(t, projectID)
+	retired := createTestCaseForRun(t, projectID)
+	linkCaseToIssue(t, active.ID, issueID)
+	linkCaseToIssue(t, retired.ID, issueID)
+	round := createTestRunFromCases(t, "Live and retired", []string{active.ID, retired.ID})
+	rows := runCasesInOrder(t, round.ID)
+	setRunCaseResultForSummary(t, rows[0].id, "passed")
+	setRunCaseResultForSummary(t, rows[1].id, "failed")
+	dbfx.Exec(t, `UPDATE test_case SET status = 'deprecated' WHERE id = $1`, retired.ID)
+	if summary := issueTestSummary(t, issueID); !summary.Verified {
+		t.Errorf("the only active covering case passed, want verified despite the deprecated failure")
+	}
 }

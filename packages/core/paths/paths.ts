@@ -61,6 +61,8 @@ function workspaceScoped(slug: string) {
     // Test plan list and detail.
     testPlans: () => `${ws}/tests/plans`,
     testPlanDetail: (id: string) => `${ws}/tests/plans/${encode(id)}`,
+    // Every issue of a project with what covers it.
+    testCoverage: () => `${ws}/tests/coverage`,
     // Test run list and detail.
     testRuns: () => `${ws}/tests/runs`,
     testRunDetail: (id: string) => `${ws}/tests/runs/${encode(id)}`,

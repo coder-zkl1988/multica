@@ -5210,6 +5210,9 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 	var task *db.AgentTaskQueue
 	var err error
 	var transitioned bool
+	// What a test-run task's hook settled, published once the completion
+	// transaction has committed.
+	var testRunSettled testRunSettlement
 	completeWithMutation := func(mutate func(*db.Queries, db.AgentTaskQueue) error) {
 		task, transitioned, err = h.TaskService.CompleteTaskWithMutationAndSessionStateAndIssueCompletion(r.Context(), parseUUID(taskID), result, req.SessionID, req.WorkDir, req.BranchName, req.SessionRolloutMissing, req.RetiredSessionID, req.DurableWorkDir, issueCompletion, mutate)
 	}
@@ -5271,7 +5274,11 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 		})
 	} else if testRunCtx != nil {
 		completeWithMutation(func(qtx *db.Queries, completedTask db.AgentTaskQueue) error {
-			return h.completeTestRunTask(r.Context(), qtx, completedTask, req.Output)
+			settled, settleErr := h.completeTestRunTask(r.Context(), qtx, completedTask, req.Output)
+			if settleErr == nil {
+				testRunSettled = settled
+			}
+			return settleErr
 		})
 	} else if testGenerationCtx != nil {
 		completeWithMutation(func(qtx *db.Queries, completedTask db.AgentTaskQueue) error {
@@ -5283,24 +5290,7 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 			if lookupErr != nil {
 				return lookupErr
 			}
-			summary, hasSummary := parseTestGenerationResultSummary(req.Output)
-			status := "completed"
-			if summary.Status == "blocked" || summary.Status == "failed" {
-				status = "failed"
-			}
-			jobResult := unmarshalJSONObject(job.Result)
-			jobResult["output"] = req.Output
-			jobResult["session_id"] = req.SessionID
-			jobResult["work_dir"] = req.WorkDir
-			if hasSummary {
-				jobResult["summary"] = summary.Summary
-				jobResult["blockers"] = summary.Blockers
-				if len(summary.Stats) > 0 {
-					jobResult["declared_stats"] = summary.Stats
-				}
-			} else {
-				jobResult["warning"] = "missing_test_generation_result_json"
-			}
+			status, jobResult := h.testGenerationCompletion(r.Context(), job, req)
 			_, updateErr := qtx.UpdateTestGenerationJob(r.Context(), db.UpdateTestGenerationJobParams{ID: job.ID, WorkspaceID: job.WorkspaceID, Status: pgtype.Text{String: status, Valid: true}, Result: marshalJSONColumn(jobResult, "{}")})
 			return updateErr
 		})
@@ -5334,6 +5324,7 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.emitIssueExecutedOnFirstCompletion(r, task)
+	h.publishTestRunSettlement(workspaceID, testRunSettled)
 	if createdDraft != nil {
 		slog.Info("ui agent draft created from task", "task_id", taskID, "draft_id", uuidToString(createdDraft.ID))
 		h.publish(protocol.EventDesignDraftReady, workspaceID, "agent", uuidToString(task.AgentID), map[string]any{

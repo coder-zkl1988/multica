@@ -3,7 +3,8 @@
     "cases": "用例",
     "plans": "计划",
     "runs": "轮次",
-    "jobs": "生成任务"
+    "jobs": "生成任务",
+    "coverage": "覆盖"
   },
   "page": {
     "title": "测试用例",
@@ -146,6 +147,7 @@
     "version": "版本 {{version}}",
     "separator": " · ",
     "human_edit": "人工编辑",
+    "agent_edit": "智能体修改",
     "proposal_accepted": "采纳 AI 建议",
     "status_change": "状态变更",
     "restore": "回退"
@@ -289,7 +291,12 @@
     "result": {
       "title": "执行结果",
       "proposals": "AI 建议列表",
-      "noProposals": "暂无建议"
+      "noProposals": "暂无建议",
+      "coverage": "测试点覆盖",
+      "coverageLine": "已覆盖 {{covered}}/{{active}}",
+      "noPoints": "没有拆分测试点",
+      "uncovered": "未覆盖",
+      "inReview": "待审核"
     }
   },
   "proposals": {
@@ -354,7 +361,25 @@
       "passRate": "通过率",
       "matrixTitle": "最近一轮的模块结果",
       "moduleColumn": "模块",
-      "moduleUnnamed": "（未分模块）"
+      "moduleUnnamed": "（未分模块）",
+      "rule": {
+        "title": "选例规则",
+        "hint": "符合规则的有效用例会自动进入每一轮，包括计划建好之后新写的用例。",
+        "none": "没有规则：每轮只执行这里列出的用例。",
+        "allActive": "项目内所有有效用例",
+        "modules": "模块",
+        "noModules": "还没有模块",
+        "priorities": "优先级",
+        "caseTypes": "用例类型",
+        "issues": "覆盖这些任务的用例",
+        "addIssue": "添加任务",
+        "removeIssue": "不再跟随 {{issue}}",
+        "pickerTitle": "跟随任务",
+        "pickerDescription": "这个计划的每一轮都会执行关联到该任务的所有有效用例。",
+        "save": "保存规则",
+        "reset": "还原",
+        "preview": "下一轮将执行 {{total}} 条用例 · 规则匹配 {{rule}} 条"
+      }
     }
   },
   "run": {
@@ -432,7 +457,26 @@
     "notesNeedResult": "备注会随结果一起保存，请先选择结果。",
     "task": "任务 {{id}}",
     "liveFrame": "实时画面",
-    "liveFrameWaiting": "等待设备中枢传来第一帧…"
+    "liveFrameWaiting": "等待设备中枢传来第一帧…",
+    "observed": "实际",
+    "noSteps": "该用例冻结时没有步骤。",
+    "evidenceEmpty": "未上传证据。",
+    "stepResult": {
+      "passed": "通过",
+      "failed": "失败",
+      "blocked": "阻塞",
+      "skipped": "跳过",
+      "not_run": "未执行到"
+    },
+    "save": "保存",
+    "draftNeedsResult": "备注和步骤结果会随结果一起保存，请先选择结果。",
+    "observedPlaceholder": "实际看到了什么",
+    "observedLabel": "第 {{index}} 步的实际情况",
+    "stepResultLabel": "第 {{index}} 步的结果",
+    "stepUnset": "未记录",
+    "addEvidence": "添加证据",
+    "evidenceTooLarge": "{{name}} 太大，无法上传",
+    "evidenceFailed": "上传证据失败"
   },
   "timeline": {
     "title": "历史执行记录",
@@ -513,7 +557,7 @@
     "failingCount": "{{count}} 条失败",
     "untestedCount": "{{count}} 条未执行",
     "verified": "已验证",
-    "verifiedHint": "所有关联用例在最近一次执行中全部通过",
+    "verifiedHint": "每个测试点都有用例覆盖，且最近一次执行通过",
     "latestRun": "最近一轮",
     "defectsSection": "测试发现的缺陷",
     "foundBySection": "由测试轮次发现",
@@ -522,6 +566,78 @@
     "newCaseTitle": "验证：{{title}}",
     "noCoverage": "暂无测试覆盖",
     "generateFailed": "无法发起用例生成",
-    "newCaseFailed": "无法创建用例"
+    "newCaseFailed": "无法创建用例",
+    "points": {
+      "section": "测试点",
+      "summary": "已覆盖 {{covered}}/{{active}} · 通过 {{passed}}",
+      "hint": "这条任务被接受的验收条件，覆盖率和验证结论都按测试点统计。",
+      "add": "添加测试点",
+      "addPlaceholder": "一条能单独判定对错的条件，例如：余额不足时下单被拒并提示",
+      "addFailed": "添加测试点失败",
+      "empty": "还没有测试点。把任务拆成可单独判定的验收条件，否则一条通过的正常路径用例就足以显示“已验证”。",
+      "drop": "废弃",
+      "restore": "恢复",
+      "updateFailed": "更新测试点失败",
+      "cover": "选择覆盖用例…",
+      "coverFailed": "关联用例与测试点失败",
+      "droppedCount": "{{count}} 个已废弃",
+      "category": {
+        "positive": "正常路径",
+        "negative": "异常",
+        "boundary": "边界",
+        "permission": "权限",
+        "state": "状态",
+        "data": "数据一致性",
+        "non_functional": "非功能"
+      },
+      "state": {
+        "uncovered": "未覆盖",
+        "in_review": "仅草稿覆盖",
+        "not_run": "未执行",
+        "failing": "失败",
+        "passed": "通过",
+        "dropped": "已废弃"
+      },
+      "caseSection": "验证的测试点",
+      "caseEmpty": "还没有声明验证哪个测试点",
+      "categoryLabel": "类别"
+    },
+    "casesPass": "用例通过",
+    "casesPassHint": "关联用例都已通过，但这条任务还没有拆测试点，没人列出必须验证什么"
+  },
+  "coveragePage": {
+    "title": "测试覆盖",
+    "hint": "项目内所有未取消的任务及其覆盖情况，问题最大的排在前面。",
+    "empty": "这个项目还没有任务",
+    "all": "全部",
+    "truncated": "只显示最近的 {{count}} 个任务，更早的未列出。",
+    "columns": {
+      "issue": "任务",
+      "points": "测试点",
+      "cases": "用例",
+      "state": "状态"
+    },
+    "pointsLine": "已覆盖 {{covered}}/{{active}} · 通过 {{passed}}",
+    "noPoints": "—",
+    "casesLine": "{{count}} 条有效",
+    "failingCases": "{{count}} 条失败",
+    "state": {
+      "failing": "失败",
+      "no_tests": "没有测试",
+      "gaps": "有未覆盖测试点",
+      "in_review": "待审核",
+      "no_points": "没有测试点",
+      "not_run": "未全部通过",
+      "verified": "已验证"
+    },
+    "stateHint": {
+      "failing": "覆盖它的用例最近一次执行失败",
+      "no_tests": "没有有效用例也没有测试点——这里出 bug 不会被发现",
+      "gaps": "部分测试点没有有效用例覆盖",
+      "in_review": "每个测试点都有用例，但部分只有待审核的草稿用例",
+      "no_points": "有用例，但没人列出必须验证什么",
+      "not_run": "测试点都已覆盖，但还没有全部通过",
+      "verified": "每个测试点都有用例覆盖且最近一次通过"
+    }
   }
 }

@@ -53,6 +53,7 @@ UPDATE test_case SET
     required_capabilities = COALESCE(sqlc.narg('required_capabilities'), required_capabilities),
     business_rules_ref    = COALESCE(sqlc.narg('business_rules_ref'), business_rules_ref),
     status                = COALESCE(sqlc.narg('status'), status),
+    source_refs           = COALESCE(sqlc.narg('source_refs'), source_refs),
     reviewed_by           = COALESCE(sqlc.narg('reviewed_by'), reviewed_by),
     reviewed_at           = COALESCE(sqlc.narg('reviewed_at'), reviewed_at),
     updated_by            = COALESCE(sqlc.narg('updated_by'), updated_by),
@@ -128,10 +129,12 @@ WHERE tci.test_case_id = $1 AND tci.workspace_id = $2
 ORDER BY i.number ASC;
 
 -- name: ListTestCasesForIssue :many
--- The case side of one issue's coverage. latest_result is the most recent
--- recorded outcome across every round the case appeared in, so the issue can
--- show whether its coverage actually passes — a linked case that has never run
--- reports NULL rather than a misleading "pending".
+-- The case side of one issue's coverage. latest_result is the case's current
+-- verdict: its most recent passed or failed result from a round that froze it
+-- as an active case. blocked and skipped carry no verdict, so they never hide
+-- an earlier failure; a result from a trial run of the draft says nothing
+-- about the case a person approved. A case with no such result reports NULL
+-- rather than a misleading "pending".
 SELECT tci.test_case_id, tci.issue_id, tci.origin, tci.created_at,
        tc.case_number, tc.title AS case_title, tc.status AS case_status,
        tc.priority AS case_priority, tc.case_type,
@@ -144,6 +147,8 @@ SELECT tci.test_case_id, tci.issue_id, tci.origin, tci.created_at,
            WHERE rc.test_case_id = tci.test_case_id
              AND rc.workspace_id = tci.workspace_id
              AND rc.executed_at IS NOT NULL
+             AND rc.result IN ('passed', 'failed')
+             AND rc.case_snapshot->>'status' = 'active'
            ORDER BY rc.executed_at DESC
            LIMIT 1
        ), '')::text AS latest_result,
@@ -153,6 +158,8 @@ SELECT tci.test_case_id, tci.issue_id, tci.origin, tci.created_at,
            WHERE rc.test_case_id = tci.test_case_id
              AND rc.workspace_id = tci.workspace_id
              AND rc.executed_at IS NOT NULL
+             AND rc.result IN ('passed', 'failed')
+             AND rc.case_snapshot->>'status' = 'active'
            ORDER BY rc.executed_at DESC
            LIMIT 1
        ) AS latest_executed_at
@@ -226,3 +233,9 @@ FROM test_case_repo tcr
 JOIN test_case tc ON tc.id = tcr.test_case_id
 WHERE tc.project_id = $1 AND tc.workspace_id = $2 AND tc.status <> 'deprecated'
 ORDER BY tcr.test_case_id, tcr.alias ASC, tcr.role ASC;
+
+-- name: LockTestCase :one
+-- Re-reads a case under a row lock inside a write transaction, so a decision
+-- made on the status read before the transaction (who may change it, which
+-- gate applies) still holds when the write lands.
+SELECT * FROM test_case WHERE id = $1 AND workspace_id = $2 FOR UPDATE;

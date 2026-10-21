@@ -10,6 +10,12 @@ import type {
   AgentBuilderSession,
   AgentBuilderSessionSummary,
   Attachment,
+  ListTestRunCaseEvidenceResponse,
+  ListIssueTestPointsResponse,
+  ListTestCaseTestPointsResponse,
+  TestPoint,
+  TestPlanSelection,
+  ProjectCoverageResponse,
   AutopilotRun,
   BillingBalance,
   BillingBatchesPage,
@@ -5438,6 +5444,15 @@ export const DispatchTestGenerationJobResponseSchema = z.object({
 // Test plans, runs and capabilities — Phase 3/4
 // ---------------------------------------------------------------------------
 
+// A server older than plan rules sends no selector: the plan is its list.
+const TestPlanSelectorSchema = z.object({
+  all_active: z.boolean().optional(),
+  modules: z.array(z.string()).optional(),
+  priorities: z.array(z.string()).optional(),
+  case_types: z.array(z.string()).optional(),
+  issue_ids: z.array(z.string()).optional(),
+}).loose();
+
 export const TestPlanSchema = z.object({
   id: z.string().default(""),
   workspace_id: z.string().default(""),
@@ -5445,10 +5460,26 @@ export const TestPlanSchema = z.object({
   title: z.string().default(""),
   description: z.string().default(""),
   status: z.string().default("draft"),
+  selector: TestPlanSelectorSchema.catch({}).default({}),
   created_by: z.string().nullable().default(null),
   created_at: z.string().default(""),
   updated_at: z.string().default(""),
 }).loose();
+
+export const TestPlanSelectionSchema = z.object({
+  cases: z.array(z.object({
+    test_case_id: z.string().default(""),
+    case_key: z.string().default(""),
+    title: z.string().default(""),
+    status: z.string().default(""),
+    source: z.string().default("manual"),
+  }).loose()).default([]),
+  manual: z.number().default(0),
+  rule: z.number().default(0),
+  total: z.number().default(0),
+}).loose();
+
+export const EMPTY_TEST_PLAN_SELECTION: TestPlanSelection = { cases: [], manual: 0, rule: 0, total: 0 };
 
 export const TestPlanCaseSchema = z.object({
   plan_id: z.string().default(""),
@@ -5500,6 +5531,26 @@ export const TestRunSchema = z.object({
   result_counts: z.record(z.string(), z.number()).optional(),
 }).loose();
 
+// One step's verdict. Rows written before step results had a shape could hold
+// anything; an entry that cannot be read is dropped rather than failing the
+// whole case.
+const TestRunStepResultSchema = z.object({
+  index: z.number(),
+  result: z.string(),
+  actual: z.string().default(""),
+  note: z.string().default(""),
+}).loose();
+
+const TestRunStepResultsSchema = z
+  .array(z.unknown())
+  .default([])
+  .transform((entries) =>
+    entries.flatMap((entry) => {
+      const parsed = TestRunStepResultSchema.safeParse(entry);
+      return parsed.success ? [parsed.data] : [];
+    }),
+  );
+
 export const TestRunCaseSchema = z.object({
   id: z.string().default(""),
   workspace_id: z.string().default(""),
@@ -5510,7 +5561,7 @@ export const TestRunCaseSchema = z.object({
   result: z.string().default("pending"),
   notes: z.string().default(""),
   evidence: z.array(z.unknown()).default([]),
-  step_results: z.array(z.unknown()).default([]),
+  step_results: TestRunStepResultsSchema,
   duration_ms: z.number().nullable().default(null),
   executed_by_type: z.string().nullable().default(null),
   executed_by_id: z.string().nullable().default(null),
@@ -5525,6 +5576,34 @@ export const ListTestRunsResponseSchema = z.object({
   test_runs: z.array(TestRunSchema).default([]),
   total: z.number().default(0),
 }).loose();
+
+// Evidence files carry every Attachment field the preview needs, defaulted so a
+// field an older server omits cannot knock the list into the fallback.
+const TestRunCaseEvidenceFileSchema = z.object({
+  id: z.string().default(""),
+  workspace_id: z.string().default(""),
+  issue_id: z.string().nullable().default(null),
+  comment_id: z.string().nullable().default(null),
+  chat_session_id: z.string().nullable().default(null),
+  chat_message_id: z.string().nullable().default(null),
+  uploader_type: z.string().default(""),
+  uploader_id: z.string().default(""),
+  filename: z.string().default(""),
+  url: z.string().default(""),
+  download_url: z.string().default(""),
+  markdown_url: z.string().default(""),
+  content_type: z.string().default(""),
+  size_bytes: z.number().default(0),
+  created_at: z.string().default(""),
+}).loose();
+
+export const ListTestRunCaseEvidenceResponseSchema = z.object({
+  evidence: z.array(TestRunCaseEvidenceFileSchema).default([]),
+}).loose();
+
+export const EMPTY_LIST_TEST_RUN_CASE_EVIDENCE_RESPONSE: ListTestRunCaseEvidenceResponse = {
+  evidence: [],
+};
 
 export const ListTestRunCasesResponseSchema = z.object({
   cases: z.array(TestRunCaseSchema).default([]),
@@ -5681,10 +5760,123 @@ export const IssueFoundBySchema = z.object({
   executed_at: z.string().nullable().default(null),
 }).loose();
 
+const TestPointFieldsSchema = {
+  id: z.string().default(""),
+  issue_id: z.string().default(""),
+  number: z.number().default(0),
+  key: z.string().default(""),
+  title: z.string().default(""),
+  description: z.string().default(""),
+  category: z.string().default("positive"),
+  origin: z.string().default("human"),
+  status: z.string().default("active"),
+  created_by_type: z.string().default("member"),
+  created_at: z.string().default(""),
+  updated_at: z.string().default(""),
+};
+
+export const TestPointSchema = z.object(TestPointFieldsSchema).loose();
+
+export const EMPTY_TEST_POINT: TestPoint = {
+  id: "",
+  issue_id: "",
+  number: 0,
+  key: "",
+  title: "",
+  description: "",
+  category: "positive",
+  origin: "human",
+  status: "active",
+  created_by_type: "member",
+  created_at: "",
+  updated_at: "",
+};
+
+const TestPointCaseSchema = z.object({
+  test_case_id: z.string().default(""),
+  case_key: z.string().default(""),
+  case_title: z.string().default(""),
+  case_status: z.string().default(""),
+  case_priority: z.string().default(""),
+  case_type: z.string().default(""),
+  latest_result: z.string().nullable().default(null),
+  origin: z.string().default("human"),
+}).loose();
+
+const TestPointSummarySchema = z.object({
+  active: z.number().default(0),
+  covered: z.number().default(0),
+  passed: z.number().default(0),
+  failing: z.number().default(0),
+  in_review: z.number().default(0),
+}).loose();
+
+const EMPTY_TEST_POINT_SUMMARY = { active: 0, covered: 0, passed: 0, failing: 0, in_review: 0 };
+
+export const ListIssueTestPointsResponseSchema = z.object({
+  test_points: z.array(z.object({
+    ...TestPointFieldsSchema,
+    cases: z.array(TestPointCaseSchema).default([]),
+    // A backend that cannot say must not claim coverage.
+    covered: z.boolean().default(false),
+    passed: z.boolean().default(false),
+    state: z.string().default("uncovered"),
+  }).loose()).default([]),
+  summary: TestPointSummarySchema.default(EMPTY_TEST_POINT_SUMMARY),
+}).loose();
+
+export const EMPTY_LIST_ISSUE_TEST_POINTS_RESPONSE: ListIssueTestPointsResponse = {
+  test_points: [],
+  summary: { ...EMPTY_TEST_POINT_SUMMARY },
+};
+
+export const ListTestCaseTestPointsResponseSchema = z.object({
+  test_points: z.array(z.object({
+    ...TestPointFieldsSchema,
+    issue_number: z.number().default(0),
+    issue_identifier: z.string().default(""),
+    issue_title: z.string().default(""),
+    link_origin: z.string().default("human"),
+  }).loose()).default([]),
+  total: z.number().default(0),
+}).loose();
+
+export const EMPTY_LIST_TEST_CASE_TEST_POINTS_RESPONSE: ListTestCaseTestPointsResponse = {
+  test_points: [],
+  total: 0,
+};
+
+export const ProjectCoverageResponseSchema = z.object({
+  issues: z.array(z.object({
+    issue_id: z.string().default(""),
+    issue_number: z.number().default(0),
+    issue_identifier: z.string().default(""),
+    title: z.string().default(""),
+    status: z.string().default(""),
+    active_cases: z.number().default(0),
+    failing_cases: z.number().default(0),
+    active_points: z.number().default(0),
+    covered_points: z.number().default(0),
+    review_points: z.number().default(0),
+    passed_points: z.number().default(0),
+    failing_points: z.number().default(0),
+    // A row a server sent half of must not read as covered.
+    state: z.string().default("no_tests"),
+  }).loose()).default([]),
+  summary: z.record(z.string(), z.number()).default({}),
+  truncated: z.boolean().default(false),
+}).loose();
+
+export const EMPTY_PROJECT_COVERAGE_RESPONSE: ProjectCoverageResponse = { issues: [], summary: {}, truncated: false };
+
 export const IssueTestSummarySchema = z.object({
   cases: z.number().default(0),
   // A backend that cannot say must not claim verification.
   verified: z.boolean().default(false),
+  // A server older than test points sends no basis; its verified flag was
+  // decided on the linked cases alone.
+  basis: z.string().default("cases_only"),
+  test_points: TestPointSummarySchema.default(EMPTY_TEST_POINT_SUMMARY),
   latest_run: IssueTestRunSummarySchema.nullable().default(null),
   defects: z.array(IssueTestDefectSchema).default([]),
   found_by: z.array(IssueFoundBySchema).default([]),
@@ -5727,6 +5919,7 @@ export const EMPTY_TEST_PLAN: TestPlan = {
   title: "",
   description: "",
   status: "draft",
+  selector: {},
   created_by: null,
   created_at: "",
   updated_at: "",
@@ -5830,6 +6023,8 @@ export const EMPTY_LIST_TEST_CASE_ISSUES_RESPONSE: ListTestCaseIssuesResponse = 
 export const EMPTY_ISSUE_TEST_SUMMARY: IssueTestSummary = {
   cases: 0,
   verified: false,
+  basis: "none",
+  test_points: { active: 0, covered: 0, passed: 0, failing: 0, in_review: 0 },
   latest_run: null,
   defects: [],
   found_by: [],

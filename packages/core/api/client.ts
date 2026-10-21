@@ -341,6 +341,14 @@ import type {
   ListTestPlanCasesResponse,
   ListTestRunsResponse,
   ListTestRunCasesResponse,
+  ListTestRunCaseEvidenceResponse,
+  ListIssueTestPointsResponse,
+  ListTestCaseTestPointsResponse,
+  TestPoint,
+  CreateTestPointRequest,
+  UpdateTestPointRequest,
+  TestPlanSelection,
+  ProjectCoverageResponse,
   TestCaseResultTimelineResponse,
   ListTestCapabilitiesResponse,
   RuntimeCapabilityScanResponse,
@@ -691,6 +699,12 @@ import {
   ListTestPlanCasesResponseSchema,
   ListTestRunsResponseSchema,
   ListTestRunCasesResponseSchema,
+  ListTestRunCaseEvidenceResponseSchema,
+  ListIssueTestPointsResponseSchema,
+  ListTestCaseTestPointsResponseSchema,
+  TestPointSchema,
+  TestPlanSelectionSchema,
+  ProjectCoverageResponseSchema,
   TestCaseResultTimelineResponseSchema,
   ListTestCapabilitiesResponseSchema,
   ListTestCaseIssuesResponseSchema,
@@ -703,6 +717,12 @@ import {
   EMPTY_LIST_TEST_PLAN_CASES_RESPONSE,
   EMPTY_LIST_TEST_RUNS_RESPONSE,
   EMPTY_LIST_TEST_RUN_CASES_RESPONSE,
+  EMPTY_LIST_TEST_RUN_CASE_EVIDENCE_RESPONSE,
+  EMPTY_LIST_ISSUE_TEST_POINTS_RESPONSE,
+  EMPTY_TEST_POINT,
+  EMPTY_TEST_PLAN_SELECTION,
+  EMPTY_PROJECT_COVERAGE_RESPONSE,
+  EMPTY_LIST_TEST_CASE_TEST_POINTS_RESPONSE,
   EMPTY_TEST_CASE_RESULT_TIMELINE_RESPONSE,
   EMPTY_LIST_TEST_CAPABILITIES_RESPONSE,
   EMPTY_RUNTIME_CAPABILITY_SCAN_RESPONSE,
@@ -4013,7 +4033,14 @@ export class ApiClient {
   // File Upload & Attachments
   async uploadFile(
     file: File,
-    opts?: { issueId?: string; commentId?: string; chatSessionId?: string },
+    opts?: {
+      issueId?: string;
+      commentId?: string;
+      chatSessionId?: string;
+      /** Evidence for a test run case, with its kind (screenshot, log, video, other). */
+      testRunCaseId?: string;
+      evidenceKind?: string;
+    },
     // Optional abort signal so a module-level upload coordinator (MUL-5181)
     // can cancel an in-flight upload on logout. When aborted, `fetch` rejects
     // with an AbortError, which the coordinator distinguishes from a real
@@ -4025,6 +4052,8 @@ export class ApiClient {
     if (opts?.issueId) formData.append("issue_id", opts.issueId);
     if (opts?.commentId) formData.append("comment_id", opts.commentId);
     if (opts?.chatSessionId) formData.append("chat_session_id", opts.chatSessionId);
+    if (opts?.testRunCaseId) formData.append("test_run_case_id", opts.testRunCaseId);
+    if (opts?.evidenceKind) formData.append("kind", opts.evidenceKind);
 
     const rid = createRequestId();
     const start = Date.now();
@@ -6837,6 +6866,14 @@ export class ApiClient {
     });
   }
 
+  /** What the next round of a plan runs: its list plus its rule's matches. */
+  async getTestPlanSelection(id: string): Promise<TestPlanSelection> {
+    const raw = await this.fetch<unknown>(`/api/test-plans/${encodeURIComponent(id)}/selection`);
+    return parseWithFallback(raw, TestPlanSelectionSchema, EMPTY_TEST_PLAN_SELECTION, {
+      endpoint: "GET /api/test-plans/:id/selection",
+    });
+  }
+
   async updateTestPlan(id: string, data: UpdateTestPlanRequest): Promise<TestPlan> {
     const raw = await this.fetch<unknown>(`/api/test-plans/${encodeURIComponent(id)}`, {
       method: "PUT",
@@ -7049,6 +7086,70 @@ export class ApiClient {
     });
   }
 
+  /** Every issue of a project with what covers it — the gap list. */
+  async getProjectTestCoverage(projectId: string): Promise<ProjectCoverageResponse> {
+    const raw = await this.fetch<unknown>(`/api/test-coverage?project_id=${encodeURIComponent(projectId)}`);
+    return parseWithFallback(raw, ProjectCoverageResponseSchema, EMPTY_PROJECT_COVERAGE_RESPONSE, {
+      endpoint: "GET /api/test-coverage",
+    });
+  }
+
+  async listIssueTestPoints(issueId: string): Promise<ListIssueTestPointsResponse> {
+    const raw = await this.fetch<unknown>(`/api/issues/${encodeURIComponent(issueId)}/test-points`);
+    return parseWithFallback(raw, ListIssueTestPointsResponseSchema, EMPTY_LIST_ISSUE_TEST_POINTS_RESPONSE, {
+      endpoint: "GET /api/issues/:id/test-points",
+    });
+  }
+
+  async createIssueTestPoint(issueId: string, data: CreateTestPointRequest): Promise<TestPoint> {
+    const raw = await this.fetch<unknown>(`/api/issues/${encodeURIComponent(issueId)}/test-points`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, TestPointSchema, { ...EMPTY_TEST_POINT, issue_id: issueId }, {
+      endpoint: "POST /api/issues/:id/test-points",
+    });
+  }
+
+  async updateTestPoint(pointId: string, data: UpdateTestPointRequest): Promise<TestPoint> {
+    const raw = await this.fetch<unknown>(`/api/test-points/${encodeURIComponent(pointId)}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, TestPointSchema, { ...EMPTY_TEST_POINT, id: pointId }, {
+      endpoint: "PATCH /api/test-points/:id",
+    });
+  }
+
+  async deleteTestPoint(pointId: string): Promise<void> {
+    await this.fetch(`/api/test-points/${encodeURIComponent(pointId)}`, { method: "DELETE" });
+  }
+
+  async listTestCaseTestPoints(ref: string): Promise<ListTestCaseTestPointsResponse> {
+    const raw = await this.fetch<unknown>(`/api/test-cases/${encodeURIComponent(ref)}/test-points`);
+    return parseWithFallback(raw, ListTestCaseTestPointsResponseSchema, EMPTY_LIST_TEST_CASE_TEST_POINTS_RESPONSE, {
+      endpoint: "GET /api/test-cases/:ref/test-points",
+    });
+  }
+
+  /** Declare which test points a case verifies (ids or "<issue>/TP-<n>"). */
+  async linkTestCaseTestPoints(ref: string, testPoints: string[]): Promise<ListTestCaseTestPointsResponse> {
+    const raw = await this.fetch<unknown>(`/api/test-cases/${encodeURIComponent(ref)}/test-points`, {
+      method: "POST",
+      body: JSON.stringify({ test_points: testPoints }),
+    });
+    return parseWithFallback(raw, ListTestCaseTestPointsResponseSchema, EMPTY_LIST_TEST_CASE_TEST_POINTS_RESPONSE, {
+      endpoint: "POST /api/test-cases/:ref/test-points",
+    });
+  }
+
+  async unlinkTestCaseTestPoint(ref: string, pointId: string): Promise<void> {
+    await this.fetch(
+      `/api/test-cases/${encodeURIComponent(ref)}/test-points/${encodeURIComponent(pointId)}`,
+      { method: "DELETE" },
+    );
+  }
+
   async listIssueTestCases(issueId: string): Promise<ListIssueTestCasesResponse> {
     const raw = await this.fetch<unknown>(
       `/api/issues/${encodeURIComponent(issueId)}/test-cases`,
@@ -7087,6 +7188,16 @@ export class ApiClient {
     const raw = await this.fetch<unknown>(`/api/runtimes/${encodeURIComponent(runtimeId)}/device-hub`);
     return parseWithFallback(raw, RuntimeDeviceHubSchema, EMPTY_RUNTIME_DEVICE_HUB, {
       endpoint: "GET /api/runtimes/{id}/device-hub",
+    });
+  }
+
+  /** The files an executor uploaded as evidence for one run case. */
+  async listTestRunCaseEvidence(runCaseId: string): Promise<ListTestRunCaseEvidenceResponse> {
+    const raw = await this.fetch<unknown>(
+      `/api/test-run-cases/${encodeURIComponent(runCaseId)}/evidence`,
+    );
+    return parseWithFallback(raw, ListTestRunCaseEvidenceResponseSchema, EMPTY_LIST_TEST_RUN_CASE_EVIDENCE_RESPONSE, {
+      endpoint: "GET /api/test-run-cases/:id/evidence",
     });
   }
 

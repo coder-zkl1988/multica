@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/logger"
+	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -41,6 +43,10 @@ type TestCaseProposalCasePayload struct {
 	BusinessRulesRef     []string              `json:"business_rules_ref"`
 	Repos                []TestCaseRepoPayload `json:"repos"`
 	SourceRefs           map[string]any        `json:"source_refs"`
+	// TestPoints are the requirement test points this case verifies, as ids
+	// or "<issue>/TP-<n>". They must belong to the run's issue scope; the
+	// server stores them as ids.
+	TestPoints []string `json:"test_points,omitempty"`
 }
 
 type TestCaseProposalItem struct {
@@ -115,7 +121,13 @@ func (h *Handler) ProposeTestCases(w http.ResponseWriter, r *http.Request) {
 		item   TestCaseProposalItem
 		target db.TestCase
 		repos  []db.CreateTestCaseRepoParams
+		points []db.IssueTestPoint
 	}
+	// A case may only claim test points of the requirements this run was
+	// scoped to; an empty scope leaves every accessible issue open.
+	scopeIssueRefs := h.testGenerationScopeIssueRefs(r, job, wsUUID)
+	scopeIssues := h.resolveScopeIssues(r, wsUUID, scopeIssueRefs)
+	newWithoutPoints := 0
 	resolved := make([]resolvedItem, 0, len(req.Items))
 	for i, item := range req.Items {
 		prefix := fmt.Sprintf("items[%d]: ", i)
@@ -148,11 +160,38 @@ func (h *Handler) ProposeTestCases(w http.ResponseWriter, r *http.Request) {
 			if !h.validateProposalCaseEnums(w, prefix, item.Case) {
 				return
 			}
+			// The prompt has always required a concrete action and a checkable
+			// expected result for every step; the server now holds it to that.
+			// A generated case nobody can check is the cheapest way to fill the
+			// library with "coverage" that never finds a bug.
+			if problem := testCaseStepsProblem(normalizeTestCaseSteps(item.Case.Steps)); problem != "" {
+				writeError(w, http.StatusBadRequest, prefix+"case: "+problem)
+				return
+			}
 			repos, reposOK := h.validateTestCaseRepos(r.Context(), w, wsUUID, job.ProjectID, item.Case.Repos)
 			if !reposOK {
 				return
 			}
 			entry.repos = repos
+			if len(item.Case.TestPoints) > 0 {
+				points, problem := h.resolveTestPointRefs(r, wsUUID, uuidToString(wsUUID), item.Case.TestPoints, scopeIssues)
+				if problem != "" {
+					writeError(w, http.StatusBadRequest, prefix+"case."+problem)
+					return
+				}
+				entry.points = points
+				// Stored as ids: a queued proposal must still name the same
+				// points when someone accepts it later.
+				ids := make([]string, len(points))
+				for j, point := range points {
+					ids[j] = uuidToString(point.ID)
+				}
+				caseCopy := *item.Case
+				caseCopy.TestPoints = ids
+				entry.item.Case = &caseCopy
+			} else if item.Kind == "new" && len(scopeIssueRefs) > 0 {
+				newWithoutPoints++
+			}
 		}
 		resolved = append(resolved, entry)
 	}
@@ -170,6 +209,18 @@ func (h *Handler) ProposeTestCases(w http.ResponseWriter, r *http.Request) {
 	createdProposals := make([]TestCaseProposalResponse, 0, len(resolved))
 
 	for _, entry := range resolved {
+		// Whether a target is still a draft decides whether this run may
+		// change it directly or must queue a proposal for review. Read it
+		// under a lock: an approval that landed since the batch was resolved
+		// turns the direct rewrite into a proposal.
+		if entry.item.Kind == "update" || entry.item.Kind == "obsolete" {
+			locked, lockErr := qtx.LockTestCase(r.Context(), db.LockTestCaseParams{ID: entry.target.ID, WorkspaceID: wsUUID})
+			if lockErr != nil {
+				h.writeTestGenerationWriteError(w, r, lockErr, "update")
+				return
+			}
+			entry.target = locked
+		}
 		switch entry.item.Kind {
 		case "new":
 			created, repos, createErr := h.insertProposedTestCase(r, qtx, job, wsUUID, entry.item.Case, entry.repos)
@@ -178,6 +229,10 @@ func (h *Handler) ProposeTestCases(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 				h.writeTestGenerationWriteError(w, r, createErr, "create")
+				return
+			}
+			if err := linkCaseToTestPoints(r, qtx, created.ID, wsUUID, entry.points, "ai", job.CreatedBy); err != nil {
+				h.writeTestGenerationWriteError(w, r, err, "create")
 				return
 			}
 			stats["new"]++
@@ -191,6 +246,10 @@ func (h *Handler) ProposeTestCases(w http.ResponseWriter, r *http.Request) {
 				updated, repos, updateErr := h.rewriteDraftTestCase(r, qtx, wsUUID, entry.target, entry.item.Case, entry.repos)
 				if updateErr != nil {
 					h.writeTestGenerationWriteError(w, r, updateErr, "update")
+					return
+				}
+				if err := h.replaceCaseAITestPoints(r, qtx, updated.ID, wsUUID, revisionOf(len(entry.item.Case.TestPoints) > 0, entry.points, scopeIssues), "ai", job.CreatedBy); err != nil {
+					h.writeTestGenerationWriteError(w, r, err, "update")
 					return
 				}
 				stats["updated"]++
@@ -273,7 +332,31 @@ func (h *Handler) ProposeTestCases(w http.ResponseWriter, r *http.Request) {
 		"stats":      stats,
 		"test_cases": createdCases,
 		"proposals":  createdProposals,
+		// New cases written under an issue scope that name no test point:
+		// coverage cannot count them toward any condition of the requirement.
+		"new_cases_without_test_points": newWithoutPoints,
 	})
+}
+
+// resolveScopeIssues turns a run's issue scope into the set of issues its
+// cases may claim test points of. nil means the scope is empty and any
+// accessible issue is allowed; an entry that resolves to nothing is skipped,
+// as linkGeneratedCaseIssues does.
+func (h *Handler) resolveScopeIssues(r *http.Request, wsUUID pgtype.UUID, refs []string) map[pgtype.UUID]struct{} {
+	if len(refs) == 0 {
+		return nil
+	}
+	out := make(map[pgtype.UUID]struct{}, len(refs))
+	for _, raw := range refs {
+		ref := strings.TrimSpace(raw)
+		if ref == "" {
+			continue
+		}
+		if issueUUID, ok := h.resolveGeneratedIssueRef(r, wsUUID, uuidToString(wsUUID), ref); ok {
+			out[issueUUID] = struct{}{}
+		}
+	}
+	return out
 }
 
 func mergeProposalStats(previous map[string]any, delta map[string]int) map[string]any {
@@ -439,6 +522,19 @@ func (h *Handler) insertProposedTestCase(
 	return testCase, repos, nil
 }
 
+// proposalScopeIssues is the issue scope of the run that queued a proposal:
+// the issues whose points it could name, and so the ones whose AI links its
+// revision may replace. nil (an unscoped run) means any issue; an empty set
+// (the job cannot be read, or its scope resolves to nothing) means none.
+func (h *Handler) proposalScopeIssues(r *http.Request, proposal db.TestCaseProposal, wsUUID pgtype.UUID) map[pgtype.UUID]struct{} {
+	job, err := h.Queries.GetTestGenerationJobInWorkspace(r.Context(), db.GetTestGenerationJobInWorkspaceParams{ID: proposal.JobID, WorkspaceID: wsUUID})
+	if err != nil {
+		// Unknown scope: the revision may remove nothing.
+		return map[pgtype.UUID]struct{}{}
+	}
+	return h.resolveScopeIssues(r, wsUUID, h.testGenerationScopeIssueRefs(r, job, wsUUID))
+}
+
 // testGenerationScopeIssueRefs reads the issue scope the agent actually worked
 // under. The approved plan wins because a reviewer can edit the scope there
 // before approving; the job's original input is only the fallback for a job
@@ -491,13 +587,22 @@ func (h *Handler) rewriteDraftTestCase(
 	}
 
 	priority, caseType, scope, executionMode := proposalCaseDefaults(payload)
+	newSteps := normalizeTestCaseSteps(payload.Steps)
+	// Once a run has written a person's draft, its content is no longer only
+	// the person's: it waits for approval instead of going live on their
+	// next save.
+	var sourceRefs []byte
+	if testCaseAwaitingSteps(current.SourceRefs) {
+		sourceRefs = withoutAwaitingSteps(current.SourceRefs)
+	}
 	updated, err := qtx.UpdateTestCase(r.Context(), db.UpdateTestCaseParams{
+		SourceRefs:           sourceRefs,
 		ID:                   current.ID,
 		WorkspaceID:          wsUUID,
 		Title:                pgtype.Text{String: strings.TrimSpace(payload.Title), Valid: true},
 		Module:               pgtype.Text{String: payload.Module, Valid: true},
 		Preconditions:        pgtype.Text{String: payload.Preconditions, Valid: true},
-		Steps:                marshalJSONColumn(normalizeTestCaseSteps(payload.Steps), "[]"),
+		Steps:                marshalJSONColumn(newSteps, "[]"),
 		ExpectedResult:       pgtype.Text{String: payload.ExpectedResult, Valid: true},
 		TestData:             marshalJSONColumn(defaultMap(payload.TestData), "{}"),
 		Priority:             pgtype.Text{String: priority, Valid: true},
@@ -589,6 +694,12 @@ func (h *Handler) reviewTestCaseProposal(w http.ResponseWriter, r *http.Request,
 	if !ok {
 		return
 	}
+	// A proposal is an agent's suggestion for a member to decide; an agent
+	// deciding one would be reviewing AI output with AI.
+	if actorType, _ := h.resolveActor(r, userID, workspaceID); actorType == "agent" {
+		writeError(w, http.StatusForbidden, "an agent cannot accept or reject a test case proposal; a member reviews it")
+		return
+	}
 	userUUID, ok := parseUUIDOrBadRequest(w, userID, "user id")
 	if !ok {
 		return
@@ -647,6 +758,7 @@ func (h *Handler) reviewTestCaseProposal(w http.ResponseWriter, r *http.Request,
 		}
 
 		params := db.UpdateTestCaseParams{ID: current.ID, WorkspaceID: wsUUID, UpdatedBy: userUUID}
+		var proposedPoints []string
 		if proposal.Kind == "obsolete" {
 			params.Status = pgtype.Text{String: "deprecated", Valid: true}
 		} else {
@@ -655,11 +767,22 @@ func (h *Handler) reviewTestCaseProposal(w http.ResponseWriter, r *http.Request,
 				writeError(w, http.StatusConflict, "the proposal payload is not readable; reject it instead")
 				return
 			}
+			// The writeback endpoint refuses such payloads now, but a proposal
+			// queued before that rule could still replace an active case's
+			// procedure with nothing to check.
+			if current.Status == "active" {
+				if problem := testCaseStepsProblem(normalizeTestCaseSteps(payload.Steps)); problem != "" {
+					writeError(w, http.StatusConflict, "accepting this proposal would leave an active case unexecutable ("+problem+"); reject it or edit the case by hand")
+					return
+				}
+			}
+			proposedPoints = payload.TestPoints
 			priority, caseType, scope, executionMode := proposalCaseDefaults(&payload)
 			params.Title = pgtype.Text{String: strings.TrimSpace(payload.Title), Valid: true}
 			params.Module = pgtype.Text{String: payload.Module, Valid: true}
 			params.Preconditions = pgtype.Text{String: payload.Preconditions, Valid: true}
-			params.Steps = marshalJSONColumn(normalizeTestCaseSteps(payload.Steps), "[]")
+			newSteps := normalizeTestCaseSteps(payload.Steps)
+			params.Steps = marshalJSONColumn(newSteps, "[]")
 			params.ExpectedResult = pgtype.Text{String: payload.ExpectedResult, Valid: true}
 			params.TestData = marshalJSONColumn(defaultMap(payload.TestData), "{}")
 			params.Priority = pgtype.Text{String: priority, Valid: true}
@@ -672,6 +795,40 @@ func (h *Handler) reviewTestCaseProposal(w http.ResponseWriter, r *http.Request,
 		applied, updateErr := qtx.UpdateTestCase(r.Context(), params)
 		if updateErr != nil {
 			h.writeTestGenerationWriteError(w, r, updateErr, "update")
+			return
+		}
+		// The points the run said this revision verifies. One dropped or
+		// deleted since the proposal was queued is no longer a condition of
+		// its requirement, so it is not linked rather than failing the accept.
+		// One on an issue the accepting person cannot see keeps any link it
+		// already has — not seeing an issue is no reason to cut its coverage —
+		// but is not newly linked by them.
+		revision := caseTestPointRevision{named: len(proposedPoints) > 0, scope: h.proposalScopeIssues(r, proposal, wsUUID)}
+		for _, ref := range proposedPoints {
+			id, parseErr := util.ParseUUID(ref)
+			if parseErr != nil {
+				continue
+			}
+			point, getErr := qtx.GetIssueTestPointInWorkspace(r.Context(), db.GetIssueTestPointInWorkspaceParams{ID: id, WorkspaceID: wsUUID})
+			if getErr != nil {
+				continue
+			}
+			revision.keep = append(revision.keep, point.ID)
+			if point.Status != "active" {
+				continue
+			}
+			if windowErr := h.checkIssueWindowAuthorization(r, point.IssueID, wsUUID, "test_case_proposal_accept"); windowErr != nil {
+				var outside *service.IssueOutsideCreationWindowError
+				if !errors.As(windowErr, &outside) {
+					writeIssueWindowAuthorizationError(w, windowErr)
+					return
+				}
+				continue
+			}
+			revision.link = append(revision.link, point)
+		}
+		if err := h.replaceCaseAITestPoints(r, qtx, applied.ID, wsUUID, revision, "ai", userUUID); err != nil {
+			h.writeTestGenerationWriteError(w, r, err, "update")
 			return
 		}
 		repos, reposErr := qtx.ListTestCaseRepos(r.Context(), applied.ID)

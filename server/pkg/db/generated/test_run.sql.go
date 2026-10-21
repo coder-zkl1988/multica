@@ -11,6 +11,54 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const abortOpenTestRun = `-- name: AbortOpenTestRun :one
+UPDATE test_run SET
+    status       = 'aborted',
+    completed_at = now(),
+    error        = COALESCE($1, error),
+    updated_at   = now()
+WHERE id = $2 AND workspace_id = $3
+  AND status NOT IN ('completed', 'aborted')
+RETURNING id, workspace_id, project_id, plan_id, title, executor_type, executor_id, agent_task_id, environment, build_ref, capability_binding, status, source_run_id, retry_scope, error, started_at, completed_at, created_by, created_at, updated_at, parallelism
+`
+
+type AbortOpenTestRunParams struct {
+	Error       pgtype.Text `json:"error"`
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+// Aborts a round only while it is still open, so an abort racing the round's
+// completion never rewrites a finished round (no rows = already settled).
+func (q *Queries) AbortOpenTestRun(ctx context.Context, arg AbortOpenTestRunParams) (TestRun, error) {
+	row := q.db.QueryRow(ctx, abortOpenTestRun, arg.Error, arg.ID, arg.WorkspaceID)
+	var i TestRun
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.ProjectID,
+		&i.PlanID,
+		&i.Title,
+		&i.ExecutorType,
+		&i.ExecutorID,
+		&i.AgentTaskID,
+		&i.Environment,
+		&i.BuildRef,
+		&i.CapabilityBinding,
+		&i.Status,
+		&i.SourceRunID,
+		&i.RetryScope,
+		&i.Error,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Parallelism,
+	)
+	return i, err
+}
+
 const addTestPlanCase = `-- name: AddTestPlanCase :one
 INSERT INTO test_plan_case (plan_id, workspace_id, test_case_id, position)
 VALUES ($1, $2, $3, $4)
@@ -39,6 +87,53 @@ func (q *Queries) AddTestPlanCase(ctx context.Context, arg AddTestPlanCaseParams
 		&i.TestCaseID,
 		&i.Position,
 		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const completeOpenTestRun = `-- name: CompleteOpenTestRun :one
+UPDATE test_run SET
+    status       = 'completed',
+    completed_at = now(),
+    updated_at   = now()
+WHERE id = $1 AND workspace_id = $2
+  AND status NOT IN ('completed', 'aborted')
+RETURNING id, workspace_id, project_id, plan_id, title, executor_type, executor_id, agent_task_id, environment, build_ref, capability_binding, status, source_run_id, retry_scope, error, started_at, completed_at, created_by, created_at, updated_at, parallelism
+`
+
+type CompleteOpenTestRunParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+// Completes a round only if it is still open. Two convergers racing (an HTTP
+// write and a case task's hook) or an abort committing in between cannot both
+// complete it: no row means another caller did, or the round was aborted.
+func (q *Queries) CompleteOpenTestRun(ctx context.Context, arg CompleteOpenTestRunParams) (TestRun, error) {
+	row := q.db.QueryRow(ctx, completeOpenTestRun, arg.ID, arg.WorkspaceID)
+	var i TestRun
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.ProjectID,
+		&i.PlanID,
+		&i.Title,
+		&i.ExecutorType,
+		&i.ExecutorID,
+		&i.AgentTaskID,
+		&i.Environment,
+		&i.BuildRef,
+		&i.CapabilityBinding,
+		&i.Status,
+		&i.SourceRunID,
+		&i.RetryScope,
+		&i.Error,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Parallelism,
 	)
 	return i, err
 }
@@ -119,9 +214,9 @@ func (q *Queries) CountTestRunResults(ctx context.Context, arg CountTestRunResul
 }
 
 const createTestPlan = `-- name: CreateTestPlan :one
-INSERT INTO test_plan (workspace_id, project_id, title, description, status, created_by)
-VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, workspace_id, project_id, title, description, status, created_by, created_at, updated_at
+INSERT INTO test_plan (workspace_id, project_id, title, description, status, created_by, selector)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING id, workspace_id, project_id, title, description, status, created_by, created_at, updated_at, selector
 `
 
 type CreateTestPlanParams struct {
@@ -131,6 +226,7 @@ type CreateTestPlanParams struct {
 	Description string      `json:"description"`
 	Status      string      `json:"status"`
 	CreatedBy   pgtype.UUID `json:"created_by"`
+	Selector    []byte      `json:"selector"`
 }
 
 func (q *Queries) CreateTestPlan(ctx context.Context, arg CreateTestPlanParams) (TestPlan, error) {
@@ -141,6 +237,7 @@ func (q *Queries) CreateTestPlan(ctx context.Context, arg CreateTestPlanParams) 
 		arg.Description,
 		arg.Status,
 		arg.CreatedBy,
+		arg.Selector,
 	)
 	var i TestPlan
 	err := row.Scan(
@@ -153,6 +250,7 @@ func (q *Queries) CreateTestPlan(ctx context.Context, arg CreateTestPlanParams) 
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Selector,
 	)
 	return i, err
 }
@@ -306,6 +404,21 @@ func (q *Queries) DeleteTestPlanCases(ctx context.Context, arg DeleteTestPlanCas
 	return err
 }
 
+const deleteTestPlanCasesForCase = `-- name: DeleteTestPlanCasesForCase :exec
+DELETE FROM test_plan_case WHERE test_case_id = $1 AND workspace_id = $2
+`
+
+type DeleteTestPlanCasesForCaseParams struct {
+	TestCaseID  pgtype.UUID `json:"test_case_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+// A deleted case leaves every plan that listed it.
+func (q *Queries) DeleteTestPlanCasesForCase(ctx context.Context, arg DeleteTestPlanCasesForCaseParams) error {
+	_, err := q.db.Exec(ctx, deleteTestPlanCasesForCase, arg.TestCaseID, arg.WorkspaceID)
+	return err
+}
+
 const deleteTestRun = `-- name: DeleteTestRun :exec
 DELETE FROM test_run WHERE id = $1 AND workspace_id = $2
 `
@@ -335,7 +448,7 @@ func (q *Queries) DeleteTestRunCases(ctx context.Context, arg DeleteTestRunCases
 }
 
 const getTestPlanInWorkspace = `-- name: GetTestPlanInWorkspace :one
-SELECT id, workspace_id, project_id, title, description, status, created_by, created_at, updated_at FROM test_plan WHERE id = $1 AND workspace_id = $2
+SELECT id, workspace_id, project_id, title, description, status, created_by, created_at, updated_at, selector FROM test_plan WHERE id = $1 AND workspace_id = $2
 `
 
 type GetTestPlanInWorkspaceParams struct {
@@ -356,6 +469,7 @@ func (q *Queries) GetTestPlanInWorkspace(ctx context.Context, arg GetTestPlanInW
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Selector,
 	)
 	return i, err
 }
@@ -571,6 +685,113 @@ func (q *Queries) ListTestCaseResultTimeline(ctx context.Context, arg ListTestCa
 	return items, nil
 }
 
+const listTestCaseSummariesByIDs = `-- name: ListTestCaseSummariesByIDs :many
+SELECT id, case_number, title, status
+FROM test_case
+WHERE workspace_id = $1 AND id = ANY($2::uuid[])
+`
+
+type ListTestCaseSummariesByIDsParams struct {
+	WorkspaceID pgtype.UUID   `json:"workspace_id"`
+	CaseIds     []pgtype.UUID `json:"case_ids"`
+}
+
+type ListTestCaseSummariesByIDsRow struct {
+	ID         pgtype.UUID `json:"id"`
+	CaseNumber int32       `json:"case_number"`
+	Title      string      `json:"title"`
+	Status     string      `json:"status"`
+}
+
+// Key, title and status of many cases in one read, for a plan's next-round
+// preview, which can name every active case of a project.
+func (q *Queries) ListTestCaseSummariesByIDs(ctx context.Context, arg ListTestCaseSummariesByIDsParams) ([]ListTestCaseSummariesByIDsRow, error) {
+	rows, err := q.db.Query(ctx, listTestCaseSummariesByIDs, arg.WorkspaceID, arg.CaseIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListTestCaseSummariesByIDsRow{}
+	for rows.Next() {
+		var i ListTestCaseSummariesByIDsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.CaseNumber,
+			&i.Title,
+			&i.Status,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTestCasesMatchingPlanSelector = `-- name: ListTestCasesMatchingPlanSelector :many
+SELECT tc.id, tc.case_number
+FROM test_case tc
+WHERE tc.workspace_id = $1
+  AND tc.project_id = $2
+  AND tc.status = 'active'
+  AND (cardinality($3::text[]) = 0 OR tc.module = ANY($3::text[]))
+  AND (cardinality($4::text[]) = 0 OR tc.priority = ANY($4::text[]))
+  AND (cardinality($5::text[]) = 0 OR tc.case_type = ANY($5::text[]))
+  AND (cardinality($6::uuid[]) = 0 OR EXISTS (
+      SELECT 1 FROM test_case_issue tci
+      WHERE tci.test_case_id = tc.id
+        AND tci.workspace_id = tc.workspace_id
+        AND tci.issue_id = ANY($6::uuid[])
+  ))
+ORDER BY tc.case_number ASC
+`
+
+type ListTestCasesMatchingPlanSelectorParams struct {
+	WorkspaceID pgtype.UUID   `json:"workspace_id"`
+	ProjectID   pgtype.UUID   `json:"project_id"`
+	Modules     []string      `json:"modules"`
+	Priorities  []string      `json:"priorities"`
+	CaseTypes   []string      `json:"case_types"`
+	IssueIds    []pgtype.UUID `json:"issue_ids"`
+}
+
+type ListTestCasesMatchingPlanSelectorRow struct {
+	ID         pgtype.UUID `json:"id"`
+	CaseNumber int32       `json:"case_number"`
+}
+
+// The active cases of a project a plan's rule picks. An empty array means the
+// dimension is not constrained; the handler never calls this for a plan with
+// no rule at all.
+func (q *Queries) ListTestCasesMatchingPlanSelector(ctx context.Context, arg ListTestCasesMatchingPlanSelectorParams) ([]ListTestCasesMatchingPlanSelectorRow, error) {
+	rows, err := q.db.Query(ctx, listTestCasesMatchingPlanSelector,
+		arg.WorkspaceID,
+		arg.ProjectID,
+		arg.Modules,
+		arg.Priorities,
+		arg.CaseTypes,
+		arg.IssueIds,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListTestCasesMatchingPlanSelectorRow{}
+	for rows.Next() {
+		var i ListTestCasesMatchingPlanSelectorRow
+		if err := rows.Scan(&i.ID, &i.CaseNumber); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTestPlanCases = `-- name: ListTestPlanCases :many
 SELECT plan_id, workspace_id, test_case_id, position, created_at FROM test_plan_case
 WHERE plan_id = $1 AND workspace_id = $2
@@ -609,7 +830,7 @@ func (q *Queries) ListTestPlanCases(ctx context.Context, arg ListTestPlanCasesPa
 }
 
 const listTestPlans = `-- name: ListTestPlans :many
-SELECT id, workspace_id, project_id, title, description, status, created_by, created_at, updated_at FROM test_plan
+SELECT id, workspace_id, project_id, title, description, status, created_by, created_at, updated_at, selector FROM test_plan
 WHERE workspace_id = $1
   AND ($2::uuid IS NULL OR project_id = $2)
   AND ($3::text IS NULL OR status = $3)
@@ -641,6 +862,7 @@ func (q *Queries) ListTestPlans(ctx context.Context, arg ListTestPlansParams) ([
 			&i.CreatedBy,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Selector,
 		); err != nil {
 			return nil, err
 		}
@@ -874,6 +1096,49 @@ func (q *Queries) ListUndispatchedTestRunCases(ctx context.Context, arg ListUndi
 	return items, nil
 }
 
+const lockTestRun = `-- name: LockTestRun :one
+SELECT id, workspace_id, project_id, plan_id, title, executor_type, executor_id, agent_task_id, environment, build_ref, capability_binding, status, source_run_id, retry_scope, error, started_at, completed_at, created_by, created_at, updated_at, parallelism FROM test_run WHERE id = $1 AND workspace_id = $2 FOR UPDATE
+`
+
+type LockTestRunParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+// Serializes the writers of one round: every case task's completion hook,
+// the failure hook and a result write take this lock before they count the
+// round's cases, release the next ones or complete it, so two hooks never
+// bind the same waiting case and the last settle always sees the others.
+// Returns the round as it is now, not as the caller read it earlier.
+func (q *Queries) LockTestRun(ctx context.Context, arg LockTestRunParams) (TestRun, error) {
+	row := q.db.QueryRow(ctx, lockTestRun, arg.ID, arg.WorkspaceID)
+	var i TestRun
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.ProjectID,
+		&i.PlanID,
+		&i.Title,
+		&i.ExecutorType,
+		&i.ExecutorID,
+		&i.AgentTaskID,
+		&i.Environment,
+		&i.BuildRef,
+		&i.CapabilityBinding,
+		&i.Status,
+		&i.SourceRunID,
+		&i.RetryScope,
+		&i.Error,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Parallelism,
+	)
+	return i, err
+}
+
 const removeTestPlanCase = `-- name: RemoveTestPlanCase :exec
 DELETE FROM test_plan_case WHERE plan_id = $1 AND workspace_id = $2 AND test_case_id = $3
 `
@@ -887,6 +1152,68 @@ type RemoveTestPlanCaseParams struct {
 func (q *Queries) RemoveTestPlanCase(ctx context.Context, arg RemoveTestPlanCaseParams) error {
 	_, err := q.db.Exec(ctx, removeTestPlanCase, arg.PlanID, arg.WorkspaceID, arg.TestCaseID)
 	return err
+}
+
+const settleOpenTestRunCase = `-- name: SettleOpenTestRunCase :one
+UPDATE test_run_case SET
+    result           = $1,
+    notes            = $2,
+    executed_by_type = $3,
+    executed_by_id   = $4,
+    executed_at      = COALESCE($5, executed_at),
+    updated_at       = now()
+WHERE id = $6 AND workspace_id = $7
+  AND result IN ('pending', 'running')
+RETURNING id, workspace_id, run_id, test_case_id, case_snapshot, position, result, notes, evidence, step_results, duration_ms, executed_by_type, executed_by_id, executed_at, defect_issue_id, created_at, updated_at, agent_task_id
+`
+
+type SettleOpenTestRunCaseParams struct {
+	Result         string             `json:"result"`
+	Notes          string             `json:"notes"`
+	ExecutedByType pgtype.Text        `json:"executed_by_type"`
+	ExecutedByID   pgtype.UUID        `json:"executed_by_id"`
+	ExecutedAt     pgtype.Timestamptz `json:"executed_at"`
+	ID             pgtype.UUID        `json:"id"`
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+}
+
+// The task hooks' fallback settle: only a case nobody recorded yet. A verdict
+// the agent's CLI write committed meanwhile is never overwritten; no row
+// means it was already recorded. executed_at is left alone when the round
+// was aborted (a NULL argument), so that settle never becomes the case's
+// latest result.
+func (q *Queries) SettleOpenTestRunCase(ctx context.Context, arg SettleOpenTestRunCaseParams) (TestRunCase, error) {
+	row := q.db.QueryRow(ctx, settleOpenTestRunCase,
+		arg.Result,
+		arg.Notes,
+		arg.ExecutedByType,
+		arg.ExecutedByID,
+		arg.ExecutedAt,
+		arg.ID,
+		arg.WorkspaceID,
+	)
+	var i TestRunCase
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.RunID,
+		&i.TestCaseID,
+		&i.CaseSnapshot,
+		&i.Position,
+		&i.Result,
+		&i.Notes,
+		&i.Evidence,
+		&i.StepResults,
+		&i.DurationMs,
+		&i.ExecutedByType,
+		&i.ExecutedByID,
+		&i.ExecutedAt,
+		&i.DefectIssueID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.AgentTaskID,
+	)
+	return i, err
 }
 
 const skipUndispatchedTestRunCases = `-- name: SkipUndispatchedTestRunCases :many
@@ -942,14 +1269,60 @@ func (q *Queries) SkipUndispatchedTestRunCases(ctx context.Context, arg SkipUndi
 	return items, nil
 }
 
+const startPendingTestRun = `-- name: StartPendingTestRun :one
+UPDATE test_run SET
+    status     = 'running',
+    started_at = COALESCE(started_at, now()),
+    updated_at = now()
+WHERE id = $1 AND workspace_id = $2 AND status = 'pending'
+RETURNING id, workspace_id, project_id, plan_id, title, executor_type, executor_id, agent_task_id, environment, build_ref, capability_binding, status, source_run_id, retry_scope, error, started_at, completed_at, created_by, created_at, updated_at, parallelism
+`
+
+type StartPendingTestRunParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+// Moves a round from pending to running only while it is still pending, so a
+// start racing an abort never revives the aborted round (no rows = it moved on).
+func (q *Queries) StartPendingTestRun(ctx context.Context, arg StartPendingTestRunParams) (TestRun, error) {
+	row := q.db.QueryRow(ctx, startPendingTestRun, arg.ID, arg.WorkspaceID)
+	var i TestRun
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.ProjectID,
+		&i.PlanID,
+		&i.Title,
+		&i.ExecutorType,
+		&i.ExecutorID,
+		&i.AgentTaskID,
+		&i.Environment,
+		&i.BuildRef,
+		&i.CapabilityBinding,
+		&i.Status,
+		&i.SourceRunID,
+		&i.RetryScope,
+		&i.Error,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Parallelism,
+	)
+	return i, err
+}
+
 const updateTestPlan = `-- name: UpdateTestPlan :one
 UPDATE test_plan SET
     title       = COALESCE($3, title),
     description = COALESCE($4, description),
     status      = COALESCE($5, status),
+    selector    = COALESCE($6, selector),
     updated_at  = now()
 WHERE id = $1 AND workspace_id = $2
-RETURNING id, workspace_id, project_id, title, description, status, created_by, created_at, updated_at
+RETURNING id, workspace_id, project_id, title, description, status, created_by, created_at, updated_at, selector
 `
 
 type UpdateTestPlanParams struct {
@@ -958,6 +1331,7 @@ type UpdateTestPlanParams struct {
 	Title       pgtype.Text `json:"title"`
 	Description pgtype.Text `json:"description"`
 	Status      pgtype.Text `json:"status"`
+	Selector    []byte      `json:"selector"`
 }
 
 func (q *Queries) UpdateTestPlan(ctx context.Context, arg UpdateTestPlanParams) (TestPlan, error) {
@@ -967,6 +1341,7 @@ func (q *Queries) UpdateTestPlan(ctx context.Context, arg UpdateTestPlanParams) 
 		arg.Title,
 		arg.Description,
 		arg.Status,
+		arg.Selector,
 	)
 	var i TestPlan
 	err := row.Scan(
@@ -979,6 +1354,7 @@ func (q *Queries) UpdateTestPlan(ctx context.Context, arg UpdateTestPlanParams) 
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Selector,
 	)
 	return i, err
 }
@@ -1061,7 +1437,7 @@ func (q *Queries) UpdateTestRun(ctx context.Context, arg UpdateTestRunParams) (T
 
 const updateTestRunCaseAgentTask = `-- name: UpdateTestRunCaseAgentTask :one
 UPDATE test_run_case SET agent_task_id = $3, updated_at = now()
-WHERE id = $1 AND workspace_id = $2
+WHERE id = $1 AND workspace_id = $2 AND (agent_task_id IS NULL OR agent_task_id = $3)
 RETURNING id, workspace_id, run_id, test_case_id, case_snapshot, position, result, notes, evidence, step_results, duration_ms, executed_by_type, executed_by_id, executed_at, defect_issue_id, created_at, updated_at, agent_task_id
 `
 
@@ -1072,6 +1448,9 @@ type UpdateTestRunCaseAgentTaskParams struct {
 }
 
 // Binds a case to the agent task that will execute it (per-case dispatch).
+// Only an unbound case: two dispatches of one round racing must not each bind
+// it, or the task that lost could never record or complete (no rows = the
+// case already has its task).
 func (q *Queries) UpdateTestRunCaseAgentTask(ctx context.Context, arg UpdateTestRunCaseAgentTaskParams) (TestRunCase, error) {
 	row := q.db.QueryRow(ctx, updateTestRunCaseAgentTask, arg.ID, arg.WorkspaceID, arg.AgentTaskID)
 	var i TestRunCase

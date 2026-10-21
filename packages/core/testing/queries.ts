@@ -109,6 +109,15 @@ export function testPlanDetailOptions(wsId: string, id: string) {
   });
 }
 
+/** Under the plan's detail key: saving the rule or the list refreshes it. */
+export function testPlanSelectionOptions(wsId: string, planId: string) {
+  return queryOptions({
+    queryKey: [...testPlanKeys.detail(wsId, planId), "selection"] as const,
+    queryFn: () => api.getTestPlanSelection(planId),
+    enabled: planId.length > 0,
+  });
+}
+
 export function testPlanCasesOptions(wsId: string, planId: string) {
   return queryOptions({
     queryKey: testPlanKeys.cases(wsId, planId),
@@ -144,6 +153,16 @@ export function testRunCasesOptions(wsId: string, runId: string) {
     queryFn: () => api.listTestRunCases(runId),
     select: (data) => data.cases,
     enabled: runId.length > 0,
+  });
+}
+
+/** Evidence of one run case; fetched when the case is expanded. */
+export function testRunCaseEvidenceOptions(wsId: string, runCaseId: string) {
+  return queryOptions({
+    queryKey: testRunKeys.evidence(wsId, runCaseId),
+    queryFn: () => api.listTestRunCaseEvidence(runCaseId),
+    select: (data) => data.evidence,
+    enabled: runCaseId.length > 0,
   });
 }
 
@@ -194,6 +213,31 @@ export function issueTestCasesOptions(wsId: string, issueId: string) {
     queryFn: () => api.listIssueTestCases(issueId),
     select: (data) => data.cases,
     enabled: issueId.length > 0,
+  });
+}
+
+export function projectTestCoverageOptions(wsId: string, projectId: string) {
+  return queryOptions({
+    queryKey: issueTestCaseKeys.projectCoverage(wsId, projectId),
+    queryFn: () => api.getProjectTestCoverage(projectId),
+    enabled: projectId.length > 0,
+  });
+}
+
+export function issueTestPointsOptions(wsId: string, issueId: string) {
+  return queryOptions({
+    queryKey: issueTestCaseKeys.testPoints(wsId, issueId),
+    queryFn: () => api.listIssueTestPoints(issueId),
+    enabled: issueId.length > 0,
+  });
+}
+
+export function testCaseTestPointsOptions(wsId: string, ref: string) {
+  return queryOptions({
+    queryKey: testCaseKeys.testPoints(wsId, ref),
+    queryFn: () => api.listTestCaseTestPoints(ref),
+    select: (data) => data.test_points,
+    enabled: ref.length > 0,
   });
 }
 

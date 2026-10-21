@@ -2093,10 +2093,27 @@ func TestBuildTestGenerationPromptCarriesTheIncrementContract(t *testing.T) {
 		"TEST_GENERATION_RESULT_JSON:",
 		"cross_repo",
 		"obsolete",
+		// Requirements are split into test points before any case is written,
+		// and every case declares the points it verifies.
+		"multica testcase point list --issue",
+		"multica testcase point add --issue",
+		"`negative`",
+		"`boundary`",
+		"`permission`",
+		"`test_points`",
+		// The run's own drafts cover points as in_review; re-covering them
+		// would duplicate every case it just wrote.
+		"show `in_review` — that is done",
+		"named in an `update` of an active case still shows `uncovered` until a member accepts",
+		"\"coverage\":[",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("prompt is missing %q", want)
 		}
+	}
+	// "Prefer few" set no floor under coverage; a run could stop at one happy path.
+	if strings.Contains(prompt, "Prefer few precise cases") {
+		t.Error("prompt still tells the run to prefer few cases")
 	}
 	// A generation run must not turn into a code-change run.
 	if !strings.Contains(prompt, "Do NOT write, refactor, or commit product code") {
@@ -2132,6 +2149,31 @@ func TestBuildTestRunPromptForbidsProbingTheHost(t *testing.T) {
 	}
 	if !strings.Contains(prompt, string(task.TestRunContext)) {
 		t.Error("prompt does not embed the context JSON")
+	}
+}
+
+// The per-case prompt states the recording contract the server enforces, so
+// an agent learns it before its write is refused rather than after.
+func TestBuildTestRunCasePromptStatesTheVerdictContract(t *testing.T) {
+	task := Task{TestRunContext: json.RawMessage(`{"type":"test_run","run_id":"run-1","run_case_id":"rc-1","case_key":"TC-7"}`)}
+	prompt := BuildPrompt(task, "claude")
+
+	for _, want := range []string{
+		"exactly ONE test case (TC-7)",
+		"Upload evidence FIRST",
+		"--step <index>=<result>",
+		"for EVERY step of the snapshot",
+		"not_run",
+		"It is NOT a synonym for failed",
+		"TEST_RUN_CASE_RESULT_JSON:",
+		"a `passed` here is recorded as `blocked`",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("per-case prompt is missing %q", want)
+		}
+	}
+	if strings.Contains(prompt, "--step-results '<json>'") {
+		t.Error("per-case prompt still teaches the raw JSON flag instead of --step")
 	}
 }
 

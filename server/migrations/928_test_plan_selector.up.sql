@@ -1,0 +1,11 @@
+-- A test plan's rule for picking cases, beside its hand-picked list.
+--
+-- A plan used to be a static list: a case written after the plan was built
+-- never ran in its regression until someone remembered to add it, so the
+-- nightly round tested less of the product every week. The selector names
+-- what the plan is about (modules, priorities, case types, the issues the
+-- cases cover, or every active case of the project); a round runs the
+-- hand-picked cases and every active case the rule matches at that moment.
+--
+-- '{}' is no rule: the plan behaves exactly as before.
+ALTER TABLE test_plan ADD COLUMN IF NOT EXISTS selector JSONB NOT NULL DEFAULT '{}'::jsonb;

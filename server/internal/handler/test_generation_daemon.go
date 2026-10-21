@@ -23,6 +23,94 @@ type testGenerationResultSummary struct {
 	Summary  string         `json:"summary"`
 	Stats    map[string]int `json:"stats"`
 	Blockers []string       `json:"blockers"`
+	// Coverage is the run's own account of each test point: the cases it
+	// says verify it, or why none can.
+	Coverage []any `json:"coverage"`
+}
+
+// testGenerationIssueCoverage is where one scoped issue's test points stand
+// when the run ends, computed by the server rather than taken from the agent.
+type testGenerationIssueCoverage struct {
+	IssueID string `json:"issue_id"`
+	Active  int    `json:"active"`
+	Covered int    `json:"covered"`
+	// InReview are points only the run's draft cases verify — written for,
+	// waiting for a person to approve the drafts.
+	InReview  []string `json:"in_review"`
+	Uncovered []string `json:"uncovered"`
+}
+
+// testGenerationCoverageSnapshot reads the test points of every issue in the
+// run's scope. Scope entries are UUIDs or identifiers; one that resolves to
+// nothing is skipped, as everywhere else the scope is read.
+func (h *Handler) testGenerationCoverageSnapshot(ctx context.Context, job db.TestGenerationJob) []testGenerationIssueCoverage {
+	var refs []string
+	if plan, err := h.Queries.GetTestGenerationPlanByJob(ctx, db.GetTestGenerationPlanByJobParams{JobID: job.ID, WorkspaceID: job.WorkspaceID}); err == nil {
+		refs = stringsFromAny(unmarshalJSONObject(plan.Plan)["issues"])
+	} else {
+		refs = stringsFromAny(unmarshalJSONObject(job.Input)["issue_ids"])
+	}
+	// A point the run covered by revising an active case waits in a queued
+	// proposal until a member accepts it; until then no link exists, but the
+	// run did its part — it is in review, not uncovered.
+	proposed := map[string]struct{}{}
+	if proposals, err := h.Queries.ListTestCaseProposalsForJob(ctx, db.ListTestCaseProposalsForJobParams{JobID: job.ID, WorkspaceID: job.WorkspaceID}); err == nil {
+		for _, proposal := range proposals {
+			if proposal.Status != "pending" || proposal.Kind != "update" {
+				continue
+			}
+			// Only a revision of an active case covers anything once
+			// accepted; one queued against a case retired since does not.
+			target, err := h.Queries.GetTestCaseInWorkspace(ctx, db.GetTestCaseInWorkspaceParams{ID: proposal.TargetCaseID, WorkspaceID: job.WorkspaceID})
+			if err != nil || target.Status != "active" {
+				continue
+			}
+			var payload TestCaseProposalCasePayload
+			if json.Unmarshal(proposal.Payload, &payload) != nil {
+				continue
+			}
+			for _, id := range payload.TestPoints {
+				proposed[id] = struct{}{}
+			}
+		}
+	}
+	out := make([]testGenerationIssueCoverage, 0, len(refs))
+	seen := map[pgtype.UUID]struct{}{}
+	for _, raw := range refs {
+		ref := strings.TrimSpace(raw)
+		var issue db.Issue
+		if id, err := util.ParseUUID(ref); err == nil {
+			found, getErr := h.Queries.GetIssueInWorkspace(ctx, db.GetIssueInWorkspaceParams{ID: id, WorkspaceID: job.WorkspaceID})
+			if getErr != nil {
+				continue
+			}
+			issue = found
+		} else if found, ok := h.resolveIssueByIdentifier(ctx, ref, uuidToString(job.WorkspaceID)); ok {
+			issue = found
+		} else {
+			continue
+		}
+		if _, dup := seen[issue.ID]; dup {
+			continue
+		}
+		seen[issue.ID] = struct{}{}
+		points, summary, err := h.issueTestPointCoverage(ctx, issue)
+		if err != nil {
+			continue
+		}
+		entry := testGenerationIssueCoverage{IssueID: uuidToString(issue.ID), Active: summary.Active, Covered: summary.Covered, InReview: []string{}, Uncovered: []string{}}
+		for _, point := range points {
+			_, inProposal := proposed[point.ID]
+			switch {
+			case point.State == "in_review", point.State == "uncovered" && inProposal:
+				entry.InReview = append(entry.InReview, point.Key)
+			case point.State == "uncovered":
+				entry.Uncovered = append(entry.Uncovered, point.Key)
+			}
+		}
+		out = append(out, entry)
+	}
+	return out
 }
 
 // parseTestGenerationResultSummary scrapes the last marker block out of the
@@ -81,12 +169,11 @@ func (h *Handler) markTestGenerationJobRunning(ctx context.Context, task db.Agen
 	return err
 }
 
-func (h *Handler) updateTestGenerationJobFromAgentCompletion(ctx context.Context, task db.AgentTaskQueue, req TaskCompleteRequest) error {
-	job, isGeneration, err := h.testGenerationJobForTask(ctx, task)
-	if !isGeneration {
-		return err
-	}
-
+// testGenerationCompletion is what a finished generation task writes onto its
+// job: the status the agent declared and the result, including the server's
+// own coverage snapshot. The daemon's completion handler writes it inside the
+// task's completion transaction.
+func (h *Handler) testGenerationCompletion(ctx context.Context, job db.TestGenerationJob, req TaskCompleteRequest) (string, map[string]any) {
 	summary, hasSummary := parseTestGenerationResultSummary(req.Output)
 	// Only the agent's declared status decides the outcome. design_restore also
 	// scans the raw output for the substring "blocked", which fails a run whose
@@ -107,19 +194,18 @@ func (h *Handler) updateTestGenerationJobFromAgentCompletion(ctx context.Context
 		if len(summary.Stats) > 0 {
 			result["declared_stats"] = summary.Stats
 		}
+		if len(summary.Coverage) > 0 {
+			result["declared_coverage"] = summary.Coverage
+		}
 	} else {
 		// Cases may still have landed through propose; say so rather than
 		// implying the run produced nothing.
 		result["warning"] = "missing_test_generation_result_json"
 	}
-
-	_, err = h.Queries.UpdateTestGenerationJob(ctx, db.UpdateTestGenerationJobParams{
-		ID:          job.ID,
-		WorkspaceID: job.WorkspaceID,
-		Status:      pgtype.Text{String: status, Valid: true},
-		Result:      marshalJSONColumn(result, "{}"),
-	})
-	return err
+	// What the run left uncovered, from the points themselves: the agent's
+	// report says what it meant to cover, this says what is actually covered.
+	result["coverage"] = h.testGenerationCoverageSnapshot(ctx, job)
+	return status, result
 }
 
 func (h *Handler) updateTestGenerationJobFromAgentFailure(ctx context.Context, task db.AgentTaskQueue, req TaskFailRequest) error {

@@ -3,14 +3,17 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 // testRunResultMarker prefixes the agent's closing summary on a whole-round
@@ -145,12 +148,9 @@ func (h *Handler) markTestRunRunning(ctx context.Context, task db.AgentTaskQueue
 		return err
 	}
 	if run.Status == "pending" {
-		if _, err := h.Queries.UpdateTestRun(ctx, db.UpdateTestRunParams{
-			ID:          run.ID,
-			WorkspaceID: run.WorkspaceID,
-			Status:      pgtype.Text{String: "running", Valid: true},
-			StartedAt:   pgtype.Timestamptz{Time: time.Now(), Valid: true},
-		}); err != nil {
+		// Conditional: an abort that landed since the read keeps the round
+		// aborted instead of being turned back into "running".
+		if _, err := h.Queries.StartPendingTestRun(ctx, db.StartPendingTestRunParams{ID: run.ID, WorkspaceID: run.WorkspaceID}); err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return err
 		}
 	}
@@ -171,22 +171,81 @@ func (h *Handler) markTestRunRunning(ctx context.Context, task db.AgentTaskQueue
 	return err
 }
 
+// testRunSettlement is what a task hook changed: the case it settled and the
+// round it completed, either possibly nil. The hooks run inside the task's
+// completion transaction, so the caller publishes them once it commits.
+type testRunSettlement struct {
+	runCase *db.TestRunCase
+	run     *db.TestRun
+}
+
+// publishTestRunSettlement tells open round pages and issue test blocks what a
+// hook settled; without it a case finished by its task stays "running" on
+// screen until a manual refresh.
+func (h *Handler) publishTestRunSettlement(workspaceID string, settled testRunSettlement) {
+	if settled.runCase != nil {
+		h.publish(protocol.EventTestRunCaseUpdated, workspaceID, "system", "", map[string]any{
+			"test_run_case": testRunCaseToResponse(*settled.runCase),
+			"run_id":        uuidToString(settled.runCase.RunID),
+		})
+	}
+	if settled.run != nil {
+		h.publish(protocol.EventTestRunUpdated, workspaceID, "system", "", map[string]any{"test_run": testRunToResponse(*settled.run)})
+	}
+}
+
+// settleOpenTestRunCase is the hooks' fallback settle. It only writes a case
+// nobody recorded yet — an agent's CLI verdict that committed after the hook
+// read the case is never overwritten — and, in an aborted round, leaves
+// executed_at unset so the settle never becomes the case's latest result.
+func settleOpenTestRunCase(ctx context.Context, q *db.Queries, run db.TestRun, rc db.TestRunCase, result, notes string) (*db.TestRunCase, error) {
+	params := db.SettleOpenTestRunCaseParams{
+		ID:             rc.ID,
+		WorkspaceID:    run.WorkspaceID,
+		Result:         result,
+		Notes:          notes,
+		ExecutedByType: pgtype.Text{String: "agent", Valid: true},
+		ExecutedByID:   run.ExecutorID,
+	}
+	if run.Status != "aborted" {
+		params.ExecutedAt = pgtype.Timestamptz{Time: time.Now(), Valid: true}
+	}
+	settled, err := q.SettleOpenTestRunCase(ctx, params)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &settled, nil
+}
+
 // completeTestRunTask closes what a finished task owned. A per-case task
 // settles its case (the CLI-recorded result stands; otherwise the closing
 // marker, otherwise `blocked`) and completes the round once no case is left
 // pending or running. A whole-round task keeps the pre-M2 behaviour: only the
 // agent's declared status decides — scanning the transcript for the word
 // "blocked" is the design_restore mistake.
-func (h *Handler) completeTestRunTask(ctx context.Context, q *db.Queries, task db.AgentTaskQueue, output string) error {
+func (h *Handler) completeTestRunTask(ctx context.Context, q *db.Queries, task db.AgentTaskQueue, output string) (testRunSettlement, error) {
+	var settled testRunSettlement
 	run, isRun, err := h.testRunForTaskWith(ctx, q, task)
 	if !isRun {
-		return err
+		return settled, err
 	}
 	rc, isCase, err := h.testRunCaseForTask(ctx, q, task, run)
 	if err != nil {
-		return err
+		return settled, err
 	}
 	if !isCase {
+		// A round aborted or finished while this whole-round task ran keeps
+		// what it became.
+		locked, err := q.LockTestRun(ctx, db.LockTestRunParams{ID: run.ID, WorkspaceID: run.WorkspaceID})
+		if err != nil {
+			return settled, err
+		}
+		if locked.Status == "completed" || locked.Status == "aborted" {
+			return settled, nil
+		}
 		summary, _ := parseTestRunResultSummary(output)
 		status := "completed"
 		if summary.Status == "blocked" {
@@ -201,8 +260,11 @@ func (h *Handler) completeTestRunTask(ctx context.Context, q *db.Queries, task d
 		if len(summary.Blockers) > 0 {
 			params.Error = pgtype.Text{String: strings.Join(summary.Blockers, "; "), Valid: true}
 		}
-		_, err = q.UpdateTestRun(ctx, params)
-		return err
+		updated, err := q.UpdateTestRun(ctx, params)
+		if err == nil {
+			settled.run = &updated
+		}
+		return settled, err
 	}
 	if !isTerminalRunCaseResult(rc.Result) {
 		result := "blocked"
@@ -213,48 +275,67 @@ func (h *Handler) completeTestRunTask(ctx context.Context, q *db.Queries, task d
 				notes = summary.Summary
 			}
 		}
-		if _, err := q.UpdateTestRunCaseResult(ctx, db.UpdateTestRunCaseResultParams{
-			ID:             rc.ID,
-			WorkspaceID:    run.WorkspaceID,
-			Result:         pgtype.Text{String: result, Valid: true},
-			Notes:          pgtype.Text{String: notes, Valid: true},
-			ExecutedByType: pgtype.Text{String: "agent", Valid: true},
-			ExecutedByID:   run.ExecutorID,
-			ExecutedAt:     pgtype.Timestamptz{Time: time.Now(), Valid: true},
-		}); err != nil {
-			return err
+		// The closing marker settles a case the agent never recorded. That
+		// is fine for a failure or a blocker — they never overstate — but a
+		// pass declared only in prose carries no step verdicts and no checked
+		// evidence: the unverifiable pass the verdict rules exist to stop.
+		// It settles as blocked so the case is retried, not counted.
+		if result == "passed" {
+			result = "blocked"
+			notes = "the agent declared the case passed but never recorded the verdict with step results and evidence (`multica test result set`), so the pass is not accepted. Agent summary: " + notes
+		}
+		if settled.runCase, err = settleOpenTestRunCase(ctx, q, run, rc, result, notes); err != nil {
+			return settled, err
 		}
 	}
 	if err := h.dispatchNextTestRunCases(ctx, q, run); err != nil {
-		// The settled case must not be lost because the next one could not be
-		// queued; the round stays running and a later hook retries.
+		// A release that fails on a query error aborts the completion
+		// transaction (the converge below then fails too) and the daemon
+		// retries the completion; a release that fails before touching the
+		// database leaves the round running for a later hook.
 		slog.Warn("dispatch next test run cases failed", "run_id", uuidToString(run.ID), "error", err)
 	}
-	return h.convergeTestRun(ctx, q, run)
+	settled.run, err = h.convergeTestRun(ctx, q, run)
+	return settled, err
 }
 
 // convergeTestRun completes the round once every case is terminal. A round
 // where every case legitimately failed is still a completed round; the
-// per-case results carry the verdict.
-func (h *Handler) convergeTestRun(ctx context.Context, q *db.Queries, run db.TestRun) error {
+// per-case results carry the verdict. The completion is conditional on the
+// round still being open, so of two racing convergers (an HTTP write and a
+// case task's hook) only one completes it, and an abort that committed in
+// between is never undone. It returns the completed round when this call
+// completed it, nil otherwise — so exactly one caller settles the autopilot
+// run and publishes the change.
+func (h *Handler) convergeTestRun(ctx context.Context, q *db.Queries, run db.TestRun) (*db.TestRun, error) {
+	// Taken before counting: a settle racing this one (another case's hook,
+	// or a result write) has either committed by the time the lock is ours,
+	// so the count sees it, or will take the lock after us and complete the
+	// round itself. Without it two concurrent settles could each see the
+	// other's case still running and leave the round open forever.
+	run, err := q.LockTestRun(ctx, db.LockTestRunParams{ID: run.ID, WorkspaceID: run.WorkspaceID})
+	if err != nil {
+		return nil, err
+	}
+	if run.Status == "completed" || run.Status == "aborted" {
+		return nil, nil
+	}
 	pending, err := q.CountPendingTestRunCases(ctx, db.CountPendingTestRunCasesParams{RunID: run.ID, WorkspaceID: run.WorkspaceID})
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if pending > 0 || run.Status == "completed" || run.Status == "aborted" {
-		return nil
+	if pending > 0 {
+		return nil, nil
 	}
-	completed, err := q.UpdateTestRun(ctx, db.UpdateTestRunParams{
-		ID:          run.ID,
-		WorkspaceID: run.WorkspaceID,
-		Status:      pgtype.Text{String: "completed", Valid: true},
-		CompletedAt: pgtype.Timestamptz{Time: time.Now(), Valid: true},
-	})
+	completed, err := q.CompleteOpenTestRun(ctx, db.CompleteOpenTestRunParams{ID: run.ID, WorkspaceID: run.WorkspaceID})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
 	if err != nil {
-		return err
+		return nil, err
 	}
 	h.settleAutopilotTestRun(ctx, q, completed)
-	return nil
+	return &completed, nil
 }
 
 // updateTestRunFromAgentFailure records an agent task that died. A per-case
@@ -271,38 +352,64 @@ func (h *Handler) updateTestRunFromAgentFailure(ctx context.Context, task db.Age
 		return err
 	}
 	if !isCase {
-		aborted, err := h.Queries.UpdateTestRun(ctx, db.UpdateTestRunParams{
+		// Conditional: a round that completed or was aborted meanwhile is
+		// not rewritten.
+		aborted, err := h.Queries.AbortOpenTestRun(ctx, db.AbortOpenTestRunParams{
 			ID:          run.ID,
 			WorkspaceID: run.WorkspaceID,
-			Status:      pgtype.Text{String: "aborted", Valid: true},
-			CompletedAt: pgtype.Timestamptz{Time: time.Now(), Valid: true},
 			Error:       pgtype.Text{String: req.Error, Valid: req.Error != ""},
 		})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
 		if err != nil {
 			return err
 		}
 		h.settleAutopilotTestRun(ctx, h.Queries, aborted)
+		h.publishTestRunSettlement(uuidToString(run.WorkspaceID), testRunSettlement{run: &aborted})
 		return nil
 	}
+	// The settle commits on its own first: nothing retries a failure hook, so
+	// a release or converge that fails afterwards must not take the case back
+	// to "running" with no task left to settle it.
+	var settled testRunSettlement
 	if !isTerminalRunCaseResult(rc.Result) {
 		notes := "the agent task failed before recording a result"
 		if strings.TrimSpace(req.Error) != "" {
 			notes += ": " + strings.TrimSpace(req.Error)
 		}
-		if _, err := h.Queries.UpdateTestRunCaseResult(ctx, db.UpdateTestRunCaseResultParams{
-			ID:             rc.ID,
-			WorkspaceID:    run.WorkspaceID,
-			Result:         pgtype.Text{String: "blocked", Valid: true},
-			Notes:          pgtype.Text{String: notes, Valid: true},
-			ExecutedByType: pgtype.Text{String: "agent", Valid: true},
-			ExecutedByID:   run.ExecutorID,
-			ExecutedAt:     pgtype.Timestamptz{Time: time.Now(), Valid: true},
-		}); err != nil {
+		if settled.runCase, err = settleOpenTestRunCase(ctx, h.Queries, run, rc, "blocked", notes); err != nil {
 			return err
 		}
+		h.publishTestRunSettlement(uuidToString(run.WorkspaceID), testRunSettlement{runCase: settled.runCase})
+		settled.runCase = nil
 	}
-	if err := h.dispatchNextTestRunCases(ctx, h.Queries, run); err != nil {
+	// Then release the next cases and converge under the round lock, in one
+	// transaction like the completion hook.
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	qtx := h.Queries.WithTx(tx)
+	// A failed release must not undo the settle: it runs under a savepoint,
+	// and the round stays open for a later hook to release the rest.
+	if sp, spErr := tx.Begin(ctx); spErr != nil {
+		return spErr
+	} else if err := h.dispatchNextTestRunCases(ctx, h.Queries.WithTx(sp), run); err != nil {
 		slog.Warn("dispatch next test run cases failed", "run_id", uuidToString(run.ID), "error", err)
+		if rbErr := sp.Rollback(ctx); rbErr != nil {
+			return rbErr
+		}
+	} else if err := sp.Commit(ctx); err != nil {
+		return err
 	}
-	return h.convergeTestRun(ctx, h.Queries, run)
+	if settled.run, err = h.convergeTestRun(ctx, qtx, run); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	h.publishTestRunSettlement(uuidToString(run.WorkspaceID), settled)
+	return nil
 }

@@ -2183,6 +2183,10 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					// Test coverage: the cases that claim to verify this issue,
 					// each with its latest recorded outcome.
 					r.Get("/test-cases", h.ListIssueTestCases)
+					// Test points: the conditions the issue is accepted on,
+					// each with the cases covering it and where it stands.
+					r.Get("/test-points", h.ListIssueTestPoints)
+					r.Post("/test-points", h.CreateIssueTestPoint)
 					// Requirement loop: latest round, verified badge, defects the
 					// covering cases opened, and (for a defect) what found it.
 					r.Get("/test-summary", h.GetIssueTestSummary)
@@ -2316,8 +2320,16 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/issues", h.ListTestCaseIssues)
 					r.Post("/issues", h.LinkTestCaseIssues)
 					r.Delete("/issues/{issueId}", h.UnlinkTestCaseIssue)
+					// Which of those requirements' test points it verifies.
+					r.Get("/test-points", h.ListTestCaseTestPoints)
+					r.Post("/test-points", h.LinkTestCaseTestPoints)
+					r.Delete("/test-points/{pointId}", h.UnlinkTestCaseTestPoint)
 				})
 			})
+			r.Patch("/api/test-points/{pointId}", h.UpdateTestPoint)
+			// Every issue of a project with what covers it: the gap list.
+			r.Get("/api/test-coverage", h.ListProjectTestCoverage)
+			r.Delete("/api/test-points/{pointId}", h.DeleteTestPoint)
 
 			// AI test case generation
 			r.Route("/api/test-generation-jobs", func(r chi.Router) {
@@ -2346,6 +2358,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Put("/", h.UpdateTestPlan)
 					r.Delete("/", h.DeleteTestPlan)
 					r.Get("/cases", h.ListTestPlanCases)
+					// What the next round runs: listed cases plus the rule's matches.
+					r.Get("/selection", h.GetTestPlanSelection)
 					r.Get("/stats", h.GetTestPlanStats)
 					r.Post("/cases", h.AddTestPlanCases)
 					r.Delete("/cases/{caseId}", h.RemoveTestPlanCase)
@@ -2370,6 +2384,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// reachable by the run's own agent through its task token.
 			r.Put("/api/test-run-cases/{id}/result", h.UpdateTestRunCaseResult)
 			r.Get("/api/test-run-cases/{id}/frame", h.GetTestRunCaseFrame)
+			r.Get("/api/test-run-cases/{id}/evidence", h.ListTestRunCaseEvidence)
 			r.Post("/api/test-run-cases/{id}/defect", h.OpenTestRunCaseDefect)
 
 			// Execution capabilities

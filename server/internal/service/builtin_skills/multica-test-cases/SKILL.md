@@ -25,6 +25,23 @@ the durable context a case is written against.
 so a gap never survives a save. `repo` is optional and, when present, must be
 one of the case's own `repos[].alias` values.
 
+An `active` case must be executable: at least one step, and every step with a
+non-empty `action` and a non-empty `expected`. A case with nothing to compare
+against can only ever come back "passed", so the server holds this line:
+
+| Write | Outcome when the steps are not executable |
+| --- | --- |
+| create without `status` | the case is created as `draft` |
+| create with `status: active` | 400 naming the step |
+| update an active case's steps, or set `status: active` | 400 naming the step |
+| `approve` | 400 naming the step |
+| `propose` a `new` or `update` item | 400; the whole batch is rolled back |
+| accept a queued proposal against an active case | 409 |
+
+Write `expected` as something an executor can observe and compare: a value, a
+message, a state change ("订单状态变为已支付，余额减少 100.00"), not "works
+correctly".
+
 ## Identity: TC-<n> and UUID are both accepted
 
 Every case carries `case_number` (an int, unique per workspace) and `key` (the
@@ -116,14 +133,50 @@ revision history, so an edit is always reversible. Bumping `version` is the
 server's job — never send it.
 
 `approve` moves a case from `draft` to `active` and stamps the reviewer. It
-rejects a case that is already active.
+rejects a case that is already active, and a draft whose steps are not yet
+executable.
+
+A person's case created without executable steps and without a `status` (the
+issue page's "new case" button sends a title only) is a draft because there is
+nothing to check yet. The person's save that makes its steps executable
+activates it, unless that save names a `status`. Every other draft waits for
+approval: one created as a draft on purpose, one whose steps were already
+executable, and one an agent wrote steps into.
+
+### What an agent may write
+
+A case an agent writes is AI-written whichever command wrote it: `create` from
+an agent's task always lands as `draft` with `origin: "ai"`, the same review
+gate a generation run's cases pass. A draft is how a person checks AI output
+before rounds execute it and coverage counts it, and a failing case is the
+signal a round exists to produce, so an agent can neither make a case live nor
+take one out of coverage or regression:
+
+| Agent write | Outcome |
+| --- | --- |
+| `approve`, or `update --status active` | 403 |
+| any status change of an active or a deprecated case, or `delete` of it | 403 |
+| linking an active case to an issue or test point (`cover`, issue links) | 403 — its past passes would count at once; name the points in a generation run's `update` instead |
+| unlinking an active case from an issue or a test point | 403 |
+| `point update --status dropped` on a point an active case verifies | 403 |
+| removing a case from a plan, changing a plan's rule or status, deleting a plan | 403 |
+| changing a regression (`test_run`) autopilot's plan, mode, project, assignee, status or triggers, or deleting it | 403 |
+| `delete` of anything but an AI-written draft nobody approved | 403 |
+| `proposal accept` / `proposal reject` | 403 |
+| other edits, linking drafts, `delete` of an AI-written draft, adding cases to a plan | allowed |
+
+An agent's edit is recorded as the agent's in the case's revision history.
+When a 403 says so, tell the person which drafts are ready for review, or
+which case, point or plan should change and why.
 
 ## Enums
 
 Sending a value outside these lists returns 400 with the allowed list; it never
 reaches the database.
 
-- `status`: `draft`, `active`, `deprecated`
+- `status`: `draft`, `active`, `deprecated` — a round skips `deprecated`
+  cases (a plan that still lists one keeps working) and refuses to start when
+  nothing else is selected
 - `origin`: `ai`, `human` — set by the server, not the client
 - `priority`: `p0`, `p1`, `p2`, `p3`
 - `scope`: `single_repo`, `cross_repo`, `no_repo`
@@ -152,7 +205,32 @@ Before proposing anything, pull a compact index of what already exists:
 paying for every step. Use it to detect duplicates and decide what each new
 proposal's `kind` should be.
 
-### Step 2 — produce three kinds of increment
+### Step 2 — split each scoped issue into test points
+
+A test point is one condition a requirement is accepted on, judged right or
+wrong on its own ("an order over the balance is refused with a message", not
+"checkout works"). Read what exists, then add what is missing:
+
+    multica testcase point list --issue MUL-12 --output json
+    multica testcase point add --issue MUL-12 --title "…" --category negative [--description "…"]
+    multica testcase point update MUL-12/TP-3 --status dropped
+
+| category | add a point for |
+| --- | --- |
+| `positive` | each main path and each distinct successful outcome |
+| `negative` | invalid input, refusals, error handling, what must not happen |
+| `boundary` | empty, zero, min, max, one past each, rounding, time zones, long text |
+| `permission` | each role or tenant that must be refused |
+| `state` | illegal transitions, repeated or concurrent submits, retries |
+| `data` | consistency across tables and services, idempotency |
+| `non_functional` | only a measurable target the requirement states |
+
+Points are `TP-<n>` inside their issue and are referenced as `MUL-12/TP-3` or
+by id. A point a person wrote cannot be changed by an agent (403); add a new
+one instead. Agents never delete points; a condition the requirement lost is
+set to `dropped`.
+
+### Step 3 — produce three kinds of increment
 
 | kind | when to use |
 | --- | --- |
@@ -163,7 +241,15 @@ proposal's `kind` should be.
 A generation run must produce only increments relative to the digest, never a
 full dump of cases that already exist.
 
-### Step 3 — submit via `testcase propose`
+Every `new` or `update` case names the points it verifies in `case.test_points`
+(`["MUL-12/TP-3"]`). Every active point needs at least one case: for a point
+with input, each equivalence class and boundary value; for a permission point,
+each refused role; for a state point, each illegal transition. Points must
+belong to the run's issue scope (400 otherwise). The response's
+`new_cases_without_test_points` counts new cases that name none — those cannot
+count toward any requirement's coverage.
+
+### Step 4 — submit via `testcase propose`
 
     multica testcase propose --job <job-id> --stdin < proposals.json
 
@@ -172,7 +258,8 @@ The input must be one complete JSON document (not line-delimited). Shape:
     {
       "items": [
         { "kind": "new", "case": { "title": "…", "module": "…", "steps": [...],
-            "case_type": "business_flow", "repos": [...] } },
+            "case_type": "business_flow", "repos": [...],
+            "test_points": ["MUL-12/TP-3"] } },
         { "kind": "update", "target": "TC-42",
             "case": { ... }, "rationale": "接口新增了分页参数" },
         { "kind": "obsolete", "target": "TC-7",
@@ -208,6 +295,8 @@ approved cases land in the review queue:
     multica testcase proposal list --case TC-42 --status pending --output table
     multica testcase proposal accept <proposal-id>
     multica testcase proposal reject <proposal-id>
+
+Accepting and rejecting are a member's decisions; an agent gets 403.
 
 Every case a run creates is linked to the issues in its APPROVED plan's
 `issues` scope, with `origin: "ai"`. The approved plan wins over the job's
@@ -247,10 +336,47 @@ An `issue_id` that does not exist in the workspace is rejected with 400 rather
 than stored: the table has no foreign key, so an unchecked id would become a
 link to nothing.
 
-The reverse direction carries `latest_result`, the most recent recorded outcome
-across every round the case appeared in. It is `null` when the case has never
-been executed — deliberately distinct from `"pending"`, which would claim the
-case is queued in a round it was never added to.
+Linking a case to an issue says it is about that requirement; declaring test
+points says which of its conditions it checks:
+
+    multica testcase cover TC-42 MUL-12/TP-1 MUL-12/TP-3
+    GET    /api/issues/<id>/test-points       # points, covering cases, state
+    GET    /api/test-cases/<ref>/test-points  # the points one case verifies
+
+Covering a point also links the case to the point's issue. Each point reports
+a `state`:
+
+| state | meaning |
+| --- | --- |
+| `uncovered` | no active case verifies it, and no draft that could be approved |
+| `in_review` | only drafts with executable steps verify it — approving one is what is left |
+| `not_run` | active cases verify it, but none has a current verdict |
+| `failing` | an active case that verifies it currently fails |
+| `passed` | an active case that verifies it currently passes, and none fails |
+| `dropped` | the condition is no longer part of the requirement |
+
+A case's current verdict is its newest `passed` or `failed` result from a
+round that froze it as an active case. `blocked` and `skipped` say the case
+was not executed, so they never hide an earlier failure; a result from a trial
+run of the draft says nothing about the case a person approved. "Newest" is when the verdict was recorded
+while its round was open; correcting a finished round keeps the time it was
+observed.
+
+Whether an issue is verified depends on `basis` in its test summary:
+
+| basis | verified when |
+| --- | --- |
+| `test_points` | every active point is `passed`, and no active linked case is failing |
+| `cases_only` | the issue has no points yet: at least one active linked case, all passed — a weaker claim, labelled as such |
+| `none` | nothing active covers the issue; never verified |
+
+Only `active` cases count. A draft nobody reviewed cannot verify a
+requirement, and a deprecated case can neither verify it nor hold it back.
+
+The reverse direction carries `latest_result`, the case's current verdict as
+defined above. It is `null` when there is none — never run on its current
+steps — deliberately distinct from `"pending"`, which would claim the case is
+queued in a round it was never added to.
 
 Deleting either side sweeps the links in the same transaction as the delete.
 

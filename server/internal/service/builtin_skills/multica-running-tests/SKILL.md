@@ -73,24 +73,10 @@ list. Treat the snapshot as immutable; do not look up the live case mid-run.
 ## 5. Record results as you go
 
 After each test case completes, record the result immediately — do not batch at
-the end.
-
-### Set result
-
-    multica test result set <run-case-id> --result passed|failed|blocked|skipped [--note "…"] [--step-results <json>]
-
-`--step-results` is an optional JSON array of per-step outcomes:
-
-```json
-[{"index": 1, "result": "passed"}, {"index": 2, "result": "failed", "note": "Button not found"}]
-```
-
-`--note` maps to the `notes` field — use it for a short failure summary or
-blocking reason.
+the end. Upload the evidence first, then record the verdict: the server checks
+a verdict against what is already on file.
 
 ### Upload evidence
-
-Upload evidence for every `failed` or `blocked` result:
 
     multica test evidence add <run-case-id> --file ./path/to/screenshot.png --kind screenshot
 
@@ -98,6 +84,42 @@ Upload evidence for every `failed` or `blocked` result:
 
 Evidence upload uses multipart form with fields `file`, `test_run_case_id`, and
 `kind`. The agent's task token authenticates the request automatically.
+
+### Set result
+
+    multica test result set <run-case-id> --result failed \
+      --step 1=passed --step "2=failed:total stayed at 100.00" --step 3=not_run \
+      [--note "…"]
+
+Each `--step` is `<index>=<result>[:<what you observed>]`, where `index` is the
+step's `index` in the snapshot and the step result is one of `passed`,
+`failed`, `blocked`, `skipped`, `not_run` (a step you never reached).
+`--step-results` takes the same thing as a JSON array instead
+(`[{"index":1,"result":"passed"},{"index":2,"result":"failed","actual":"…"}]`);
+use one form or the other. `--note` maps to the `notes` field — a short failure
+summary or blocking reason.
+
+What the server refuses from an agent:
+
+| Write | Refused unless |
+| --- | --- |
+| `passed` or `failed` | the case already has at least one evidence file, and there is a step result for **every** step of the snapshot |
+| `passed` | no step is `failed`, `blocked` or `not_run` |
+| `passed` | the snapshot has at least one step — a case frozen without steps has nothing to compare, so record `blocked` and say so |
+| `failed` with step results | at least one step is `failed` — the one that diverged |
+| any step result | its `index` is a step of the snapshot, given once |
+| `pending` / `running` | never accepted from an agent; the platform sets them |
+| any result or evidence | the round is not `completed`, `blocked` or `aborted` |
+| any result or evidence | the `run_case_id` is your task's own case (403 for a sibling's) |
+
+A verdict written without step results is checked against the step results
+already on file: changing a `failed` case to `passed` means sending the step
+results that make it a pass, in the same write.
+
+Add `:<what you observed>` to every step that did not pass, and wherever the
+expected result names a value (a total, a count, a message): a failure without
+the observed value cannot be triaged without running it again. `blocked` and
+`skipped` need neither step results nor evidence; say why in `--note`.
 
 ### Open a defect
 
@@ -135,11 +157,14 @@ A round may carry a parallelism cap: the server queues only that many case tasks
 
 - Execute `case_snapshot` and nothing else. Sibling cases run in their own
   tasks, possibly on other phones, at the same time.
-- Record against `run_case_id` with `multica test result set`. The round
+- Record against `run_case_id` with `multica test result set`, and upload
+  evidence against the same id. Your task token is accepted for that case
+  only: a write against a sibling's `run_case_id` returns 403. The round
   completes by itself once every case is terminal; you never close it.
 - End with `TEST_RUN_CASE_RESULT_JSON:{"result":"passed|failed|blocked|skipped","summary":"…"}`.
   The CLI write is the record; the line only settles the case if the write
-  never happened.
+  never happened — and then a `passed` is recorded as `blocked`, because a
+  pass needs the step results and evidence only the write carries.
 
 ## 8. Driving a phone
 
@@ -228,8 +253,11 @@ the code and stop.
 
 ## 9. Test plans (informational)
 
-Test plans group cases into a named release scope. You can read them but you
-do not modify plans during a run:
+Test plans group cases into a named release scope. A round of a plan runs the
+plan's listed cases and then every active case its `selector` rule matches at
+that moment (modules, priorities, case types, covered issues, or all active),
+so the round you execute may include cases written after the plan was built.
+You can read plans but you do not modify them during a run:
 
     multica test plan list --output json
     multica test plan get <plan-id> --output json
@@ -243,8 +271,9 @@ do not modify plans during a run:
   correctly.
 - **Record immediately**: set the result before moving to the next case. Do not
   accumulate results and flush them at the end.
-- **Evidence on failure**: upload at least one screenshot or log for every
-  `failed` or `blocked` case where the environment permits it.
+- **Evidence before a verdict**: upload at least one screenshot, trace or log
+  before recording `passed` or `failed`, and a result for every step with it.
+  For `blocked`, upload what the environment still lets you capture.
 - **Frozen snapshot is authoritative**: do not re-read the live test case
   record mid-run. The run has the snapshot it was dispatched with.
 - **One task, one case**: record only against your own `run_case_id`; the

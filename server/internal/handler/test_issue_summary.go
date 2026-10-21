@@ -59,13 +59,22 @@ type IssueFoundByResponse struct {
 }
 
 type IssueTestSummaryResponse struct {
-	// Cases is the number of covering cases; Verified is true when there is
-	// at least one and every one's latest recorded result is passed.
-	Cases     int                          `json:"cases"`
-	Verified  bool                         `json:"verified"`
-	LatestRun *IssueTestRunSummaryResponse `json:"latest_run"`
-	Defects   []IssueTestDefectResponse    `json:"defects"`
-	FoundBy   []IssueFoundByResponse       `json:"found_by"`
+	// Cases is the number of covering cases. Verified is decided on Basis:
+	//
+	//	test_points  the issue has active test points: every one is covered by
+	//	             an active case that passed, and no active linked case's
+	//	             latest result is failed
+	//	cases_only   no test points yet: at least one active linked case, and
+	//	             every one's latest result is passed — a weaker claim the UI
+	//	             labels as such, since nobody listed what must be checked
+	//	none         nothing active covers the issue
+	Cases      int                          `json:"cases"`
+	Verified   bool                         `json:"verified"`
+	Basis      string                       `json:"basis"`
+	TestPoints TestPointSummaryResponse     `json:"test_points"`
+	LatestRun  *IssueTestRunSummaryResponse `json:"latest_run"`
+	Defects    []IssueTestDefectResponse    `json:"defects"`
+	FoundBy    []IssueFoundByResponse       `json:"found_by"`
 }
 
 // GetIssueTestSummary answers GET /api/issues/{id}/test-summary.
@@ -84,13 +93,39 @@ func (h *Handler) GetIssueTestSummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp.Cases = len(links)
-	resp.Verified = len(links) > 0
+	activeCases, activePassed, activeFailing := 0, 0, 0
 	for _, link := range links {
-		// The query reports "" for a case that never ran; that is not a pass.
-		if link.LatestResult != "passed" {
-			resp.Verified = false
-			break
+		// Only an active case is a claim about the product: a draft has not
+		// been reviewed, and a deprecated case describes behaviour that is
+		// gone. Neither may make an issue look verified.
+		if link.CaseStatus != "active" {
+			continue
 		}
+		activeCases++
+		// The query reports "" for a case that never ran; that is not a pass.
+		switch link.LatestResult {
+		case "passed":
+			activePassed++
+		case "failed":
+			activeFailing++
+		}
+	}
+	_, pointSummary, err := h.issueTestPointCoverage(ctx, issue)
+	if err != nil {
+		slog.Error("issue test summary: test point coverage failed", append(logger.RequestAttrs(r), "error", err)...)
+		writeError(w, http.StatusInternalServerError, "failed to load test coverage")
+		return
+	}
+	resp.TestPoints = pointSummary
+	switch {
+	case pointSummary.Active > 0:
+		resp.Basis = "test_points"
+		resp.Verified = pointSummary.Passed == pointSummary.Active && activeFailing == 0
+	case activeCases > 0:
+		resp.Basis = "cases_only"
+		resp.Verified = activePassed == activeCases
+	default:
+		resp.Basis = "none"
 	}
 
 	if len(links) > 0 {

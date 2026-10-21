@@ -21,6 +21,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -179,7 +180,8 @@ func init() {
 	// test result set
 	testResultSetCmd.Flags().String("result", "", "Result: passed, failed, blocked, or skipped (required)")
 	testResultSetCmd.Flags().String("note", "", "Optional note to record with the result")
-	testResultSetCmd.Flags().String("step-results", "", "Step results as a JSON array")
+	testResultSetCmd.Flags().String("step-results", "", `Step results as a JSON array of {"index","result","actual","note"}`)
+	testResultSetCmd.Flags().StringArray("step", nil, "One step's result as <index>=<passed|failed|blocked|skipped|not_run>[:<what you observed>]; repeat per step")
 
 	// test evidence add
 	testEvidenceAddCmd.Flags().String("file", "", "Local file path to upload (required)")
@@ -322,10 +324,22 @@ func runTestResultSet(cmd *cobra.Command, args []string) error {
 	if note, _ := cmd.Flags().GetString("note"); note != "" {
 		body["notes"] = note
 	}
-	if raw, _ := cmd.Flags().GetString("step-results"); raw != "" {
+	raw, _ := cmd.Flags().GetString("step-results")
+	steps, _ := cmd.Flags().GetStringArray("step")
+	if raw != "" && len(steps) > 0 {
+		return fmt.Errorf("use either --step or --step-results, not both")
+	}
+	if raw != "" {
 		var stepResults []any
 		if err := json.Unmarshal([]byte(raw), &stepResults); err != nil {
 			return fmt.Errorf("--step-results must be valid JSON: %w", err)
+		}
+		body["step_results"] = stepResults
+	}
+	if len(steps) > 0 {
+		stepResults, err := parseStepFlags(steps)
+		if err != nil {
+			return err
 		}
 		body["step_results"] = stepResults
 	}
@@ -335,6 +349,30 @@ func runTestResultSet(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("set test result: %w", err)
 	}
 	return cli.PrintJSON(os.Stdout, out)
+}
+
+// parseStepFlags reads repeated --step values of the form
+// <index>=<result>[:<actual>]. The server checks the verdicts against the
+// case's frozen steps; this only gets the shape right.
+func parseStepFlags(values []string) ([]map[string]any, error) {
+	out := make([]map[string]any, 0, len(values))
+	for _, value := range values {
+		indexText, rest, ok := strings.Cut(value, "=")
+		if !ok {
+			return nil, fmt.Errorf("--step %q must look like <index>=<result>[:<actual>]", value)
+		}
+		index, err := strconv.Atoi(strings.TrimSpace(indexText))
+		if err != nil || index < 1 {
+			return nil, fmt.Errorf("--step %q: the index must be the step's number, starting at 1", value)
+		}
+		result, actual, _ := strings.Cut(rest, ":")
+		step := map[string]any{"index": index, "result": strings.TrimSpace(result)}
+		if actual = strings.TrimSpace(actual); actual != "" {
+			step["actual"] = actual
+		}
+		out = append(out, step)
+	}
+	return out, nil
 }
 
 // ---------------------------------------------------------------------------

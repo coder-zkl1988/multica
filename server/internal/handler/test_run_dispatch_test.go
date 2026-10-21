@@ -130,6 +130,7 @@ func TestDispatchTestRunBindsOnlyTheAgentRuntimeDaemon(t *testing.T) {
 		"project_id":            projectID,
 		"title":                 "Browser case " + t.Name(),
 		"status":                "active",
+		"steps":                 executableSteps,
 		"required_capabilities": []map[string]any{{"kind": "browser"}},
 	})
 	testHandler.CreateTestCase(w, req)
@@ -226,6 +227,7 @@ func TestDispatchTestRunCreatesOneTaskPerCaseWithTheOverlay(t *testing.T) {
 		"project_id":            projectID,
 		"title":                 "Browser case " + t.Name(),
 		"status":                "active",
+		"steps":                 executableSteps,
 		"required_capabilities": []map[string]any{{"kind": "browser"}},
 	})
 	testHandler.CreateTestCase(w, req)
@@ -329,7 +331,9 @@ func TestDispatchTestRunCreatesOneTaskPerCaseWithTheOverlay(t *testing.T) {
 
 // A per-case task that dies blocks its own case and lets the round converge
 // once every case is terminal; a task that finishes without the CLI write is
-// settled from its closing marker.
+// settled from its closing marker — except that a bare `passed` marker is not
+// a verdict: a pass needs step results and evidence, which only the CLI write
+// carries, so it settles as blocked with the agent's summary kept.
 func TestPerCaseTaskHooksSettleCasesAndConvergeTheRun(t *testing.T) {
 	projectID := newTestRunProject(t)
 	a := createTestCaseForRun(t, projectID)
@@ -405,11 +409,11 @@ func TestPerCaseTaskHooksSettleCasesAndConvergeTheRun(t *testing.T) {
 
 	taskB := loadTask(b.ID)
 	output := "Checked everything.\nTEST_RUN_CASE_RESULT_JSON: {\"result\":\"passed\",\"summary\":\"expected text visible on the final frame\"}"
-	if err := testHandler.completeTestRunTask(ctx, testHandler.Queries, taskB, output); err != nil {
+	if _, err := testHandler.completeTestRunTask(ctx, testHandler.Queries, taskB, output); err != nil {
 		t.Fatal(err)
 	}
-	if got, notes := caseResult(b.ID); got != "passed" || notes != "expected text visible on the final frame" {
-		t.Errorf("case B after completion = %s / %q, want passed from the marker", got, notes)
+	if got, notes := caseResult(b.ID); got != "blocked" || !strings.Contains(notes, "expected text visible on the final frame") {
+		t.Errorf("case B after a bare passed marker = %s / %q, want blocked keeping the agent summary", got, notes)
 	}
 	if runStatus() != "completed" {
 		t.Errorf("run after every case settled = %s, want completed", runStatus())

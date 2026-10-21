@@ -172,6 +172,8 @@ var workspaceDeletionManifest = map[string]workspaceDeleteAction{
 	"test_capability":                    workspaceDelete,
 	"test_case":                          workspaceDelete,
 	"test_case_issue":                    workspaceDelete,
+	"test_case_test_point":               workspaceDelete,
+	"issue_test_point":                   workspaceDelete,
 	"test_case_proposal":                 workspaceDelete,
 	"test_case_repo":                     workspaceDelete,
 	"test_case_revision":                 workspaceDelete,

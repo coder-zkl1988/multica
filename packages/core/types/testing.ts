@@ -1,3 +1,5 @@
+import type { Attachment } from "./attachment";
+
 export type TestCasePriority = "p0" | "p1" | "p2" | "p3";
 export type TestCaseStatus = "draft" | "active" | "deprecated";
 export type TestCaseOrigin = "ai" | "human";
@@ -282,6 +284,20 @@ export type TestRunRetryScope = "all" | "failed_only" | "selected";
 export type TestCapabilityKind = "android_device" | "ios_device" | "computer_use" | "browser";
 export type TestCapabilityStatus = "available" | "busy" | "offline" | "unknown";
 
+/**
+ * A plan's rule for picking cases beside its hand-picked list. Dimensions
+ * combine with AND, values inside one with OR; only active cases match. The
+ * empty object is no rule.
+ */
+export interface TestPlanSelector {
+  all_active?: boolean;
+  modules?: string[];
+  priorities?: TestCasePriority[];
+  case_types?: TestCaseType[];
+  /** Cases linked to any of these issues (stored as ids). */
+  issue_ids?: string[];
+}
+
 export interface TestPlan {
   id: string;
   workspace_id: string;
@@ -289,6 +305,7 @@ export interface TestPlan {
   title: string;
   description: string;
   status: TestPlanStatus;
+  selector: TestPlanSelector;
   created_by: string | null;
   created_at: string;
   updated_at: string;
@@ -337,6 +354,21 @@ export interface TestRun {
   result_counts?: Record<string, number>;
 }
 
+/**
+ * A step's verdict inside a run case. `index` is the step's index in the frozen
+ * case snapshot; `not_run` is a step the executor never reached. Unknown
+ * verdicts from a newer server are kept as strings.
+ */
+export type TestRunStepVerdict = "passed" | "failed" | "blocked" | "skipped" | "not_run";
+
+export interface TestRunStepResult {
+  index: number;
+  result: TestRunStepVerdict | (string & {});
+  /** What the executor observed; set whenever it differs from the expected result. */
+  actual: string;
+  note: string;
+}
+
 export interface TestRunCase {
   id: string;
   workspace_id: string;
@@ -347,7 +379,7 @@ export interface TestRunCase {
   result: TestRunCaseResult;
   notes: string;
   evidence: unknown[];
-  step_results: unknown[];
+  step_results: TestRunStepResult[];
   duration_ms: number | null;
   executed_by_type: "member" | "agent" | null;
   executed_by_id: string | null;
@@ -439,12 +471,32 @@ export interface CreateTestPlanRequest {
   title: string;
   description?: string;
   status?: TestPlanStatus;
+  selector?: TestPlanSelector;
 }
 
 export interface UpdateTestPlanRequest {
   title?: string;
   description?: string;
   status?: TestPlanStatus;
+  /** Replaces the rule; `{}` clears it. */
+  selector?: TestPlanSelector;
+}
+
+/** One case the next round of a plan will run, and why it is in it. */
+export interface TestPlanSelectionCase {
+  test_case_id: string;
+  case_key: string;
+  title: string;
+  status: string;
+  source: "manual" | "rule" | (string & {});
+}
+
+/** GET /api/test-plans/{id}/selection */
+export interface TestPlanSelection {
+  cases: TestPlanSelectionCase[];
+  manual: number;
+  rule: number;
+  total: number;
 }
 
 export interface AddTestPlanCasesRequest {
@@ -476,8 +528,13 @@ export interface UpdateTestRunCaseResultRequest {
   result: TestRunCaseResult;
   notes?: string;
   evidence?: unknown[];
-  step_results?: unknown[];
+  step_results?: Array<{ index: number; result: TestRunStepVerdict; actual?: string; note?: string }>;
   duration_ms?: number;
+}
+
+/** GET /api/test-run-cases/{id}/evidence — the files uploaded for one run case. */
+export interface ListTestRunCaseEvidenceResponse {
+  evidence: Attachment[];
 }
 
 export interface OpenTestRunCaseDefectRequest {
@@ -654,10 +711,139 @@ export interface IssueFoundBy {
   executed_at: string | null;
 }
 
+// ---------------------------------------------------------------------------
+// Test points — the conditions a requirement is accepted on
+// ---------------------------------------------------------------------------
+
+export type TestPointCategory =
+  | "positive"
+  | "negative"
+  | "boundary"
+  | "permission"
+  | "state"
+  | "data"
+  | "non_functional";
+export type TestPointStatus = "active" | "dropped";
+/** Where a point stands; server-driven, so unknown values must still render. */
+export type TestPointState = "uncovered" | "in_review" | "not_run" | "failing" | "passed" | "dropped";
+
+export interface TestPoint {
+  id: string;
+  issue_id: string;
+  number: number;
+  /** TP-<n> inside its issue. */
+  key: string;
+  title: string;
+  description: string;
+  category: TestPointCategory | (string & {});
+  origin: TestCaseOrigin | (string & {});
+  status: TestPointStatus | (string & {});
+  created_by_type: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TestPointCase {
+  test_case_id: string;
+  case_key: string;
+  case_title: string;
+  case_status: string;
+  case_priority: string;
+  case_type: string;
+  /** null when the case never ran. */
+  latest_result: string | null;
+  origin: string;
+}
+
+export interface TestPointCoverage extends TestPoint {
+  cases: TestPointCase[];
+  covered: boolean;
+  passed: boolean;
+  state: TestPointState | (string & {});
+}
+
+export interface TestPointSummary {
+  active: number;
+  covered: number;
+  passed: number;
+  failing: number;
+  /** Points only draft cases verify — covered once someone approves them. */
+  in_review: number;
+}
+
+/** GET /api/issues/{id}/test-points */
+export interface ListIssueTestPointsResponse {
+  test_points: TestPointCoverage[];
+  summary: TestPointSummary;
+}
+
+export interface TestPointForCase extends TestPoint {
+  issue_number: number;
+  issue_identifier: string;
+  issue_title: string;
+  link_origin: string;
+}
+
+/** GET /api/test-cases/{ref}/test-points */
+export interface ListTestCaseTestPointsResponse {
+  test_points: TestPointForCase[];
+  total: number;
+}
+
+export interface CreateTestPointRequest {
+  title: string;
+  description?: string;
+  category?: TestPointCategory;
+}
+
+export interface UpdateTestPointRequest {
+  title?: string;
+  description?: string;
+  category?: TestPointCategory;
+  status?: TestPointStatus;
+}
+
+/** Where one issue of a project stands, worst first; server-driven. */
+export type ProjectCoverageState = "failing" | "no_tests" | "gaps" | "in_review" | "no_points" | "not_run" | "verified";
+
+export interface ProjectCoverageIssue {
+  issue_id: string;
+  issue_number: number;
+  issue_identifier: string;
+  title: string;
+  status: string;
+  active_cases: number;
+  failing_cases: number;
+  active_points: number;
+  covered_points: number;
+  /** Points only draft cases verify. */
+  review_points: number;
+  passed_points: number;
+  failing_points: number;
+  state: ProjectCoverageState | (string & {});
+}
+
+/** GET /api/test-coverage?project_id= */
+export interface ProjectCoverageResponse {
+  issues: ProjectCoverageIssue[];
+  summary: Record<string, number>;
+  /** The server stopped at its row limit. */
+  truncated: boolean;
+}
+
+/**
+ * What `verified` was decided on: every active test point covered and passing
+ * (`test_points`), only the linked cases because no point was listed
+ * (`cases_only` — a weaker claim), or nothing covers the issue (`none`).
+ */
+export type IssueTestVerificationBasis = "test_points" | "cases_only" | "none";
+
 export interface IssueTestSummary {
   cases: number;
-  /** Every covering case's latest recorded result is passed (and there is at least one). */
+  /** Decided on `basis`; see IssueTestVerificationBasis. */
   verified: boolean;
+  basis: IssueTestVerificationBasis | (string & {});
+  test_points: TestPointSummary;
   latest_run: IssueTestRunSummary | null;
   /** Defects opened by rounds that executed a covering case, newest first. */
   defects: IssueTestDefect[];

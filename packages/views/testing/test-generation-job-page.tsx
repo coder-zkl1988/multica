@@ -11,6 +11,7 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { agentTaskSnapshotOptions } from "@multica/core/agents/queries";
+import { issueDetailOptions } from "@multica/core/issues/queries";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
 import type { TestGenerationPlanPayload } from "@multica/core/types";
@@ -29,7 +30,7 @@ import { Input } from "@multica/ui/components/ui/input";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { Textarea } from "@multica/ui/components/ui/textarea";
 import { BreadcrumbHeader } from "../layout/breadcrumb-header";
-import { useNavigation } from "../navigation";
+import { AppLink, useNavigation } from "../navigation";
 import { useT } from "../i18n";
 import { PlanIssueScope } from "./components/plan-issue-scope";
 import {
@@ -43,6 +44,8 @@ import {
   withPlanInstructions,
   withPlanList,
   withPlanRepoToggled,
+  readJobCoverage,
+  type JobIssueCoverage,
 } from "./test-generation-job-logic";
 
 // ---------------------------------------------------------------------------
@@ -632,6 +635,7 @@ export function TestGenerationJobPage({ jobId }: { jobId: string }) {
                   <div className="text-body font-medium">
                     {t(($) => $.job.result.title)}
                   </div>
+                  <JobCoverage wsId={wsId} result={job.result} />
                   <div className="mt-3 text-caption text-muted-foreground">
                     <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded-md bg-muted p-2 text-caption leading-relaxed">
                       {JSON.stringify(job.result, null, 2)}
@@ -644,5 +648,59 @@ export function TestGenerationJobPage({ jobId }: { jobId: string }) {
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * What the run left untested: per scoped issue, how many of its test points an
+ * active case covers and which do not — computed by the server when the run
+ * ended, not taken from the agent's own report.
+ */
+function JobCoverage({ wsId, result }: { wsId: string; result: Record<string, unknown> }) {
+  const { t } = useT("testing");
+  const coverage = readJobCoverage(result);
+  if (coverage.length === 0) return null;
+  return (
+    <div className="mt-3">
+      <div className="mb-1 text-caption font-medium text-muted-foreground">{t(($) => $.job.result.coverage)}</div>
+      <ul className="flex flex-col gap-1">
+        {coverage.map((entry) => (
+          <JobIssueCoverageRow key={entry.issueId} wsId={wsId} entry={entry} />
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function JobIssueCoverageRow({ wsId, entry }: { wsId: string; entry: JobIssueCoverage }) {
+  const { t } = useT("testing");
+  const paths = useWorkspacePaths();
+  const { data: issue } = useQuery(issueDetailOptions(wsId, entry.issueId));
+  const gap = entry.active === 0 || entry.uncovered.length > 0;
+  return (
+    <li className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-caption">
+      <AppLink
+        href={paths.issueDetail(entry.issueId)}
+        className="min-w-0 max-w-full truncate hover:underline"
+        title={issue?.title}
+      >
+        {issue?.identifier ?? entry.issueId.slice(0, 8)}
+      </AppLink>
+      <span className={`tabular-nums ${gap ? "text-warning" : "text-success"}`}>
+        {entry.active === 0
+          ? t(($) => $.job.result.noPoints)
+          : t(($) => $.job.result.coverageLine, { covered: entry.covered, active: entry.active })}
+      </span>
+      {entry.inReview.length > 0 ? (
+        <span className="text-muted-foreground">
+          {t(($) => $.job.result.inReview)}: {entry.inReview.join(", ")}
+        </span>
+      ) : null}
+      {entry.uncovered.length > 0 ? (
+        <span className="text-muted-foreground">
+          {t(($) => $.job.result.uncovered)}: {entry.uncovered.join(", ")}
+        </span>
+      ) : null}
+    </li>
   );
 }

@@ -938,6 +938,41 @@ func TestTestCasesSkillCoversTheDataContract(t *testing.T) {
 		// Steps are the executable contract: structured, renumbered, repo-tagged.
 		"structured JSON array, not markdown",
 		"running order 1..n",
+		// An active case is executable: every step has an action and an expected result.
+		"An `active` case must be executable",
+		"a round skips `deprecated`",
+		// Coverage is counted per test point; verified depends on the basis.
+		"multica testcase point add --issue",
+		"multica testcase cover TC-42",
+		"`test_points`",
+		"| `cases_only` |",
+		"Only `active` cases count.",
+		// A point only drafts verify is in review, not uncovered: the generation
+		// prompt tells the agent not to add cases for it (handler: TestPointsCoveredOnlyByDraftsAreInReview).
+		"| `in_review` |",
+		// An agent's case passes the same review gate as a generation run's; it
+		// cannot activate, approve, retire, or decide proposals
+		// (handler: TestAgentCaseWaitsForAMembersApproval, TestAgentCannotRetireAnActiveCase,
+		// TestAgentCannotReviewATestCaseProposal).
+		"lands as `draft` with `origin: \"ai\"`",
+		"| `proposal accept` / `proposal reject` | 403 |",
+		// Unlinking, dropping a covered point and narrowing a plan take a case
+		// out of coverage as surely as deprecating it
+		// (handler: TestAgentCannotRetireAnActiveCase, TestAgentCannotNarrowARegressionPlan).
+		"| unlinking an active case from an issue or a test point | 403 |",
+		"| removing a case from a plan, changing a plan's rule or status, deleting a plan | 403 |",
+		// Claiming coverage for a live case, and retargeting the nightly
+		// regression, are review decisions too (handler:
+		// TestAgentCannotClaimThatAnActiveCaseCoversARequirement,
+		// TestAgentCannotRetargetOrPauseARegressionAutopilot).
+		"| linking an active case to an issue or test point (`cover`, issue links) | 403",
+		"| changing a regression (`test_run`) autopilot's plan, mode, project, assignee, status or triggers, or deleting it | 403 |",
+		// A blocked round never hides a failure and a draft's trial run does
+		// not count (handler: TestBlockedRoundNeverHidesAFailure,
+		// TestADraftTrialRunDoesNotVerifyOnceApproved,
+		// TestAPointPassesWhenACoveringCasePassesAndNoneFails).
+		"A case's current verdict is its newest `passed` or `failed` result",
+		"| `passed` | an active case that verifies it currently passes, and none fails |",
 		// Multi-repo semantics are the reason roles exist at all.
 		"under_test",
 		"driver",
@@ -1017,11 +1052,24 @@ func TestRunningTestsSkillCoversExecutionContract(t *testing.T) {
 		"blocked",
 		"`blocked` is not `failed`",
 		// Recording commands.
-		"multica test result set <run-case-id> --result passed|failed|blocked|skipped",
+		"multica test result set <run-case-id> --result",
 		"multica test evidence add <run-case-id> --file",
 		"multica test defect open <run-case-id> --title",
-		// Evidence is required for failures.
-		"failed` or `blocked",
+		// A verdict carries one step result per snapshot step, in this shape.
+		"`<index>=<result>[:<what you observed>]`",
+		"`not_run` (a step you never reached)",
+		// The server refuses an agent's pass or fail without evidence on file
+		// and a result for every step, and a bare passed marker is not a pass.
+		"at least one evidence file",
+		"a step result for **every** step of the snapshot",
+		"a `passed` is recorded as `blocked`",
+		// A per-case task writes only its own case, a step-less snapshot cannot
+		// pass, and a bare verdict must agree with the step results on file
+		// (handler: TestPerCaseTaskCannotWriteASiblingCase,
+		// TestAgentCannotPassACaseFrozenWithoutSteps, TestVerdictMustAgreeWithStoredStepResults).
+		"(403 for a sibling's)",
+		"a case frozen without steps has nothing to compare",
+		"checked against the step results\nalready on file",
 		// Supporting file must ship.
 	}
 	for _, want := range mustContain {

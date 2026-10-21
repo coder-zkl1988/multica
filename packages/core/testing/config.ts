@@ -9,6 +9,9 @@ import type {
   TestCaseStatus,
   TestCaseType,
   TestPlanStatus,
+  TestPointCategory,
+  TestPointState,
+  ProjectCoverageState,
   TestRunCaseResult,
 } from "../types";
 
@@ -106,6 +109,51 @@ export const TEST_RUN_RESULT_TONE: Record<TestRunCaseResult, string> = {
   failed: "text-destructive",
   blocked: "text-warning",
   skipped: "text-muted-foreground",
+};
+
+/** Order a requirement is walked in when it is split into test points. */
+export const TEST_POINT_CATEGORIES: TestPointCategory[] = [
+  "positive",
+  "negative",
+  "boundary",
+  "permission",
+  "state",
+  "data",
+  "non_functional",
+];
+
+export const TEST_POINT_STATES: TestPointState[] = ["uncovered", "in_review", "not_run", "failing", "passed", "dropped"];
+
+/** An uncovered point is what nobody tests — it reads as a warning, not as
+ *  neutral; a failing one is a bug that tests already found. */
+export const TEST_POINT_STATE_TONE: Record<TestPointState, string> = {
+  uncovered: "text-warning",
+  in_review: "text-muted-foreground",
+  not_run: "text-muted-foreground",
+  failing: "text-destructive",
+  passed: "text-success",
+  dropped: "text-muted-foreground",
+};
+
+/** Worst first: the order a QA lead works down the coverage list in. */
+export const PROJECT_COVERAGE_STATES: ProjectCoverageState[] = [
+  "failing",
+  "no_tests",
+  "gaps",
+  "in_review",
+  "no_points",
+  "not_run",
+  "verified",
+];
+
+export const PROJECT_COVERAGE_STATE_TONE: Record<ProjectCoverageState, string> = {
+  failing: "text-destructive",
+  no_tests: "text-warning",
+  gaps: "text-warning",
+  in_review: "text-muted-foreground",
+  no_points: "text-muted-foreground",
+  not_run: "text-muted-foreground",
+  verified: "text-success",
 };
 
 export const TEST_CASE_PRIORITY_TONE: Record<TestCasePriority, string> = {

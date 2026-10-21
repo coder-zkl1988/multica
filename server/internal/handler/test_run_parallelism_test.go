@@ -3,12 +3,16 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/multica-ai/multica/server/internal/testutil"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 // M4 "finish one, release one": a round with a parallelism cap queues only
@@ -83,7 +87,7 @@ func settleCase(t *testing.T, taskID string, result string) {
 		t.Fatal(err)
 	}
 	output := "done\nTEST_RUN_CASE_RESULT_JSON: {\"result\":\"" + result + "\",\"summary\":\"ok\"}"
-	if err := testHandler.completeTestRunTask(ctx, testHandler.Queries, task, output); err != nil {
+	if _, err := testHandler.completeTestRunTask(ctx, testHandler.Queries, task, output); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -118,11 +122,12 @@ func TestDispatchTestRunHonoursTheParallelismCapAndReleasesTheNextCase(t *testin
 		t.Fatalf("after dispatch only the first case may hold a task: %+v", cases)
 	}
 
-	// Finishing the first case releases exactly one more.
-	settleCase(t, *cases[0].taskID, "passed")
+	// Finishing the first case releases exactly one more. (A bare `passed`
+	// marker would settle as blocked; any marker verdict releases the next.)
+	settleCase(t, *cases[0].taskID, "skipped")
 	cases = runCasesInOrder(t, run.ID)
-	if cases[0].result != "passed" {
-		t.Errorf("first case result = %q, want passed", cases[0].result)
+	if cases[0].result != "skipped" {
+		t.Errorf("first case result = %q, want skipped", cases[0].result)
 	}
 	if cases[1].taskID == nil {
 		t.Fatalf("the second case was not released after the first settled: %+v", cases)
@@ -203,6 +208,7 @@ func TestDispatchTestRunRequiresATestHostForDeviceCases(t *testing.T) {
 		"project_id":            projectID,
 		"title":                 "Phone case " + t.Name(),
 		"status":                "active",
+		"steps":                 executableSteps,
 		"required_capabilities": []map[string]any{{"kind": "android_device"}},
 	})
 	testHandler.CreateTestCase(w, req)
@@ -274,5 +280,123 @@ func TestUpdateAgentRuntimeTogglesTheTestHostFlag(t *testing.T) {
 	}
 	if !stored {
 		t.Error("the flag was not persisted")
+	}
+}
+
+// Two cases of a capped round settling at the same moment must release
+// different waiting cases. Without the round lock each hook counted the
+// other's case as still running, listed the same waiting case and bound it
+// twice; the task that lost the bind could never record or complete.
+func TestConcurrentSettlesReleaseDistinctCases(t *testing.T) {
+	projectID := newTestRunProject(t)
+	var ids []string
+	for i := 0; i < 4; i++ {
+		ids = append(ids, createTestCaseForRun(t, projectID).ID)
+	}
+	run := createCappedRun(t, "Concurrent settles", ids, 2)
+	runtimeID := dbfx.Runtime(t, "concurrent-runtime", testutil.Cols{"daemon_id": "daemon-concurrent"})
+	agentID := dbfx.Agent(t, "concurrent-agent", runtimeID)
+	if w := dispatchRun(t, run.ID, agentID); w.Code != http.StatusCreated {
+		t.Fatalf("dispatch: got %d: %s", w.Code, w.Body.String())
+	}
+	cases := runCasesInOrder(t, run.ID)
+	ctx := context.Background()
+	hook := func(taskID string) (pgx.Tx, error) {
+		task, err := testHandler.Queries.GetAgentTask(ctx, parseUUID(taskID))
+		if err != nil {
+			return nil, err
+		}
+		if err := testHandler.markTestRunRunning(ctx, task); err != nil {
+			return nil, err
+		}
+		tx, err := testPool.Begin(ctx)
+		if err != nil {
+			return nil, err
+		}
+		output := "done\nTEST_RUN_CASE_RESULT_JSON: {\"result\":\"failed\",\"summary\":\"diverged\"}"
+		_, err = testHandler.completeTestRunTask(ctx, testHandler.Queries.WithTx(tx), task, output)
+		return tx, err
+	}
+	first, err := hook(*cases[0].taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type outcome struct {
+		tx  pgx.Tx
+		err error
+	}
+	second := make(chan outcome, 1)
+	go func() {
+		tx, err := hook(*cases[1].taskID)
+		second <- outcome{tx, err}
+	}()
+	select {
+	case got := <-second:
+		if got.tx != nil {
+			got.tx.Rollback(ctx)
+		}
+		first.Rollback(ctx)
+		t.Fatalf("the second hook did not wait for the first one's round lock (err=%v)", got.err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	if err := first.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	got := <-second
+	if got.err != nil {
+		t.Fatal(got.err)
+	}
+	if err := got.tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	cases = runCasesInOrder(t, run.ID)
+	for _, rc := range cases[2:] {
+		if rc.taskID == nil {
+			t.Fatalf("a waiting case was not released: %+v", cases)
+		}
+		var tasks int
+		dbfx.QueryRow(t, `SELECT count(*) FROM agent_task_queue WHERE context->>'run_case_id' = $1`, rc.id).Scan(&tasks)
+		if tasks != 1 {
+			t.Fatalf("case %s has %d agent tasks, want exactly 1", rc.id, tasks)
+		}
+	}
+}
+
+// A case keeps the task it was bound to: a second dispatch racing the first
+// gets no row back and withdraws its task instead of taking the case over.
+func TestABoundCaseIsNotReboundAndAnAbortIsNotRevived(t *testing.T) {
+	projectID := newTestRunProject(t)
+	a := createTestCaseForRun(t, projectID)
+	b := createTestCaseForRun(t, projectID)
+	run := createCappedRun(t, "Bind once", []string{a.ID, b.ID}, 1)
+	runtimeID := dbfx.Runtime(t, "bind-once-runtime", testutil.Cols{"daemon_id": "daemon-bind-once"})
+	agentID := dbfx.Agent(t, "bind-once-agent", runtimeID)
+	if w := dispatchRun(t, run.ID, agentID); w.Code != http.StatusCreated {
+		t.Fatalf("dispatch: got %d: %s", w.Code, w.Body.String())
+	}
+	cases := runCasesInOrder(t, run.ID)
+	ctx := context.Background()
+	_, err := testHandler.Queries.UpdateTestRunCaseAgentTask(ctx, db.UpdateTestRunCaseAgentTaskParams{
+		ID: parseUUID(cases[0].id), WorkspaceID: parseUUID(testWorkspaceID), AgentTaskID: parseUUID("00000000-0000-0000-0000-00000000b1d0"),
+	})
+	if !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("rebinding a bound case: err = %v, want no rows", err)
+	}
+
+	// The daemon starting the first task after a member aborted the round
+	// must not turn it back into "running".
+	testutil.Call(t, testHandler.AbortTestRun, withURLParam(newRequest("POST", "/api/test-runs/"+run.ID+"/abort?workspace_id="+testWorkspaceID, nil), "id", run.ID)).
+		Want(http.StatusOK)
+	task, err := testHandler.Queries.GetAgentTask(ctx, parseUUID(*cases[0].taskID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := testHandler.markTestRunRunning(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+	var status string
+	dbfx.QueryRow(t, `SELECT status FROM test_run WHERE id = $1`, run.ID).Scan(&status)
+	if status != "aborted" {
+		t.Fatalf("round status after a late start = %q, want aborted", status)
 	}
 }

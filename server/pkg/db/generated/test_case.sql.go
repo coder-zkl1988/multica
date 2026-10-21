@@ -965,6 +965,8 @@ SELECT tci.test_case_id, tci.issue_id, tci.origin, tci.created_at,
            WHERE rc.test_case_id = tci.test_case_id
              AND rc.workspace_id = tci.workspace_id
              AND rc.executed_at IS NOT NULL
+             AND rc.result IN ('passed', 'failed')
+             AND rc.case_snapshot->>'status' = 'active'
            ORDER BY rc.executed_at DESC
            LIMIT 1
        ), '')::text AS latest_result,
@@ -974,6 +976,8 @@ SELECT tci.test_case_id, tci.issue_id, tci.origin, tci.created_at,
            WHERE rc.test_case_id = tci.test_case_id
              AND rc.workspace_id = tci.workspace_id
              AND rc.executed_at IS NOT NULL
+             AND rc.result IN ('passed', 'failed')
+             AND rc.case_snapshot->>'status' = 'active'
            ORDER BY rc.executed_at DESC
            LIMIT 1
        ) AS latest_executed_at
@@ -1002,10 +1006,12 @@ type ListTestCasesForIssueRow struct {
 	LatestExecutedAt pgtype.Timestamptz `json:"latest_executed_at"`
 }
 
-// The case side of one issue's coverage. latest_result is the most recent
-// recorded outcome across every round the case appeared in, so the issue can
-// show whether its coverage actually passes — a linked case that has never run
-// reports NULL rather than a misleading "pending".
+// The case side of one issue's coverage. latest_result is the case's current
+// verdict: its most recent passed or failed result from a round that froze it
+// as an active case. blocked and skipped carry no verdict, so they never hide
+// an earlier failure; a result from a trial run of the draft says nothing
+// about the case a person approved. A case with no such result reports NULL
+// rather than a misleading "pending".
 func (q *Queries) ListTestCasesForIssue(ctx context.Context, arg ListTestCasesForIssueParams) ([]ListTestCasesForIssueRow, error) {
 	rows, err := q.db.Query(ctx, listTestCasesForIssue, arg.IssueID, arg.WorkspaceID)
 	if err != nil {
@@ -1036,6 +1042,53 @@ func (q *Queries) ListTestCasesForIssue(ctx context.Context, arg ListTestCasesFo
 		return nil, err
 	}
 	return items, nil
+}
+
+const lockTestCase = `-- name: LockTestCase :one
+SELECT id, workspace_id, project_id, case_number, title, module, preconditions, steps, expected_result, test_data, priority, case_type, scope, execution_mode, required_capabilities, business_rules_ref, status, origin, source_refs, generation_job_id, version, created_by, updated_by, reviewed_by, reviewed_at, created_at, updated_at FROM test_case WHERE id = $1 AND workspace_id = $2 FOR UPDATE
+`
+
+type LockTestCaseParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+// Re-reads a case under a row lock inside a write transaction, so a decision
+// made on the status read before the transaction (who may change it, which
+// gate applies) still holds when the write lands.
+func (q *Queries) LockTestCase(ctx context.Context, arg LockTestCaseParams) (TestCase, error) {
+	row := q.db.QueryRow(ctx, lockTestCase, arg.ID, arg.WorkspaceID)
+	var i TestCase
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.ProjectID,
+		&i.CaseNumber,
+		&i.Title,
+		&i.Module,
+		&i.Preconditions,
+		&i.Steps,
+		&i.ExpectedResult,
+		&i.TestData,
+		&i.Priority,
+		&i.CaseType,
+		&i.Scope,
+		&i.ExecutionMode,
+		&i.RequiredCapabilities,
+		&i.BusinessRulesRef,
+		&i.Status,
+		&i.Origin,
+		&i.SourceRefs,
+		&i.GenerationJobID,
+		&i.Version,
+		&i.CreatedBy,
+		&i.UpdatedBy,
+		&i.ReviewedBy,
+		&i.ReviewedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const unlinkTestCaseIssue = `-- name: UnlinkTestCaseIssue :exec
@@ -1069,9 +1122,10 @@ UPDATE test_case SET
     required_capabilities = COALESCE($13, required_capabilities),
     business_rules_ref    = COALESCE($14, business_rules_ref),
     status                = COALESCE($15, status),
-    reviewed_by           = COALESCE($16, reviewed_by),
-    reviewed_at           = COALESCE($17, reviewed_at),
-    updated_by            = COALESCE($18, updated_by),
+    source_refs           = COALESCE($16, source_refs),
+    reviewed_by           = COALESCE($17, reviewed_by),
+    reviewed_at           = COALESCE($18, reviewed_at),
+    updated_by            = COALESCE($19, updated_by),
     version               = version + 1,
     updated_at            = now()
 WHERE id = $1 AND workspace_id = $2
@@ -1094,6 +1148,7 @@ type UpdateTestCaseParams struct {
 	RequiredCapabilities []byte             `json:"required_capabilities"`
 	BusinessRulesRef     []byte             `json:"business_rules_ref"`
 	Status               pgtype.Text        `json:"status"`
+	SourceRefs           []byte             `json:"source_refs"`
 	ReviewedBy           pgtype.UUID        `json:"reviewed_by"`
 	ReviewedAt           pgtype.Timestamptz `json:"reviewed_at"`
 	UpdatedBy            pgtype.UUID        `json:"updated_by"`
@@ -1119,6 +1174,7 @@ func (q *Queries) UpdateTestCase(ctx context.Context, arg UpdateTestCaseParams) 
 		arg.RequiredCapabilities,
 		arg.BusinessRulesRef,
 		arg.Status,
+		arg.SourceRefs,
 		arg.ReviewedBy,
 		arg.ReviewedAt,
 		arg.UpdatedBy,

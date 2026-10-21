@@ -3,7 +3,8 @@
     "cases": "ケース",
     "plans": "計画",
     "runs": "実行",
-    "jobs": "生成ジョブ"
+    "jobs": "生成ジョブ",
+    "coverage": "カバレッジ"
   },
   "page": {
     "title": "テストケース",
@@ -146,6 +147,7 @@
     "version": "バージョン {{version}}",
     "separator": " · ",
     "human_edit": "手動編集",
+    "agent_edit": "エージェントによる編集",
     "proposal_accepted": "AI 提案を採用",
     "status_change": "ステータス変更",
     "restore": "復元"
@@ -289,7 +291,12 @@
     "result": {
       "title": "実行結果",
       "proposals": "AI提案一覧",
-      "noProposals": "提案はありません"
+      "noProposals": "提案はありません",
+      "coverage": "テストポイントのカバレッジ",
+      "coverageLine": "カバー {{covered}}/{{active}}",
+      "noPoints": "テストポイントに分解されていません",
+      "uncovered": "未カバー",
+      "inReview": "レビュー待ち"
     }
   },
   "proposals": {
@@ -354,7 +361,25 @@
       "passRate": "合格率",
       "matrixTitle": "最新ラウンドのモジュール別結果",
       "moduleColumn": "モジュール",
-      "moduleUnnamed": "（モジュールなし）"
+      "moduleUnnamed": "（モジュールなし）",
+      "rule": {
+        "title": "選択ルール",
+        "hint": "条件に合う有効なケースは、計画作成後に書かれたものも含めて毎回のラウンドに自動で入ります。",
+        "none": "ルールなし：ラウンドはここに並んだケースだけを実行します。",
+        "allActive": "プロジェクト内のすべての有効なケース",
+        "modules": "モジュール",
+        "noModules": "モジュールはまだありません",
+        "priorities": "優先度",
+        "caseTypes": "ケース種別",
+        "issues": "タスクをカバーするケース",
+        "addIssue": "タスクを追加",
+        "removeIssue": "{{issue}} の追跡をやめる",
+        "pickerTitle": "タスクを追跡",
+        "pickerDescription": "この計画のラウンドは、リンクされた有効なケースをすべて実行します。",
+        "save": "ルールを保存",
+        "reset": "元に戻す",
+        "preview": "次のラウンドは {{total}} 件 · ルールから {{rule}} 件"
+      }
     }
   },
   "run": {
@@ -432,7 +457,26 @@
     "notesNeedResult": "メモは結果と一緒に保存されます。先に結果を選んでください。",
     "task": "タスク {{id}}",
     "liveFrame": "ライブ画面",
-    "liveFrameWaiting": "デバイスハブからの最初のフレームを待っています…"
+    "liveFrameWaiting": "デバイスハブからの最初のフレームを待っています…",
+    "observed": "実際",
+    "noSteps": "このケースはステップなしで固定されました。",
+    "evidenceEmpty": "証跡はアップロードされていません。",
+    "stepResult": {
+      "passed": "合格",
+      "failed": "失敗",
+      "blocked": "ブロック",
+      "skipped": "スキップ",
+      "not_run": "未到達"
+    },
+    "save": "保存",
+    "draftNeedsResult": "メモとステップ結果は結果と一緒に保存されます。先に結果を選んでください。",
+    "observedPlaceholder": "実際に見えたこと",
+    "observedLabel": "ステップ {{index}} で実際に見えたこと",
+    "stepResultLabel": "ステップ {{index}} の結果",
+    "stepUnset": "未記録",
+    "addEvidence": "証跡を追加",
+    "evidenceTooLarge": "{{name}} は大きすぎてアップロードできません",
+    "evidenceFailed": "証跡をアップロードできませんでした"
   },
   "timeline": {
     "title": "実行履歴",
@@ -513,7 +557,7 @@
     "failingCount": "失敗 {{count}} 件",
     "untestedCount": "未実行 {{count}} 件",
     "verified": "検証済み",
-    "verifiedHint": "関連するすべてのケースが最新の実行で合格しました",
+    "verifiedHint": "すべてのテストポイントが、直近の実行で合格したケースでカバーされています",
     "latestRun": "最新ラウンド",
     "defectsSection": "テストで見つかった不具合",
     "foundBySection": "発見したテスト実行",
@@ -522,6 +566,78 @@
     "newCaseTitle": "検証：{{title}}",
     "noCoverage": "テストカバレッジはまだありません",
     "generateFailed": "ケース生成を開始できませんでした",
-    "newCaseFailed": "ケースを作成できませんでした"
+    "newCaseFailed": "ケースを作成できませんでした",
+    "points": {
+      "section": "テストポイント",
+      "summary": "カバー {{covered}}/{{active}} · 合格 {{passed}}",
+      "hint": "このタスクが受け入れられる条件です。カバレッジと検証はこの単位で数えます。",
+      "add": "ポイントを追加",
+      "addPlaceholder": "単独で正誤を判定できる条件。例：残高を超える注文はメッセージ付きで拒否される",
+      "addFailed": "テストポイントを追加できませんでした",
+      "empty": "テストポイントがまだありません。タスクを受け入れ条件に分解してください。そうしないと、正常系のケースが 1 件合格しただけで検証済みに見えます。",
+      "drop": "廃止",
+      "restore": "復元",
+      "updateFailed": "テストポイントを更新できませんでした",
+      "cover": "カバーするケース…",
+      "coverFailed": "ケースをテストポイントにリンクできませんでした",
+      "droppedCount": "廃止 {{count}} 件",
+      "category": {
+        "positive": "正常系",
+        "negative": "異常系",
+        "boundary": "境界値",
+        "permission": "権限",
+        "state": "状態",
+        "data": "データ整合性",
+        "non_functional": "非機能"
+      },
+      "state": {
+        "uncovered": "未カバー",
+        "in_review": "下書きのみ",
+        "not_run": "未実行",
+        "failing": "失敗",
+        "passed": "合格",
+        "dropped": "廃止"
+      },
+      "caseSection": "検証するテストポイント",
+      "caseEmpty": "まだどのテストポイントも宣言していません",
+      "categoryLabel": "種別"
+    },
+    "casesPass": "ケース合格",
+    "casesPassHint": "リンクされたケースはすべて合格しましたが、テストポイントがないため、何を確認すべきかは誰も挙げていません"
+  },
+  "coveragePage": {
+    "title": "テストカバレッジ",
+    "hint": "プロジェクト内のキャンセルされていないタスクと、それをカバーするもの。問題の大きい順。",
+    "empty": "このプロジェクトにはタスクがありません",
+    "all": "すべて",
+    "truncated": "最新の {{count}} 件のタスクのみ表示しています。",
+    "columns": {
+      "issue": "タスク",
+      "points": "テストポイント",
+      "cases": "ケース",
+      "state": "状態"
+    },
+    "pointsLine": "カバー {{covered}}/{{active}} · 合格 {{passed}}",
+    "noPoints": "—",
+    "casesLine": "有効 {{count}} 件",
+    "failingCases": "失敗 {{count}} 件",
+    "state": {
+      "failing": "失敗",
+      "no_tests": "テストなし",
+      "gaps": "未カバーのポイントあり",
+      "in_review": "レビュー待ち",
+      "no_points": "テストポイントなし",
+      "not_run": "未合格あり",
+      "verified": "検証済み"
+    },
+    "stateHint": {
+      "failing": "カバーするケースの直近の結果が失敗",
+      "no_tests": "有効なケースもテストポイントもありません — ここで起きたバグは見つかりません",
+      "gaps": "一部のテストポイントに有効なケースがありません",
+      "in_review": "すべてのポイントにケースがありますが、一部は承認待ちの下書きだけです",
+      "no_points": "ケースはありますが、確認すべきことが挙げられていません",
+      "not_run": "すべてカバー済みですが、まだすべて合格していません",
+      "verified": "すべてのテストポイントが合格したケースでカバーされています"
+    }
   }
 }

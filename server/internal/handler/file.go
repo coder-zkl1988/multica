@@ -608,11 +608,45 @@ func (h *Handler) UploadFile(w http.ResponseWriter, r *http.Request) {
 		}
 		var pendingRunCase *pendingRunCaseState
 
-		if caseIDStr := r.FormValue("test_run_case_id"); caseIDStr != "" {
-			if r.Header.Get("X-Actor-Source") != "task_token" {
-				writeError(w, http.StatusForbidden, "test_run_case_id upload is only available from within an agent task")
+		if caseIDStr := r.FormValue("test_run_case_id"); caseIDStr != "" && r.Header.Get("X-Actor-Source") != "task_token" {
+			// A person executing the round by hand attaches what they saw —
+			// the same evidence an agent uploads, without which a manual
+			// verdict is as unauditable as a bare agent pass. Membership was
+			// checked above; an aborted round is final for evidence too.
+			caseUUID, ok := parseUUIDOrBadRequest(w, caseIDStr, "test_run_case_id")
+			if !ok {
 				return
 			}
+			if uploaderType != "member" {
+				writeError(w, http.StatusForbidden, "test_run_case_id upload from an agent requires its task token")
+				return
+			}
+			runCase, err := h.Queries.GetTestRunCaseInWorkspace(r.Context(), db.GetTestRunCaseInWorkspaceParams{
+				ID:          caseUUID,
+				WorkspaceID: parseUUID(workspaceID),
+			})
+			if err != nil {
+				writeError(w, http.StatusForbidden, "invalid test_run_case_id")
+				return
+			}
+			run, err := h.Queries.GetTestRunInWorkspace(r.Context(), db.GetTestRunInWorkspaceParams{
+				ID:          runCase.RunID,
+				WorkspaceID: parseUUID(workspaceID),
+			})
+			if err != nil {
+				writeError(w, http.StatusForbidden, "invalid test_run_case_id for this run")
+				return
+			}
+			if run.Status == "aborted" {
+				writeError(w, http.StatusConflict, "the round was aborted; its evidence can no longer change")
+				return
+			}
+			pendingRunCase = &pendingRunCaseState{
+				runCaseID: caseUUID,
+				runID:     run.ID,
+				kind:      strings.TrimSpace(r.FormValue("kind")),
+			}
+		} else if caseIDStr != "" {
 			caseUUID, ok := parseUUIDOrBadRequest(w, caseIDStr, "test_run_case_id")
 			if !ok {
 				return
@@ -649,6 +683,18 @@ func (h *Handler) UploadFile(w http.ResponseWriter, r *http.Request) {
 			ownsCase := runCase.AgentTaskID.Valid && uuidToString(runCase.AgentTaskID) == uuidToString(taskUUID)
 			if !ownsRun && !ownsCase {
 				writeError(w, http.StatusForbidden, "invalid task token for test_run")
+				return
+			}
+			// The round's task id is the first case's task under per-case
+			// dispatch; it may only attach evidence to its own case.
+			if !ownsCase && h.taskExecutesAnotherCase(r.Context(), uuidToString(taskUUID), runCase.ID) {
+				writeError(w, http.StatusForbidden, "this task executes another case of the round; attach evidence only to your own run_case_id")
+				return
+			}
+			// Evidence follows the same rule as results: an agent task cannot
+			// change a round that was aborted or has already settled.
+			if accepted, reason := runAcceptsResultWrite(run.Status, true); !accepted {
+				writeError(w, http.StatusConflict, reason)
 				return
 			}
 			// Gate 3: the uploader must be the run's executor agent.
@@ -732,7 +778,7 @@ func (h *Handler) UploadFile(w http.ResponseWriter, r *http.Request) {
 						pendingRunCase.kind,
 						markdownURL,
 					)
-					if _, evErr := h.Queries.UpdateTestRunCaseResult(r.Context(), db.UpdateTestRunCaseResultParams{
+					if updatedCase, evErr := h.Queries.UpdateTestRunCaseResult(r.Context(), db.UpdateTestRunCaseResultParams{
 						ID:          pendingRunCase.runCaseID,
 						WorkspaceID: parseUUID(workspaceID),
 						Evidence:    updatedEvidence,
@@ -744,6 +790,12 @@ func (h *Handler) UploadFile(w http.ResponseWriter, r *http.Request) {
 							"attachment_id", uuidToString(att.ID),
 							"error", evErr,
 						)
+					} else {
+						// The round page lists a case's evidence; tell it.
+						h.publish(protocol.EventTestRunCaseUpdated, workspaceID, uploaderType, uploaderID, map[string]any{
+							"test_run_case": testRunCaseToResponse(updatedCase),
+							"run_id":        uuidToString(pendingRunCase.runID),
+						})
 					}
 				}
 			}

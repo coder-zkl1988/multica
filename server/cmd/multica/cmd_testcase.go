@@ -135,16 +135,7 @@ func init() {
 	testcaseModulesCmd.Flags().String("output", "table", "Output format: table or json")
 
 	for _, cmd := range []*cobra.Command{testcaseCreateCmd, testcaseUpdateCmd} {
-		cmd.Flags().String("title", "", "Test case title")
-		cmd.Flags().String("module", "", "Module used for grouping")
-		cmd.Flags().String("priority", "", "Priority: p0, p1, p2, p3")
-		cmd.Flags().String("case-type", "", "Case type, e.g. functional, business_flow, boundary")
-		cmd.Flags().String("scope", "", "Scope: single_repo, cross_repo, no_repo")
-		cmd.Flags().String("execution-mode", "", "Execution mode: manual, agent, both")
-		cmd.Flags().String("preconditions", "", "Preconditions (decodes \\n, \\r, \\t, \\\\; pipe via --preconditions-stdin to preserve literal backslashes)")
-		cmd.Flags().String("expected", "", "Overall expected result (decodes \\n, \\r, \\t, \\\\; pipe via --expected-stdin to preserve literal backslashes)")
-		cmd.Flags().String("steps", "", `Steps as a JSON array: [{"index":1,"action":"…","expected":"…"}]`)
-		cmd.Flags().String("output", "json", "Output format: table or json")
+		registerTestcaseWriteFlags(cmd)
 	}
 	testcaseCreateCmd.Flags().String("project", "", "Project id (required)")
 	testcaseUpdateCmd.Flags().String("status", "", "Status: draft, active, deprecated")
@@ -371,11 +362,62 @@ func testcasePath(client *cli.APIClient, ref, action string) string {
 	return path
 }
 
+// registerTestcaseWriteFlags is the flag surface create and update share. The
+// -stdin / -file variants are the ones resolveTextFlag reads; a long procedure
+// or a backslash-heavy precondition goes through them rather than through
+// shell quoting.
+func registerTestcaseWriteFlags(cmd *cobra.Command) {
+	cmd.Flags().String("title", "", "Test case title")
+	cmd.Flags().String("module", "", "Module used for grouping")
+	cmd.Flags().String("priority", "", "Priority: p0, p1, p2, p3")
+	cmd.Flags().String("case-type", "", "Case type, e.g. functional, business_flow, boundary")
+	cmd.Flags().String("scope", "", "Scope: single_repo, cross_repo, no_repo")
+	cmd.Flags().String("execution-mode", "", "Execution mode: manual, agent, both")
+	cmd.Flags().String("preconditions", "", "Preconditions (decodes \\n, \\r, \\t, \\\\; pipe via --preconditions-stdin to preserve literal backslashes)")
+	cmd.Flags().Bool("preconditions-stdin", false, "Read the preconditions from stdin")
+	cmd.Flags().String("preconditions-file", "", "Read the preconditions from a file in the working directory")
+	cmd.Flags().String("expected", "", "Overall expected result (decodes \\n, \\r, \\t, \\\\; pipe via --expected-stdin to preserve literal backslashes)")
+	cmd.Flags().Bool("expected-stdin", false, "Read the overall expected result from stdin")
+	cmd.Flags().String("expected-file", "", "Read the overall expected result from a file in the working directory")
+	cmd.Flags().String("steps", "", `Steps as a JSON array: [{"index":1,"action":"…","expected":"…"}]`)
+	cmd.Flags().Bool("steps-stdin", false, "Read the steps JSON array from stdin")
+	cmd.Flags().String("steps-file", "", "Read the steps JSON array from a file in the working directory")
+	cmd.Flags().Bool("allow-external-file", false, "Allow a --*-file path outside the current working directory")
+	cmd.Flags().String("repos", "", `Repository bindings as a JSON array, replacing the case's: [{"project_resource_id":"…","alias":"web","role":"under_test","path_globs":["src/**"]}]`)
+	cmd.Flags().String("output", "json", "Output format: table or json")
+}
+
+// testcaseJSONFlag reads a JSON-valued flag from its inline, -stdin or -file
+// form. Inline JSON is taken verbatim: the backslash decoding text flags get
+// would turn a JSON "\n" escape into a raw newline and break the document.
+func testcaseJSONFlag(cmd *cobra.Command, name string) (string, bool, error) {
+	if cmd.Flags().Changed(name) {
+		useStdin, _ := cmd.Flags().GetBool(name + "-stdin")
+		filePath, _ := cmd.Flags().GetString(name + "-file")
+		if useStdin || filePath != "" {
+			return "", false, fmt.Errorf("--%s, --%s-stdin, and --%s-file are mutually exclusive", name, name, name)
+		}
+		raw, _ := cmd.Flags().GetString(name)
+		return raw, true, nil
+	}
+	return resolveTextFlag(cmd, name)
+}
+
 // testcaseBodyFromFlags collects the flags the caller actually set. Every field
 // is gated on Changed() so `--module ""` reaches the server as a clear rather
 // than being indistinguishable from an omitted flag.
 func testcaseBodyFromFlags(cmd *cobra.Command) (map[string]any, error) {
 	body := map[string]any{}
+	// stdin can be read once.
+	stdinFlags := 0
+	for _, flag := range []string{"preconditions-stdin", "expected-stdin", "steps-stdin"} {
+		if on, _ := cmd.Flags().GetBool(flag); on {
+			stdinFlags++
+		}
+	}
+	if stdinFlags > 1 {
+		return nil, fmt.Errorf("only one of --preconditions-stdin, --expected-stdin and --steps-stdin can read stdin")
+	}
 	for flag, field := range map[string]string{
 		"title":          "title",
 		"module":         "module",
@@ -399,17 +441,30 @@ func testcaseBodyFromFlags(cmd *cobra.Command) (map[string]any, error) {
 		if err != nil {
 			return nil, err
 		}
-		if provided {
+		switch {
+		case provided:
 			body[field] = value
+		case cmd.Flags().Changed(flag):
+			// An explicitly empty value is a clear, like `--module ""`.
+			body[field] = ""
 		}
 	}
-	if cmd.Flags().Changed("steps") {
-		raw, _ := cmd.Flags().GetString("steps")
+	if raw, provided, err := testcaseJSONFlag(cmd, "steps"); err != nil {
+		return nil, err
+	} else if provided {
 		var steps []map[string]any
 		if err := json.Unmarshal([]byte(raw), &steps); err != nil {
 			return nil, fmt.Errorf("--steps must be valid JSON: %w", err)
 		}
 		body["steps"] = steps
+	}
+	if cmd.Flags().Changed("repos") {
+		raw, _ := cmd.Flags().GetString("repos")
+		var repos []map[string]any
+		if err := json.Unmarshal([]byte(raw), &repos); err != nil {
+			return nil, fmt.Errorf("--repos must be a JSON array: %w", err)
+		}
+		body["repos"] = repos
 	}
 	return body, nil
 }

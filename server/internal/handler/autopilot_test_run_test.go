@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/multica-ai/multica/server/internal/testutil"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -151,7 +153,7 @@ func TestAutopilotTestRunModeLaunchesARoundAndSettlesIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := testHandler.convergeTestRun(ctx, testHandler.Queries, run); err != nil {
+	if _, err := testHandler.convergeTestRun(ctx, testHandler.Queries, run); err != nil {
 		t.Fatal(err)
 	}
 	var settled string
@@ -196,4 +198,114 @@ func TestAbortingAnAutopilotRoundFailsItsRun(t *testing.T) {
 	if status != "failed" || !strings.Contains(reason, "phone lab closed") {
 		t.Errorf("autopilot run after abort = %s %q, want failed with the abort reason", status, reason)
 	}
+}
+
+// The CLI write is the normal last write of a round. Completing the round
+// there used to skip settling the autopilot run, and the case task's hook that
+// followed found the round already completed and stopped: the nightly run
+// stayed "running" for good.
+func TestRecordingTheLastResultSettlesTheAutopilotRun(t *testing.T) {
+	ctx := context.Background()
+	_, planID, _ := createAutopilotTestPlan(t)
+	runtimeID := dbfx.Runtime(t, "autopilot-http-settle-runtime")
+	agentID := dbfx.Agent(t, "autopilot-http-settle-agent", runtimeID)
+	testPool.Exec(ctx, "UPDATE agent_runtime SET status = 'online' WHERE id = $1", runtimeID)
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), "DELETE FROM agent_task_queue WHERE agent_id = $1", agentID)
+	})
+	ap := createTestRunAutopilot(t, map[string]any{
+		"title": "Nightly regression over HTTP", "assignee_id": agentID, "execution_mode": "test_run", "test_plan_id": planID,
+	})
+	w := httptest.NewRecorder()
+	testHandler.TriggerAutopilot(w, withURLParam(newRequest("POST", "/api/autopilots/"+ap.ID+"/trigger?workspace_id="+testWorkspaceID, map[string]any{}), "id", ap.ID))
+	if w.Code >= 300 {
+		t.Fatalf("trigger: got %d: %s", w.Code, w.Body.String())
+	}
+	var apRunID string
+	var testRunID *string
+	if err := testPool.QueryRow(ctx, "SELECT id, test_run_id FROM autopilot_run WHERE autopilot_id = $1 ORDER BY created_at DESC LIMIT 1", ap.ID).Scan(&apRunID, &testRunID); err != nil || testRunID == nil {
+		t.Fatalf("read autopilot run: %v (test run %v)", err, testRunID)
+	}
+
+	for _, rc := range listRunCases(t, *testRunID) {
+		setRunCaseResult(t, rc.ID, "failed")
+	}
+
+	var settled, result string
+	if err := testPool.QueryRow(ctx, "SELECT status, coalesce(result::text, '') FROM autopilot_run WHERE id = $1", apRunID).Scan(&settled, &result); err != nil {
+		t.Fatal(err)
+	}
+	if settled != "completed" || !strings.Contains(result, "failed") {
+		t.Errorf("autopilot run after the last recorded result = %s %s, want completed with the result counts", settled, result)
+	}
+}
+
+// A nightly regression over a rule-only plan runs whatever the rule matches
+// that night, including cases written after the plan was built.
+func TestAutopilotRoundFollowsThePlansRule(t *testing.T) {
+	ctx := context.Background()
+	projectID := newTestRunProject(t)
+	plan := createTestPlanForRun(t, projectID)
+	updatePlanSelector(t, plan.ID, map[string]any{"all_active": true}).Want(http.StatusOK)
+	first := createTestCaseForRun(t, projectID)
+	second := createTestCaseForRun(t, projectID)
+	retired := createTestCaseForRun(t, projectID)
+	dbfx.Exec(t, `UPDATE test_case SET status = 'deprecated' WHERE id = $1`, retired.ID)
+
+	runtimeID := dbfx.Runtime(t, "autopilot-rule-runtime")
+	agentID := dbfx.Agent(t, "autopilot-rule-agent", runtimeID)
+	testPool.Exec(ctx, "UPDATE agent_runtime SET status = 'online' WHERE id = $1", runtimeID)
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), "DELETE FROM agent_task_queue WHERE agent_id = $1", agentID)
+	})
+	ap := createTestRunAutopilot(t, map[string]any{
+		"title": "Nightly by rule", "assignee_id": agentID, "execution_mode": "test_run", "test_plan_id": plan.ID,
+	})
+	w := httptest.NewRecorder()
+	testHandler.TriggerAutopilot(w, withURLParam(newRequest("POST", "/api/autopilots/"+ap.ID+"/trigger?workspace_id="+testWorkspaceID, map[string]any{}), "id", ap.ID))
+	if w.Code >= 300 {
+		t.Fatalf("trigger: got %d: %s", w.Code, w.Body.String())
+	}
+	var testRunID *string
+	if err := testPool.QueryRow(ctx, "SELECT test_run_id FROM autopilot_run WHERE autopilot_id = $1 ORDER BY created_at DESC LIMIT 1", ap.ID).Scan(&testRunID); err != nil || testRunID == nil {
+		t.Fatalf("autopilot run has no round: %v", err)
+	}
+	if got := roundCaseIDs(t, *testRunID); !slices.Equal(got, []string{first.ID, second.ID}) {
+		t.Fatalf("nightly round cases = %v, want the two active cases and not the deprecated one", got)
+	}
+}
+
+// Pausing the nightly regression or pointing it at a narrower plan takes
+// failing cases out of regression as surely as removing them from the plan.
+func TestAgentCannotRetargetOrPauseARegressionAutopilot(t *testing.T) {
+	projectID := newTestRunProject(t)
+	plan := createTestPlanForRun(t, projectID)
+	narrower := createTestPlanForRun(t, projectID)
+	addCaseToPlan(t, plan.ID, createTestCaseForRun(t, projectID).ID, 1)
+	runtimeID := dbfx.Runtime(t, "autopilot-gate-runtime")
+	agentID := dbfx.Agent(t, "autopilot-gate-agent", runtimeID)
+	ap := createTestRunAutopilot(t, map[string]any{
+		"title": "Nightly regression", "assignee_id": agentID, "execution_mode": "test_run", "test_plan_id": plan.ID,
+	})
+	// The agent acts for the member who created the autopilot, so the write
+	// gate admits it; what it may change is the question.
+	asAgent := actingCaller{authUserID: testUserID, agentID: agentID, taskID: callerTask(t, agentID, testUserID)}
+	update := func(body map[string]any, agent bool) *testutil.Response {
+		req := withURLParam(newRequest("PATCH", "/api/autopilots/"+ap.ID+"?workspace_id="+testWorkspaceID, body), "id", ap.ID)
+		if agent {
+			req = withURLParam(asAgent.request("PATCH", "/api/autopilots/"+ap.ID+"?workspace_id="+testWorkspaceID, body), "id", ap.ID)
+		}
+		return testutil.Call(t, testHandler.UpdateAutopilot, req)
+	}
+	if resp := update(map[string]any{"test_plan_id": narrower.ID}, true).Want(http.StatusForbidden); !strings.Contains(resp.Text(), "regression autopilot") {
+		t.Fatalf("retarget refused with %q, want the regression-autopilot refusal", resp.Text())
+	}
+	update(map[string]any{"status": "paused"}, true).Want(http.StatusForbidden)
+	update(map[string]any{"execution_mode": "run_only"}, true).Want(http.StatusForbidden)
+	// encoding/json matches keys case-insensitively; the gate must too.
+	update(map[string]any{"Status": "paused"}, true).Want(http.StatusForbidden)
+	// Handing the regression to another executor stops its rounds as well.
+	update(map[string]any{"assignee_id": agentID}, true).Want(http.StatusForbidden)
+	update(map[string]any{"title": "Nightly regression (web)"}, true).Want(http.StatusOK)
+	update(map[string]any{"status": "paused"}, false).Want(http.StatusOK)
 }

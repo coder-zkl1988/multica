@@ -15,6 +15,10 @@ const mocks = vi.hoisted(() => ({
   dispatchRun: vi.fn(),
   updateCaseResult: vi.fn(),
   openDefect: vi.fn(),
+  evidence: [] as unknown[],
+  tryOpenPreview: vi.fn(),
+  downloadAttachment: vi.fn(),
+  uploadEvidence: vi.fn(),
 }));
 
 vi.mock("@tanstack/react-query", () => ({
@@ -23,6 +27,7 @@ vi.mock("@tanstack/react-query", () => ({
     const kind = options.queryKey?.[2];
     if (key === "test-runs" && kind === "detail") return { data: mocks.run, isLoading: false };
     if (key === "test-runs" && kind === "cases") return { data: mocks.cases, isLoading: false };
+    if (key === "test-runs" && kind === "evidence") return { data: mocks.evidence, isLoading: false };
     if (key === "agents") return { data: mocks.agents, isLoading: false };
     return { data: [], isLoading: false };
   },
@@ -46,12 +51,14 @@ vi.mock("@multica/core/paths", () => ({
 vi.mock("@multica/core/testing", () => ({
   testRunDetailOptions: () => ({ queryKey: ["test-runs", "ws-1", "detail"] }),
   testRunCasesOptions: () => ({ queryKey: ["test-runs", "ws-1", "cases"] }),
+  testRunCaseEvidenceOptions: () => ({ queryKey: ["test-runs", "ws-1", "evidence"] }),
   useStartTestRun: () => ({ mutateAsync: mocks.startRun, isPending: false }),
   useAbortTestRun: () => ({ mutateAsync: mocks.abortRun, isPending: false }),
   useRetryTestRun: () => ({ mutateAsync: mocks.retryRun, isPending: false }),
   useDispatchTestRun: () => ({ mutateAsync: mocks.dispatchRun, isPending: false }),
-  useUpdateTestRunCaseResult: () => ({ mutate: mocks.updateCaseResult, isPending: false }),
+  useUpdateTestRunCaseResult: () => ({ mutateAsync: mocks.updateCaseResult, isPending: false }),
   useOpenTestRunCaseDefect: () => ({ mutateAsync: mocks.openDefect, isPending: false }),
+  useUploadTestRunCaseEvidence: () => ({ mutateAsync: mocks.uploadEvidence, isPending: false }),
 }));
 
 vi.mock("@multica/core/workspace/queries", () => ({
@@ -59,6 +66,12 @@ vi.mock("@multica/core/workspace/queries", () => ({
 }));
 
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+
+// The preview modal is the editor's; this page only decides what to open.
+vi.mock("../editor", () => ({
+  useAttachmentPreview: () => ({ tryOpen: mocks.tryOpenPreview, open: vi.fn(), modal: null }),
+  useDownloadAttachment: () => mocks.downloadAttachment,
+}));
 
 function makeRun(overrides = {}) {
   return {
@@ -115,9 +128,12 @@ function renderPage(adapter = makeAdapter()) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // The page awaits result writes (mutateAsync).
+  mocks.updateCaseResult.mockImplementation(() => Promise.resolve());
   mocks.run = makeRun();
   mocks.cases = [];
   mocks.agents = [];
+  mocks.evidence = [];
 });
 
 describe("TestRunDetail entry points", () => {
@@ -245,7 +261,6 @@ describe("TestRunDetail case result", () => {
     await userEvent.click(passedBtns[0]!);
     expect(mocks.updateCaseResult).toHaveBeenCalledWith(
       expect.objectContaining({ id: "rc-1", data: expect.objectContaining({ result: "passed" }) }),
-      expect.anything(),
     );
   });
 
@@ -266,7 +281,6 @@ describe("TestRunDetail case result", () => {
         id: "rc-1",
         data: expect.objectContaining({ result: "passed", notes: "flaky on retry" }),
       }),
-      expect.anything(),
     );
   });
 
@@ -285,5 +299,219 @@ describe("TestRunDetail case result", () => {
     page.rerenderPage();
 
     expect(await screen.findByRole("textbox")).toHaveValue("my draft");
+  });
+});
+
+describe("TestRunDetail case procedure", () => {
+  beforeEach(() => {
+    mocks.run = makeRun({ status: "completed" });
+    mocks.cases = [
+      {
+        id: "rc-1",
+        run_id: "run-1",
+        test_case_id: "tc-1",
+        case_snapshot: {
+          title: "Coupon checkout",
+          key: "TC-9",
+          preconditions: "One item in the cart",
+          steps: [
+            { index: 1, action: "Apply coupon SAVE10", expected: "The total drops by 10%" },
+            { index: 2, action: "Pay", expected: "The confirmation shows 90.00" },
+          ],
+        },
+        position: 0,
+        result: "failed",
+        notes: "",
+        evidence: [],
+        step_results: [
+          { index: 1, result: "passed", actual: "", note: "" },
+          { index: 2, result: "failed", actual: "The confirmation shows 100.00", note: "" },
+        ],
+        duration_ms: null,
+        executed_by_type: "agent",
+        executed_by_id: "agent-1",
+        executed_at: "2024-01-01T00:00:00Z",
+        defect_issue_id: null,
+        created_at: "2024-01-01T00:00:00Z",
+        updated_at: "2024-01-01T00:00:00Z",
+      },
+    ];
+    mocks.evidence = [
+      { id: "att-1", filename: "confirmation.png", content_type: "image/png", download_url: "/api/attachments/att-1/download" },
+    ];
+  });
+
+  // A manual tester executes from this page; it used to show only the title,
+  // and an agent's per-step verdicts and screenshots were stored but invisible.
+  it("lists the frozen steps beside what was recorded for each", async () => {
+    renderPage();
+    await userEvent.click(await screen.findByText("Coupon checkout"));
+
+    expect(screen.getByText("One item in the cart")).toBeInTheDocument();
+    expect(screen.getByText("Apply coupon SAVE10")).toBeInTheDocument();
+    expect(screen.getByText(/The confirmation shows 90\.00/)).toBeInTheDocument();
+    // An open round lets a person correct what was recorded.
+    expect(screen.getByRole("combobox", { name: /Result of step 2|第 2 步的结果/ })).toHaveValue("failed");
+    expect(screen.getByDisplayValue("The confirmation shows 100.00")).toBeInTheDocument();
+  });
+
+  it("shows the recorded verdicts read-only once the round is aborted", async () => {
+    mocks.run = makeRun({ status: "aborted" });
+    renderPage();
+    await userEvent.click(await screen.findByText("Coupon checkout"));
+    expect(screen.queryByRole("combobox", { name: /Result of step 2|第 2 步的结果/ })).toBeNull();
+    expect(screen.getByText("The confirmation shows 100.00")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Add evidence|添加证据/ })).toBeNull();
+  });
+
+  // A person executing by hand records each step; the verdicts ride along
+  // with the case result, as the notes do.
+  it("sends the step verdicts a person recorded with the case result", async () => {
+    mocks.run = makeRun({ status: "running" });
+    mocks.cases = [{ ...(mocks.cases[0] as object), result: "pending", step_results: [] }];
+    renderPage();
+    await userEvent.click(await screen.findByText("Coupon checkout"));
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: /Result of step 1|第 1 步的结果/ }), "passed");
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: /Result of step 2|第 2 步的结果/ }), "failed");
+    await userEvent.type(screen.getByRole("textbox", { name: /What you observed at step 2|第 2 步的实际情况/ }), "Total stayed 100.00");
+
+    const failedButtons = await screen.findAllByRole("button", { name: /^(Failed|失败|실패)$/ });
+    await userEvent.click(failedButtons[0]!);
+    expect(mocks.updateCaseResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "rc-1",
+        data: expect.objectContaining({
+          result: "failed",
+          step_results: [
+            { index: 1, result: "passed" },
+            { index: 2, result: "failed", actual: "Total stayed 100.00" },
+          ],
+        }),
+      }),
+    );
+  });
+
+  it("uploads evidence a person picked for the case", async () => {
+    mocks.uploadEvidence.mockResolvedValue({});
+    renderPage();
+    await userEvent.click(await screen.findByText("Coupon checkout"));
+    const file = new File(["png"], "seen.png", { type: "image/png" });
+    await userEvent.upload(screen.getByLabelText(/Add evidence|添加证据/, { selector: "input" }), file);
+    expect(mocks.uploadEvidence).toHaveBeenCalledWith({ runCaseId: "rc-1", file });
+  });
+
+  it("opens an evidence file in the preview", async () => {
+    mocks.tryOpenPreview.mockReturnValue(true);
+    renderPage();
+    await userEvent.click(await screen.findByText("Coupon checkout"));
+    await userEvent.click(screen.getByRole("button", { name: "confirmation.png" }));
+    expect(mocks.tryOpenPreview).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "full", attachment: expect.objectContaining({ id: "att-1" }) }),
+    );
+    expect(mocks.downloadAttachment).not.toHaveBeenCalled();
+  });
+});
+
+describe("TestRunDetail step drafts", () => {
+  beforeEach(() => {
+    mocks.run = makeRun({ status: "running" });
+    mocks.cases = [
+      {
+        id: "rc-1",
+        run_id: "run-1",
+        test_case_id: "tc-1",
+        case_snapshot: {
+          title: "Coupon checkout",
+          key: "TC-9",
+          steps: [
+            { index: 1, action: "Apply coupon SAVE10", expected: "The total drops by 10%" },
+            { index: 2, action: "Pay", expected: "The confirmation shows 90.00" },
+          ],
+        },
+        position: 0,
+        result: "failed",
+        notes: "",
+        evidence: [],
+        step_results: [
+          { index: 1, result: "passed", actual: "", note: "coupon field was slow" },
+          { index: 2, result: "failed", actual: "The confirmation shows 100.00", note: "" },
+        ],
+        duration_ms: null,
+        executed_by_type: "agent",
+        executed_by_id: "agent-1",
+        executed_at: "2024-01-01T00:00:00Z",
+        defect_issue_id: null,
+        created_at: "2024-01-01T00:00:00Z",
+        updated_at: "2024-01-01T00:00:00Z",
+      },
+    ];
+  });
+
+  // Re-sending what is stored would rewrite an agent's record on every note
+  // save; untouched step results stay out of the write.
+  it("leaves the agent's step results alone when only the notes change", async () => {
+    renderPage();
+    await userEvent.click(await screen.findByText("Coupon checkout"));
+    await userEvent.type(screen.getByRole("textbox", { name: "" }), "checked again");
+    await userEvent.click(screen.getByRole("button", { name: /^(Save notes|保存备注)$/ }));
+    const [call] = mocks.updateCaseResult.mock.calls;
+    expect(call?.[0].data).not.toHaveProperty("step_results");
+  });
+
+  it("keeps each step's note when a person corrects a step", async () => {
+    renderPage();
+    await userEvent.click(await screen.findByText("Coupon checkout"));
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: /Result of step 2|第 2 步的结果/ }), "blocked");
+    const failedButtons = screen.getAllByRole("button", { name: /^(Failed|失败|실패)$/ });
+    await userEvent.click(failedButtons[0]!);
+    expect(mocks.updateCaseResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          step_results: [
+            { index: 1, result: "passed", note: "coupon field was slow" },
+            { index: 2, result: "blocked", actual: "The confirmation shows 100.00" },
+          ],
+        }),
+      }),
+    );
+  });
+
+  // An old agent recorded 0-based indexes; the server refuses them and the
+  // page cannot show them, so they are left out of a person's write.
+  it("leaves out stored entries at indexes the snapshot does not have", async () => {
+    const [row] = mocks.cases as Array<Record<string, unknown>>;
+    mocks.cases = [{ ...row, step_results: [...(row!.step_results as object[]), { index: 0, result: "passed", actual: "", note: "" }] }];
+    renderPage();
+    await userEvent.click(await screen.findByText("Coupon checkout"));
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: /Result of step 2|第 2 步的结果/ }), "blocked");
+    await userEvent.click(screen.getAllByRole("button", { name: /^(Failed|失败|실패)$/ })[0]!);
+    const [call] = mocks.updateCaseResult.mock.calls;
+    expect((call?.[0].data.step_results as Array<{ index: number }>).map((step) => step.index)).toEqual([1, 2]);
+  });
+
+  // A refused write leaves the person's draft; a co-tester's later save must
+  // not replace it with the stored verdicts.
+  it("keeps the step draft after a refused write when the row changes again", async () => {
+    mocks.updateCaseResult.mockImplementationOnce(() => Promise.reject(new Error("the case cannot pass while step 2 is blocked")));
+    const page = renderPage();
+    await userEvent.click(await screen.findByText("Coupon checkout"));
+    const step2 = screen.getByRole("combobox", { name: /Result of step 2|第 2 步的结果/ });
+    await userEvent.selectOptions(step2, "blocked");
+    await userEvent.click(screen.getAllByRole("button", { name: /^(Passed|通过|통과)$/ })[0]!);
+
+    mocks.cases = [{ ...(mocks.cases[0] as object), notes: "their note", updated_at: "2024-01-02T00:00:00Z" }];
+    page.rerenderPage();
+    expect(await screen.findByRole("combobox", { name: /Result of step 2|第 2 步的结果/ })).toHaveValue("blocked");
+  });
+
+  // Clearing every verdict is a decision too, and is sent as such.
+  it("sends an empty list when a person clears every step verdict", async () => {
+    renderPage();
+    await userEvent.click(await screen.findByText("Coupon checkout"));
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: /Result of step 1|第 1 步的结果/ }), "");
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: /Result of step 2|第 2 步的结果/ }), "");
+    await userEvent.click(screen.getAllByRole("button", { name: /^(Blocked|阻塞|차단)$/ })[0]!);
+    const [call] = mocks.updateCaseResult.mock.calls;
+    expect(call?.[0].data.step_results).toEqual([]);
   });
 });

@@ -304,6 +304,7 @@ func TestApproveTestCaseOnlyFromDraft(t *testing.T) {
 		"project_id": projectID,
 		"title":      "待审用例",
 		"status":     "draft",
+		"steps":      executableSteps,
 	})
 
 	w := httptest.NewRecorder()

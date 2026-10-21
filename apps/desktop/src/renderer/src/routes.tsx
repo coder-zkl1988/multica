@@ -36,6 +36,7 @@ import {
   TestPlanDetail,
   TestRunsPage,
   TestRunDetail,
+  TestCoveragePage,
 } from "@multica/views/testing";
 import { DesktopRuntimesPage } from "./components/desktop-runtimes-page";
 import { DesktopAgentsPage } from "./components/desktop-agents-page";
@@ -240,6 +241,11 @@ export const appRoutes: RouteObject[] = [
             path: "tests/:id",
             element: <DesktopTestCaseDetailRoute />,
             handle: { title: "Test Case" },
+          },
+          {
+            path: "tests/coverage",
+            element: <TestCoveragePage />,
+            handle: { title: "Test Coverage" },
           },
           {
             path: "tests/jobs",

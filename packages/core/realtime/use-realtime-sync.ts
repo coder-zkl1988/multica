@@ -12,7 +12,7 @@ import { defaultStorage } from "../platform/storage";
 import { getCurrentWsId, getCurrentSlug } from "../platform/workspace-storage";
 import { issueKeys } from "../issues/queries";
 import { projectKeys } from "../projects/queries";
-import { testCaseKeys, testGenerationJobKeys, testPlanKeys, testRunKeys, testCapabilityKeys } from "../testing/keys";
+import { issueTestCaseKeys, testCaseKeys, testGenerationJobKeys, testPlanKeys, testRunKeys, testCapabilityKeys } from "../testing/keys";
 import { designKeys } from "../designs/keys";
 import { pinKeys } from "../pins/queries";
 import { autopilotKeys } from "../autopilots/queries";
@@ -671,6 +671,14 @@ function invalidateWorkspaceScopedQueries(qc: QueryClient): void {
     qc.invalidateQueries({ queryKey: chatKeys.all(wsId) });
     qc.invalidateQueries({ queryKey: labelKeys.all(wsId) });
     qc.invalidateQueries({ queryKey: propertyKeys.all(wsId) });
+    // Testing views run on staleTime: Infinity; a case, round or coverage
+    // event missed while disconnected would otherwise never show.
+    qc.invalidateQueries({ queryKey: testCaseKeys.all(wsId) });
+    qc.invalidateQueries({ queryKey: testPlanKeys.all(wsId) });
+    qc.invalidateQueries({ queryKey: testRunKeys.all(wsId) });
+    qc.invalidateQueries({ queryKey: issueTestCaseKeys.all(wsId) });
+    qc.invalidateQueries({ queryKey: testGenerationJobKeys.all(wsId) });
+    qc.invalidateQueries({ queryKey: testCapabilityKeys.all(wsId) });
     // A catalog edit missed while disconnected would otherwise sit behind the
     // 5-minute staleTime — long enough to offer a status the server already
     // archived, or to keep painting its old name.
@@ -854,8 +862,16 @@ export function useRealtimeSync(
         if (wsId) qc.invalidateQueries({ queryKey: projectKeys.all(wsId) });
       },
       test_case: () => {
+        // Coverage links and test points change what an issue's test block
+        // shows, and that block is keyed under the issue, not the case tree.
+        // A case written, approved or retired also changes what a plan's rule
+        // selects, so the next-round preview under the plan tree refreshes too.
         const wsId = getCurrentWsId();
-        if (wsId) qc.invalidateQueries({ queryKey: testCaseKeys.all(wsId) });
+        if (wsId) {
+          qc.invalidateQueries({ queryKey: testCaseKeys.all(wsId) });
+          qc.invalidateQueries({ queryKey: issueTestCaseKeys.all(wsId) });
+          qc.invalidateQueries({ queryKey: testPlanKeys.all(wsId) });
+        }
       },
       test_generation_job: () => {
         const wsId = getCurrentWsId();
@@ -885,6 +901,8 @@ export function useRealtimeSync(
         if (wsId) {
           qc.invalidateQueries({ queryKey: testRunKeys.all(wsId) });
           qc.invalidateQueries({ queryKey: testCaseKeys.all(wsId) });
+          // A recorded result moves an issue's points between passed and failing.
+          qc.invalidateQueries({ queryKey: issueTestCaseKeys.all(wsId) });
         }
       },
       test_capability: () => {
@@ -1160,6 +1178,11 @@ export function useRealtimeSync(
         if (issue.status) {
           onInboxIssueStatusChanged(qc, wsId, issue.id, issue.status);
         }
+        // Cancelling or moving an issue changes which issues a project's
+        // test coverage lists.
+        if (payload.status_changed || payload.project_changed) {
+          qc.invalidateQueries({ queryKey: issueTestCaseKeys.projectCoverageAll(wsId) });
+        }
       }
     });
 
@@ -1167,7 +1190,10 @@ export function useRealtimeSync(
       const { issue } = p as IssueCreatedPayload;
       if (!issue) return;
       const wsId = getCurrentWsId();
-      if (wsId) onIssueCreated(qc, wsId, issue);
+      if (wsId) {
+        onIssueCreated(qc, wsId, issue);
+        qc.invalidateQueries({ queryKey: issueTestCaseKeys.projectCoverageAll(wsId) });
+      }
     });
 
     const unsubIssueDeleted = ws.on("issue:deleted", (p) => {
@@ -1177,6 +1203,7 @@ export function useRealtimeSync(
       if (wsId) {
         onIssueDeleted(qc, wsId, issue_id);
         void onInboxIssueDeleted(qc, wsId, issue_id);
+        qc.invalidateQueries({ queryKey: issueTestCaseKeys.projectCoverageAll(wsId) });
       }
     });
 

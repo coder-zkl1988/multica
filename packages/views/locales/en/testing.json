@@ -3,7 +3,8 @@
     "cases": "Cases",
     "plans": "Plans",
     "runs": "Runs",
-    "jobs": "Generation"
+    "jobs": "Generation",
+    "coverage": "Coverage"
   },
   "page": {
     "title": "Test Cases",
@@ -146,6 +147,7 @@
     "version": "Version {{version}}",
     "separator": " · ",
     "human_edit": "Manual edit",
+    "agent_edit": "Agent edit",
     "proposal_accepted": "AI suggestion accepted",
     "status_change": "Status change",
     "restore": "Restore"
@@ -289,7 +291,12 @@
     "result": {
       "title": "Results",
       "proposals": "AI proposals",
-      "noProposals": "No proposals yet"
+      "noProposals": "No proposals yet",
+      "coverage": "Test point coverage",
+      "coverageLine": "{{covered}}/{{active}} covered",
+      "noPoints": "Not split into test points",
+      "uncovered": "Uncovered",
+      "inReview": "Awaiting review"
     }
   },
   "proposals": {
@@ -355,7 +362,25 @@
       "passRate": "Pass rate",
       "matrixTitle": "Modules in the latest round",
       "moduleColumn": "Module",
-      "moduleUnnamed": "(no module)"
+      "moduleUnnamed": "(no module)",
+      "rule": {
+        "title": "Selection rule",
+        "hint": "Active cases that match join every round automatically — including cases written after the plan.",
+        "none": "No rule: rounds run only the cases listed here.",
+        "allActive": "Every active case in the project",
+        "modules": "Modules",
+        "noModules": "No modules yet",
+        "priorities": "Priorities",
+        "caseTypes": "Case types",
+        "issues": "Cases covering issues",
+        "addIssue": "Follow issue",
+        "removeIssue": "Stop following {{issue}}",
+        "pickerTitle": "Follow an issue",
+        "pickerDescription": "Rounds of this plan will run every active case linked to it.",
+        "save": "Save rule",
+        "reset": "Reset",
+        "preview": "Next round runs {{total}} cases · {{rule}} from the rule"
+      }
     }
   },
   "run": {
@@ -433,7 +458,26 @@
     "notesNeedResult": "Notes are saved with a result — pick one first.",
     "task": "task {{id}}",
     "liveFrame": "Live screen",
-    "liveFrameWaiting": "Waiting for the first frame from the device hub…"
+    "liveFrameWaiting": "Waiting for the first frame from the device hub…",
+    "observed": "Observed",
+    "noSteps": "This case was frozen without steps.",
+    "evidenceEmpty": "No evidence uploaded.",
+    "stepResult": {
+      "passed": "Passed",
+      "failed": "Failed",
+      "blocked": "Blocked",
+      "skipped": "Skipped",
+      "not_run": "Not reached"
+    },
+    "save": "Save",
+    "draftNeedsResult": "Notes and step results are saved with a result — pick one first.",
+    "observedPlaceholder": "What you observed",
+    "observedLabel": "What you observed at step {{index}}",
+    "stepResultLabel": "Result of step {{index}}",
+    "stepUnset": "Not recorded",
+    "addEvidence": "Add evidence",
+    "evidenceTooLarge": "{{name}} is too large to upload",
+    "evidenceFailed": "Could not upload the evidence"
   },
   "timeline": {
     "title": "Run History",
@@ -514,7 +558,7 @@
     "failingCount": "{{count}} failing",
     "untestedCount": "{{count}} not run",
     "verified": "Verified",
-    "verifiedHint": "Every covering case passed in its latest run",
+    "verifiedHint": "Every test point is covered by a case that passed in its latest run",
     "latestRun": "Latest round",
     "defectsSection": "Defects found by tests",
     "foundBySection": "Found by test run",
@@ -523,6 +567,78 @@
     "newCaseTitle": "Verify: {{title}}",
     "noCoverage": "No test coverage yet",
     "generateFailed": "Could not start case generation",
-    "newCaseFailed": "Could not create the case"
+    "newCaseFailed": "Could not create the case",
+    "points": {
+      "section": "Test points",
+      "summary": "{{covered}}/{{active}} covered · {{passed}} passed",
+      "hint": "The conditions this issue is accepted on. Coverage and verification are counted against them.",
+      "add": "Add point",
+      "addPlaceholder": "One condition that can be judged right or wrong, e.g. an order over the balance is refused",
+      "addFailed": "Could not add the test point",
+      "empty": "No test points yet. Split the issue into the conditions it is accepted on — otherwise one passing happy-path case is enough to look verified.",
+      "drop": "Drop",
+      "restore": "Restore",
+      "updateFailed": "Could not update the test point",
+      "cover": "Cover with…",
+      "coverFailed": "Could not link the case to the test point",
+      "droppedCount": "{{count}} dropped",
+      "category": {
+        "positive": "Positive",
+        "negative": "Negative",
+        "boundary": "Boundary",
+        "permission": "Permission",
+        "state": "State",
+        "data": "Data",
+        "non_functional": "Non-functional"
+      },
+      "state": {
+        "uncovered": "Uncovered",
+        "in_review": "Drafts only",
+        "not_run": "Not run",
+        "failing": "Failing",
+        "passed": "Passed",
+        "dropped": "Dropped"
+      },
+      "caseSection": "Verifies",
+      "caseEmpty": "Not declared against any test point yet",
+      "categoryLabel": "Category"
+    },
+    "casesPass": "Cases pass",
+    "casesPassHint": "Every linked case passed, but this issue has no test points, so nobody listed what must be checked"
+  },
+  "coveragePage": {
+    "title": "Test coverage",
+    "hint": "Every live issue of the project with what covers it, worst first. Cancelled issues are left out.",
+    "empty": "No issues in this project",
+    "all": "All",
+    "truncated": "Showing the {{count}} most recent issues; older ones are not listed.",
+    "columns": {
+      "issue": "Issue",
+      "points": "Test points",
+      "cases": "Cases",
+      "state": "State"
+    },
+    "pointsLine": "{{covered}}/{{active}} covered · {{passed}} passed",
+    "noPoints": "—",
+    "casesLine": "{{count}} active",
+    "failingCases": "{{count}} failing",
+    "state": {
+      "failing": "Failing",
+      "no_tests": "No tests",
+      "gaps": "Uncovered points",
+      "in_review": "Awaiting review",
+      "no_points": "No test points",
+      "not_run": "Not all passed",
+      "verified": "Verified"
+    },
+    "stateHint": {
+      "failing": "A covering case's latest result is failed",
+      "no_tests": "No active case and no test point — nothing would catch a bug here",
+      "gaps": "Some test points have no active case",
+      "in_review": "Every point has a case, but some only draft cases waiting for approval",
+      "no_points": "Cases exist, but nobody listed what must be checked",
+      "not_run": "Every point is covered; not every one has passed yet",
+      "verified": "Every test point is covered by a case that passed"
+    }
   }
 }

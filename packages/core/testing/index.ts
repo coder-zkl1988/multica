@@ -25,14 +25,19 @@ export {
   testPlanDetailOptions,
   testPlanCasesOptions,
   testPlanStatsOptions,
+  testPlanSelectionOptions,
   testRunListOptions,
   testRunDetailOptions,
   testRunCasesOptions,
+  testRunCaseEvidenceOptions,
   testCapabilityListOptions,
   testCaseResultTimelineOptions,
   testCaseIssuesOptions,
   issueTestCasesOptions,
   issueTestSummaryOptions,
+  issueTestPointsOptions,
+  projectTestCoverageOptions,
+  testCaseTestPointsOptions,
 } from "./queries";
 export {
   useCreateTestCase,
@@ -62,6 +67,12 @@ export {
   useLinkTestCaseIssues,
   useUnlinkTestCaseIssue,
   useRequestRuntimeCapabilityScan,
+  useCreateIssueTestPoint,
+  useUpdateTestPoint,
+  useLinkTestCaseTestPoints,
+  useUnlinkTestCaseTestPoint,
+  useUploadTestRunCaseEvidence,
+  evidenceKindForFile,
 } from "./mutations";
 export * from "./config";
 export {

@@ -560,6 +560,12 @@ deleted_test_case_repos AS (
 deleted_test_case_issues AS (
     DELETE FROM test_case_issue WHERE workspace_id = $1
 ),
+deleted_test_case_test_points AS (
+    DELETE FROM test_case_test_point WHERE workspace_id = $1
+),
+deleted_issue_test_points AS (
+    DELETE FROM issue_test_point WHERE workspace_id = $1
+),
 deleted_test_cases AS (
     DELETE FROM test_case WHERE workspace_id = $1
 ),

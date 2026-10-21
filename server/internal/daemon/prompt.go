@@ -1103,15 +1103,8 @@ func buildTestRunPrompt(task Task) string {
 	b.WriteString("4. Execute each case's steps in order and record the outcome as you go — do not batch the writes to the end, a crashed run should still have recorded what it got through.\n\n")
 
 	b.WriteString("Recording results:\n")
-	b.WriteString("```\n")
-	b.WriteString("multica test result set <run-case-id> --result passed|failed|blocked|skipped [--note \"…\"]\n")
-	b.WriteString("multica test evidence add <run-case-id> --file ./shot.png --kind screenshot\n")
-	b.WriteString("multica test defect open <run-case-id> --title \"…\"\n")
-	b.WriteString("```\n")
-	b.WriteString("- `failed` means the product behaved differently from the expected result. Open a defect for it.\n")
-	b.WriteString("- `blocked` means you could not run the case at all — a missing capability, an environment that would not come up, a precondition you could not reach. It is NOT a synonym for failed, and it must never be used to hide a real failure.\n")
-	b.WriteString("- `skipped` means the case did not apply to this round.\n")
-	b.WriteString("- Attach a screenshot or log for every `failed` and every `blocked`. A result nobody can audit is barely a result.\n\n")
+	writeTestResultRecordingRules(&b, "<run-case-id>")
+	b.WriteString("\n")
 
 	b.WriteString("Capability rules — these are hard:\n")
 	b.WriteString("- Use ONLY the `capability_key` values returned by `capability list`. Drive them through the MCP servers that were mounted for this run.\n")
@@ -1192,13 +1185,8 @@ func buildTestRunCasePrompt(task Task, ref testRunCaseRef) string {
 	}
 
 	b.WriteString("Recording:\n")
-	b.WriteString("```\n")
-	b.WriteString("multica test result set <run_case_id> --result passed|failed|blocked|skipped [--note \"…\"] [--step-results '<json>']\n")
-	b.WriteString("multica test evidence add <run_case_id> --file ./evidence/step-3.jpg --kind screenshot\n")
-	b.WriteString("multica test defect open <run_case_id> --title \"…\"\n")
-	b.WriteString("```\n")
-	b.WriteString("- `failed` means the product behaved differently from `expected`; open a defect for it. `blocked` means the case could not run (no device, missing precondition, login wall); it is NOT a synonym for failed. `skipped` means it did not apply.\n")
-	b.WriteString("- Do NOT record `passed` unless you observed every step's expected result yourself — on a screenshot, a trace step, or the browser. Attach at least one screenshot for `failed` and `blocked`, and the final one for `passed`.\n")
+	writeTestResultRecordingRules(&b, "<run_case_id>")
+	b.WriteString("- Do NOT record `passed` unless you observed every step's expected result yourself — on a screenshot, a trace step, or the browser.\n")
 	b.WriteString("- Do NOT modify product code or open pull requests; you are observing behaviour. Use the `multica` CLI for every Multica read and write.\n\n")
 
 	b.WriteString("Context JSON:\n")
@@ -1207,8 +1195,24 @@ func buildTestRunCasePrompt(task Task, ref testRunCaseRef) string {
 
 	b.WriteString("End your final response with a machine-readable line prefixed by exactly `TEST_RUN_CASE_RESULT_JSON:`:\n")
 	b.WriteString("{\"result\":\"passed|failed|blocked|skipped\",\"summary\":\"one paragraph: what you observed at the end and why that is the verdict\"}\n")
-	b.WriteString("The CLI write above is the record; this line only lets the platform settle the case if the write never happened.\n")
+	b.WriteString("The CLI write above is the record; this line only lets the platform settle the case if the write never happened — and then a `passed` here is recorded as `blocked`, because a pass needs the step results and evidence only the write carries.\n")
 	return b.String()
+}
+
+// writeTestResultRecordingRules is the recording contract both test run
+// prompts share. The server enforces each rule it states, so an agent that
+// skips one gets its write refused rather than a pass nobody can check.
+func writeTestResultRecordingRules(b *strings.Builder, id string) {
+	b.WriteString("```\n")
+	b.WriteString("multica test evidence add " + id + " --file ./evidence/step-2.png --kind screenshot\n")
+	b.WriteString("multica test result set " + id + " --result failed --step 1=passed --step \"2=failed:total stayed at 100.00\" --step 3=not_run [--note \"…\"]\n")
+	b.WriteString("multica test defect open " + id + " --title \"…\"\n")
+	b.WriteString("```\n")
+	b.WriteString("- Upload evidence FIRST, then record the verdict. A `passed` or `failed` is refused unless the case already has at least one evidence file AND the write carries a `--step <index>=<result>` for EVERY step of the snapshot (`index` is the step's `index`). A step result is passed, failed, blocked, skipped, or not_run (never reached).\n")
+	b.WriteString("- Add `:<what you observed>` to every step that did not pass, and wherever the expected result names a value (a total, a count, a message). A failure without the observed value cannot be triaged without running it again.\n")
+	b.WriteString("- A case cannot pass while any step is failed, blocked or not_run, and a failed case must mark the step that diverged as `failed`.\n")
+	b.WriteString("- `failed` means the product behaved differently from `expected`; open a defect for it.\n")
+	b.WriteString("- `blocked` means you could not run the case at all — a missing capability, an environment that would not come up, a precondition you could not reach. It is NOT a synonym for failed, and it must never be used to hide a real failure. `skipped` means the case did not apply. Neither needs step results or evidence; say why in `--note`.\n")
 }
 
 // writeArtemisCaseRules is how a case drives its Android phone: Artemis's own
@@ -1247,13 +1251,32 @@ func buildTestGenerationPrompt(task Task) string {
 	b.WriteString("2. Check out every repository named in `plan.repos` with `multica repo checkout <url>` (or `multica repo checkout --all`). Read only inside each entry's `path_globs` when it is non-empty.\n")
 	b.WriteString("3. Read every document in `plan.knowledge_refs`. These are the authoritative business rules; they outrank your inference from code.\n")
 	b.WriteString("4. For each issue id in `plan.issues`, run `multica issue get <id> --output json` and read its comment thread. Run `multica issue search <keyword>` for decisions that only ever got recorded in comments.\n")
-	b.WriteString("5. Write the cases back with `multica testcase propose --job <job_id> --stdin`.\n\n")
+	b.WriteString("5. Split every issue in `plan.issues` into test points BEFORE writing any case (see below).\n")
+	b.WriteString("6. Derive cases from the points, then write them back with `multica testcase propose --job <job_id> --stdin`.\n")
+	b.WriteString("7. Run `multica testcase point list --issue <id>` again for every issue. Your new cases land as drafts, so the points they verify show `in_review` — that is done; do not add more cases for them. A point you named in an `update` of an active case still shows `uncovered` until a member accepts that revision — it is done too; do not write a second case for it. Any other point still `uncovered` needs a case, or a line in your report saying why no case can check it.\n\n")
+
+	b.WriteString("Test points — the conditions a requirement is accepted on:\n")
+	b.WriteString("- A test point is ONE condition that can be judged right or wrong on its own: \"an order over the balance is refused with a message\", not \"checkout works\". Coverage is counted per point: an issue is verified only when every active point is covered by a passing case.\n")
+	b.WriteString("- Read the existing points first: `multica testcase point list --issue <id> --output json`. Points a person wrote are the contract — never rewrite them; add what is missing with `multica testcase point add --issue <id> --title \"…\" --category <category> [--description \"…\"]`.\n")
+	b.WriteString("- Walk every category for every issue and add a point for each condition the requirement, its comments, the documents or the code actually imply:\n")
+	b.WriteString("  - `positive`: each main path and each distinct successful outcome.\n")
+	b.WriteString("  - `negative`: invalid input, refusals, error and failure handling, what must NOT happen.\n")
+	b.WriteString("  - `boundary`: limits and edges — empty, zero, minimum, maximum, one past each, rounding, time zones, long text.\n")
+	b.WriteString("  - `permission`: each role or tenant that must be refused, not only the one that is allowed.\n")
+	b.WriteString("  - `state`: illegal transitions, repeated or concurrent submits, retries, cancel mid-way.\n")
+	b.WriteString("  - `data`: consistency across tables and services, idempotency, what other screens show afterwards.\n")
+	b.WriteString("  - `non_functional`: only when the requirement states a measurable target.\n")
+	b.WriteString("- Do not invent conditions the sources do not support; a guessed point is a guessed requirement.\n\n")
+
+	b.WriteString("From points to cases:\n")
+	b.WriteString("- Every new or updated case lists the points it verifies in `test_points` (`[\"MUL-12/TP-3\"]`); a case that verifies no point cannot count toward coverage.\n")
+	b.WriteString("- Every active point gets at least one case. For a point with input, cover each equivalence class and the boundary values (min, min-1, max, max+1, empty) — one case each, or one case with explicit `test_data` rows. For a permission point, a case per refused role. For a state point, a case per illegal transition.\n")
+	b.WriteString("- Precise does not mean few: leave a point uncovered only when you can say why no case can check it. A case nobody can execute is still worse than a missing one, so make every case executable rather than writing fewer.\n\n")
 
 	b.WriteString("What a good case set looks like:\n")
 	b.WriteString("- Cover BUSINESS behaviour, not only code paths: end-to-end flows, permission matrices, state-machine transitions, data consistency across services, money and time-zone edges, and what must NOT happen.\n")
 	b.WriteString("- `plan.expected_case_types` lists the case types this run is expected to produce. Treat a set that is entirely `functional` as a failure to understand the product.\n")
-	b.WriteString("- `steps` is a structured array, not prose. Each step needs a concrete `action` and a checkable `expected`. A human and an agent both have to be able to execute it verbatim.\n")
-	b.WriteString("- Prefer few precise cases over many vague ones. A case nobody can execute is worse than a missing case.\n\n")
+	b.WriteString("- `steps` is a structured array, not prose. Each step needs a concrete `action` and a checkable `expected` that names what to observe (a value, a message, a state). The server refuses a case with a step that has no expected result.\n\n")
 
 	b.WriteString("Multi-repo cases:\n")
 	b.WriteString("- When a scenario spans systems (change data in one service, verify it in another), set `scope` to `cross_repo`, list each repository in `repos` with a distinct `role` (`driver`, `under_test`, `verifier`, `fixture`), and tag each step with the `repo` alias it runs against.\n")
@@ -1276,7 +1299,8 @@ func buildTestGenerationPrompt(task Task) string {
 	b.WriteString("\n\n")
 
 	b.WriteString("When you are done, end your final response with a machine-readable JSON block prefixed by exactly `TEST_GENERATION_RESULT_JSON:` with this shape:\n")
-	b.WriteString("{\"status\":\"completed|blocked|failed\",\"summary\":\"one paragraph\",\"stats\":{\"new\":0,\"updated\":0,\"obsolete\":0},\"blockers\":[]}\n")
+	b.WriteString("{\"status\":\"completed|blocked|failed\",\"summary\":\"one paragraph\",\"stats\":{\"new\":0,\"updated\":0,\"obsolete\":0},\"coverage\":[{\"point\":\"MUL-12/TP-3\",\"cases\":[\"TC-41\"],\"uncovered_reason\":\"\"}],\"blockers\":[]}\n")
+	b.WriteString("`coverage` has one entry per active test point of the scoped issues: the cases verifying it, or why none can.\n")
 	b.WriteString("The cases themselves must already have been written through `multica testcase propose`; this block is a report, not the delivery.\n")
 	return b.String()
 }

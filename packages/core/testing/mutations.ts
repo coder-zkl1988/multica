@@ -1,4 +1,4 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { api } from "../api";
 import { useWorkspaceId } from "../hooks";
 import {
@@ -31,6 +31,8 @@ import type {
   DispatchTestRunRequest,
   UpdateTestRunCaseResultRequest,
   OpenTestRunCaseDefectRequest,
+  CreateTestPointRequest,
+  UpdateTestPointRequest,
 } from "../types";
 
 /**
@@ -48,9 +50,21 @@ export function useCreateTestCase() {
       qc.setQueryData<TestCase>(testCaseKeys.detail(wsId, created.key), created);
     },
     onSettled: () => {
-      qc.invalidateQueries({ queryKey: testCaseKeys.all(wsId) });
+      invalidateAfterCaseWrite(qc, wsId);
     },
   });
+}
+
+/**
+ * A case write changes more than the case list: what a plan's rule selects
+ * (its next-round preview and Run button) and what an issue's coverage reads
+ * (a status or a changed procedure decides which results count). The
+ * realtime event refreshes them too, but a write must not depend on it.
+ */
+function invalidateAfterCaseWrite(qc: QueryClient, wsId: string) {
+  qc.invalidateQueries({ queryKey: testCaseKeys.all(wsId) });
+  qc.invalidateQueries({ queryKey: testPlanKeys.all(wsId) });
+  qc.invalidateQueries({ queryKey: issueTestCaseKeys.all(wsId) });
 }
 
 /**
@@ -84,7 +98,7 @@ export function useUpdateTestCase() {
       }
     },
     onSettled: () => {
-      qc.invalidateQueries({ queryKey: testCaseKeys.all(wsId) });
+      invalidateAfterCaseWrite(qc, wsId);
     },
   });
 }
@@ -112,7 +126,7 @@ export function useApproveTestCase() {
       }
     },
     onSettled: () => {
-      qc.invalidateQueries({ queryKey: testCaseKeys.all(wsId) });
+      invalidateAfterCaseWrite(qc, wsId);
     },
   });
 }
@@ -132,7 +146,7 @@ export function useDeleteTestCase() {
       qc.removeQueries({ queryKey: testCaseKeys.revisions(wsId, ref) });
     },
     onSettled: () => {
-      qc.invalidateQueries({ queryKey: testCaseKeys.all(wsId) });
+      invalidateAfterCaseWrite(qc, wsId);
     },
   });
 }
@@ -435,6 +449,8 @@ export function useAddTestPlanCases() {
       api.addTestPlanCases(planId, data),
     onSettled: (_data, _error, { planId }) => {
       qc.invalidateQueries({ queryKey: testPlanKeys.cases(wsId, planId) });
+      // The next-round preview lives under the plan's detail key.
+      qc.invalidateQueries({ queryKey: testPlanKeys.detail(wsId, planId) });
     },
   });
 }
@@ -448,6 +464,7 @@ export function useRemoveTestPlanCase() {
       api.removeTestPlanCase(planId, caseId),
     onSettled: (_data, _error, { planId }) => {
       qc.invalidateQueries({ queryKey: testPlanKeys.cases(wsId, planId) });
+      qc.invalidateQueries({ queryKey: testPlanKeys.detail(wsId, planId) });
     },
   });
 }
@@ -643,6 +660,96 @@ export function useUnlinkTestCaseIssue() {
     onSettled: (_data, _error, { ref, issueId }) => {
       qc.invalidateQueries({ queryKey: testCaseKeys.issues(wsId, ref) });
       qc.invalidateQueries({ queryKey: issueTestCaseKeys.forIssue(wsId, issueId) });
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Test points — the conditions a requirement is accepted on
+// ---------------------------------------------------------------------------
+
+/**
+ * Add a test point to an issue. Not optimistic: the server allocates TP-<n>,
+ * and the point's coverage state is computed from links the client does not
+ * hold. Invalidating the issue's tree refreshes the points and the summary
+ * whose `verified` they decide.
+ */
+export function useCreateIssueTestPoint(issueId: string) {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: (data: CreateTestPointRequest) => api.createIssueTestPoint(issueId, data),
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: issueTestCaseKeys.forIssue(wsId, issueId) });
+    },
+  });
+}
+
+/** Edit, drop or restore a point of `issueId`. */
+export function useUpdateTestPoint(issueId: string) {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: ({ pointId, data }: { pointId: string; data: UpdateTestPointRequest }) =>
+      api.updateTestPoint(pointId, data),
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: issueTestCaseKeys.forIssue(wsId, issueId) });
+      qc.invalidateQueries({ queryKey: testCaseKeys.all(wsId) });
+    },
+  });
+}
+
+/**
+ * Declare that a case verifies some points. Covering a point also links the
+ * case to its issue, so both sides of the issue coverage go stale.
+ */
+export function useLinkTestCaseTestPoints(issueId: string) {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: ({ ref, testPoints }: { ref: string; testPoints: string[] }) =>
+      api.linkTestCaseTestPoints(ref, testPoints),
+    onSettled: (_data, _error, { ref }) => {
+      qc.invalidateQueries({ queryKey: issueTestCaseKeys.forIssue(wsId, issueId) });
+      qc.invalidateQueries({ queryKey: testCaseKeys.testPoints(wsId, ref) });
+      qc.invalidateQueries({ queryKey: testCaseKeys.issues(wsId, ref) });
+    },
+  });
+}
+
+export function useUnlinkTestCaseTestPoint(issueId: string) {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: ({ ref, pointId }: { ref: string; pointId: string }) =>
+      api.unlinkTestCaseTestPoint(ref, pointId),
+    onSettled: (_data, _error, { ref }) => {
+      qc.invalidateQueries({ queryKey: issueTestCaseKeys.forIssue(wsId, issueId) });
+      qc.invalidateQueries({ queryKey: testCaseKeys.testPoints(wsId, ref) });
+    },
+  });
+}
+
+/** The evidence kind a file reads as; the server stores it beside the file. */
+export function evidenceKindForFile(file: File): "screenshot" | "video" | "log" | "other" {
+  if (file.type.startsWith("image/")) return "screenshot";
+  if (file.type.startsWith("video/")) return "video";
+  if (file.type.startsWith("text/") || /\.(log|txt|json)$/i.test(file.name)) return "log";
+  return "other";
+}
+
+/**
+ * Attach a file a person captured while executing a case by hand. Awaits the
+ * server: the stored attachment is what the evidence list shows.
+ */
+export function useUploadTestRunCaseEvidence() {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: ({ runCaseId, file }: { runCaseId: string; file: File }) =>
+      api.uploadFile(file, { testRunCaseId: runCaseId, evidenceKind: evidenceKindForFile(file) }),
+    onSettled: (_data, _error, { runCaseId }) => {
+      qc.invalidateQueries({ queryKey: testRunKeys.evidence(wsId, runCaseId) });
     },
   });
 }

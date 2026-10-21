@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -19,19 +21,46 @@ import (
 // without a server.
 func newTestcaseWriteTestCmd() *cobra.Command {
 	c := &cobra.Command{Use: "write"}
-	c.Flags().String("title", "", "")
-	c.Flags().String("module", "", "")
-	c.Flags().String("priority", "", "")
-	c.Flags().String("case-type", "", "")
-	c.Flags().String("scope", "", "")
-	c.Flags().String("execution-mode", "", "")
+	registerTestcaseWriteFlags(c)
 	c.Flags().String("status", "", "")
-	c.Flags().String("preconditions", "", "")
-	c.Flags().String("preconditions-stdin", "", "")
-	c.Flags().String("expected", "", "")
-	c.Flags().String("steps", "", "")
-	c.Flags().String("output", "json", "")
 	return c
+}
+
+// The skill pipes long procedures and rebinds repositories through these.
+func TestTestcaseBodyReadsStepsFromAFileAndRepos(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	if err := os.WriteFile(filepath.Join(dir, "steps.json"), []byte(`[{"action":"Pay","expected":"Line one\nline two"}]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := newTestcaseWriteTestCmd()
+	cmd.Flags().Set("steps-file", "steps.json")
+	cmd.Flags().Set("repos", `[{"project_resource_id":"r1","alias":"web","role":"under_test"}]`)
+	body, err := testcaseBodyFromFlags(cmd)
+	if err != nil {
+		t.Fatalf("build body: %v", err)
+	}
+	steps, _ := body["steps"].([]map[string]any)
+	if len(steps) != 1 || steps[0]["expected"] != "Line one\nline two" {
+		t.Fatalf("steps = %#v, want the file's JSON with its escape decoded once", body["steps"])
+	}
+	repos, _ := body["repos"].([]map[string]any)
+	if len(repos) != 1 || repos[0]["alias"] != "web" {
+		t.Fatalf("repos = %#v", body["repos"])
+	}
+
+	both := newTestcaseWriteTestCmd()
+	both.Flags().Set("steps", "[]")
+	both.Flags().Set("steps-file", "steps.json")
+	if _, err := testcaseBodyFromFlags(both); err == nil {
+		t.Fatal("inline and file steps together were accepted")
+	}
+	twoStdin := newTestcaseWriteTestCmd()
+	twoStdin.Flags().Set("steps-stdin", "true")
+	twoStdin.Flags().Set("expected-stdin", "true")
+	if _, err := testcaseBodyFromFlags(twoStdin); err == nil {
+		t.Fatal("two flags reading stdin were accepted")
+	}
 }
 
 func TestTestcaseBodyOnlyIncludesChangedFlags(t *testing.T) {
@@ -411,5 +440,18 @@ func TestRunTestcaseProposalAcceptHitsAcceptEndpoint(t *testing.T) {
 	}
 	if want := "/api/test-case-proposals/" + proposalID + "/accept"; gotPath != want {
 		t.Errorf("path = %s, want %s", gotPath, want)
+	}
+}
+
+// `--preconditions ""` clears the field, as `--module ""` does.
+func TestTestcaseBodyClearsAnExplicitlyEmptyTextFlag(t *testing.T) {
+	cmd := newTestcaseWriteTestCmd()
+	cmd.Flags().Set("preconditions", "")
+	body, err := testcaseBodyFromFlags(cmd)
+	if err != nil {
+		t.Fatalf("build body: %v", err)
+	}
+	if value, ok := body["preconditions"]; !ok || value != "" {
+		t.Fatalf("body = %#v, want preconditions cleared", body)
 	}
 }

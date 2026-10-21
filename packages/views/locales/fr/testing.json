@@ -3,7 +3,8 @@
     "cases": "Cas",
     "plans": "Plans",
     "runs": "Séries",
-    "jobs": "Génération"
+    "jobs": "Génération",
+    "coverage": "Couverture"
   },
   "page": {
     "title": "Cas de test",
@@ -146,6 +147,7 @@
     "version": "Version {{version}}",
     "separator": " · ",
     "human_edit": "Modification manuelle",
+    "agent_edit": "Modification par un agent",
     "proposal_accepted": "Suggestion IA acceptée",
     "status_change": "Changement de statut",
     "restore": "Restaurer"
@@ -289,7 +291,12 @@
     "result": {
       "title": "Résultats",
       "proposals": "Suggestions de l'IA",
-      "noProposals": "Aucune suggestion pour l'instant"
+      "noProposals": "Aucune suggestion pour l'instant",
+      "coverage": "Couverture des points de test",
+      "coverageLine": "{{covered}}/{{active}} couverts",
+      "noPoints": "Pas découpée en points de test",
+      "uncovered": "Non couverts",
+      "inReview": "En attente de revue"
     }
   },
   "proposals": {
@@ -355,7 +362,25 @@
       "passRate": "Taux de réussite",
       "matrixTitle": "Modules de la dernière série",
       "moduleColumn": "Module",
-      "moduleUnnamed": "(sans module)"
+      "moduleUnnamed": "(sans module)",
+      "rule": {
+        "title": "Règle de sélection",
+        "hint": "Les cas actifs qui correspondent rejoignent chaque tour automatiquement — y compris ceux écrits après le plan.",
+        "none": "Aucune règle : les tours n'exécutent que les cas listés ici.",
+        "allActive": "Tous les cas actifs du projet",
+        "modules": "Modules",
+        "noModules": "Aucun module",
+        "priorities": "Priorités",
+        "caseTypes": "Types de cas",
+        "issues": "Cas couvrant des tâches",
+        "addIssue": "Suivre une tâche",
+        "removeIssue": "Ne plus suivre {{issue}}",
+        "pickerTitle": "Suivre une tâche",
+        "pickerDescription": "Les tours de ce plan exécuteront chaque cas actif qui lui est lié.",
+        "save": "Enregistrer la règle",
+        "reset": "Réinitialiser",
+        "preview": "Prochain tour : {{total}} cas · {{rule}} par la règle"
+      }
     }
   },
   "run": {
@@ -433,7 +458,26 @@
     "notesNeedResult": "Les notes sont enregistrées avec un résultat — choisissez-en un d'abord.",
     "task": "tâche {{id}}",
     "liveFrame": "Écran en direct",
-    "liveFrameWaiting": "En attente de la première image du hub d'appareils…"
+    "liveFrameWaiting": "En attente de la première image du hub d'appareils…",
+    "observed": "Constaté",
+    "noSteps": "Ce cas a été figé sans étapes.",
+    "evidenceEmpty": "Aucune preuve téléversée.",
+    "stepResult": {
+      "passed": "Réussi",
+      "failed": "Échoué",
+      "blocked": "Bloqué",
+      "skipped": "Ignoré",
+      "not_run": "Non atteint"
+    },
+    "save": "Enregistrer",
+    "draftNeedsResult": "Les notes et les résultats d'étape sont enregistrés avec un résultat — choisissez-en un d'abord.",
+    "observedPlaceholder": "Ce que vous avez constaté",
+    "observedLabel": "Ce que vous avez constaté à l'étape {{index}}",
+    "stepResultLabel": "Résultat de l'étape {{index}}",
+    "stepUnset": "Non renseigné",
+    "addEvidence": "Ajouter une preuve",
+    "evidenceTooLarge": "{{name}} est trop volumineux pour être téléversé",
+    "evidenceFailed": "Impossible de téléverser la preuve"
   },
   "timeline": {
     "title": "Historique des séries",
@@ -514,7 +558,7 @@
     "failingCount": "{{count}} en échec",
     "untestedCount": "{{count}} non exécutés",
     "verified": "Vérifié",
-    "verifiedHint": "Tous les cas couvrants ont réussi lors de leur dernière série",
+    "verifiedHint": "Chaque point de test est couvert par un cas réussi lors de sa dernière exécution",
     "latestRun": "Dernière série",
     "defectsSection": "Anomalies trouvées par les tests",
     "foundBySection": "Trouvée par une série de tests",
@@ -523,6 +567,78 @@
     "newCaseTitle": "Vérifier : {{title}}",
     "noCoverage": "Aucune couverture de test",
     "generateFailed": "Impossible de démarrer la génération de cas",
-    "newCaseFailed": "Impossible de créer le cas"
+    "newCaseFailed": "Impossible de créer le cas",
+    "points": {
+      "section": "Points de test",
+      "summary": "{{covered}}/{{active}} couverts · {{passed}} réussis",
+      "hint": "Les conditions d'acceptation de cette tâche. La couverture et la vérification se comptent par point.",
+      "add": "Ajouter un point",
+      "addPlaceholder": "Une condition jugeable seule, p. ex. une commande au-delà du solde est refusée avec un message",
+      "addFailed": "Impossible d'ajouter le point de test",
+      "empty": "Aucun point de test. Découpez la tâche en conditions d'acceptation — sinon un seul cas nominal réussi suffit à paraître vérifié.",
+      "drop": "Abandonner",
+      "restore": "Restaurer",
+      "updateFailed": "Impossible de mettre à jour le point de test",
+      "cover": "Couvrir avec…",
+      "coverFailed": "Impossible de lier le cas au point de test",
+      "droppedCount": "{{count}} abandonné(s)",
+      "category": {
+        "positive": "Nominal",
+        "negative": "Négatif",
+        "boundary": "Limite",
+        "permission": "Permission",
+        "state": "État",
+        "data": "Données",
+        "non_functional": "Non fonctionnel"
+      },
+      "state": {
+        "uncovered": "Non couvert",
+        "in_review": "Brouillons seulement",
+        "not_run": "Non exécuté",
+        "failing": "En échec",
+        "passed": "Réussi",
+        "dropped": "Abandonné"
+      },
+      "caseSection": "Vérifie",
+      "caseEmpty": "Aucun point de test déclaré",
+      "categoryLabel": "Catégorie"
+    },
+    "casesPass": "Cas réussis",
+    "casesPassHint": "Tous les cas liés ont réussi, mais cette tâche n'a aucun point de test : personne n'a listé ce qui doit être vérifié"
+  },
+  "coveragePage": {
+    "title": "Couverture des tests",
+    "hint": "Chaque tâche non annulée du projet et ce qui la couvre, les pires d'abord.",
+    "empty": "Aucune tâche dans ce projet",
+    "all": "Toutes",
+    "truncated": "Seules les {{count}} tâches les plus récentes sont affichées.",
+    "columns": {
+      "issue": "Tâche",
+      "points": "Points de test",
+      "cases": "Cas",
+      "state": "État"
+    },
+    "pointsLine": "{{covered}}/{{active}} couverts · {{passed}} réussis",
+    "noPoints": "—",
+    "casesLine": "{{count}} actifs",
+    "failingCases": "{{count}} en échec",
+    "state": {
+      "failing": "En échec",
+      "no_tests": "Aucun test",
+      "gaps": "Points non couverts",
+      "in_review": "En attente de revue",
+      "no_points": "Aucun point de test",
+      "not_run": "Pas tous réussis",
+      "verified": "Vérifiée"
+    },
+    "stateHint": {
+      "failing": "Le dernier résultat d'un cas qui la couvre est un échec",
+      "no_tests": "Aucun cas actif ni point de test — un bug ici passerait inaperçu",
+      "gaps": "Certains points de test n'ont aucun cas actif",
+      "in_review": "Chaque point a un cas, mais certains seulement des brouillons à approuver",
+      "no_points": "Des cas existent, mais personne n'a listé ce qui doit être vérifié",
+      "not_run": "Tous les points sont couverts, pas encore tous réussis",
+      "verified": "Chaque point de test est couvert par un cas réussi"
+    }
   }
 }

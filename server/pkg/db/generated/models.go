@@ -1463,6 +1463,23 @@ type IssueSubscriber struct {
 	OptOutScope    pgtype.Text        `json:"opt_out_scope"`
 }
 
+type IssueTestPoint struct {
+	ID              pgtype.UUID        `json:"id"`
+	WorkspaceID     pgtype.UUID        `json:"workspace_id"`
+	IssueID         pgtype.UUID        `json:"issue_id"`
+	Number          int32              `json:"number"`
+	Title           string             `json:"title"`
+	Description     string             `json:"description"`
+	Category        string             `json:"category"`
+	Origin          string             `json:"origin"`
+	Status          string             `json:"status"`
+	GenerationJobID pgtype.UUID        `json:"generation_job_id"`
+	CreatedByType   string             `json:"created_by_type"`
+	CreatedBy       pgtype.UUID        `json:"created_by"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+}
+
 type IssueToLabel struct {
 	IssueID pgtype.UUID `json:"issue_id"`
 	LabelID pgtype.UUID `json:"label_id"`
@@ -2438,6 +2455,15 @@ type TestCaseRevision struct {
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 }
 
+type TestCaseTestPoint struct {
+	TestCaseID  pgtype.UUID        `json:"test_case_id"`
+	TestPointID pgtype.UUID        `json:"test_point_id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	Origin      string             `json:"origin"`
+	CreatedBy   pgtype.UUID        `json:"created_by"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
 type TestGenerationJob struct {
 	ID          pgtype.UUID        `json:"id"`
 	WorkspaceID pgtype.UUID        `json:"workspace_id"`
@@ -2477,6 +2503,7 @@ type TestPlan struct {
 	CreatedBy   pgtype.UUID        `json:"created_by"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+	Selector    []byte             `json:"selector"`
 }
 
 type TestPlanCase struct {

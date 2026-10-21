@@ -52,6 +52,7 @@ func TestDispatchTestRunSpreadsAndroidCasesOverTheArtemisPool(t *testing.T) {
 			"project_id":            projectID,
 			"title":                 "Artemis case " + t.Name(),
 			"status":                "active",
+			"steps":                 executableSteps,
 			"required_capabilities": []map[string]any{{"kind": "android_device", "match": map[string]string{"os_version": ">=13"}}},
 		})).Want(http.StatusCreated).JSON(&tc)
 		caseIDs = append(caseIDs, tc.ID)
