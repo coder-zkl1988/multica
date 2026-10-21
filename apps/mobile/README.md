@@ -88,7 +88,9 @@ APP_ENV=production pnpm exec expo prebuild --clean --platform ios
 ```
 
 Use `development` or `staging` instead for those variants, then run the usual
-build script. Keep normal development builds on the incremental prebuild path.
+build script. Keep normal development builds on the incremental prebuild path:
+`scripts/ios-run.sh` passes `--no-clean`, because since SDK 57 a bare
+`expo prebuild` deletes and recreates `ios/`, Pods included.
 For native validation, test a Release cold launch to sign-in, cold and warm
 `multica://` links, background/foreground transitions, and the Debug dev-client
 in each variant. Also open the image picker from profile, chat, and the issue

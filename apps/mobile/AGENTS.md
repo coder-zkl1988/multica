@@ -7,7 +7,7 @@ These rules apply only to `apps/mobile/`, in addition to the [root instructions]
 - Mobile owns its UI, state, hooks, providers, API client, QueryClient, i18n, and build/release workflow. Import core types with `import type`; runtime imports are limited to pure utilities and platform-independent schemas. Do not import web/desktop stores, hooks, Query factories, or WS updaters.
 - Use `package.json` and the lockfile for current versions. Mobile pins Expo/React Native dependencies rather than taking the root React catalog.
 - Add SDK-aligned native packages with `pnpm exec expo install <package>` from this directory. Check compatibility before adding other dependencies; do not pick versions from memory.
-- Follow [README.md](README.md) for setup, simulator/device builds, and environment variants. Keep iOS scripts routed through `scripts/ios-run.sh`, which prebuilds before running iOS so config plugins are reapplied. Preserve the caller's `APP_ENV`; avoid clean prebuilds in the normal edit loop.
+- Follow [README.md](README.md) for setup, simulator/device builds, and environment variants. Keep iOS scripts routed through `scripts/ios-run.sh`, which prebuilds before running iOS so config plugins are reapplied. Preserve the caller's `APP_ENV`; avoid clean prebuilds in the normal edit loop. Since Expo SDK 57, prebuild cleans unless `--no-clean` is passed, so the wrapper passes it.
 - Generated `ios/` and `android/` directories are not source. Check new source paths with `git check-ignore -v <path>` when they could match the root ignore rules, particularly `data/`, `build/`, and `bin/`.
 
 ## Behavioral Parity
