@@ -633,6 +633,10 @@ func TestPlatformSkillCoversPlatformContracts(t *testing.T) {
 				// A schedule with no --timezone silently runs in UTC, which is
 				// the one wrong assumption here that recurs daily.
 				"runs in **UTC**",
+				// An agent cannot retarget, pause or re-trigger a regression
+				// autopilot (handler: TestAgentCannotRetargetOrPauseARegressionAutopilot).
+				"A regression (`test_run`) autopilot is narrower still for you",
+				"rotating a webhook URL, setting a signing secret",
 			},
 		},
 		{
@@ -965,8 +969,13 @@ func TestTestCasesSkillCoversTheDataContract(t *testing.T) {
 		// regression, are review decisions too (handler:
 		// TestAgentCannotClaimThatAnActiveCaseCoversARequirement,
 		// TestAgentCannotRetargetOrPauseARegressionAutopilot).
-		"| linking an active case to an issue or test point (`cover`, issue links) | 403",
-		"| changing a regression (`test_run`) autopilot's plan, mode, project, assignee, status or triggers, or deleting it | 403 |",
+		"| linking a case that has been live — active, deprecated, or a draft someone approved before — to an issue or test point (`cover`, issue links) | 403",
+		// Rewriting a covered point re-points its results (handler:
+		// TestAgentCannotRetireAnActiveCase).
+		"rewriting a point's title, description or category, when an active case verifies it | 403",
+		// An ai link is any agent-drawn link, not only a generation run's.
+		"| `ai` | an agent drew it — a generation run for its approved scope, or an agent linking a draft — a claim nobody has checked |",
+		"| changing a regression (`test_run`) autopilot's plan, mode, project, assignee, description (its rounds' case prompt), status or triggers (adding, editing or deleting one, rotating a webhook URL, setting a signing secret), or deleting it | 403 |",
 		// A blocked round never hides a failure and a draft's trial run does
 		// not count (handler: TestBlockedRoundNeverHidesAFailure,
 		// TestADraftTrialRunDoesNotVerifyOnceApproved,

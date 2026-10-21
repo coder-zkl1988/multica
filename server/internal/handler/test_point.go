@@ -445,21 +445,32 @@ func (h *Handler) UpdateTestPoint(w http.ResponseWriter, r *http.Request) {
 		if !validateTestCaseEnum(w, "status", *req.Status, validTestPointStatuses) {
 			return
 		}
-		// Dropping a point an active case verifies takes that case's result
-		// out of the requirement's verdict — a failing one included.
-		if actorType == "agent" && *req.Status == "dropped" && point.Status != "dropped" {
-			live, err := h.Queries.CountActiveCasesForTestPoint(r.Context(), db.CountActiveCasesForTestPointParams{TestPointID: point.ID, WorkspaceID: point.WorkspaceID})
-			if err != nil {
-				slog.Error("count active cases for test point failed", append(logger.RequestAttrs(r), "error", err)...)
-				writeError(w, http.StatusInternalServerError, "failed to update the test point")
-				return
-			}
-			if live > 0 {
-				writeError(w, http.StatusForbidden, "an active test case verifies this test point, so an agent cannot drop it; tell the person why the condition no longer applies")
-				return
-			}
-		}
 		params.Status = pgtype.Text{String: *req.Status, Valid: true}
+	}
+	// A point an active case verifies carries that case's results. Dropping
+	// it takes them out of the requirement's verdict (a failing one
+	// included); rewriting what it says keeps them, now standing for a
+	// condition the case was never checked against. Either is a person's
+	// call.
+	dropping := req.Status != nil && *req.Status == "dropped" && point.Status != "dropped"
+	rewriting := (req.Title != nil && strings.TrimSpace(*req.Title) != point.Title) ||
+		(req.Description != nil && strings.TrimSpace(*req.Description) != point.Description) ||
+		(req.Category != nil && *req.Category != point.Category)
+	if actorType == "agent" && (dropping || rewriting) {
+		live, err := h.Queries.CountActiveCasesForTestPoint(r.Context(), db.CountActiveCasesForTestPointParams{TestPointID: point.ID, WorkspaceID: point.WorkspaceID})
+		if err != nil {
+			slog.Error("count active cases for test point failed", append(logger.RequestAttrs(r), "error", err)...)
+			writeError(w, http.StatusInternalServerError, "failed to update the test point")
+			return
+		}
+		if live > 0 && dropping {
+			writeError(w, http.StatusForbidden, "an active test case verifies this test point, so an agent cannot drop it; tell the person why the condition no longer applies")
+			return
+		}
+		if live > 0 {
+			writeError(w, http.StatusForbidden, "an active test case verifies this test point, so an agent cannot rewrite it — its results would stand for a condition nobody checked; add a new point instead and tell the person why this one changed")
+			return
+		}
 	}
 	updated, err := h.Queries.UpdateIssueTestPoint(r.Context(), params)
 	if err != nil {
@@ -575,10 +586,12 @@ func (h *Handler) LinkTestCaseTestPoints(w http.ResponseWriter, r *http.Request)
 	userID, _ := requireUserID(w, r)
 	workspaceID := uuidToString(testCase.WorkspaceID)
 	actorType, actorID := h.resolveActor(r, userID, workspaceID)
-	// An active case's past passes would count for a point the moment it is
-	// linked: an agent's claim that a live case verifies a point is reviewed
-	// like any other AI output (an update proposal, or a person).
-	if actorType == "agent" && testCase.Status == "active" {
+	// A case that has been live carries results that would count for a
+	// point the moment it is (again) active: an agent's claim that it
+	// verifies a point is reviewed like any other AI output (an update
+	// proposal, or a person). Only a draft nobody approved is the agent's
+	// to link.
+	if actorType == "agent" && !agentMayLinkTestCase(testCase) {
 		writeError(w, http.StatusForbidden, agentCannotClaimCoverage)
 		return
 	}
@@ -607,7 +620,17 @@ func (h *Handler) LinkTestCaseTestPoints(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	defer tx.Rollback(r.Context())
-	if err := linkCaseToTestPoints(r, h.Queries.WithTx(tx), testCase.ID, testCase.WorkspaceID, points, origin, createdBy); err != nil {
+	qtx := h.Queries.WithTx(tx)
+	if actorType == "agent" {
+		if ok, err := agentLinkStillAllowed(r.Context(), qtx, testCase); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to link test points")
+			return
+		} else if !ok {
+			writeError(w, http.StatusConflict, agentLinkRaced)
+			return
+		}
+	}
+	if err := linkCaseToTestPoints(r, qtx, testCase.ID, testCase.WorkspaceID, points, origin, createdBy); err != nil {
 		slog.Error("link test case test points failed", append(logger.RequestAttrs(r), "error", err)...)
 		writeError(w, http.StatusInternalServerError, "failed to link test points")
 		return

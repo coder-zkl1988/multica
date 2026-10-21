@@ -31,8 +31,10 @@ type TestCapabilityRequirement struct {
 	Optional bool              `json:"optional,omitempty"`
 }
 
-// TestRunCapabilityBinding is the frozen resolution stored on test_run so a
-// retry reproduces the same environment.
+// TestRunCapabilityBinding is the resolution frozen onto test_run at
+// dispatch, so the round's later cases — a capped round queues them as earlier
+// ones settle — run against what was resolved then. A retry is a new round and
+// resolves again.
 type TestRunCapabilityBinding struct {
 	DaemonID  string            `json:"daemon_id"`
 	RuntimeID string            `json:"runtime_id,omitempty"`

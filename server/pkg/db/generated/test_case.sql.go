@@ -56,37 +56,42 @@ INSERT INTO test_case (
     workspace_id, project_id, case_number, title, module, preconditions,
     steps, expected_result, test_data, priority, case_type, scope,
     execution_mode, required_capabilities, business_rules_ref, status,
-    origin, source_refs, generation_job_id, created_by, updated_by
+    origin, source_refs, generation_job_id, created_by, updated_by,
+    reviewed_by, reviewed_at
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-    $13, $14, $15, $16, $17, $18, $19, $20, $21
+    $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23
 ) RETURNING id, workspace_id, project_id, case_number, title, module, preconditions, steps, expected_result, test_data, priority, case_type, scope, execution_mode, required_capabilities, business_rules_ref, status, origin, source_refs, generation_job_id, version, created_by, updated_by, reviewed_by, reviewed_at, created_at, updated_at
 `
 
 type CreateTestCaseParams struct {
-	WorkspaceID          pgtype.UUID `json:"workspace_id"`
-	ProjectID            pgtype.UUID `json:"project_id"`
-	CaseNumber           int32       `json:"case_number"`
-	Title                string      `json:"title"`
-	Module               string      `json:"module"`
-	Preconditions        string      `json:"preconditions"`
-	Steps                []byte      `json:"steps"`
-	ExpectedResult       string      `json:"expected_result"`
-	TestData             []byte      `json:"test_data"`
-	Priority             string      `json:"priority"`
-	CaseType             string      `json:"case_type"`
-	Scope                string      `json:"scope"`
-	ExecutionMode        string      `json:"execution_mode"`
-	RequiredCapabilities []byte      `json:"required_capabilities"`
-	BusinessRulesRef     []byte      `json:"business_rules_ref"`
-	Status               string      `json:"status"`
-	Origin               string      `json:"origin"`
-	SourceRefs           []byte      `json:"source_refs"`
-	GenerationJobID      pgtype.UUID `json:"generation_job_id"`
-	CreatedBy            pgtype.UUID `json:"created_by"`
-	UpdatedBy            pgtype.UUID `json:"updated_by"`
+	WorkspaceID          pgtype.UUID        `json:"workspace_id"`
+	ProjectID            pgtype.UUID        `json:"project_id"`
+	CaseNumber           int32              `json:"case_number"`
+	Title                string             `json:"title"`
+	Module               string             `json:"module"`
+	Preconditions        string             `json:"preconditions"`
+	Steps                []byte             `json:"steps"`
+	ExpectedResult       string             `json:"expected_result"`
+	TestData             []byte             `json:"test_data"`
+	Priority             string             `json:"priority"`
+	CaseType             string             `json:"case_type"`
+	Scope                string             `json:"scope"`
+	ExecutionMode        string             `json:"execution_mode"`
+	RequiredCapabilities []byte             `json:"required_capabilities"`
+	BusinessRulesRef     []byte             `json:"business_rules_ref"`
+	Status               string             `json:"status"`
+	Origin               string             `json:"origin"`
+	SourceRefs           []byte             `json:"source_refs"`
+	GenerationJobID      pgtype.UUID        `json:"generation_job_id"`
+	CreatedBy            pgtype.UUID        `json:"created_by"`
+	UpdatedBy            pgtype.UUID        `json:"updated_by"`
+	ReviewedBy           pgtype.UUID        `json:"reviewed_by"`
+	ReviewedAt           pgtype.Timestamptz `json:"reviewed_at"`
 }
 
+// reviewed_by/reviewed_at are set when a member creates a case directly as
+// active: creating it live is that member's approval.
 func (q *Queries) CreateTestCase(ctx context.Context, arg CreateTestCaseParams) (TestCase, error) {
 	row := q.db.QueryRow(ctx, createTestCase,
 		arg.WorkspaceID,
@@ -110,6 +115,8 @@ func (q *Queries) CreateTestCase(ctx context.Context, arg CreateTestCaseParams) 
 		arg.GenerationJobID,
 		arg.CreatedBy,
 		arg.UpdatedBy,
+		arg.ReviewedBy,
+		arg.ReviewedAt,
 	)
 	var i TestCase
 	err := row.Scan(
