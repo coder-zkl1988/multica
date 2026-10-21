@@ -302,6 +302,10 @@ func TestAgentCannotRetargetOrPauseARegressionAutopilot(t *testing.T) {
 	}
 	update(map[string]any{"status": "paused"}, true).Want(http.StatusForbidden)
 	update(map[string]any{"execution_mode": "run_only"}, true).Want(http.StatusForbidden)
+	// encoding/json matches keys case-insensitively; the gate must too.
+	update(map[string]any{"Status": "paused"}, true).Want(http.StatusForbidden)
+	// Handing the regression to another executor stops its rounds as well.
+	update(map[string]any{"assignee_id": agentID}, true).Want(http.StatusForbidden)
 	update(map[string]any{"title": "Nightly regression (web)"}, true).Want(http.StatusOK)
 	update(map[string]any{"status": "paused"}, false).Want(http.StatusOK)
 }

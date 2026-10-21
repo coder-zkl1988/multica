@@ -1100,15 +1100,21 @@ func (h *Handler) UpdateAutopilot(w http.ResponseWriter, r *http.Request) {
 	}
 	var rawFields map[string]json.RawMessage
 	json.Unmarshal(bodyBytes, &rawFields)
-	// What a regression autopilot runs, and whether it runs, is a member's
-	// call; an agent may still rename or describe it.
-	for _, field := range []string{"status", "execution_mode", "test_plan_id", "project_id"} {
-		if _, sent := rawFields[field]; sent {
-			if h.refuseAgentOnRegressionAutopilot(w, r, prev, workspaceID) {
-				return
+	// What a regression autopilot runs, who runs it, and whether it runs is
+	// a member's call; an agent may still rename or describe it. Decided on
+	// the decoded fields as well as the raw keys: encoding/json matches keys
+	// case-insensitively, so {"Status": "paused"} must not slip past a
+	// lowercase key lookup.
+	guarded := req.Status != nil || req.ExecutionMode != nil || req.TestPlanID != nil || req.ProjectID != nil || req.AssigneeID != nil
+	for key := range rawFields {
+		for _, field := range []string{"status", "execution_mode", "test_plan_id", "project_id", "assignee_id"} {
+			if strings.EqualFold(key, field) {
+				guarded = true
 			}
-			break
 		}
+	}
+	if guarded && h.refuseAgentOnRegressionAutopilot(w, r, prev, workspaceID) {
+		return
 	}
 
 	params := db.UpdateAutopilotParams{

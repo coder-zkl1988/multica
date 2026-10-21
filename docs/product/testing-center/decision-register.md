@@ -391,7 +391,7 @@
 - 状态：`proposal` / `implemented`（待验收）
 - 问题：TS-004 规定生成任务的新用例落草稿，但智能体通过 CLI（`multica testcase create`）直接建的用例 `origin` 是 `human`，带步骤即为 `active`；智能体还能 `approve` 自己的草稿、`update --status active`、接受或拒绝提议，审批闸门形同虚设。反方向更危险：智能体能把一条失败的有效用例设为 `deprecated` 或直接删除，回归“变绿”，缺陷还在。
 - 决定：任务令牌发起的用例写入按智能体处理。新建一律 `origin ai`、默认 `draft`，显式 `active` 返回 403。以下操作也都返回 403：`approve`、把用例设为 `active`（已废弃的用例由人恢复）、接受或拒绝提议；改变有效用例的状态或删除它；把有效用例从任务或测试点解除关联；废弃有效用例所验证的测试点；从计划移除用例、修改计划的规则或状态、删除计划；删除智能体写的草稿以外的任何用例。智能体仍可编辑用例（修订历史里记为智能体修改，可回滚），可删除智能体写的草稿，可往计划里加用例。权限判断在步骤校验之前；写入时在事务里锁住用例重读状态，状态在此期间变了就返回 409。403 信息要求智能体告诉人：哪些草稿待审，哪条用例、哪个测试点或哪个计划应该改、为什么。
-- 第三轮复审补充：智能体也不能声称一条有效用例覆盖某个任务或测试点（`multica testcase cover`、关联任务，403——它过去的通过会立刻计入，应在生成任务的 `update` 里写明测试点，交人审核）；不能改变已废弃用例的状态；不能改回归（`test_run`）autopilot 的计划、模式、项目、状态或触发器，也不能删除它；只能删除没有被审批过的 AI 草稿。智能体在草稿上画的任务关联记为 `origin ai`。
+- 第三轮复审补充：智能体也不能声称一条有效用例覆盖某个任务或测试点（`multica testcase cover`、关联任务，403——它过去的通过会立刻计入，应在生成任务的 `update` 里写明测试点，交人审核）；不能改变已废弃用例的状态；不能改回归（`test_run`）autopilot 的计划、模式、项目、执行者、状态或触发器，也不能删除它（判断按解码后的字段，键名大小写不同也拦得住）；只能删除没有被审批过的 AI 草稿。智能体在草稿上画的任务关联记为 `origin ai`。
 - 未处理：智能体直接修改有效用例的内容（例如放宽预期，或改模块、优先级让它落出按规则选例的计划）仍然允许，修订历史会标成智能体修改、可追溯。若要收紧，应改成对有效用例的修改一律走提议，先讨论。
 - 证据：`server/internal/handler/test_case.go`（`agentCannotActivateTestCase`、`agentCannotRetireTestCase`、`agentCannotDeleteTestCase`、`LockTestCase` 重读），`test_case_issue.go`、`test_point.go`、`test_run.go`（计划），`test_generation_propose.go` `reviewTestCaseProposal`；测试 `TestAgentCaseWaitsForAMembersApproval`、`TestAgentCannotRetireAnActiveCase`、`TestAgentCannotNarrowARegressionPlan`、`TestAgentEditsAreRecordedAsTheAgents`、`TestAgentCannotReviewATestCaseProposal`；`multica-test-cases` 技能的 “What an agent may write”。
 

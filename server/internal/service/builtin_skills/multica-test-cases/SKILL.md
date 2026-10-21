@@ -165,7 +165,7 @@ take one out of coverage or regression:
 | unlinking an active case from an issue or a test point | 403 |
 | `point update --status dropped` on a point an active case verifies | 403 |
 | removing a case from a plan, changing a plan's rule or status, deleting a plan | 403 |
-| changing a regression (`test_run`) autopilot's plan, mode, project, status or triggers, or deleting it | 403 |
+| changing a regression (`test_run`) autopilot's plan, mode, project, assignee, status or triggers, or deleting it | 403 |
 | `delete` of anything but an AI-written draft nobody approved | 403 |
 | `proposal accept` / `proposal reject` | 403 |
 | other edits, linking drafts, `delete` of an AI-written draft, adding cases to a plan | allowed |
