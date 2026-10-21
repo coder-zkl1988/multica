@@ -109,7 +109,6 @@ func (h *Handler) ListProjectTestCoverage(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-
 	// The same issue-window rule every issue list follows.
 	policy, windowEnabled := h.issueWindowPolicy(r.Context(), wsUUID)
 	var visible map[pgtype.UUID]struct{}

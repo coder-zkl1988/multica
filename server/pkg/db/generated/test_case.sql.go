@@ -60,7 +60,7 @@ INSERT INTO test_case (
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
     $13, $14, $15, $16, $17, $18, $19, $20, $21
-) RETURNING id, workspace_id, project_id, case_number, title, module, preconditions, steps, expected_result, test_data, priority, case_type, scope, execution_mode, required_capabilities, business_rules_ref, status, origin, source_refs, generation_job_id, version, created_by, updated_by, reviewed_by, reviewed_at, created_at, updated_at, steps_changed_at
+) RETURNING id, workspace_id, project_id, case_number, title, module, preconditions, steps, expected_result, test_data, priority, case_type, scope, execution_mode, required_capabilities, business_rules_ref, status, origin, source_refs, generation_job_id, version, created_by, updated_by, reviewed_by, reviewed_at, created_at, updated_at
 `
 
 type CreateTestCaseParams struct {
@@ -140,7 +140,6 @@ func (q *Queries) CreateTestCase(ctx context.Context, arg CreateTestCaseParams) 
 		&i.ReviewedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.StepsChangedAt,
 	)
 	return i, err
 }
@@ -349,7 +348,7 @@ func (q *Queries) GetLatestTestRunForIssue(ctx context.Context, arg GetLatestTes
 }
 
 const getTestCaseByNumber = `-- name: GetTestCaseByNumber :one
-SELECT id, workspace_id, project_id, case_number, title, module, preconditions, steps, expected_result, test_data, priority, case_type, scope, execution_mode, required_capabilities, business_rules_ref, status, origin, source_refs, generation_job_id, version, created_by, updated_by, reviewed_by, reviewed_at, created_at, updated_at, steps_changed_at FROM test_case
+SELECT id, workspace_id, project_id, case_number, title, module, preconditions, steps, expected_result, test_data, priority, case_type, scope, execution_mode, required_capabilities, business_rules_ref, status, origin, source_refs, generation_job_id, version, created_by, updated_by, reviewed_by, reviewed_at, created_at, updated_at FROM test_case
 WHERE workspace_id = $1 AND case_number = $2
 `
 
@@ -389,13 +388,12 @@ func (q *Queries) GetTestCaseByNumber(ctx context.Context, arg GetTestCaseByNumb
 		&i.ReviewedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.StepsChangedAt,
 	)
 	return i, err
 }
 
 const getTestCaseInWorkspace = `-- name: GetTestCaseInWorkspace :one
-SELECT id, workspace_id, project_id, case_number, title, module, preconditions, steps, expected_result, test_data, priority, case_type, scope, execution_mode, required_capabilities, business_rules_ref, status, origin, source_refs, generation_job_id, version, created_by, updated_by, reviewed_by, reviewed_at, created_at, updated_at, steps_changed_at FROM test_case
+SELECT id, workspace_id, project_id, case_number, title, module, preconditions, steps, expected_result, test_data, priority, case_type, scope, execution_mode, required_capabilities, business_rules_ref, status, origin, source_refs, generation_job_id, version, created_by, updated_by, reviewed_by, reviewed_at, created_at, updated_at FROM test_case
 WHERE id = $1 AND workspace_id = $2
 `
 
@@ -435,7 +433,6 @@ func (q *Queries) GetTestCaseInWorkspace(ctx context.Context, arg GetTestCaseInW
 		&i.ReviewedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.StepsChangedAt,
 	)
 	return i, err
 }
@@ -878,7 +875,7 @@ func (q *Queries) ListTestCaseRevisions(ctx context.Context, arg ListTestCaseRev
 }
 
 const listTestCases = `-- name: ListTestCases :many
-SELECT id, workspace_id, project_id, case_number, title, module, preconditions, steps, expected_result, test_data, priority, case_type, scope, execution_mode, required_capabilities, business_rules_ref, status, origin, source_refs, generation_job_id, version, created_by, updated_by, reviewed_by, reviewed_at, created_at, updated_at, steps_changed_at FROM test_case
+SELECT id, workspace_id, project_id, case_number, title, module, preconditions, steps, expected_result, test_data, priority, case_type, scope, execution_mode, required_capabilities, business_rules_ref, status, origin, source_refs, generation_job_id, version, created_by, updated_by, reviewed_by, reviewed_at, created_at, updated_at FROM test_case
 WHERE workspace_id = $1
   AND ($2::uuid IS NULL OR project_id = $2)
   AND ($3::text IS NULL OR status = $3)
@@ -944,7 +941,6 @@ func (q *Queries) ListTestCases(ctx context.Context, arg ListTestCasesParams) ([
 			&i.ReviewedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
-			&i.StepsChangedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -971,7 +967,6 @@ SELECT tci.test_case_id, tci.issue_id, tci.origin, tci.created_at,
              AND rc.executed_at IS NOT NULL
              AND rc.result IN ('passed', 'failed')
              AND rc.case_snapshot->>'status' = 'active'
-             AND (tc.steps_changed_at IS NULL OR rc.created_at >= tc.steps_changed_at)
            ORDER BY rc.executed_at DESC
            LIMIT 1
        ), '')::text AS latest_result,
@@ -983,7 +978,6 @@ SELECT tci.test_case_id, tci.issue_id, tci.origin, tci.created_at,
              AND rc.executed_at IS NOT NULL
              AND rc.result IN ('passed', 'failed')
              AND rc.case_snapshot->>'status' = 'active'
-             AND (tc.steps_changed_at IS NULL OR rc.created_at >= tc.steps_changed_at)
            ORDER BY rc.executed_at DESC
            LIMIT 1
        ) AS latest_executed_at
@@ -1014,10 +1008,10 @@ type ListTestCasesForIssueRow struct {
 
 // The case side of one issue's coverage. latest_result is the case's current
 // verdict: its most recent passed or failed result from a round that froze it
-// as an active case with the steps it has now. blocked and skipped carry no
-// verdict, so they never hide an earlier failure; a result on old steps, or
-// from a trial run of the draft, says nothing about the case as it is. A case
-// with no such result reports NULL rather than a misleading "pending".
+// as an active case. blocked and skipped carry no verdict, so they never hide
+// an earlier failure; a result from a trial run of the draft says nothing
+// about the case a person approved. A case with no such result reports NULL
+// rather than a misleading "pending".
 func (q *Queries) ListTestCasesForIssue(ctx context.Context, arg ListTestCasesForIssueParams) ([]ListTestCasesForIssueRow, error) {
 	rows, err := q.db.Query(ctx, listTestCasesForIssue, arg.IssueID, arg.WorkspaceID)
 	if err != nil {
@@ -1051,7 +1045,7 @@ func (q *Queries) ListTestCasesForIssue(ctx context.Context, arg ListTestCasesFo
 }
 
 const lockTestCase = `-- name: LockTestCase :one
-SELECT id, workspace_id, project_id, case_number, title, module, preconditions, steps, expected_result, test_data, priority, case_type, scope, execution_mode, required_capabilities, business_rules_ref, status, origin, source_refs, generation_job_id, version, created_by, updated_by, reviewed_by, reviewed_at, created_at, updated_at, steps_changed_at FROM test_case WHERE id = $1 AND workspace_id = $2 FOR UPDATE
+SELECT id, workspace_id, project_id, case_number, title, module, preconditions, steps, expected_result, test_data, priority, case_type, scope, execution_mode, required_capabilities, business_rules_ref, status, origin, source_refs, generation_job_id, version, created_by, updated_by, reviewed_by, reviewed_at, created_at, updated_at FROM test_case WHERE id = $1 AND workspace_id = $2 FOR UPDATE
 `
 
 type LockTestCaseParams struct {
@@ -1093,7 +1087,6 @@ func (q *Queries) LockTestCase(ctx context.Context, arg LockTestCaseParams) (Tes
 		&i.ReviewedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.StepsChangedAt,
 	)
 	return i, err
 }
@@ -1130,17 +1123,13 @@ UPDATE test_case SET
     business_rules_ref    = COALESCE($14, business_rules_ref),
     status                = COALESCE($15, status),
     source_refs           = COALESCE($16, source_refs),
-    -- The caller decides whether the steps changed (it compares what an
-    -- executor reads, not JSON bytes); results frozen before this moment stop
-    -- counting toward coverage.
-    steps_changed_at      = CASE WHEN $17::boolean IS TRUE THEN now() ELSE steps_changed_at END,
-    reviewed_by           = COALESCE($18, reviewed_by),
-    reviewed_at           = COALESCE($19, reviewed_at),
-    updated_by            = COALESCE($20, updated_by),
+    reviewed_by           = COALESCE($17, reviewed_by),
+    reviewed_at           = COALESCE($18, reviewed_at),
+    updated_by            = COALESCE($19, updated_by),
     version               = version + 1,
     updated_at            = now()
 WHERE id = $1 AND workspace_id = $2
-RETURNING id, workspace_id, project_id, case_number, title, module, preconditions, steps, expected_result, test_data, priority, case_type, scope, execution_mode, required_capabilities, business_rules_ref, status, origin, source_refs, generation_job_id, version, created_by, updated_by, reviewed_by, reviewed_at, created_at, updated_at, steps_changed_at
+RETURNING id, workspace_id, project_id, case_number, title, module, preconditions, steps, expected_result, test_data, priority, case_type, scope, execution_mode, required_capabilities, business_rules_ref, status, origin, source_refs, generation_job_id, version, created_by, updated_by, reviewed_by, reviewed_at, created_at, updated_at
 `
 
 type UpdateTestCaseParams struct {
@@ -1160,7 +1149,6 @@ type UpdateTestCaseParams struct {
 	BusinessRulesRef     []byte             `json:"business_rules_ref"`
 	Status               pgtype.Text        `json:"status"`
 	SourceRefs           []byte             `json:"source_refs"`
-	StepsChanged         pgtype.Bool        `json:"steps_changed"`
 	ReviewedBy           pgtype.UUID        `json:"reviewed_by"`
 	ReviewedAt           pgtype.Timestamptz `json:"reviewed_at"`
 	UpdatedBy            pgtype.UUID        `json:"updated_by"`
@@ -1187,7 +1175,6 @@ func (q *Queries) UpdateTestCase(ctx context.Context, arg UpdateTestCaseParams) 
 		arg.BusinessRulesRef,
 		arg.Status,
 		arg.SourceRefs,
-		arg.StepsChanged,
 		arg.ReviewedBy,
 		arg.ReviewedAt,
 		arg.UpdatedBy,
@@ -1221,7 +1208,6 @@ func (q *Queries) UpdateTestCase(ctx context.Context, arg UpdateTestCaseParams) 
 		&i.ReviewedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.StepsChangedAt,
 	)
 	return i, err
 }

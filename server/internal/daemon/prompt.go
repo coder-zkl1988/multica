@@ -1210,7 +1210,7 @@ func writeTestResultRecordingRules(b *strings.Builder, id string) {
 	b.WriteString("```\n")
 	b.WriteString("- Upload evidence FIRST, then record the verdict. A `passed` or `failed` is refused unless the case already has at least one evidence file AND the write carries a `--step <index>=<result>` for EVERY step of the snapshot (`index` is the step's `index`). A step result is passed, failed, blocked, skipped, or not_run (never reached).\n")
 	b.WriteString("- Add `:<what you observed>` to every step that did not pass, and wherever the expected result names a value (a total, a count, a message). A failure without the observed value cannot be triaged without running it again.\n")
-	b.WriteString("- A case cannot pass while any step is failed, blocked or not_run, a pass needs at least one step you actually saw pass (every step skipped means record the case as `skipped`), and a failed case must mark the step that diverged as `failed`.\n")
+	b.WriteString("- A case cannot pass while any step is failed, blocked or not_run, and a failed case must mark the step that diverged as `failed`.\n")
 	b.WriteString("- `failed` means the product behaved differently from `expected`; open a defect for it.\n")
 	b.WriteString("- `blocked` means you could not run the case at all — a missing capability, an environment that would not come up, a precondition you could not reach. It is NOT a synonym for failed, and it must never be used to hide a real failure. `skipped` means the case did not apply. Neither needs step results or evidence; say why in `--note`.\n")
 }

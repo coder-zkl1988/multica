@@ -140,17 +140,15 @@ func testPointToResponse(p db.IssueTestPoint) TestPointResponse {
 
 // testPointState decides where one point stands from its covering cases. Only
 // active cases count: a draft has not been reviewed and a deprecated case
-// describes behaviour that is gone. A point passes only when every active
-// case written for it passes — a generation run writes one case per boundary
-// value, refused role or illegal transition, and one of them passing says
-// nothing about the others. LatestResult is the case's current verdict
-// (passed or failed on its current steps), so a blocked or skipped round
-// never hides a failure.
+// describes behaviour that is gone. A point passes when an active covering
+// case passes and none fails. LatestResult is the case's current verdict
+// (its newest passed or failed result), so a blocked or skipped round never
+// hides a failure.
 func testPointState(status string, cases []TestPointCaseResponse) (covered, passed bool, state string) {
 	if status == "dropped" {
 		return false, false, "dropped"
 	}
-	allPassed, anyFailed, reviewableDraft := true, false, false
+	anyPassed, anyFailed, reviewableDraft := false, false, false
 	for _, c := range cases {
 		if c.CaseStatus == "draft" {
 			// A draft that cannot be approved yet (no executable steps) is
@@ -164,14 +162,14 @@ func testPointState(status string, cases []TestPointCaseResponse) (covered, pass
 			continue
 		}
 		covered = true
-		switch {
-		case c.LatestResult == nil:
-			allPassed = false
-		case *c.LatestResult == "failed":
+		if c.LatestResult == nil {
+			continue
+		}
+		switch *c.LatestResult {
+		case "passed":
+			anyPassed = true
+		case "failed":
 			anyFailed = true
-			allPassed = false
-		case *c.LatestResult != "passed":
-			allPassed = false
 		}
 	}
 	switch {
@@ -183,7 +181,7 @@ func testPointState(status string, cases []TestPointCaseResponse) (covered, pass
 		return false, false, "uncovered"
 	case anyFailed:
 		return true, false, "failing"
-	case allPassed:
+	case anyPassed:
 		return true, true, "passed"
 	default:
 		return true, false, "not_run"

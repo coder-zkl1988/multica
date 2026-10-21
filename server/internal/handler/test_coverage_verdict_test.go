@@ -71,43 +71,6 @@ func TestBlockedRoundNeverHidesAFailure(t *testing.T) {
 	}
 }
 
-// A pass on the old steps says nothing about the case as it is now.
-func TestAPassOnOldStepsStopsCounting(t *testing.T) {
-	projectID, issueID, point := verdictFixture(t, "Refund rounding")
-	tc := createTestCaseForRun(t, projectID)
-	linkCaseTestPoints(t, tc.Key, []string{point.ID}).Want(http.StatusOK)
-	round := createTestRunFromCases(t, "Before the change", []string{tc.ID})
-	setRunCaseResultForSummary(t, runCasesInOrder(t, round.ID)[0].id, "passed")
-	if state := pointState(t, issueID); state != "passed" {
-		t.Fatalf("point after a pass = %q, want passed", state)
-	}
-
-	// A title fix is not a new procedure; the pass still stands.
-	testutil.Call(t, testHandler.UpdateTestCase, withURLParam(newRequest("PUT", "/api/test-cases/"+tc.Key+"?workspace_id="+testWorkspaceID,
-		map[string]any{"title": "Refund rounding, renamed", "steps": executableSteps}), "ref", tc.Key)).Want(http.StatusOK)
-	if state := pointState(t, issueID); state != "passed" {
-		t.Fatalf("point after a title fix = %q, want passed", state)
-	}
-
-	testutil.Call(t, testHandler.UpdateTestCase, withURLParam(newRequest("PUT", "/api/test-cases/"+tc.Key+"?workspace_id="+testWorkspaceID,
-		map[string]any{"steps": []map[string]any{{"action": "Refund 10.005", "expected": "10.01 is returned"}}}), "ref", tc.Key)).Want(http.StatusOK)
-	if state := pointState(t, issueID); state != "not_run" {
-		t.Fatalf("point after the steps changed = %q, want not_run", state)
-	}
-	if summary := issueTestSummary(t, issueID); summary.Verified {
-		t.Fatalf("summary = %+v, want unverified until the new steps run", summary)
-	}
-	if row := projectCoverageRow(t, projectID, issueID); row.State == "verified" {
-		t.Fatalf("coverage row = %+v, want not verified", row)
-	}
-
-	again := createTestRunFromCases(t, "After the change", []string{tc.ID})
-	setRunCaseResultForSummary(t, runCasesInOrder(t, again.ID)[0].id, "passed")
-	if state := pointState(t, issueID); state != "passed" {
-		t.Fatalf("point after the new steps passed = %q, want passed", state)
-	}
-}
-
 // Drafts may be trial-run, but nobody had reviewed what that run checked.
 func TestADraftTrialRunDoesNotVerifyOnceApproved(t *testing.T) {
 	projectID, issueID, point := verdictFixture(t, "Refund approval")
@@ -123,9 +86,9 @@ func TestADraftTrialRunDoesNotVerifyOnceApproved(t *testing.T) {
 	}
 }
 
-// One case per refused role or boundary value: one passing says nothing
-// about the one that never ran.
-func TestEveryCoveringCaseMustPass(t *testing.T) {
+// A point passes when a covering active case passes and none fails; a
+// covering case that never ran does not hold it back, one that fails does.
+func TestAPointPassesWhenACoveringCasePassesAndNoneFails(t *testing.T) {
 	projectID, issueID, point := verdictFixture(t, "Refund roles")
 	editor := createTestCaseForRun(t, projectID)
 	viewer := createTestCaseForRun(t, projectID)
@@ -133,19 +96,19 @@ func TestEveryCoveringCaseMustPass(t *testing.T) {
 	linkCaseTestPoints(t, viewer.Key, []string{point.ID}).Want(http.StatusOK)
 	first := createTestRunFromCases(t, "Editor only", []string{editor.ID})
 	setRunCaseResultForSummary(t, runCasesInOrder(t, first.ID)[0].id, "passed")
-	if state := pointState(t, issueID); state != "not_run" {
-		t.Fatalf("point with one of two cases run = %q, want not_run", state)
-	}
-	if row := projectCoverageRow(t, projectID, issueID); row.PassedPoints != 0 {
-		t.Fatalf("coverage row = %+v, want no passed point yet", row)
-	}
-	second := createTestRunFromCases(t, "Viewer", []string{viewer.ID})
-	setRunCaseResultForSummary(t, runCasesInOrder(t, second.ID)[0].id, "passed")
 	if state := pointState(t, issueID); state != "passed" {
-		t.Fatalf("point with both cases passed = %q, want passed", state)
+		t.Fatalf("point with one case passed and the other not run = %q, want passed", state)
 	}
 	if row := projectCoverageRow(t, projectID, issueID); row.PassedPoints != 1 || row.State != "verified" {
 		t.Fatalf("coverage row = %+v, want verified", row)
+	}
+	second := createTestRunFromCases(t, "Viewer", []string{viewer.ID})
+	setRunCaseResultForSummary(t, runCasesInOrder(t, second.ID)[0].id, "failed")
+	if state := pointState(t, issueID); state != "failing" {
+		t.Fatalf("point with a failing covering case = %q, want failing", state)
+	}
+	if row := projectCoverageRow(t, projectID, issueID); row.PassedPoints != 0 || row.State != "failing" {
+		t.Fatalf("coverage row = %+v, want failing", row)
 	}
 }
 
@@ -187,22 +150,6 @@ func TestCorrectingAFinishedRoundNeverOutranksANewerOne(t *testing.T) {
 	}
 }
 
-func TestAPassNeedsAPassedStep(t *testing.T) {
-	skipped := []TestRunStepResult{{Index: 1, Result: "skipped"}, {Index: 2, Result: "skipped"}}
-	if problem := stepResultsProblem("passed", skipped, []int32{1, 2}, true); problem == "" {
-		t.Fatal("an all-skipped pass was accepted")
-	}
-	// A person's partial annotations say nothing about the steps left blank.
-	partial := []TestRunStepResult{{Index: 2, Result: "skipped"}}
-	if problem := stepResultsProblem("passed", partial, []int32{1, 2}, false); problem != "" {
-		t.Fatalf("a person's partial annotation on a pass was refused: %s", problem)
-	}
-	mixed := []TestRunStepResult{{Index: 1, Result: "passed"}, {Index: 2, Result: "skipped"}}
-	if problem := stepResultsProblem("passed", mixed, []int32{1, 2}, true); problem != "" {
-		t.Fatalf("a pass with one skipped step was refused: %s", problem)
-	}
-}
-
 // A draft that cannot be approved yet (nothing to check) is not "only
 // approval left"; the point it names stays uncovered on every surface.
 func TestAStepLessDraftLeavesItsPointUncovered(t *testing.T) {
@@ -222,20 +169,5 @@ func TestAStepLessDraftLeavesItsPointUncovered(t *testing.T) {
 	}
 	if row := projectCoverageRow(t, projectID, issueID); row.ReviewPoints != 1 || row.State != "in_review" {
 		t.Fatalf("coverage row = %+v, want in_review", row)
-	}
-}
-
-// The executor reads the preconditions and the overall expected result too;
-// changing them is a new procedure as much as changing a step.
-func TestChangingPreconditionsNeedsANewRun(t *testing.T) {
-	projectID, issueID, point := verdictFixture(t, "Refund preconditions")
-	tc := createTestCaseForRun(t, projectID)
-	linkCaseTestPoints(t, tc.Key, []string{point.ID}).Want(http.StatusOK)
-	round := createTestRunFromCases(t, "Before", []string{tc.ID})
-	setRunCaseResultForSummary(t, runCasesInOrder(t, round.ID)[0].id, "passed")
-	testutil.Call(t, testHandler.UpdateTestCase, withURLParam(newRequest("PUT", "/api/test-cases/"+tc.Key+"?workspace_id="+testWorkspaceID,
-		map[string]any{"preconditions": "The order was paid with a gift card"}), "ref", tc.Key)).Want(http.StatusOK)
-	if state := pointState(t, issueID); state != "not_run" {
-		t.Fatalf("point after the preconditions changed = %q, want not_run", state)
 	}
 }

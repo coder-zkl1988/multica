@@ -387,31 +387,6 @@ func testCaseStepsProblem(steps []TestCaseStep) string {
 
 // decodeTestCaseSteps reads the persisted steps column. A malformed column
 // decodes to no steps, which testCaseStepsProblem then reports.
-// testCaseProcedureChanged is whether a write changes what an executor reads
-// and checks the product against: the steps, the preconditions, the overall
-// expected result or the test data. Results recorded on the old procedure
-// stop counting toward coverage (test_case.steps_changed_at). nil means the
-// write leaves that part alone.
-func testCaseProcedureChanged(current db.TestCase, steps *[]TestCaseStep, preconditions, expected *string, testData *map[string]any) bool {
-	if steps != nil && !sameTestCaseSteps(normalizeTestCaseSteps(*steps), decodeTestCaseSteps(current.Steps)) {
-		return true
-	}
-	if preconditions != nil && strings.TrimSpace(*preconditions) != strings.TrimSpace(current.Preconditions) {
-		return true
-	}
-	if expected != nil && strings.TrimSpace(*expected) != strings.TrimSpace(current.ExpectedResult) {
-		return true
-	}
-	if testData != nil {
-		stored := map[string]any{}
-		_ = json.Unmarshal(current.TestData, &stored)
-		if string(marshalJSONColumn(*testData, "{}")) != string(marshalJSONColumn(stored, "{}")) {
-			return true
-		}
-	}
-	return false
-}
-
 // sameTestCaseSteps compares two normalized step lists by what an executor
 // reads: action, expected result and repository, in order.
 func sameTestCaseSteps(a, b []TestCaseStep) bool {
@@ -867,9 +842,6 @@ func (h *Handler) UpdateTestCase(w http.ResponseWriter, r *http.Request) {
 	// compared, not assumed: re-sending a legacy case's unchanged steps must
 	// not block a title fix.
 	stepsChanged := req.Steps != nil && !sameTestCaseSteps(normalizeTestCaseSteps(*req.Steps), decodeTestCaseSteps(current.Steps))
-	if testCaseProcedureChanged(current, req.Steps, req.Preconditions, req.ExpectedResult, req.TestData) {
-		params.StepsChanged = pgtype.Bool{Bool: true, Valid: true}
-	}
 	// Who may change the status is decided before what the steps allow: an
 	// agent asking to make a case live is told it cannot, not that a step is
 	// missing.

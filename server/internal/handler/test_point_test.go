@@ -32,9 +32,7 @@ func TestTestPointState(t *testing.T) {
 		{"covered, never run", "active", []TestPointCaseResponse{active(nil)}, true, false, "not_run"},
 		{"covered, blocked", "active", []TestPointCaseResponse{active(result("blocked"))}, true, false, "not_run"},
 		{"passed", "active", []TestPointCaseResponse{active(result("passed")), active(result("passed"))}, true, true, "passed"},
-		// One case per boundary value or refused role: one passing says
-		// nothing about the one that never ran.
-		{"one of two cases never ran", "active", []TestPointCaseResponse{active(result("passed")), active(nil)}, true, false, "not_run"},
+		{"one of two cases never ran", "active", []TestPointCaseResponse{active(result("passed")), active(nil)}, true, true, "passed"},
 		{"a failing case wins over a passing one", "active", []TestPointCaseResponse{active(result("passed")), active(result("failed"))}, true, false, "failing"},
 		{"a deprecated failure does not count", "active", []TestPointCaseResponse{active(result("passed")), retired}, true, true, "passed"},
 		{"dropped", "dropped", []TestPointCaseResponse{active(result("passed"))}, false, false, "dropped"},

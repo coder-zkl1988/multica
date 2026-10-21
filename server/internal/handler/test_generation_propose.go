@@ -522,12 +522,6 @@ func (h *Handler) insertProposedTestCase(
 	return testCase, repos, nil
 }
 
-// proposalTestData is the test data a proposal sets, as the update writes it.
-func proposalTestData(payload *TestCaseProposalCasePayload) *map[string]any {
-	data := defaultMap(payload.TestData)
-	return &data
-}
-
 // proposalScopeIssues is the issue scope of the run that queued a proposal:
 // the issues whose points it could name, and so the ones whose AI links its
 // revision may replace. nil (an unscoped run) means any issue; an empty set
@@ -609,7 +603,6 @@ func (h *Handler) rewriteDraftTestCase(
 		Module:               pgtype.Text{String: payload.Module, Valid: true},
 		Preconditions:        pgtype.Text{String: payload.Preconditions, Valid: true},
 		Steps:                marshalJSONColumn(newSteps, "[]"),
-		StepsChanged:         pgtype.Bool{Bool: testCaseProcedureChanged(current, &newSteps, &payload.Preconditions, &payload.ExpectedResult, proposalTestData(payload)), Valid: true},
 		ExpectedResult:       pgtype.Text{String: payload.ExpectedResult, Valid: true},
 		TestData:             marshalJSONColumn(defaultMap(payload.TestData), "{}"),
 		Priority:             pgtype.Text{String: priority, Valid: true},
@@ -790,8 +783,6 @@ func (h *Handler) reviewTestCaseProposal(w http.ResponseWriter, r *http.Request,
 			params.Preconditions = pgtype.Text{String: payload.Preconditions, Valid: true}
 			newSteps := normalizeTestCaseSteps(payload.Steps)
 			params.Steps = marshalJSONColumn(newSteps, "[]")
-			// Results on the old procedure stop counting toward coverage.
-			params.StepsChanged = pgtype.Bool{Bool: testCaseProcedureChanged(current, &newSteps, &payload.Preconditions, &payload.ExpectedResult, proposalTestData(&payload)), Valid: true}
 			params.ExpectedResult = pgtype.Text{String: payload.ExpectedResult, Valid: true}
 			params.TestData = marshalJSONColumn(defaultMap(payload.TestData), "{}")
 			params.Priority = pgtype.Text{String: priority, Valid: true}
