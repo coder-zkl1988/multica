@@ -143,11 +143,6 @@ activates it, unless that save names a `status`. Every other draft waits for
 approval: one created as a draft on purpose, one whose steps were already
 executable, and one an agent wrote steps into.
 
-Changing what an executor reads and checks — the steps (action, expected,
-repo), the preconditions, the overall expected result or the test data — is
-a new procedure: results recorded on the old one stop counting toward
-coverage until a round runs the new one. A title or priority edit is not.
-
 ### What an agent may write
 
 A case an agent writes is AI-written whichever command wrote it: `create` from
@@ -355,16 +350,15 @@ a `state`:
 | --- | --- |
 | `uncovered` | no active case verifies it, and no draft that could be approved |
 | `in_review` | only drafts with executable steps verify it — approving one is what is left |
-| `not_run` | active cases verify it, but at least one has no current verdict |
+| `not_run` | active cases verify it, but none has a current verdict |
 | `failing` | an active case that verifies it currently fails |
-| `passed` | every active case that verifies it currently passes |
+| `passed` | an active case that verifies it currently passes, and none fails |
 | `dropped` | the condition is no longer part of the requirement |
 
 A case's current verdict is its newest `passed` or `failed` result from a
-round that froze it as an active case with the procedure it has now. `blocked`
-and `skipped` say the case was not executed, so they never hide an earlier
-failure; a result on an old procedure, or from a trial run of the draft, says
-nothing about the case as it is. "Newest" is when the verdict was recorded
+round that froze it as an active case. `blocked` and `skipped` say the case
+was not executed, so they never hide an earlier failure; a result from a trial
+run of the draft says nothing about the case a person approved. "Newest" is when the verdict was recorded
 while its round was open; correcting a finished round keeps the time it was
 observed.
 
@@ -372,7 +366,7 @@ Whether an issue is verified depends on `basis` in its test summary:
 
 | basis | verified when |
 | --- | --- |
-| `test_points` | every active point is `passed` (every active case verifying it currently passes), and no active linked case is failing |
+| `test_points` | every active point is `passed`, and no active linked case is failing |
 | `cases_only` | the issue has no points yet: at least one active linked case, all passed — a weaker claim, labelled as such |
 | `none` | nothing active covers the issue; never verified |
 

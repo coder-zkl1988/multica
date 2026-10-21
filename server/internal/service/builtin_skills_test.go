@@ -967,11 +967,12 @@ func TestTestCasesSkillCoversTheDataContract(t *testing.T) {
 		// TestAgentCannotRetargetOrPauseARegressionAutopilot).
 		"| linking an active case to an issue or test point (`cover`, issue links) | 403",
 		"| changing a regression (`test_run`) autopilot's plan, mode, project, assignee, status or triggers, or deleting it | 403 |",
-		// A blocked round never hides a failure; old steps and trial runs do not
-		// count (handler: TestBlockedRoundNeverHidesAFailure, TestAPassOnOldStepsStopsCounting,
-		// TestADraftTrialRunDoesNotVerifyOnceApproved, TestEveryCoveringCaseMustPass).
+		// A blocked round never hides a failure and a draft's trial run does
+		// not count (handler: TestBlockedRoundNeverHidesAFailure,
+		// TestADraftTrialRunDoesNotVerifyOnceApproved,
+		// TestAPointPassesWhenACoveringCasePassesAndNoneFails).
 		"A case's current verdict is its newest `passed` or `failed` result",
-		"| `passed` | every active case that verifies it currently passes |",
+		"| `passed` | an active case that verifies it currently passes, and none fails |",
 		// Multi-repo semantics are the reason roles exist at all.
 		"under_test",
 		"driver",
@@ -1069,8 +1070,6 @@ func TestRunningTestsSkillCoversExecutionContract(t *testing.T) {
 		"(403 for a sibling's)",
 		"a case frozen without steps has nothing to compare",
 		"checked against the step results\nalready on file",
-		// An all-skipped pass executed nothing (handler: TestAPassNeedsAPassedStep).
-		"at least one step is `passed`",
 		// Supporting file must ship.
 	}
 	for _, want := range mustContain {

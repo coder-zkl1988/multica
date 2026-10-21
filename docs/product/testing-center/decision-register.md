@@ -257,10 +257,10 @@
 
 ### TS-030 “已验证”的定义与 autopilot 回归模板的延后
 
-- 状态：`confirmed`（实现者定义，用户可推翻）
+- 状态：`confirmed`（实现者定义，用户可推翻）；其中“已验证”的定义于 2026-10-21 `superseded`，由 TS-038 替代
 - 决定：“已验证”= 至少一条关联用例，且每条关联用例**最近一次执行**的结果都是 passed（与 Issue 覆盖列表已有的 `latest_result` 同一口径），只作徽章不改状态；“最近一轮”= 执行过任一关联用例的最新轮次，展示其中关联用例的结果分布；“测试发现的缺陷”= 关联用例所在轮次通过 `defect open` 开出的 Issue，按缺陷去重取最新一次发现。
 - 证据随缺陷：复制为同一存储对象的第二条附件行（`CreateAttachmentCopyForIssue`），`DeleteAttachment` 在仍有其他行引用同一对象时不删对象；不做存储层拷贝，因为 `Storage` 接口没有 Copy 且同一对象没有理由存两份。
-- 2026-10-20：TS-038 提案修订其中“已验证”的口径（按测试点判定、只计有效用例），已实现、待用户验收；验收后本条的“已验证”定义改为 `superseded`，“最近一轮”“测试发现的缺陷”与证据随缺陷不变。
+- 2026-10-20：TS-038 提案修订其中“已验证”的口径（按测试点判定、只计有效用例），已实现、待用户验收；2026-10-21 用户验收 TS-038，本条的“已验证”定义已改为 `superseded`，“最近一轮”“测试发现的缺陷”与证据随缺陷不变。
 - 延后：09-02 §7.5 的“autopilot 回归模板（按计划建轮次并派发给 QA 智能体，定时触发）”。autopilot 现有执行模式只有 `create_issue` / `run_only`，没有能调用测试轮次 API 的动作；做法有两种——给 autopilot 加一种 `test_run` 动作，或让它创建一个派给 QA 智能体的 Issue 并靠技能里的 `multica test run` 命令组完成——两者都超出“看板”一行的范围，留到 M6 与“按差异推荐回归”一起定。
 
 ## 2026-09-07 落地记录：M6 的取舍
@@ -318,13 +318,13 @@
 - 测试机的运维前提（代码不负责）：Artemis 需要模型 API 密钥（`.env`，默认 Gemini，逐帧定位默认要 Gemini ER 模型）；首次任务会往手机装无障碍助手 APK——小米 HyperOS 默认禁止 USB 安装，要么由机主打开“USB 安装”，要么在 Artemis `.env` 设 `ARTEMIS_HELPER_AUTO_INSTALL=false` 与 `ARTEMIS_HIERARCHY_BACKEND=uiautomator`；Artemis 默认保持被占用手机亮屏；Artemis 的调度守护进程默认占 8000 端口，测试机上若有开发服务占着（本机就是），在守护进程环境里设 `MULTICA_ARTEMIS_DAEMON_PORT`，它随能力 target 传给每条用例的代理（`--daemon-port` → `ARTEMIS_DAEMON_PORT`），所有用例共用同一个 Artemis 守护进程；录屏回放需要 scrcpy（可选，本机已用 Homebrew 装在 `/opt/homebrew/bin/scrcpy`）。adb 只解析一次：守护进程按 Artemis 自己的顺序（`ARTEMIS_ADB_PATH` → `ANDROID_HOME` / `ANDROID_SDK_ROOT` → SDK 默认位置 → Homebrew → PATH，PATH 放最后，桌面 App 拉起与终端启动选中同一个）找到 adb，作为 `adb_path` 随能力下发，代理以 `--adb` 设进 `ARTEMIS_ADB_PATH` 与 `ADB`，Artemis 和它调用的 scrcpy 都用这一个——scrcpy 否则只在 PATH 里找 adb，桌面 App 拉起的智能体没有登录 shell 的 PATH 时录屏会失败。
 - 未做：真机端到端（缺模型密钥与机主对安装的许可）；`mobile_manage_task` / `mobile_inspect_trace` 以 trace id 为界（只有启动它的用例拿得到这个 UUID），代理未额外校验 trace 归属。
 
-## 2026-10-20 测试模型复审（用户授权“按你的经验进行修改”，待验收）
+## 2026-10-20 测试模型复审（用户授权“按你的经验进行修改”，2026-10-21 验收）
 
 用户原话：“重新审视一下测试模型，设计的合理性，以及功能的完整性，如果不合理，和当前系统不匹配，或者现有的功能设计会导致测试覆盖度低，会遗漏大量的bug，那么就按照你的经验进行修改，8个小时之后我验收成果”。下列 TS-036 至 TS-040 是据此做出的修改，已在分支 `feat/testing-model-review` 实现并有测试，但仍是 `proposal`：用户验收前不得写成 `confirmed`。问题清单与取舍见 [2026-10-20 复审](../../superpowers/specs/2026-10-20-testing-model-review.md)。
 
 ### TS-036 记录下来的结果必须可信
 
-- 状态：`proposal` / `implemented`（待验收）
+- 状态：`confirmed`（2026-10-21 用户验收）/ `implemented`
 - 问题：智能体可以不带任何步骤结果、不传一张截图就记 `passed`；兜底标记 `TEST_RUN_CASE_RESULT_JSON` 里一个 `passed` 就能结案；中止后的轮次被晚到的写入翻成 `completed`；最后一条结果经 HTTP 写入时轮次完成但没有结算 autopilot，夜间回归永远停在 `running`。
 - 决定：`step_results` 有结构（`index` 对齐冻结快照、`result ∈ passed|failed|blocked|skipped|not_run`、`actual`、`note`）；智能体记 `passed` / `failed` 必须覆盖快照的每一步，且该用例已有至少一份证据（先 `evidence add` 再 `result set`）；`passed` 不得含 `failed` / `blocked` / `not_run` 步骤，`failed` 要指出失败的那一步；人工记录可以不填步骤，但填了就按同一规则校验。`aborted` 轮次拒绝一切写入；`completed` / `blocked` 轮次拒绝智能体写入、允许人工更正。兜底标记里的 `passed` 记为 `blocked` 并保留智能体摘要（失败可以靠标记结案，通过不行）。HTTP 写入后经 `convergeTestRun` 收敛，与任务钩子同一条路径。
 - 配套：`multica test result set --step <index>=<result>[:<实际>]`；两份执行提示词与 `multica-running-tests` 技能写明契约；`GET /api/test-run-cases/{id}/evidence`；轮次详情展开用例时显示冻结步骤、每步结论与实际值、证据文件（点开预览）。
@@ -332,32 +332,35 @@
 - 复审修正（2026-10-21 对抗复审）：按用例派发的任务只能写自己的 `run_case_id`——记结论与上传证据都一样，写兄弟用例返回 403；智能体上传证据同样受轮次状态约束（`completed` / `blocked` / `aborted` 返回 409）。任务钩子的兜底结案改为条件写，只写仍是 `pending` / `running` 的用例，不会覆盖智能体经 CLI 刚记下的结论；`aborted` 轮次里的兜底不写 `executed_at`，因此不会成为用例的“最近一次结果”。轮次完成改为条件写，只完成尚未 `completed` / `aborted` 的轮次：已中止的轮次不会被翻回 `completed`，autopilot 也不会被结算两次。钩子结案与轮次完成都推送事件，轮次页不再停在“执行中”。更正已记录的结果保留首次 `executed_at`，所以旧轮次的更正不会变成用例的最近一次结果。不带步骤结论的结论按已存的步骤结论校验（`failed` 改 `passed` 要在同一次写入里给出能成立的步骤结论）。冻结快照没有步骤的用例，智能体不能记 `passed`。轮次页只在步骤结论改动过时重发步骤，并保留每步的 `note`。停放（`blocked`）的轮次在所有用例都有结论后照常收敛为 `completed`：结论由各用例的结果承载，行为与此前相同。
 - 第二轮复审修正（2026-10-21）：同一轮次的写入按轮次行加锁串行化——每个用例任务的完成钩子、失败钩子和结果写入在清点、放行下一批用例、收尾之前都先锁住轮次行。此前两个用例同时结案时，两个钩子会各自把对方的用例看成仍在执行：要么把同一个等待中的用例派给两个任务，输掉的任务再也写不进结果、也无法完成；要么两边都不收尾，轮次永远停在“执行中”。失败钩子改在事务里执行，放行失败只回滚放行本身，不回滚结案。中止改为条件写，不会改写已完成的轮次；整轮任务的收尾钩子遇到已中止或已完成的轮次不再改写。`executed_at` 的规则细化为：首次记录时写；先记 `blocked` / `skipped`、后来真正执行时重写；轮次仍在进行中且结论改变时重写；已结束轮次的更正保留原时间。通过要求至少一步 `passed`，全部 `skipped` 的通过是什么都没执行，要记为 `skipped`。不带步骤结论的写入只在结论改变时才对照已存的步骤结论，备注之类的保存不再被旧数据挡住。轮次页的步骤草稿只在写入成功后跟随服务端，失败后不会被同事的保存冲掉；全部清空的步骤结论会以空列表发出；快照里没有的步骤序号不再随写入发出。
 - 第三轮复审修正：`executed_at` 只在轮次仍在进行时（`pending` / `running`，或停放为 `blocked` 等人工执行）随结论改变而重写；已结束轮次的更正保留观察时间，不会盖过之后跑过的轮次，新的观察放进重跑。“通过需要至少一步 `passed`”只约束给出了每一步结论的记录（智能体总是给全），人工的部分标注不受影响。用例与任务的绑定改为条件写（只绑未绑定的用例），两次派发竞争时输的一方撤回刚建的任务并返回 409；“开始轮次”和守护进程的开始钩子改为只把 `pending` 的轮次置为 `running`，不会复活刚被中止的轮次。失败钩子先单独提交结案，再在轮次锁下放行与收尾，后者失败不会把用例退回“执行中”；整轮任务失败导致的中止会推送事件。
+- 验收（2026-10-21）：用户确认本条，同时否决复审中加入的“通过必须至少有一步 `passed`”——全部 `skipped` 的通过仍按原规则接受（只拒绝含 `failed` / `blocked` / `not_run` 的通过）。上文复审修正里关于这一条的描述已不再生效。
 - 证据：`server/internal/handler/test_run_result.go`、`test_run.go` `UpdateTestRunCaseResult`、`test_run_daemon.go` `completeTestRunTask`；测试 `test_run_result_test.go`、`autopilot_test_run_test.go` `TestRecordingTheLastResultSettlesTheAutopilotRun`（去掉结算时该测试失败，已验证）。
 
 ### TS-037 有效用例必须可执行
 
-- 状态：`proposal` / `implemented`（待验收）
+- 状态：`confirmed`（2026-10-21 用户验收）/ `implemented`
 - 问题：`active` 用例可以没有步骤，或步骤没有预期结果——这样的用例执行起来只可能“通过”；废弃用例照样进轮次；草稿、废弃用例照样计入“已验证”。
 - 决定：`active` 用例至少一步，每步有操作和预期；不满足时新建落为 `draft`（需求页“新建用例”只带标题，因此不受影响），显式设为 `active`、改步骤、审批、AI 提议（整批回滚）都返回 400 并指出哪一步；接受旧提议会把有效用例改得不可执行时返回 409。轮次跳过废弃用例（计划里还列着也照跑其余用例），全部废弃时拒绝建轮次；草稿仍可执行（试跑是正当需求），但不计入覆盖与验证。
 - 复审修正：人写的、因为没有步骤才落成草稿的用例，在补齐可执行步骤的那次保存时自动生效；这次保存显式给了 `status` 时按给定值处理。步骤本来就完整的草稿和 AI 草稿仍要审批。旧版本遗留的“无步骤 `active` 用例”其它字段照常可改（只在步骤变化或转为 `active` 时校验），但智能体不能对其冻结快照记 `passed`。这条规则约束本版本之后的写入，存量数据不追溯降级。删除用例时同时把它从计划的列表里移除，计划不会因悬空 id 而无法建轮次。
 - 第二轮复审修正：自动生效改由一个标记决定——只有因为没有步骤才默认落为草稿的人写用例（`source_refs.awaiting_steps`）会在人补齐步骤的那次保存时生效。特意建成草稿的、步骤本来就完整的、智能体写过步骤的草稿都要审批；任何显式给出状态的保存都会清掉这个标记。用例的步骤改变（按操作、预期、仓库比较）时记录 `test_case.steps_changed_at`（迁移 929）。此后在旧步骤上记下的结果不再计入覆盖，标题、优先级之类的修改不影响。
 - 第三轮复审修正：“程序变了”不只看步骤，还看前置条件、整体预期结果和测试数据——执行者读到并据以核对的都算。生成任务改写人写的草稿时清掉 `awaiting_steps` 标记，这类草稿也要审批。
+- 验收（2026-10-21）：用户确认本条，同时否决“改了用例步骤（及前置条件、整体预期、测试数据）后旧结果不再计入覆盖”——迁移 929 `test_case.steps_changed_at` 已从分支删除（未上线），修改用例后旧结果照常计入。上文复审修正里关于 `steps_changed_at` 的描述已不再生效。
 - 证据：`server/internal/handler/test_case.go` `testCaseStepsProblem`、`test_generation_propose.go`、`test_run.go` `loadCasesForRun`；测试 `test_case_gate_test.go`（含 `TestPersonsDraftGoesLiveWhenItsStepsAreFilledIn`、`TestLegacyActiveCaseStaysEditable`）、`test_generation_test.go`、`test_run_test.go` `TestCreateTestRunSkipsDeprecatedCases`、`test_plan_selector_test.go` `TestPlansOutliveTheirDeletedCases`。
 
 ### TS-038 覆盖按需求的测试点计算
 
-- 状态：`proposal` / `implemented`（待验收）；验收后替代 TS-030 的“已验证”定义
+- 状态：`confirmed`（2026-10-21 用户验收）/ `implemented`；替代 TS-030 的“已验证”定义
 - 问题：覆盖率的分母不存在——“已验证”只看关联用例是否全部通过，一条正常路径用例通过，需求就显示已验证，而拒绝路径、边界、权限没人测，也没有任何地方列出“没测什么”。
-- 决定：新增测试点 `issue_test_point`（每个任务内 `TP-<n>`，类别 `positive|negative|boundary|permission|state|data|non_functional`，`origin ai|human`，`active|dropped`）与用例声明 `test_case_test_point`（声明测试点同时关联其任务）。测试点状态（第二轮复审后）：无有效用例覆盖 = `uncovered`（只有可审批的草稿覆盖时为 `in_review`），有覆盖用例的当前结论为 `failed` = `failing`，覆盖它的每条有效用例当前结论都是 `passed` = `passed`，否则 `not_run`；当前结论的定义见下方“第二轮复审修正”。“已验证”按 `basis` 判定：有有效测试点时（`test_points`）每个都已覆盖并通过、且任务的有效关联用例中没有最近一次失败的；没有测试点时退回关联用例口径并标 `cases_only`，界面显示“用例通过”而不是“已验证”；什么都没有为 `none`。只计 `active` 用例。人写的测试点智能体不能改、不能删（403），智能体只能新增或改自己的、用 `dropped` 退场。
+- 决定：新增测试点 `issue_test_point`（每个任务内 `TP-<n>`，类别 `positive|negative|boundary|permission|state|data|non_functional`，`origin ai|human`，`active|dropped`）与用例声明 `test_case_test_point`（声明测试点同时关联其任务）。测试点状态（验收后）：无有效用例覆盖 = `uncovered`（只有可审批的草稿覆盖时为 `in_review`），有覆盖用例的当前结论为 `failed` = `failing`，有覆盖用例的当前结论为 `passed` 且没有失败 = `passed`，否则 `not_run`；当前结论见下方“验收”。“已验证”按 `basis` 判定：有有效测试点时（`test_points`）每个都已覆盖并通过、且任务的有效关联用例中没有最近一次失败的；没有测试点时退回关联用例口径并标 `cases_only`，界面显示“用例通过”而不是“已验证”；什么都没有为 `none`。只计 `active` 用例。人写的测试点智能体不能改、不能删（403），智能体只能新增或改自己的、用 `dropped` 退场。
 - 配套：迁移 924–927（无外键、索引并发建、各自单文件；删任务 / 用例 / 测试点 / 工作区都清理）；`/api/issues/{id}/test-points`、`/api/test-points/{id}`、`/api/test-cases/{ref}/test-points`；`multica testcase point list|add|update`、`multica testcase cover`；需求页列出测试点、未覆盖高亮、可新增 / 废弃 / 选用例覆盖，用例页列出它验证的测试点；`test_case:updated` 与结果事件会刷新需求页覆盖。项目级“覆盖”页（测试 → 覆盖，`/tests/coverage`，`GET /api/test-coverage?project_id=`）列出项目内所有未取消的任务，按 `failing`（覆盖用例失败）、`no_tests`（没有有效用例也没有测试点）、`gaps`（有测试点未覆盖）、`no_points`（有用例但没拆测试点）、`not_run`、`verified` 从坏到好排序并可筛选——发版前要逐条处理的漏测清单。
 - 复审修正：新增测试点状态 `in_review`（界面“仅草稿覆盖”）：没有有效用例覆盖、但有草稿声明了它。生成运行的新用例都落草稿，不区分的话它刚覆盖的点会全部显示“未覆盖”，提示词又要求为未覆盖的点补用例，形成重复生成。覆盖页相应增加 `in_review` 行状态（“待审核”）与 `review_points` 列，排序在 `gaps` 之后。从任务解除用例关联时，同时删除该用例对这个任务测试点的声明，否则一个已无关联用例的任务仍可能显示已验证。人编辑 AI 测试点后其 `origin` 变为 `human`，之后智能体不能再改。用例修订（草稿改写、接受提议）替换它的 AI 测试点声明，而不是累加。接受提议前，对每个测试点所在的任务做与其它关联路径相同的窗口授权检查。覆盖页的截断与 `truncated` 标志改为在过滤之后计算。已知限制：删除编号最大的测试点后，下一个新点会复用该 `TP-<n>` 编号。
 - 第二轮复审修正：覆盖与验证改读每条用例的**当前结论**——最近一次以有效用例、按现在的步骤执行的轮次（快照里状态为 `active`，且轮次用例的创建时间不早于 `steps_changed_at`）里记下的 `passed` 或 `failed`。`blocked` / `skipped` 不再算结论，夜里设备掉线的一轮不会抹掉前一晚发现的失败；草稿试跑的结果在审批后也不计入。测试点“通过”改为**覆盖它的每条有效用例当前都通过**（原为“有一条通过且没有失败”）：生成任务为每个边界值、每个被拒角色各写一条用例，只跑过其中一条时该点是“未执行”。`in_review` 只计步骤可执行、能被审批的草稿。项目覆盖页先读一个更宽的窗口（4 倍上限），过滤掉已取消和不可见的任务后再按 500 条截断，`truncated` 按过滤后的结果计算。用例修订替换 AI 测试点声明时只动修订所属生成任务范围内的任务，接受提议时窗口外的测试点保留原有关联、只是不新建；窗口检查的基础设施错误改为直接报错，不再静默跳过。
 - 第三轮复审修正：项目覆盖页在 SQL 里排除已关闭状态（内置 `cancelled` 及自定义的关闭类状态），再按 500 条截断；查询改为按任务聚合后连接，开销随读取行数线性增长；`truncated` 只在确有可见任务被截掉时为真。可审批草稿的判断与 Go 端一致（任何空白都算空）。生成任务快照只把目标仍为有效用例的排队修订计为待审核。修订替换 AI 测试点声明时，范围解析不出任何任务（任务已删、生成任务读不到）就不删除任何声明；窗口外任务上的既有 AI 声明保留。
+- 验收（2026-10-21）：用户确认本条，同时否决“测试点要所有覆盖它的有效用例都通过才算通过”，恢复为“有覆盖用例当前结论为通过且没有失败”。“当前结论”保留其余部分：只看最近一次以有效用例执行的 `passed` / `failed`，`blocked` / `skipped` 不抹失败，草稿试跑的结果在审批后不计入。
 - 证据：`server/internal/handler/test_point.go`、`test_issue_summary.go`；`packages/views/testing/components/issue-test-points.tsx`、`case-test-points.tsx`；测试 `test_point_test.go`（含“只测正常路径不算已验证”的端到端用例）、`issue-test-coverage.test.tsx`、`case-test-points.test.tsx`、`issue-test-summary-schema.test.ts`。
 
 ### TS-039 AI 生成先拆测试点，再逐点设计用例
 
-- 状态：`proposal` / `implemented`（待验收）
+- 状态：`confirmed`（2026-10-21 用户验收）/ `implemented`
 - 问题：生成提示词没有系统的测试设计方法，还写着“宁少勿多”——一条没有下限的引导，运行可以停在一条正常路径；生成结果只报数量，看不出漏了什么。
 - 决定：提示词先要求对 `plan.issues` 的每个任务读已有测试点、按七个类别补缺（人写的不改），再逐点派生用例：每个有效测试点至少一条；有输入的点覆盖等价类与边界值（min、min-1、max、max+1、空）；权限点每个被拒角色一条；状态点每个非法转换一条；“精确不等于少”。提议的 `case.test_points` 只能引用本次范围内任务的测试点（否则 400），存为 id，草稿直接改写与人工接受提议时建立关联；生成结束时服务端写入 `result.coverage`（每个范围内任务的有效 / 已覆盖测试点数与未覆盖列表），智能体自报的放 `declared_coverage`；生成任务页的结果区按任务列出“已覆盖 X/Y”与未覆盖的测试点，没拆测试点的任务单独标出。
 - 与复审草案的偏差：草案曾写“新用例必须声明测试点，否则拒绝”。实现改为**不拒绝、计数上报**（响应 `new_cases_without_test_points`）：守护进程与服务器版本可能不一致，旧守护进程的提示词不知道测试点，硬拒会让整次生成失败；约束改由提示词、需求页的未覆盖清单和结束时的覆盖快照承担。
@@ -367,7 +370,7 @@
 
 ### TS-040 回归计划按规则选例
 
-- 状态：`proposal` / `implemented`（待验收）
+- 状态：`confirmed`（2026-10-21 用户验收）/ `implemented`
 - 问题：计划是静态列表，计划建好后新写的用例永远不进它的回归，夜间 autopilot 回归测到的产品范围逐周缩小。
 - 决定：`test_plan.selector`（迁移 928）：模块、优先级、用例类型、要跟随的任务（存 id）或“项目内所有有效用例”；维度之间取交、维度内取并、只选 `active`；`{}` 即无规则。一轮（人工建或 autopilot）先跑列出的用例，再跑规则此刻匹配到的有效用例（去重）；什么都选不出时拒绝建轮次。`GET /api/test-plans/{id}/selection` 预览下一轮及每条用例的来源，计划页可编辑规则并显示“下一轮将执行 N 条”。
 - 复审修正：模块规则按存储值精确匹配（此前会 trim 规则值，带首尾空格的模块永远匹配不到）；人工列出但已被删除的用例在预览与建轮次时都会被丢弃；用例变化会刷新计划的“下一轮”预览与开始按钮。已知限制：对不认识 `selector` 的旧服务器保存规则时，规则会被静默丢弃。
@@ -388,7 +391,7 @@
 
 ### TS-043 智能体写的用例同样要人审，智能体不能让用例生效或下线
 
-- 状态：`proposal` / `implemented`（待验收）
+- 状态：`confirmed`（2026-10-21 用户验收）/ `implemented`
 - 问题：TS-004 规定生成任务的新用例落草稿，但智能体通过 CLI（`multica testcase create`）直接建的用例 `origin` 是 `human`，带步骤即为 `active`；智能体还能 `approve` 自己的草稿、`update --status active`、接受或拒绝提议，审批闸门形同虚设。反方向更危险：智能体能把一条失败的有效用例设为 `deprecated` 或直接删除，回归“变绿”，缺陷还在。
 - 决定：任务令牌发起的用例写入按智能体处理。新建一律 `origin ai`、默认 `draft`，显式 `active` 返回 403。以下操作也都返回 403：`approve`、把用例设为 `active`（已废弃的用例由人恢复）、接受或拒绝提议；改变有效用例的状态或删除它；把有效用例从任务或测试点解除关联；废弃有效用例所验证的测试点；从计划移除用例、修改计划的规则或状态、删除计划；删除智能体写的草稿以外的任何用例。智能体仍可编辑用例（修订历史里记为智能体修改，可回滚），可删除智能体写的草稿，可往计划里加用例。权限判断在步骤校验之前；写入时在事务里锁住用例重读状态，状态在此期间变了就返回 409。403 信息要求智能体告诉人：哪些草稿待审，哪条用例、哪个测试点或哪个计划应该改、为什么。
 - 第三轮复审补充：智能体也不能声称一条有效用例覆盖某个任务或测试点（`multica testcase cover`、关联任务，403——它过去的通过会立刻计入，应在生成任务的 `update` 里写明测试点，交人审核）；不能改变已废弃用例的状态；不能改回归（`test_run`）autopilot 的计划、模式、项目、执行者、状态或触发器，也不能删除它（判断按解码后的字段，键名大小写不同也拦得住）；只能删除没有被审批过的 AI 草稿。智能体在草稿上画的任务关联记为 `origin ai`。
