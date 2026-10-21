@@ -697,8 +697,13 @@ func (h *Handler) replaceCaseAITestPoints(r *http.Request, qtx *db.Queries, case
 			if point.LinkOrigin != "ai" || slices.Contains(keep, point.ID) {
 				continue
 			}
+			// A window check that could not run is not "visible": failing the
+			// revision is better than deleting a link it may not speak for.
 			var outside *service.IssueOutsideCreationWindowError
-			if windowErr := h.checkIssueWindowAuthorization(r, point.IssueID, wsUUID, "test_case_revision"); windowErr != nil && errors.As(windowErr, &outside) {
+			if windowErr := h.checkIssueWindowAuthorization(r, point.IssueID, wsUUID, "test_case_revision"); windowErr != nil {
+				if !errors.As(windowErr, &outside) {
+					return windowErr
+				}
 				keep = append(keep, point.ID)
 			}
 		}

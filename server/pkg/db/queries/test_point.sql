@@ -149,11 +149,31 @@ ORDER BY i.number ASC, p.number ASC;
 -- owed tests and are dropped before the limit, so the limit counts issues the
 -- page can show. Every count is aggregated once per issue and joined, so the
 -- cost grows with the rows read, not with their square.
-WITH project_issues AS (
+-- The issue window: the workspace's newest window_limit issues and all their
+-- ancestors, however old. A CTE is only evaluated when read, so with the
+-- window off it costs nothing.
+WITH RECURSIVE issue_window_base AS MATERIALIZED (
+    SELECT w.id, w.parent_issue_id FROM issue w
+    WHERE w.workspace_id = sqlc.arg(workspace_id)
+    ORDER BY w.number DESC
+    LIMIT sqlc.narg(window_limit)::bigint
+),
+issue_window_visible(id, parent_issue_id) AS (
+    SELECT b.id, b.parent_issue_id FROM issue_window_base b
+    UNION
+    SELECT parent.id, parent.parent_issue_id
+    FROM issue parent
+    JOIN issue_window_visible child ON child.parent_issue_id = parent.id
+    WHERE parent.workspace_id = sqlc.arg(workspace_id)
+),
+project_issues AS (
     SELECT i.id, i.number, i.title, i.status
     FROM issue i
     WHERE i.workspace_id = sqlc.arg(workspace_id) AND i.project_id = sqlc.arg(project_id)
       AND NOT (i.status = ANY(sqlc.arg(closed_statuses)::text[]))
+      -- An enforced issue window (window_limit set) applies before the limit,
+      -- as in every other issue list.
+      AND (sqlc.narg(window_limit)::bigint IS NULL OR i.id IN (SELECT id FROM issue_window_visible))
     ORDER BY i.number DESC
     LIMIT sqlc.arg(row_limit)
 ),
@@ -174,8 +194,11 @@ draft_cases AS (
       AND jsonb_typeof(tc.steps) = 'array' AND jsonb_array_length(tc.steps) > 0
       AND NOT EXISTS (
           SELECT 1 FROM jsonb_array_elements(tc.steps) s
-          WHERE COALESCE(s->>'action', '') ~ '^\s*$'
-             OR COALESCE(s->>'expected', '') ~ '^\s*$'
+          -- Blank as the approval gate's strings.TrimSpace sees it: the
+          -- class is Go's unicode.IsSpace set, since \s follows the
+          -- database's locale and misses no-break and other Unicode spaces.
+          WHERE COALESCE(s->>'action', '') ~ '^[\t\n\v\f\r \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]*$'
+             OR COALESCE(s->>'expected', '') ~ '^[\t\n\v\f\r \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]*$'
       )
 ),
 active_case_latest AS (
