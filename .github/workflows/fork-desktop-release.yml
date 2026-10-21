@@ -282,6 +282,20 @@ jobs:
           echo "reactNativeArchitectures=arm64-v8a" >> gradle.properties
           ./gradlew :app:assembleRelease --no-daemon
 
+      # A native-lib mismatch still assembles a good-looking APK that dies in
+      # SoLoader before any JS loads: fbjni 0.8.1 imported a symbol NDK r27.1's
+      # libc++_shared.so lacks (see apps/mobile/plugins/with-fbjni-pin.js).
+      # The tests first prove the checker flags that skew with this runner's
+      # NDK; then every packaged lib must resolve its imports and the APK must
+      # be 16 KB-page aligned.
+      - name: Check APK native libs
+        working-directory: apps/mobile
+        env:
+          REQUIRE_ANDROID_TOOLCHAIN: "1"
+        run: |
+          node --test scripts/check-apk-native-libs.test.mjs
+          node scripts/check-apk-native-libs.mjs android/app/build/outputs/apk/release/app-release.apk
+
       - name: Rename APK with release version
         shell: bash
         env:
