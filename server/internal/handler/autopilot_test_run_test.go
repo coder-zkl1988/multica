@@ -153,9 +153,13 @@ func TestAutopilotTestRunModeLaunchesARoundAndSettlesIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := testHandler.convergeTestRun(ctx, testHandler.Queries, run); err != nil {
-		t.Fatal(err)
+	completed, err := testHandler.convergeTestRun(ctx, testHandler.Queries, run)
+	if err != nil || completed == nil {
+		t.Fatalf("converge: completed %v, err %v", completed, err)
 	}
+	// A hook converges inside its transaction and settles the autopilot run
+	// only once that has committed, when it publishes the settlement.
+	testHandler.publishTestRunSettlement(testWorkspaceID, testRunSettlement{run: completed, converged: true})
 	var settled string
 	var result []byte
 	if err := testPool.QueryRow(ctx, "SELECT status, coalesce(result::text, '') FROM autopilot_run WHERE id = $1", apRunID).Scan(&settled, &result); err != nil {

@@ -432,6 +432,7 @@ var concurrentIndexCleanups = map[string]string{
 	"919_autopilot_run_test_run_index":                     "idx_autopilot_run_test_run",
 	"925_issue_test_point_issue_number_index":              "issue_test_point_issue_number_idx",
 	"927_test_case_test_point_point_index":                 "test_case_test_point_point_idx",
+	"929_test_run_case_open_task_index":                    "test_run_case_open_task_idx",
 	"452_agent_task_pending_thread_unique":                 "idx_one_pending_task_per_issue_agent_thread",
 	"459_chat_message_assistant_task_index":                "idx_chat_message_assistant_task",
 	"460_agent_task_queue_autopilot_run_created_at_index":  "idx_agent_task_queue_autopilot_run_created_at",
