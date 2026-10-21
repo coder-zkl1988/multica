@@ -200,14 +200,14 @@ rebuild the app (`pnpm exec expo prebuild -p android` then Gradle, or
 
 ### Local iOS builds go through `scripts/ios-run.sh`
 
-Every `ios:*` script runs `expo prebuild -p ios` before `expo run:ios`. Keep it that way, and route any new iOS script through the same wrapper.
+Every `ios:*` script runs `expo prebuild -p ios --no-install --no-clean` before `expo run:ios`. Keep it that way, and route any new iOS script through the same wrapper.
 
 `expo run:ios` prebuilds **only when `ios/` is missing** (`ensureNativeProjectAsync` in `@expo/cli`) — when the directory exists it returns early and config plugins never re-run. Without the explicit prebuild, everything `app.config.ts` owns (app icon, bundle identifier, display name, URL scheme, Info.plist permission strings) stays pinned to whatever the first prebuild wrote, while the build still reports success. `ios/` is gitignored and fully generated, so re-prebuilding on every run is safe and idempotent.
 
 Two things the wrapper depends on:
 
+- `--no-clean` is required. Since Expo SDK 57, `expo prebuild` deletes and recreates `ios/` unless `--no-clean` is passed; earlier SDKs applied changes in place by default. A clean prebuild also deletes `ios/Pods`, and since `expo-build-properties` sets `buildReactNativeFromSource`, the next `run:ios` rebuilds React Native's pods from source, which is far too slow for the edit/run loop. `--no-clean` still rewrites `appleTeamId`, the variant's bundle identifier and display name, and the `enableSceneSupport` scene manifest in place. The Xcode project keeps the name of the variant that first generated it (e.g. `MulticaDev` after switching to staging). Run `npx expo prebuild -p ios --clean` by hand when a native dependency changes or the Expo SDK is bumped.
 - `--no-install` is safe because `run:ios` installs pods itself when `Podfile.lock` is stale.
-- `--clean` is avoided on purpose: `expo-build-properties` sets `buildReactNativeFromSource`, so a clean prebuild forces a from-source pod rebuild that is far too slow for the edit/run loop. Run `npx expo prebuild -p ios --clean` by hand when a native dependency changes.
 
 The wrapper is invoked under the caller's `dotenv`/`cross-env`, so prebuild and run resolve the same `APP_ENV` and bundle identifier. A bare `expo prebuild` inside a prod/staging script would rewrite the project to the dev variant.
 

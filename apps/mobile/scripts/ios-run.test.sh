@@ -53,7 +53,9 @@ fail() {
 : >"$CALLS_FILE"
 "$SCRIPT_DIR/ios-run.sh"
 
-expected_prebuild='exec expo prebuild -p ios --no-install'
+# --no-clean is part of the contract: since Expo SDK 57 a bare prebuild deletes
+# and recreates ios/ (and its Pods) on every run.
+expected_prebuild='exec expo prebuild -p ios --no-install --no-clean'
 [ "$(sed -n '1p' "$CALLS_FILE")" = "$expected_prebuild" ] ||
   fail "first call should be the prebuild, got: $(sed -n '1p' "$CALLS_FILE")"
 [ "$(sed -n '2p' "$CALLS_FILE")" = 'exec expo run:ios' ] ||
