@@ -1642,6 +1642,9 @@ func (h *Handler) UpdateTestRunCaseResult(w http.ResponseWriter, r *http.Request
 	if completedRun, convergeErr := h.convergeTestRun(r.Context(), h.Queries, run); convergeErr != nil {
 		slog.Error("auto-complete test run failed", append(logger.RequestAttrs(r), "error", convergeErr)...)
 	} else if completedRun != nil {
+		// No transaction here: the completion has committed, so the autopilot
+		// run is settled now.
+		h.settleAutopilotTestRun(r.Context(), h.Queries, *completedRun)
 		h.publish(protocol.EventTestRunUpdated, workspaceID, actorType, actorID,
 			map[string]any{"test_run": testRunToResponse(*completedRun)})
 	}

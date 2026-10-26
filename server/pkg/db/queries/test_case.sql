@@ -25,14 +25,17 @@ GROUP BY module
 ORDER BY module ASC;
 
 -- name: CreateTestCase :one
+-- reviewed_by/reviewed_at are set when a member creates a case directly as
+-- active: creating it live is that member's approval.
 INSERT INTO test_case (
     workspace_id, project_id, case_number, title, module, preconditions,
     steps, expected_result, test_data, priority, case_type, scope,
     execution_mode, required_capabilities, business_rules_ref, status,
-    origin, source_refs, generation_job_id, created_by, updated_by
+    origin, source_refs, generation_job_id, created_by, updated_by,
+    reviewed_by, reviewed_at
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-    $13, $14, $15, $16, $17, $18, $19, $20, $21
+    $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23
 ) RETURNING *;
 
 -- name: UpdateTestCase :one

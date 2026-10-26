@@ -156,14 +156,14 @@ take one out of coverage or regression:
 | --- | --- |
 | `approve`, or `update --status active` | 403 |
 | any status change of an active or a deprecated case, or `delete` of it | 403 |
-| linking an active case to an issue or test point (`cover`, issue links) | 403 — its past passes would count at once; name the points in a generation run's `update` instead |
+| linking a case that has been live — active, deprecated, or a draft someone approved before — to an issue or test point (`cover`, issue links) | 403 — its past passes would count once it is active; name the points in a generation run's `update` instead |
 | unlinking an active case from an issue or a test point | 403 |
-| `point update --status dropped` on a point an active case verifies | 403 |
+| `point update --status dropped`, or rewriting a point's title, description or category, when an active case verifies it | 403 — its results would stand for a condition nobody checked; add a new point instead |
 | removing a case from a plan, changing a plan's rule or status, deleting a plan | 403 |
-| changing a regression (`test_run`) autopilot's plan, mode, project, assignee, status or triggers, or deleting it | 403 |
+| changing a regression (`test_run`) autopilot's plan, mode, project, assignee, description (its rounds' case prompt), status or triggers (adding, editing or deleting one, rotating a webhook URL, setting a signing secret), or deleting it | 403 |
 | `delete` of anything but an AI-written draft nobody approved | 403 |
 | `proposal accept` / `proposal reject` | 403 |
-| other edits, linking drafts, `delete` of an AI-written draft, adding cases to a plan | allowed |
+| other edits, linking a draft nobody approved, `delete` of an AI-written draft, adding cases to a plan | allowed |
 
 An agent's edit is recorded as the agent's in the case's revision history.
 When a 403 says so, tell the person which drafts are ready for review, or
@@ -325,7 +325,7 @@ Each link carries an `origin`:
 | origin | meaning |
 | --- | --- |
 | `human` | someone linked it by hand |
-| `ai` | a generation run asserted it, because its approved plan was scoped to that issue |
+| `ai` | an agent drew it — a generation run for its approved scope, or an agent linking a draft — a claim nobody has checked |
 
 The distinction is what a reviewer needs: an `ai` link is a claim the run made,
 not a fact a person checked.

@@ -235,7 +235,18 @@ func TestAgentCannotRetireAnActiveCase(t *testing.T) {
 	// Nor may it drop the condition the live case is checked against.
 	testutil.Call(t, testHandler.UpdateTestPoint, asTestCaseAgent(withURLParam(newRequest("PATCH", "/api/test-points/"+point.ID+"?workspace_id="+testWorkspaceID,
 		map[string]any{"status": "dropped"}), "pointId", point.ID))).Want(http.StatusForbidden)
+	// Nor rewrite it: the live case's results would then stand for a
+	// condition nobody checked it against, even on a point the agent wrote.
+	for _, body := range []map[string]any{{"title": "A refund keeps no record"}, {"description": "Only for gift cards"}, {"category": "negative"}} {
+		resp := testutil.Call(t, testHandler.UpdateTestPoint, asTestCaseAgent(withURLParam(newRequest("PATCH", "/api/test-points/"+point.ID+"?workspace_id="+testWorkspaceID,
+			body), "pointId", point.ID))).Want(http.StatusForbidden)
+		if !strings.Contains(resp.Text(), "add a new point") {
+			t.Errorf("rewrite %v refused with %q, want the add-a-new-point advice", body, resp.Text())
+		}
+	}
 	loose := createTestPoint(t, issueID, map[string]any{"title": "A refund is logged"}, testCaseAgentHeaders...)
+	testutil.Call(t, testHandler.UpdateTestPoint, asTestCaseAgent(withURLParam(newRequest("PATCH", "/api/test-points/"+loose.ID+"?workspace_id="+testWorkspaceID,
+		map[string]any{"title": "A refund is logged with its reason"}), "pointId", loose.ID))).Want(http.StatusOK)
 	testutil.Call(t, testHandler.UpdateTestPoint, asTestCaseAgent(withURLParam(newRequest("PATCH", "/api/test-points/"+loose.ID+"?workspace_id="+testWorkspaceID,
 		map[string]any{"status": "dropped"}), "pointId", loose.ID))).Want(http.StatusOK)
 
@@ -313,6 +324,31 @@ func TestAgentCannotClaimThatAnActiveCaseCoversARequirement(t *testing.T) {
 		map[string]any{"test_points": []string{point.ID}}), "ref", active.Key))).Want(http.StatusForbidden)
 	testutil.Call(t, testHandler.LinkTestCaseIssues, asTestCaseAgent(withURLParam(newRequest("POST", "/api/test-cases/"+active.Key+"/issues?workspace_id="+testWorkspaceID,
 		map[string]any{"issue_ids": []string{issueID}}), "ref", active.Key))).Want(http.StatusForbidden)
+
+	// A case that has been live keeps its past passes: moved back to draft
+	// or retired, it is still not the agent's to link. That covers a case a
+	// member created live, one their save activated, and a deprecated one.
+	agentLink := func(key string) *testutil.Response {
+		return testutil.Call(t, testHandler.LinkTestCaseTestPoints, asTestCaseAgent(withURLParam(newRequest("POST", "/api/test-cases/"+key+"/test-points?workspace_id="+testWorkspaceID,
+			map[string]any{"test_points": []string{point.ID}}), "ref", key)))
+	}
+	memberSets := func(key string, body map[string]any) TestCaseResponse {
+		var out TestCaseResponse
+		testutil.Call(t, testHandler.UpdateTestCase, withURLParam(newRequest("PUT", "/api/test-cases/"+key+"?workspace_id="+testWorkspaceID,
+			body), "ref", key)).Want(http.StatusOK).JSON(&out)
+		return out
+	}
+	memberSets(active.Key, map[string]any{"status": "draft"})
+	agentLink(active.Key).Want(http.StatusForbidden)
+	stepless := createTestCaseForTest(t, map[string]any{"project_id": projectID, "title": "Refund twice, no steps yet"})
+	if activated := memberSets(stepless.Key, map[string]any{"steps": executableSteps}); activated.Status != "active" || activated.ReviewedAt == nil {
+		t.Fatalf("a member's save that activates a case = %s reviewed %v, want active and stamped as reviewed", activated.Status, activated.ReviewedAt)
+	}
+	memberSets(stepless.Key, map[string]any{"status": "draft"})
+	agentLink(stepless.Key).Want(http.StatusForbidden)
+	retired := createTestCaseForTest(t, map[string]any{"project_id": projectID, "title": "Refund twice, retired", "steps": executableSteps})
+	memberSets(retired.Key, map[string]any{"status": "deprecated"})
+	agentLink(retired.Key).Want(http.StatusForbidden)
 
 	// A draft's links count for nothing until it is approved, so an agent
 	// may draw them — as AI links.

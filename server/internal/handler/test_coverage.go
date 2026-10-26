@@ -99,52 +99,41 @@ func (h *Handler) ListProjectTestCoverage(w http.ResponseWriter, r *http.Request
 	} else {
 		slog.Warn("list issue statuses for test coverage failed", append(logger.RequestAttrs(r), "error", err)...)
 	}
-	rows, err := h.Queries.ListProjectTestCoverage(r.Context(), db.ListProjectTestCoverageParams{
+	// The same issue-window rule every issue list follows. Enforced, it is
+	// applied inside the query, before the limit, so a visible ancestor older
+	// than a run of hidden issues is still listed and the limit counts only
+	// issues the page can show.
+	policy, windowEnabled := h.issueWindowPolicy(r.Context(), wsUUID)
+	params := db.ListProjectTestCoverageParams{
 		// One row past the limit says whether anything was cut off.
 		WorkspaceID: wsUUID, ProjectID: projectUUID, ClosedStatuses: closed, RowLimit: projectCoverageLimit + 1,
-	})
+	}
+	if windowEnabled && policy.action == entitlement.ActionEnforce {
+		params.WindowLimit = pgtype.Int8{Int64: policy.limit, Valid: true}
+	}
+	rows, err := h.Queries.ListProjectTestCoverage(r.Context(), params)
 	if err != nil {
 		slog.Error("list project test coverage failed", append(logger.RequestAttrs(r), "error", err)...)
 		writeError(w, http.StatusInternalServerError, "failed to load test coverage")
 		return
 	}
-
-	// The same issue-window rule every issue list follows.
-	policy, windowEnabled := h.issueWindowPolicy(r.Context(), wsUUID)
-	var visible map[pgtype.UUID]struct{}
-	if windowEnabled {
+	if windowEnabled && policy.action != entitlement.ActionEnforce {
 		issueIDs := make([]pgtype.UUID, len(rows))
 		for i, row := range rows {
 			issueIDs[i] = row.IssueID
 		}
-		if policy.action == entitlement.ActionEnforce {
-			visible, err = h.visibleIssueIDSet(r.Context(), wsUUID, policy, issueIDs)
-			if err != nil {
-				writeError(w, http.StatusInternalServerError, "failed to check issue access")
-				return
-			}
-		} else {
-			h.observeIssueWindow(r.Context(), wsUUID, policy, issueIDs, "test_coverage_list")
-		}
+		h.observeIssueWindow(r.Context(), wsUUID, policy, issueIDs, "test_coverage_list")
 	}
 
 	resolver := issuestatus.NewResolver(wsUUID)
 	prefix := h.getIssuePrefix(r.Context(), wsUUID)
 	summary := map[string]int{"failing": 0, "no_tests": 0, "gaps": 0, "in_review": 0, "no_points": 0, "not_run": 0, "verified": 0}
-	issues := make([]ProjectTestCoverageIssueResponse, 0, min(len(rows), projectCoverageLimit))
-	// The window hides the oldest issues, which the newest-first order puts
-	// last: an issue past the limit that is visible is one the page cut.
-	truncated := false
+	truncated := len(rows) > projectCoverageLimit
+	if truncated {
+		rows = rows[:projectCoverageLimit]
+	}
+	issues := make([]ProjectTestCoverageIssueResponse, 0, len(rows))
 	for _, row := range rows {
-		if visible != nil {
-			if _, ok := visible[row.IssueID]; !ok {
-				continue
-			}
-		}
-		if len(issues) == projectCoverageLimit {
-			truncated = true
-			break
-		}
 		// Belt and braces for a status whose category changed since the
 		// catalog read above.
 		if resolver.Category(r.Context(), h.Queries, row.IssueStatus) == issuestatus.CategoryClosed {

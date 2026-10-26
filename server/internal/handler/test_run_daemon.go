@@ -177,12 +177,21 @@ func (h *Handler) markTestRunRunning(ctx context.Context, task db.AgentTaskQueue
 type testRunSettlement struct {
 	runCase *db.TestRunCase
 	run     *db.TestRun
+	// converged marks a run the hook completed by convergence: its autopilot
+	// run is settled after the commit, never inside the transaction (the
+	// autopilot writes through its own connection, so a rollback could not
+	// take it back).
+	converged bool
 }
 
 // publishTestRunSettlement tells open round pages and issue test blocks what a
 // hook settled; without it a case finished by its task stays "running" on
-// screen until a manual refresh.
+// screen until a manual refresh. Called once the hook's transaction has
+// committed, it also settles the autopilot run of a round the hook completed.
 func (h *Handler) publishTestRunSettlement(workspaceID string, settled testRunSettlement) {
+	if settled.converged && settled.run != nil {
+		h.settleAutopilotTestRun(context.Background(), h.Queries, *settled.run)
+	}
 	if settled.runCase != nil {
 		h.publish(protocol.EventTestRunCaseUpdated, workspaceID, "system", "", map[string]any{
 			"test_run_case": testRunCaseToResponse(*settled.runCase),
@@ -198,6 +207,8 @@ func (h *Handler) publishTestRunSettlement(workspaceID string, settled testRunSe
 // nobody recorded yet — an agent's CLI verdict that committed after the hook
 // read the case is never overwritten — and, in an aborted round, leaves
 // executed_at unset so the settle never becomes the case's latest result.
+// The query re-checks the round's status itself when it writes; the read
+// here only saves a pointless stamp.
 func settleOpenTestRunCase(ctx context.Context, q *db.Queries, run db.TestRun, rc db.TestRunCase, result, notes string) (*db.TestRunCase, error) {
 	params := db.SettleOpenTestRunCaseParams{
 		ID:             rc.ID,
@@ -296,6 +307,7 @@ func (h *Handler) completeTestRunTask(ctx context.Context, q *db.Queries, task d
 		slog.Warn("dispatch next test run cases failed", "run_id", uuidToString(run.ID), "error", err)
 	}
 	settled.run, err = h.convergeTestRun(ctx, q, run)
+	settled.converged = settled.run != nil
 	return settled, err
 }
 
@@ -334,7 +346,7 @@ func (h *Handler) convergeTestRun(ctx context.Context, q *db.Queries, run db.Tes
 	if err != nil {
 		return nil, err
 	}
-	h.settleAutopilotTestRun(ctx, q, completed)
+	// The caller settles the autopilot run once this write has committed.
 	return &completed, nil
 }
 
@@ -369,15 +381,23 @@ func (h *Handler) updateTestRunFromAgentFailure(ctx context.Context, task db.Age
 		h.publishTestRunSettlement(uuidToString(run.WorkspaceID), testRunSettlement{run: &aborted})
 		return nil
 	}
+	notes := "the agent task failed before recording a result"
+	if strings.TrimSpace(req.Error) != "" {
+		notes += ": " + strings.TrimSpace(req.Error)
+	}
+	return h.blockTestRunCaseAndAdvance(ctx, run, rc, notes)
+}
+
+// blockTestRunCaseAndAdvance settles a case whose task ended without a result
+// as blocked, then releases the next held-back cases and converges the round.
+// The /fail hook and the reconciler share it.
+func (h *Handler) blockTestRunCaseAndAdvance(ctx context.Context, run db.TestRun, rc db.TestRunCase, notes string) error {
 	// The settle commits on its own first: nothing retries a failure hook, so
 	// a release or converge that fails afterwards must not take the case back
 	// to "running" with no task left to settle it.
 	var settled testRunSettlement
+	var err error
 	if !isTerminalRunCaseResult(rc.Result) {
-		notes := "the agent task failed before recording a result"
-		if strings.TrimSpace(req.Error) != "" {
-			notes += ": " + strings.TrimSpace(req.Error)
-		}
 		if settled.runCase, err = settleOpenTestRunCase(ctx, h.Queries, run, rc, "blocked", notes); err != nil {
 			return err
 		}
@@ -407,6 +427,7 @@ func (h *Handler) updateTestRunFromAgentFailure(ctx context.Context, task db.Age
 	if settled.run, err = h.convergeTestRun(ctx, qtx, run); err != nil {
 		return err
 	}
+	settled.converged = settled.run != nil
 	if err := tx.Commit(ctx); err != nil {
 		return err
 	}
