@@ -12,10 +12,11 @@ import { useSidebarKeptStore } from "@multica/core/issues/stores/sidebar-kept-st
 import { useSidebarTreeStore } from "@multica/core/issues/stores/sidebar-tree-store";
 import { projectListOptions } from "@multica/core/projects/queries";
 import type { Project } from "@multica/core/types";
+import { FlaskConical, Palette } from "@multica/ui/icons";
 import { useNavigation } from "../../navigation";
 import { IssueContextMenuProvider } from "../../issues/actions";
 import { useT } from "../../i18n";
-import { PanelBody, PanelHeader, isPathWithin } from "../panel-nav";
+import { PanelBody, PanelHeader, PanelLink, PanelList, isPathWithin } from "../panel-nav";
 import { PinnedSection, usePanelPins } from "./pinned-section";
 import { useKeptActiveItem } from "./sidebar-tree";
 import { ProjectsSection, useIssueIdInTree } from "./work-tree";
@@ -159,6 +160,29 @@ export function WorkPanel() {
               activeIssueId={plainRowsLit ? currentIssueId : null}
             />
           )}
+
+          {/* Fork work tools: the pre-1.0 sidebar listed these as plain rows
+              in its work group (issues, projects, designs, tests). Upstream's
+              1.0 panel has no equivalent section, so they are restored here
+              as flat links — no section header, matching the old grouping.
+              Routes, icons, search keywords and the work-space mapping all
+              already know these pages. */}
+          <PanelList className="mt-2">
+            <PanelLink
+              href={p.designs()}
+              icon={<Palette className="size-4 shrink-0" />}
+              label={t(($) => $.nav.designs)}
+              active={isPathWithin(pathname, p.designs())}
+              className="text-caption"
+            />
+            <PanelLink
+              href={p.tests()}
+              icon={<FlaskConical className="size-4 shrink-0" />}
+              label={t(($) => $.nav.tests)}
+              active={isPathWithin(pathname, p.tests())}
+              className="text-caption"
+            />
+          </PanelList>
         </PanelBody>
       </IssueContextMenuProvider>
     </>

@@ -325,3 +325,32 @@ describe("WorkPanel issue highlight", () => {
     expect(screen.queryByRole("link", { name: "Launched" })).toBeNull();
   });
 });
+
+describe("WorkPanel fork tool links", () => {
+  it("keeps the fork designs and tests pages reachable from the work panel", () => {
+    renderPanel("/acme/issues");
+    // The pre-1.0 sidebar listed these two rows in its work group; the 1.0
+    // panel must keep them reachable (regression: lost in the merge).
+    expect(screen.getByRole("link", { name: "Designs" })).toHaveAttribute(
+      "href",
+      "/acme/designs",
+    );
+    expect(screen.getByRole("link", { name: "Tests" })).toHaveAttribute(
+      "href",
+      "/acme/tests",
+    );
+  });
+
+  it("lights the designs row while a designs page is open", () => {
+    // spaceForPath maps designs to the work space, so the panel mounts.
+    renderPanel("/acme/designs");
+    expect(screen.getByRole("link", { name: "Designs" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    expect(screen.getByRole("link", { name: "Tests" })).not.toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+  });
+});
