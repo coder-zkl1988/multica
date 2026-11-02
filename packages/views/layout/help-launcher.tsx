@@ -151,8 +151,7 @@ export function HelpLauncher() {
           <ArrowUpRight className="size-3 translate-y-px text-faint-foreground" />
         </DropdownMenuItem>
         {/* Fork product: the community invite is a Feishu group (Chinese
-            market), not upstream's Discord. ./discord.tsx stays for the
-            upstream account menu, which still links Discord. */}
+            market), not upstream's Discord. */}
         <DropdownMenuItem
           render={
             <a href={FEISHU_GROUP_URL} target="_blank" rel="noopener noreferrer" />
