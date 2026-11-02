@@ -690,7 +690,11 @@ func buildDeterministicArchive(files map[string][]byte) ([]byte, error) {
 	writer := zip.NewWriter(&output)
 	fixedTime := time.Date(1980, time.January, 1, 0, 0, 0, 0, time.UTC)
 	for _, name := range names {
-		header := &zip.FileHeader{Name: name, Method: zip.Deflate}
+		// Stored, not Deflated: flate output bytes are not stable across Go
+		// toolchain versions (encoder rewritten in go1.27), which would break
+		// the byte-level reproducibility the pinned timestamps/modes exist to
+		// provide. See internal/designpackage BuildDeterministicArchive.
+		header := &zip.FileHeader{Name: name, Method: zip.Store}
 		header.SetMode(0o644)
 		header.SetModTime(fixedTime)
 		entry, err := writer.CreateHeader(header)

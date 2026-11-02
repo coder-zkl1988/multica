@@ -70,7 +70,7 @@ func TestCollectV2DirectoryBuildsDeterministicManifestAndArchive(t *testing.T) {
 	}
 	archiveHash := sha256.Sum256(first.Archive)
 	manifestHash := sha256.Sum256(manifestJSON)
-	if got := hex.EncodeToString(archiveHash[:]); got != "9b5ae702044e1c3bea32143ef3b5c6b8fdfc3afb9580a744b3a28b84f10bc37d" {
+	if got := hex.EncodeToString(archiveHash[:]); got != "996f1f7002cf7bf23e574b91eadb14c05c3b6e21e90579a3fd30c9070bc7e601" {
 		t.Fatalf("archive golden = %s", got)
 	}
 	if got := hex.EncodeToString(manifestHash[:]); got != "9882aaa6f2082940047fad7816e28cd2a5d1b0d91b8fef97d18d08a348615c0d" {

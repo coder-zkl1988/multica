@@ -268,7 +268,11 @@ func mustMarshalEvidenceJSON(value any) json.RawMessage {
 }
 
 func writeEvidenceArchiveEntry(writer *zip.Writer, path string, body []byte) error {
-	header := &zip.FileHeader{Name: path, Method: zip.Deflate}
+	// Stored, not Deflated: flate output bytes are not stable across Go
+	// toolchain versions (encoder rewritten in go1.27), which would break
+	// byte-level reproducibility of evidence archives. See internal/
+	// designpackage BuildDeterministicArchive for the full rationale.
+	header := &zip.FileHeader{Name: path, Method: zip.Store}
 	header.SetModTime(time.Date(1980, time.January, 1, 0, 0, 0, 0, time.UTC))
 	header.SetMode(0o644)
 	entry, err := writer.CreateHeader(header)

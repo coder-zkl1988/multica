@@ -308,7 +308,19 @@ func BuildDeterministicArchive(files map[string][]byte, limits Limits, policies 
 	writer := zip.NewWriter(&output)
 	fixedTime := time.Date(1980, time.January, 1, 0, 0, 0, 0, time.UTC)
 	for _, file := range entries {
-		header := &zip.FileHeader{Name: file.archiveName, Method: zip.Deflate}
+		// Stored, not Deflated: compress/flate does not guarantee stable
+		// output bytes across Go toolchain versions (its encoder was
+		// rewritten in go1.27 — see the compress/flate section of
+		// go.dev/doc/go1.27 — and the docs state exact written bytes are
+		// not covered by the Go 1 compatibility promise). That would break
+		// the byte-level reproducibility this builder exists to provide —
+		// the same inputs must hash to the same archive on every build.
+		// The zip container fields (fixed mod time, fixed mode, sorted
+		// entry names) are fully pinned, so a stored archive is
+		// byte-identical across versions and architectures. Archives
+		// written earlier with Deflate still read back through ReadArchive
+		// unchanged.
+		header := &zip.FileHeader{Name: file.archiveName, Method: zip.Store}
 		header.SetMode(0o644)
 		header.SetModTime(fixedTime)
 		entry, err := writer.CreateHeader(header)
