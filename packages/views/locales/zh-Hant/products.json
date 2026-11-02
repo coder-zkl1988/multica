@@ -1,0 +1,23 @@
+{
+  "tree_title": "產品樹",
+  "empty_tree": "暫無產品節點",
+  "select_node_hint": "選擇左側產品節點檢視詳情",
+  "meta_line": "slug: {{slug}} · 狀態來源: {{source}}",
+  "refs_title": "關聯專案 / 需求",
+  "refs_empty": "暫無追溯連結（專案進入工作區後回填）",
+  "evidence_title": "證據",
+  "evidence_pending": "待確認 —— 無 PMO / 程式碼倉庫證據時不以 Issue 狀態推斷上線",
+  "updated_at": "更新時間: {{time}}",
+  "editors_suffix": " · 產品編輯人: {{ids}}",
+  "status": {
+    "dev": "研發中",
+    "pending_release": "待上線",
+    "pending_confirmation": "待確認",
+    "released": "已上線"
+  },
+  "status_source": {
+    "pmo": "PMO 上線狀態",
+    "code_repo": "程式碼倉庫"
+  },
+  "evidence_suffix": " · 有證據"
+}

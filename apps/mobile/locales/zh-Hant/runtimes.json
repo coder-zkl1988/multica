@@ -1,0 +1,54 @@
+{
+  "list": {
+    "header_title": "執行時",
+    "error": {
+      "load_prefix": "載入執行時失敗：",
+      "unknown": "未知錯誤",
+      "retry": "重試"
+    },
+    "empty": {
+      "title": "還沒有執行時",
+      "message": "在桌面端連線的執行時會顯示在這裡。"
+    }
+  },
+  "health": {
+    "online": {
+      "label": "線上"
+    },
+    "recently_lost": {
+      "label": "最近失聯"
+    },
+    "offline": {
+      "label": "離線"
+    },
+    "long_offline": {
+      "label": "長期離線"
+    }
+  },
+  "detail": {
+    "header_default_title": "執行時",
+    "error": {
+      "load_prefix": "載入執行時失敗：",
+      "unknown": "未知錯誤",
+      "retry": "重試"
+    },
+    "owner_label": "所有者",
+    "mode_label": "模式",
+    "mode": {
+      "local": "本地",
+      "cloud": "雲端"
+    },
+    "visibility_label": "可見性",
+    "visibility": {
+      "private": "私有",
+      "public": "公開"
+    },
+    "device_label": "裝置",
+    "created_label": "建立時間",
+    "updated_label": "更新時間",
+    "cli_version_label": "CLI 版本",
+    "update_available": "有新版本可用（{{version}}）",
+    "agents_title": "在此執行時上執行的 AI 代理",
+    "agents_empty": "還沒有 AI 代理設定在此執行時上"
+  }
+}

@@ -52,6 +52,7 @@ func init() {
 	projectCmd.GroupID = groupCore
 	testcaseCmd.GroupID = groupCore
 	testRunGroupCmd.GroupID = groupCore
+	workflowCmd.GroupID = groupCore
 	labelCmd.GroupID = groupCore
 	propertyCmd.GroupID = groupCore
 	agentCmd.GroupID = groupCore
@@ -82,6 +83,7 @@ func init() {
 	rootCmd.AddCommand(projectCmd)
 	rootCmd.AddCommand(testcaseCmd)
 	rootCmd.AddCommand(testRunGroupCmd)
+	rootCmd.AddCommand(workflowCmd)
 	rootCmd.AddCommand(labelCmd)
 	rootCmd.AddCommand(propertyCmd)
 	rootCmd.AddCommand(agentCmd)

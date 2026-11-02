@@ -86,7 +86,9 @@ func validPMOSnapshotForTest(t *testing.T) string {
 
 func pmoCompleteTaskForTest(t *testing.T, taskID, output string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := newDaemonTokenRequest("POST", "/api/daemon/tasks/"+taskID+"/complete", map[string]any{"output": output}, testWorkspaceID, "pmo-daemon")
+	// The shared fixture runtime carries no daemon_id, so since MUL-8154 a
+	// daemon token cannot reach it; authenticate with the owner's credential.
+	req := newOwnerDaemonRequest("POST", "/api/daemon/tasks/"+taskID+"/complete", map[string]any{"output": output})
 	req = withURLParam(req, "taskId", taskID)
 	w := httptest.NewRecorder()
 	testHandler.CompleteTask(w, req)
@@ -182,7 +184,7 @@ func TestClaimPMOSyncTaskExposesSyncContext(t *testing.T) {
 	if _, err := testPool.Exec(context.Background(), `UPDATE agent_runtime SET status = 'online', last_seen_at = now() WHERE id = $1`, testRuntimeID); err != nil {
 		t.Fatalf("refresh PMO claim runtime heartbeat: %v", err)
 	}
-	claimReq := newDaemonTokenRequest("POST", "/api/daemon/runtimes/"+testRuntimeID+"/tasks/claim", nil, testWorkspaceID, "pmo-claim")
+	claimReq := newOwnerDaemonRequest("POST", "/api/daemon/runtimes/"+testRuntimeID+"/tasks/claim", nil)
 	claimReq = withURLParam(claimReq, "runtimeId", testRuntimeID)
 	claimW := httptest.NewRecorder()
 	testHandler.ClaimTaskByRuntime(claimW, claimReq)
@@ -256,7 +258,7 @@ func TestStartPMOSyncTaskMarksRunRunning(t *testing.T) {
 		t.Fatalf("mark task dispatched: %v", err)
 	}
 
-	req := newDaemonTokenRequest("POST", "/api/daemon/tasks/"+taskID+"/start", nil, testWorkspaceID, "pmo-daemon")
+	req := newOwnerDaemonRequest("POST", "/api/daemon/tasks/"+taskID+"/start", nil)
 	req = withURLParam(req, "taskId", taskID)
 	w := httptest.NewRecorder()
 	testHandler.StartTask(w, req)
@@ -507,7 +509,7 @@ func TestFailPMOSyncTaskMarksRunFailed(t *testing.T) {
 
 	// Far over the bound; the marker sits only in the truncated tail.
 	longError := strings.Repeat("e", 220) + "TAILMARK_Q7"
-	req := newDaemonTokenRequest("POST", "/api/daemon/tasks/"+taskID+"/fail", map[string]any{"error": longError, "failure_reason": "agent_error"}, testWorkspaceID, "pmo-daemon")
+	req := newOwnerDaemonRequest("POST", "/api/daemon/tasks/"+taskID+"/fail", map[string]any{"error": longError, "failure_reason": "agent_error"})
 	req = withURLParam(req, "taskId", taskID)
 	w := httptest.NewRecorder()
 	testHandler.FailTask(w, req)
@@ -551,7 +553,7 @@ func TestRecoverOrphanedPMOSyncTaskFailsRun(t *testing.T) {
 		t.Fatalf("bind pmo task to runtime: %v", err)
 	}
 
-	req := newDaemonTokenRequest("POST", "/api/daemon/runtimes/"+testRuntimeID+"/tasks/recover-orphans", nil, testWorkspaceID, "pmo-recover")
+	req := newOwnerDaemonRequest("POST", "/api/daemon/runtimes/"+testRuntimeID+"/tasks/recover-orphans", nil)
 	req = withURLParam(req, "runtimeId", testRuntimeID)
 	w := httptest.NewRecorder()
 	testHandler.RecoverOrphanedTasks(w, req)

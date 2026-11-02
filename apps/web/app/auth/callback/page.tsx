@@ -19,7 +19,7 @@ import {
 } from "@multica/ui/components/ui/card";
 import { Button } from "@multica/ui/components/ui/button";
 import { useT } from "@multica/views/i18n";
-import { Loader2, RefreshCw } from "lucide-react";
+import { Loader2, RefreshCw } from "@multica/ui/icons";
 import { callbackErrorFrom, type CallbackError } from "./callback-error";
 
 const authLogger = createLogger("auth.callback");

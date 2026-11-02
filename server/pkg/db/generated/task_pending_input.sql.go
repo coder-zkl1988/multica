@@ -534,7 +534,7 @@ func (q *Queries) LockTaskPendingInput(ctx context.Context, arg LockTaskPendingI
 }
 
 const lockTaskPendingInputRuntime = `-- name: LockTaskPendingInputRuntime :one
-SELECT id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id, visibility, profile_id, custom_name, test_host_enabled FROM agent_runtime
+SELECT id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id, visibility, profile_id, custom_name, shared_with, test_host_enabled FROM agent_runtime
 WHERE id = $1 AND workspace_id = $2
 FOR UPDATE
 `
@@ -567,13 +567,14 @@ func (q *Queries) LockTaskPendingInputRuntime(ctx context.Context, arg LockTaskP
 		&i.Visibility,
 		&i.ProfileID,
 		&i.CustomName,
+		&i.SharedWith,
 		&i.TestHostEnabled,
 	)
 	return i, err
 }
 
 const lockTaskPendingInputRuntimeForDaemon = `-- name: LockTaskPendingInputRuntimeForDaemon :one
-SELECT id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id, visibility, profile_id, custom_name, test_host_enabled FROM agent_runtime
+SELECT id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id, visibility, profile_id, custom_name, shared_with, test_host_enabled FROM agent_runtime
 WHERE id = $1
   AND workspace_id = $2
   AND daemon_id = $3
@@ -609,6 +610,7 @@ func (q *Queries) LockTaskPendingInputRuntimeForDaemon(ctx context.Context, arg 
 		&i.Visibility,
 		&i.ProfileID,
 		&i.CustomName,
+		&i.SharedWith,
 		&i.TestHostEnabled,
 	)
 	return i, err

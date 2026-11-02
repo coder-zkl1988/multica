@@ -21,6 +21,7 @@ describe("paths.workspace() shape", () => {
         "issues",
         "products",
         "projects",
+        "views",
         // Fork: standalone design-system creation lives under the workspace.
         "projectDesignSystemNew",
         "pmo",
@@ -39,6 +40,7 @@ describe("paths.workspace() shape", () => {
         "squads",
         "inbox",
         "myIssues",
+        "myAgents",
         "runtimes",
         "skills",
         "squads",

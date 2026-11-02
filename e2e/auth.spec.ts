@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { loginAsDefault, openWorkspaceMenu } from "./helpers";
+import { loginAsDefault, openAccountMenu } from "./helpers";
 
 const useSySSO = /^(1|true|yes|on)$/i.test(process.env.USE_SY_SSO?.trim() ?? "");
 
@@ -20,10 +20,10 @@ test.describe("Authentication", () => {
   });
 
   test("login and redirect to /issues", async ({ page }) => {
-    await loginAsDefault(page);
+    const workspaceSlug = await loginAsDefault(page);
 
-    await expect(page).toHaveURL(/\/issues/);
-    await expect(page.getByRole("heading", { name: "Issues" })).toBeVisible();
+    await expect(page).toHaveURL(new RegExp(`/${workspaceSlug}/issues$`));
+    await expect(page.getByRole("button", { name: "New Issue" }).first()).toBeVisible();
   });
 
   test("unauthenticated user is redirected to /login", async ({ page, context }) => {
@@ -39,8 +39,8 @@ test.describe("Authentication", () => {
   test("logout redirects to the configured auth entry", async ({ page }) => {
     await loginAsDefault(page);
 
-    // Open the workspace dropdown menu
-    await openWorkspaceMenu(page);
+    // Open the account menu in the app rail
+    await openAccountMenu(page);
 
     const logoutResponse = page.waitForResponse(
       (response) =>

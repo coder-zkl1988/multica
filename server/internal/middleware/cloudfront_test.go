@@ -208,3 +208,53 @@ func cloudFrontPolicies(rec *httptest.ResponseRecorder) []*http.Cookie {
 	}
 	return out
 }
+
+// MUL-8190: CLI and daemon never keep cookies, so signing for them was pure
+// RSA cost on every request. Browser-family platforms must keep receiving
+// cookies, including when the header is absent.
+func TestRefreshCloudFrontCookies_SkipsCookielessClients(t *testing.T) {
+	signer := testSigner(t)
+
+	cases := []struct {
+		platform    string
+		wantCookies bool
+	}{
+		{platform: "cli", wantCookies: false},
+		{platform: "daemon", wantCookies: false},
+		{platform: "web", wantCookies: true},
+		{platform: "desktop", wantCookies: true},
+		{platform: "mobile", wantCookies: true},
+		{platform: "", wantCookies: true},
+		{platform: "CLI", wantCookies: true}, // exact match only
+	}
+	for _, tc := range cases {
+		t.Run("platform="+tc.platform, func(t *testing.T) {
+			nextCalled := false
+			handler := RefreshCloudFrontCookies(signer)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				nextCalled = true
+				w.WriteHeader(http.StatusOK)
+			}))
+
+			req := httptest.NewRequest(http.MethodGet, "/api/issues/x", nil)
+			if tc.platform != "" {
+				req.Header.Set(HeaderClientPlatform, tc.platform)
+			}
+			// The fork binds cookie minting to the session-stated auth expiry
+			// (see SkipsWithoutAuthExpiry); the platform skip is orthogonal,
+			// so browser-family cases still need a live expiry to see cookies.
+			if tc.wantCookies {
+				req.Header.Set("X-Auth-Expires-At", time.Now().Add(time.Hour).UTC().Format(time.RFC3339))
+			}
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+
+			if !nextCalled {
+				t.Fatal("next handler was not called")
+			}
+			got := len(rec.Result().Cookies()) > 0
+			if got != tc.wantCookies {
+				t.Fatalf("cookies set = %v, want %v", got, tc.wantCookies)
+			}
+		})
+	}
+}

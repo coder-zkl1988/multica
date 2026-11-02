@@ -94,6 +94,12 @@ const (
 	// agent timeout path.
 	ReasonTimeout Reason = "timeout"
 
+	// Process cleanup is a separate, non-retryable failure even when the
+	// provider succeeded or the user cancelled. Blocked successors do not
+	// create a new cleanup obligation of their own.
+	ReasonProcessCleanupUnconfirmed Reason = "cleanup_unconfirmed"
+	ReasonProcessCleanupBlocked     Reason = "cleanup_blocked"
+
 	// ReasonIterationLimit: the agent reached its per-run iteration
 	// cap and emitted a fallback "I reached the iteration limit"
 	// message. Treated as platform-side because it is a Multica-imposed
@@ -297,7 +303,7 @@ const (
 	ReasonAgentUnknown Reason = "agent_error.unknown"
 )
 
-// allReasons is the canonical ordered list of the 31 reasons. Order is
+// allReasons is the canonical ordered list of the 34 reasons. Order is
 // stable so callers (e.g. Prometheus collectors that pre-warm series via
 // AllReasons) can build deterministic label sets across restarts.
 //
@@ -314,6 +320,8 @@ var allReasons = []Reason{
 	ReasonRuntimeReconnectTimeout,
 	ReasonRuntimeRecovery,
 	ReasonTimeout,
+	ReasonProcessCleanupUnconfirmed,
+	ReasonProcessCleanupBlocked,
 	ReasonIterationLimit,
 	ReasonExecutionBudgetExceeded,
 	ReasonAgentBlocked,

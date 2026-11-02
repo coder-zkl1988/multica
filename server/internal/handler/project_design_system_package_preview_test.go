@@ -205,7 +205,9 @@ func TestNativePackageRetrievalRejectsForeignSelfConsistentArchiveBinding(t *tes
 	}
 
 	base := httptest.NewRecorder()
-	baseRequest := newDaemonTokenRequest(http.MethodGet, "/api/daemon/tasks/"+adjusted.ActiveTask.ID+"/project-design-system/base-package", nil, testWorkspaceID, "")
+	// Since MUL-8154 a daemon token with no daemon_id binds to nothing, so
+	// reach the endpoint's own foreign-binding refusal with owner credentials.
+	baseRequest := newOwnerDaemonRequest(http.MethodGet, "/api/daemon/tasks/"+adjusted.ActiveTask.ID+"/project-design-system/base-package", nil)
 	baseRequest = withURLParam(baseRequest, "taskId", adjusted.ActiveTask.ID)
 	testHandler.DownloadProjectDesignSystemBasePackage(base, baseRequest)
 	if base.Code != http.StatusConflict || base.Header().Get(nativePackageDigestHeader) != "" {
@@ -325,7 +327,9 @@ func TestAdjustProjectDesignSystemUsesImmutableV2BaseReference(t *testing.T) {
 		t.Fatalf("replace persisted native base metadata: %v", err)
 	}
 	download := httptest.NewRecorder()
-	downloadRequest := newDaemonTokenRequest(http.MethodGet, "/api/daemon/tasks/"+adjusted.ActiveTask.ID+"/project-design-system/base-package", nil, testWorkspaceID, "")
+	// Since MUL-8154 a daemon token with no daemon_id binds to nothing, so
+	// reach the endpoint's own foreign-binding refusal with owner credentials.
+	downloadRequest := newOwnerDaemonRequest(http.MethodGet, "/api/daemon/tasks/"+adjusted.ActiveTask.ID+"/project-design-system/base-package", nil)
 	downloadRequest = withURLParam(downloadRequest, "taskId", adjusted.ActiveTask.ID)
 	testHandler.DownloadProjectDesignSystemBasePackage(download, downloadRequest)
 	if download.Code != http.StatusConflict || download.Header().Get(nativePackageDigestHeader) != "" {

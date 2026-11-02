@@ -49,7 +49,7 @@ func TestRerunIssueConciseModeOverride(t *testing.T) {
 
 	rerunMode := func(t *testing.T, sourceID pgtype.UUID, override *bool) bool {
 		t.Helper()
-		task, err := svc.RerunIssue(ctx, util.MustParseUUID(issueID), sourceID, pgtype.UUID{}, util.MustParseUUID(creatorID), nil, override)
+		task, err := svc.RerunIssue(ctx, util.MustParseUUID(issueID), sourceID, pgtype.UUID{}, util.MustParseUUID(creatorID), false, nil, override)
 		if err != nil {
 			t.Fatalf("RerunIssue: %v", err)
 		}

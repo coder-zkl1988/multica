@@ -22,14 +22,6 @@
     "android:staging": "dotenv -e .env.staging -- cross-env APP_ENV=staging expo run:android",
     "android:prod": "dotenv -e .env.production -- cross-env APP_ENV=production expo run:android"
   },
-  "expo": {
-    "install": {
-      "exclude": [
-        "eslint-config-expo",
-        "typescript"
-      ]
-    }
-  },
   "dependencies": {
     "@expo/dom-webview": "~57.0.1",
     "@expo/metro-runtime": "~57.0.16",
@@ -107,8 +99,8 @@
     "@types/react": "~19.0.0",
     "cross-env": "^7.0.3",
     "dotenv-cli": "^7.4.4",
-    "eslint-config-expo": "~55.0.0",
-    "typescript": "~5.9.0",
+    "eslint-config-expo": "~57.0.2",
+    "typescript": "~6.0.3",
     "vitest": "catalog:"
   }
 }

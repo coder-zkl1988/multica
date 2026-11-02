@@ -2,7 +2,7 @@
 
 import { type ReactNode, useRef, useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Dices, Plus } from "lucide-react";
+import { Dices, Plus } from "@multica/ui/icons";
 import { toast } from "sonner";
 import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";

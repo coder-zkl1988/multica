@@ -12,7 +12,8 @@ import { contentReferencesAttachment, type AgentTask } from "@multica/core/types
 import type { Agent, CommentDesignRequest, Issue } from "@multica/core/types";
 import { Palette } from "lucide-react";
 import { CommentDesignDeliveryComposer } from "./comment-design-delivery-composer";
-import { formatShortcut, useShortcut } from "@multica/core/shortcuts";
+import { useShortcut } from "@multica/core/shortcuts";
+import { ShortcutKeycaps } from "../../common/shortcut-keycaps";
 import { useCommentDraftStore, useCommentComposerStore } from "@multica/core/issues/stores";
 import { ConciseModeToggle } from "./concise-mode-toggle";
 import { cn } from "@multica/ui/lib/utils";
@@ -386,13 +387,19 @@ function ReplyInputComposer({
             disabled={!canSend || (!!designRequest && (!issue || !deliveryValid))}
             loading={submitting}
             busy={gate.uploading}
-            tooltip={gate.uploading
+            disabledReason={gate.uploading
               ? tEditor(($) => $.upload.in_progress)
               : !canSend && annotations.length > 0 && !targetMissing
                 ? t(($) => $.reply.annotations.intent_hint)
-              : sendShortcut
-                ? `${t(($) => $.comment.send_tooltip)} · ${formatShortcut(sendShortcut)}`
-                : t(($) => $.comment.send_tooltip)}
+                : undefined}
+            tooltip={sendShortcut
+              ? (
+                <>
+                  {t(($) => $.comment.send_tooltip)}
+                  <ShortcutKeycaps shortcut={sendShortcut} decorative />
+                </>
+              )
+              : t(($) => $.comment.send_tooltip)}
             ariaLabel={gate.uploading
               ? tEditor(($) => $.upload.in_progress)
               : t(($) => $.comment.send_tooltip)}

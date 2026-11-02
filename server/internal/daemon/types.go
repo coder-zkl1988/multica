@@ -133,6 +133,7 @@ type Task struct {
 	ActiveSiblingRuns                 []ActiveSiblingRunData `json:"active_sibling_runs,omitempty"`
 	ThreadName                        string                 `json:"thread_name,omitempty"` // semantic title for provider-native session/thread history
 	Agent                             *AgentData             `json:"agent,omitempty"`
+	ModelOverride                     string                 `json:"model_override,omitempty"` // claim-time snapshot of the agent's persistent OpenClaw model override
 	ConnectedApps                     []ConnectedAppData     `json:"connected_apps,omitempty"` // per-run app capabilities mounted through runtime MCP overlays
 	Repos                             []RepoData             `json:"repos,omitempty"`
 	ProjectID                         string                 `json:"project_id,omitempty"`                       // active project for this task, when present
@@ -152,6 +153,8 @@ type Task struct {
 	TriggerCommentContent             string                 `json:"trigger_comment_content,omitempty"`          // content of the triggering comment
 	TriggerAuthorType                 string                 `json:"trigger_author_type,omitempty"`              // "agent" or "member" — author kind for the triggering comment
 	TriggerAuthorName                 string                 `json:"trigger_author_name,omitempty"`              // display name of the triggering comment author
+	TriggerCommentEditedAt            string                 `json:"trigger_comment_edited_at,omitempty"`        // MUL-8218: set when the trigger comment was edited after the resumed session's run started, so the resumed history may quote an earlier version. Empty on old servers / unedited comments
+	TriggerCommentRevision            int64                  `json:"trigger_comment_revision,omitempty"`         // MUL-8218: current revision of the trigger comment; sent alongside TriggerCommentEditedAt
 	NewCommentCount                   int                    `json:"new_comment_count,omitempty"`                // issue-wide comments since this agent's last run (excludes its own and the injected trigger); 0/omitted for old daemons or cold start
 	NewCommentsSince                  string                 `json:"new_comments_since,omitempty"`               // RFC3339 anchor (last run's started_at) the count is measured from; empty on cold start
 	NewCommentsDeltaKnown             bool                   `json:"new_comments_delta_known,omitempty"`         // the issue-wide delta above was actually COMPUTED this claim; a zero NewCommentCount means "nothing was said" only when this is true (MUL-6984)
@@ -200,8 +203,8 @@ type Task struct {
 	IssueStatusesOmitted int                  `json:"issue_statuses_omitted,omitempty"`
 	ProjectWorkflow      *ProjectWorkflowData `json:"project_workflow,omitempty"`
 	WakeupID             string               `json:"wakeup_id,omitempty"`
-	WakeupSystemRule     string               `json:"wakeup_system_rule,omitempty"`
-	WakeupJoined         string               `json:"wakeup_joined,omitempty"`
+	WakeupSystemRule     string               `json:"wakeup_system_rule,omitempty"` // a platform rule (e.g. child_done) started the run
+	WakeupJoined         string               `json:"wakeup_joined,omitempty"`      // wakeups that joined this run instead of queuing their own
 
 	SquadID               string `json:"squad_id,omitempty"`                // when the picker was a squad, the squad's UUID; Agent is still the resolved leader
 	SquadName             string `json:"squad_name,omitempty"`              // display name for the picker squad, used in prompt text
@@ -254,6 +257,8 @@ type CoalescedCommentData struct {
 	AuthorName string `json:"author_name,omitempty"`
 	Content    string `json:"content"`
 	CreatedAt  string `json:"created_at,omitempty"`
+	EditedAt   string `json:"edited_at,omitempty"` // MUL-8218: set when this comment was edited after the resumed session's run started; empty on old servers / unedited comments
+	Revision   int64  `json:"revision,omitempty"`  // MUL-8218: current revision, sent alongside EditedAt
 }
 
 // AgentData holds agent details returned by the claim endpoint.

@@ -24,6 +24,19 @@ import settingsZh from "@/locales/zh-Hans/settings.json";
 import skillsZh from "@/locales/zh-Hans/skills.json";
 import usageZh from "@/locales/zh-Hans/usage.json";
 import workspaceZh from "@/locales/zh-Hans/workspace.json";
+import authZhHant from "@/locales/zh-Hant/auth.json";
+import chatZhHant from "@/locales/zh-Hant/chat.json";
+import commonZhHant from "@/locales/zh-Hant/common.json";
+import editorZhHant from "@/locales/zh-Hant/editor.json";
+import inboxZhHant from "@/locales/zh-Hant/inbox.json";
+import issuesZhHant from "@/locales/zh-Hant/issues.json";
+import navigationZhHant from "@/locales/zh-Hant/navigation.json";
+import projectsZhHant from "@/locales/zh-Hant/projects.json";
+import runtimesZhHant from "@/locales/zh-Hant/runtimes.json";
+import settingsZhHant from "@/locales/zh-Hant/settings.json";
+import skillsZhHant from "@/locales/zh-Hant/skills.json";
+import usageZhHant from "@/locales/zh-Hant/usage.json";
+import workspaceZhHant from "@/locales/zh-Hant/workspace.json";
 
 export const resources = {
   en: {
@@ -55,5 +68,20 @@ export const resources = {
     skills: skillsZh,
     usage: usageZh,
     workspace: workspaceZh,
+  },
+  "zh-Hant": {
+    auth: authZhHant,
+    chat: chatZhHant,
+    common: commonZhHant,
+    editor: editorZhHant,
+    inbox: inboxZhHant,
+    issues: issuesZhHant,
+    navigation: navigationZhHant,
+    projects: projectsZhHant,
+    runtimes: runtimesZhHant,
+    settings: settingsZhHant,
+    skills: skillsZhHant,
+    usage: usageZhHant,
+    workspace: workspaceZhHant,
   },
 } as const;

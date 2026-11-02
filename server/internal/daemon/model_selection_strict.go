@@ -21,8 +21,9 @@ type taskModelSelectionResolution struct {
 
 // resolveTaskModelSelectionForTask adds strict rejection only for ordinary
 // issue runs. Older task shapes and specialized workflows keep the historical
-// drop-and-warn behavior until their provider-specific launch contracts can be
-// validated independently.
+// drop behavior until their provider-specific launch contracts can be
+// validated independently; they drop an unsupported capability override
+// silently instead of emitting the user-facing thinking-level warning.
 func resolveTaskModelSelectionForTask(
 	ctx context.Context,
 	task Task,
@@ -34,6 +35,13 @@ func resolveTaskModelSelectionForTask(
 	result := taskModelSelectionResolution{Requested: requested}
 	if !ordinaryIssueUsesStrictModelSelection(task) {
 		effective := resolveTaskModelSelection(ctx, provider, runtimeCmd, requested, taskLog)
+		// Legacy task shapes and the specialized workflows (chat, autopilot,
+		// quick create, Testing Center runs, Design Center, PMO sync) keep the
+		// historical silent drop: an unsupported level degrades to the runtime
+		// default without surfacing a transcript message, because these runs
+		// carry the warning text straight into agent-visible output. Only the
+		// resolver's own diagnostics (taskLog) report the drop.
+		effective.ThinkingLevelWarning = ""
 		result.Launch = effective
 		result.Effective = &effective
 		return result, nil

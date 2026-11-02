@@ -14,7 +14,7 @@
  * Icon values are *names*, not React components, so this module stays
  * React-free and safe inside `@multica/core`. The name → component registry
  * lives in `packages/views/layout/route-icon-components.tsx`; its
- * `Record<RouteIconName, LucideIcon>` type makes a missing component a compile
+ * `Record<RouteIconName, IconComponent>` type makes a missing component a compile
  * error.
  */
 
@@ -29,6 +29,7 @@ export type RouteIconName =
   | "Palette"
   | "ClipboardList"
   | "FlaskConical"
+  | "Layers"
   | "Zap"
   | "Bot"
   | "Users"
@@ -57,6 +58,7 @@ export type NavLabelKey =
   | "pmo"
   | "designs"
   | "tests"
+  | "views"
   | "autopilots"
   | "agents"
   | "squads"
@@ -76,6 +78,7 @@ export type WorkspacePageKey =
   | "pmo"
   | "designs"
   | "tests"
+  | "views"
   | "autopilots"
   | "agents"
   | "squads"
@@ -107,6 +110,7 @@ export const WORKSPACE_PAGES: Record<WorkspacePageKey, WorkspacePage> = {
   pmo: { segment: "pmo", icon: "ClipboardList", navKey: "pmo" },
   designs: { segment: "designs", icon: "Palette", navKey: "designs" },
   tests: { segment: "tests", icon: "FlaskConical", navKey: "tests" },
+  views: { segment: "views", icon: "Layers", navKey: "views" },
   autopilots: { segment: "autopilots", icon: "Zap", navKey: "autopilots" },
   agents: { segment: "agents", icon: "Bot", navKey: "agents" },
   squads: { segment: "squads", icon: "Users", navKey: "squads" },

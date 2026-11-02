@@ -31,6 +31,11 @@ func TestFinalizeOpenDesignRunAcceptsAgentFailureBeforeWorkerRunStarts(t *testin
 
 	projectID := createProjectForDesignTest(t, "Open Design pre-run failure")
 	agentID, runtimeID := createProjectDesignSystemAgent(t, "online")
+	// Since MUL-8154 a daemon token reaches only runtimes carrying its own
+	// daemon_id, so bind the runtime to the callback token used below.
+	if _, err := testPool.Exec(context.Background(), `UPDATE agent_runtime SET daemon_id = 'project-design-system-test' WHERE id = $1`, runtimeID); err != nil {
+		t.Fatalf("bind Open Design runtime daemon id: %v", err)
+	}
 	if _, err := testPool.Exec(context.Background(), `UPDATE agent_runtime SET provider = 'opencode' WHERE id = $1`, runtimeID); err != nil {
 		t.Fatalf("configure Open Design runtime: %v", err)
 	}
@@ -704,6 +709,11 @@ func prepareOpenDesignRunForAuditTest(t *testing.T, name string) (string, string
 
 	projectID := createProjectForDesignTest(t, name)
 	agentID, runtimeID := createProjectDesignSystemAgent(t, "online")
+	// Since MUL-8154 a daemon token reaches only runtimes carrying its own
+	// daemon_id, so bind the runtime to the callback token used below.
+	if _, err := testPool.Exec(context.Background(), `UPDATE agent_runtime SET daemon_id = 'project-design-system-test' WHERE id = $1`, runtimeID); err != nil {
+		t.Fatalf("bind Open Design runtime daemon id: %v", err)
+	}
 	if _, err := testPool.Exec(context.Background(), `UPDATE agent_runtime SET provider = 'opencode' WHERE id = $1`, runtimeID); err != nil {
 		t.Fatalf("configure Open Design runtime: %v", err)
 	}
@@ -867,6 +877,11 @@ func testRecoverOrphanedOpenDesignRun(t *testing.T, initialTaskStatus, initialRu
 	t.Helper()
 	projectID := createProjectForDesignTest(t, "Open Design orphan recovery")
 	agentID, runtimeID := createProjectDesignSystemAgent(t, "online")
+	// Since MUL-8154 a daemon token reaches only runtimes carrying its own
+	// daemon_id, so bind the runtime to the callback token used below.
+	if _, err := testPool.Exec(context.Background(), `UPDATE agent_runtime SET daemon_id = 'project-design-system-test' WHERE id = $1`, runtimeID); err != nil {
+		t.Fatalf("bind Open Design runtime daemon id: %v", err)
+	}
 	if _, err := testPool.Exec(context.Background(), `UPDATE agent_runtime SET provider = 'opencode' WHERE id = $1`, runtimeID); err != nil {
 		t.Fatalf("configure Open Design runtime: %v", err)
 	}
@@ -975,6 +990,8 @@ func performOpenDesignDaemonCallbackForTest(
 ) *httptest.ResponseRecorder {
 	t.Helper()
 	response := httptest.NewRecorder()
+	// Callbacks authenticate as the "project-design-system-test" daemon, so
+	// since MUL-8154 the runtime under test must carry that daemon_id.
 	request := newDaemonTokenRequest(
 		http.MethodPost,
 		path,

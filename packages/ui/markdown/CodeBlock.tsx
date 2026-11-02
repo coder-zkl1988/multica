@@ -24,7 +24,7 @@ import sql from 'shiki/langs/sql.mjs'
 import tsx from 'shiki/langs/tsx.mjs'
 import typescript from 'shiki/langs/typescript.mjs'
 import yaml from 'shiki/langs/yaml.mjs'
-import { Copy, Check } from "lucide-react"
+import { Copy, Check } from "@multica/ui/icons"
 import { useTranslation } from "react-i18next"
 import { Button } from "@multica/ui/components/ui/button"
 import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip"

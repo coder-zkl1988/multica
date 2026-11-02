@@ -1223,7 +1223,7 @@ func TestRerunIssueAttributesToRerunningMember(t *testing.T) {
 	}
 
 	// The rerun, performed by a different member.
-	task, err := svc.RerunIssue(ctx, util.MustParseUUID(issueID), orig.ID, pgtype.UUID{}, util.MustParseUUID(rerunnerID), nil, nil)
+	task, err := svc.RerunIssue(ctx, util.MustParseUUID(issueID), orig.ID, pgtype.UUID{}, util.MustParseUUID(rerunnerID), false, nil, nil)
 	if err != nil {
 		t.Fatalf("RerunIssue: %v", err)
 	}

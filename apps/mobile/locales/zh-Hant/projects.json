@@ -1,0 +1,228 @@
+{
+  "list": {
+    "title": "專案",
+    "empty": {
+      "title": "還沒有專案",
+      "message": "將相關的 issue 歸入同一個專案，追蹤進度並指定負責人。",
+      "create": "建立專案"
+    },
+    "search_placeholder": "搜尋專案...",
+    "header_title": "專案",
+    "error": {
+      "load_prefix": "載入專案失敗：",
+      "unknown": "未知錯誤",
+      "retry": "重試"
+    },
+    "new_project_accessibility_label": "新建專案"
+  },
+  "status": {
+    "planned": "計劃中",
+    "in_progress": "進行中",
+    "paused": "已暫停",
+    "completed": "已完成",
+    "cancelled": "已取消"
+  },
+  "priority": {
+    "urgent": "緊急",
+    "high": "高",
+    "medium": "中",
+    "low": "低",
+    "none": "無優先順序"
+  },
+  "detail": {
+    "properties": "屬性",
+    "related_issues": "相關任務",
+    "resources": "資源",
+    "lead": "負責人",
+    "no_resources": "尚未新增資源。",
+    "add_resource": "新增資源",
+    "header_default_title": "專案",
+    "header_back_title": "返回",
+    "actions_accessibility_label": "專案操作",
+    "error": {
+      "load_prefix": "載入專案失敗：",
+      "not_found": "未找到",
+      "retry": "重試"
+    },
+    "menu": {
+      "cancel": "取消",
+      "pin": "置頂",
+      "unpin": "取消置頂",
+      "edit_details": "編輯詳情",
+      "open_on_web": "在網頁中開啟",
+      "delete_project": "刪除"
+    },
+    "delete_confirm": {
+      "title": "刪除專案？",
+      "message": "此操作無法撤銷。此專案中的 issue 將變為未分配專案狀態。",
+      "cancel": "取消",
+      "confirm": "刪除"
+    }
+  },
+  "form": {
+    "icon_emoji": "圖示（emoji）",
+    "title": "標題",
+    "title_placeholder": "專案標題",
+    "description": "描述",
+    "description_placeholder": "這個專案是做什麼的？",
+    "discard_title": "放棄專案？",
+    "discard_message": "草稿將會丟失。",
+    "keep_editing": "繼續編輯",
+    "save_failed": "建立專案失敗",
+    "save_failed_edit": "儲存失敗"
+  },
+  "errors": {
+    "load_failed": "專案載入失敗：{{message}}"
+  },
+  "actions": {
+    "creating": "建立中...",
+    "saving": "儲存中..."
+  },
+  "menu": {
+    "pin": "固定",
+    "unpin": "取消固定",
+    "edit_details": "編輯詳情",
+    "open_web": "在網頁開啟",
+    "project_actions": "專案操作"
+  },
+  "delete": {
+    "title": "刪除專案？",
+    "message": "此操作無法撤銷。該專案中的任務將不再關聯任何專案。"
+  },
+  "properties": {
+    "status": "狀態",
+    "priority": "優先順序",
+    "lead": "負責人",
+    "unassigned": "未分配"
+  },
+  "resources": {
+    "title": "資源",
+    "add": "新增",
+    "detach_title": "移除資源？",
+    "detach": "移除",
+    "empty": "尚未新增資源。",
+    "detach_confirm": {
+      "title": "取消關聯資源？",
+      "cancel": "取消",
+      "confirm": "取消關聯"
+    }
+  },
+  "runs": {
+    "working": "處理中",
+    "count": "執行 · {{count}}"
+  },
+  "edit": {
+    "header_title": "編輯專案",
+    "loading": "載入中...",
+    "icon_field": {
+      "label": "圖示（表情符號）"
+    },
+    "title_field": {
+      "label": "標題",
+      "placeholder": "專案標題"
+    },
+    "description_field": {
+      "label": "描述",
+      "placeholder": "這個專案是關於什麼的？"
+    },
+    "saving": "儲存中...",
+    "discard_confirm": {
+      "title": "放棄修改？",
+      "message": "你對此專案的修改將會遺失。",
+      "keep_editing": "繼續編輯",
+      "discard": "放棄"
+    },
+    "save_error": {
+      "title": "儲存失敗",
+      "unknown": "未知錯誤"
+    }
+  },
+  "add_resource": {
+    "header_title": "關聯倉庫",
+    "attaching": "關聯中…",
+    "attach": "關聯",
+    "url_field": {
+      "label": "倉庫 URL",
+      "placeholder": "https://github.com/owner/repo"
+    },
+    "ref_field": {
+      "label": "起始分支（可選）",
+      "hint": "任務將從此分支開始，並以此分支作為 Pull Request 目標；留空則使用倉庫預設分支。",
+      "error_commit": "這是一個 commit，不是分支。任務會交付回它開始的分支；如果只需要某次修訂，請在 multica repo checkout 中使用 --ref。",
+      "error_too_long": "最多輸入 255 個字元。",
+      "error_characters": "分支名不能包含空格或 ~ ^ : ? * [ \\ 這些字元",
+      "error_format": "請輸入有效的分支名。"
+    },
+    "label_field": {
+      "label": "標籤（可選）",
+      "placeholder": "例如：後端"
+    },
+    "attach_error": {
+      "title": "關聯資源失敗",
+      "unknown": "未知錯誤"
+    }
+  },
+  "new_project": {
+    "header_title": "新建專案",
+    "discard_confirm": {
+      "title": "放棄此專案？",
+      "message": "你的草稿將會遺失。",
+      "keep_editing": "繼續編輯",
+      "discard": "放棄"
+    },
+    "creating": "建立中…",
+    "create": "建立",
+    "create_error": {
+      "title": "建立專案失敗",
+      "unknown": "未知錯誤"
+    },
+    "icon_field": {
+      "label": "圖示（表情符號）"
+    },
+    "title_field": {
+      "label": "標題",
+      "placeholder": "專案標題"
+    },
+    "description_field": {
+      "label": "描述",
+      "placeholder": "這個專案是關於什麼的？"
+    },
+    "status_field": {
+      "label": "狀態"
+    },
+    "priority_field": {
+      "label": "優先順序"
+    }
+  },
+  "picker": {
+    "lead": {
+      "search_placeholder": "搜尋成員或 AI 代理"
+    }
+  },
+  "header_card": {
+    "add_description": "新增描述",
+    "progress": "進度"
+  },
+  "related_issues": {
+    "error": {
+      "load_prefix": "載入 issue 失敗：",
+      "unknown": "未知錯誤",
+      "retry": "重試"
+    },
+    "empty": "暫無 issue。"
+  },
+  "picker_body": {
+    "lead": {
+      "unassigned": "未指定",
+      "agent_tag": "AI 代理",
+      "no_matches": "沒有匹配結果。",
+      "empty": "此工作區中還沒有成員或 AI 代理。"
+    },
+    "priority": {
+      "title": "優先順序"
+    },
+    "status": {
+      "title": "狀態"
+    }
+  }
+}

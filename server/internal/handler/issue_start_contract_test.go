@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"testing"
@@ -21,6 +22,15 @@ func newIssueStartFixture(t *testing.T, title string) issueStartFixture {
 	}
 	var agentID, runtimeID string
 	dbfx.QueryRow(t, `SELECT a.id, a.runtime_id FROM agent a WHERE a.workspace_id=$1 LIMIT 1`, testWorkspaceID).Scan(&agentID, &runtimeID)
+	// Since MUL-8154 a daemon token reaches only runtimes carrying its own
+	// daemon_id, so bind the fixture runtime to the token the start helper
+	// uses below and restore whatever the column held before the test.
+	var originalDaemonID *string
+	dbfx.QueryRow(t, `SELECT daemon_id FROM agent_runtime WHERE id=$1`, runtimeID).Scan(&originalDaemonID)
+	dbfx.Exec(t, `UPDATE agent_runtime SET daemon_id='typed-start' WHERE id=$1`, runtimeID)
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `UPDATE agent_runtime SET daemon_id=$2 WHERE id=$1`, runtimeID, originalDaemonID)
+	})
 	issueID := dbfx.Issue(t, "typed start "+title, testutil.Cols{
 		"status":        "todo",
 		"assignee_type": "agent",

@@ -1063,7 +1063,9 @@ func TestCompleteDesignTemplateBlueprintAnalyzeTaskSavesBlueprint(t *testing.T) 
 		"summary":        "Blueprint analyzed.",
 	}
 	outputJSON, _ := json.Marshal(output)
-	req := newDaemonTokenRequest("POST", "/api/daemon/tasks/"+taskID+"/complete", map[string]any{"output": string(outputJSON)}, testWorkspaceID, "template-blueprint-complete")
+	// The shared fixture runtime carries no daemon_id, so since MUL-8154 a
+	// daemon token cannot reach it; authenticate with the owner's credential.
+	req := newOwnerDaemonRequest("POST", "/api/daemon/tasks/"+taskID+"/complete", map[string]any{"output": string(outputJSON)})
 	req = withURLParam(req, "taskId", taskID)
 	w := httptest.NewRecorder()
 	testHandler.CompleteTask(w, req)
@@ -1682,7 +1684,9 @@ func TestClaimUIDraftCreateTaskReturnsContext(t *testing.T) {
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, created.TaskID)
 	})
 
-	claimReq := newDaemonTokenRequest("POST", "/api/daemon/runtimes/"+runtimeID+"/tasks/claim", nil, testWorkspaceID, "ui-draft-claim")
+	// The claim token must carry the runtime's daemon_id (MUL-8154); the
+	// local_directory resource below is scoped to that same id.
+	claimReq := newDaemonTokenRequest("POST", "/api/daemon/runtimes/"+runtimeID+"/tasks/claim", nil, testWorkspaceID, daemonID)
 	claimReq = withURLParam(claimReq, "runtimeId", runtimeID)
 	claimW := httptest.NewRecorder()
 	testHandler.ClaimTaskByRuntime(claimW, claimReq)
@@ -1731,6 +1735,11 @@ func TestClaimDesignSystemProfileAnalyzeTaskReturnsContext(t *testing.T) {
 	created := createDesignFileForTest(t, "Claim Design System Analyze Source")
 	attachDesignFileToProjectForTest(t, created.File.ID, projectID)
 	runtimeID := createRuntimeLocalSkillTestRuntime(t, testUserID)
+	// The claim token must carry the runtime's daemon_id (MUL-8154).
+	var claimDaemonID string
+	if err := testPool.QueryRow(ctx, `SELECT daemon_id FROM agent_runtime WHERE id = $1`, runtimeID).Scan(&claimDaemonID); err != nil {
+		t.Fatalf("load analyze runtime daemon id: %v", err)
+	}
 	var agentID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent (
@@ -1782,7 +1791,7 @@ func TestClaimDesignSystemProfileAnalyzeTaskReturnsContext(t *testing.T) {
 		_, _ = testPool.Exec(ctx, `DELETE FROM design_system_profile WHERE id = $1`, profileID)
 	})
 
-	claimReq := newDaemonTokenRequest("POST", "/api/daemon/runtimes/"+runtimeID+"/tasks/claim", nil, testWorkspaceID, "design-system-analyze-claim")
+	claimReq := newDaemonTokenRequest("POST", "/api/daemon/runtimes/"+runtimeID+"/tasks/claim", nil, testWorkspaceID, claimDaemonID)
 	claimReq = withURLParam(claimReq, "runtimeId", runtimeID)
 	claimW := httptest.NewRecorder()
 	testHandler.ClaimTaskByRuntime(claimW, claimReq)
@@ -1863,7 +1872,9 @@ func TestClaimDesignRestoreTaskUsesDispatchProjectContext(t *testing.T) {
 		_, _ = testPool.Exec(ctx, `DELETE FROM project_resource WHERE id = $1`, resourceID)
 	})
 
-	claimReq := newDaemonTokenRequest("POST", "/api/daemon/runtimes/"+runtimeID+"/tasks/claim", nil, testWorkspaceID, "design-restore-project-claim")
+	// The claim token must carry the runtime's daemon_id (MUL-8154); the
+	// local_directory resource above is scoped to that same id.
+	claimReq := newDaemonTokenRequest("POST", "/api/daemon/runtimes/"+runtimeID+"/tasks/claim", nil, testWorkspaceID, daemonID)
 	claimReq = withURLParam(claimReq, "runtimeId", runtimeID)
 	claimW := httptest.NewRecorder()
 	testHandler.ClaimTaskByRuntime(claimW, claimReq)
@@ -1938,7 +1949,7 @@ func TestClaimDesignRestoreTaskUsesDispatchProjectContext(t *testing.T) {
 		_, _ = testPool.Exec(ctx, `DELETE FROM workspace WHERE id = $1`, foreignWorkspaceID)
 	})
 
-	foreignClaimReq := newDaemonTokenRequest("POST", "/api/daemon/runtimes/"+runtimeID+"/tasks/claim", nil, testWorkspaceID, "design-restore-foreign-project-claim")
+	foreignClaimReq := newDaemonTokenRequest("POST", "/api/daemon/runtimes/"+runtimeID+"/tasks/claim", nil, testWorkspaceID, daemonID)
 	foreignClaimReq = withURLParam(foreignClaimReq, "runtimeId", runtimeID)
 	foreignClaimW := httptest.NewRecorder()
 	testHandler.ClaimTaskByRuntime(foreignClaimW, foreignClaimReq)
@@ -2012,9 +2023,11 @@ func TestCompleteUIDraftCreateTaskCompilesPageSpecDraft(t *testing.T) {
 	if _, err := testPool.Exec(ctx, `UPDATE agent_task_queue SET status = 'running', started_at = now() WHERE id = $1`, created.TaskID); err != nil {
 		t.Fatalf("mark task running: %v", err)
 	}
-	completeReq := newDaemonTokenRequest("POST", "/api/daemon/tasks/"+created.TaskID+"/complete", map[string]any{
+	// The shared fixture runtime carries no daemon_id, so since MUL-8154 a
+	// daemon token cannot reach it; authenticate with the owner's credential.
+	completeReq := newOwnerDaemonRequest("POST", "/api/daemon/tasks/"+created.TaskID+"/complete", map[string]any{
 		"output": uiDraftPageSpecOutputForTest(t, uuidToString(fixture.TemplateID), true),
-	}, testWorkspaceID, "ui-draft-pagespec-complete")
+	})
 	completeReq = withURLParam(completeReq, "taskId", created.TaskID)
 	completeW := httptest.NewRecorder()
 	testHandler.CompleteTask(completeW, completeReq)
@@ -2109,7 +2122,9 @@ func TestCompleteDesignSystemProfileAnalyzeTaskUpdatesProfile(t *testing.T) {
 	})
 
 	outputJSON := designSystemProfileAnalyzeOutputForTest(t)
-	completeReq := newDaemonTokenRequest("POST", "/api/daemon/tasks/"+taskID+"/complete", map[string]any{"output": outputJSON}, testWorkspaceID, "design-system-analyze-complete")
+	// The shared fixture runtime carries no daemon_id, so since MUL-8154 a
+	// daemon token cannot reach it; authenticate with the owner's credential.
+	completeReq := newOwnerDaemonRequest("POST", "/api/daemon/tasks/"+taskID+"/complete", map[string]any{"output": outputJSON})
 	completeReq = withURLParam(completeReq, "taskId", taskID)
 	completeW := httptest.NewRecorder()
 	testHandler.CompleteTask(completeW, completeReq)
@@ -2315,6 +2330,11 @@ func TestFailDesignSystemProfileAnalyzeTaskMarksProfileFailed(t *testing.T) {
 	created := createDesignFileForTest(t, "Fail Design System Analyze Source")
 	attachDesignFileToProjectForTest(t, created.File.ID, projectID)
 	runtimeID := createRuntimeLocalSkillTestRuntime(t, testUserID)
+	// The fail token must carry the runtime's daemon_id (MUL-8154).
+	var failDaemonID string
+	if err := testPool.QueryRow(ctx, `SELECT daemon_id FROM agent_runtime WHERE id = $1`, runtimeID).Scan(&failDaemonID); err != nil {
+		t.Fatalf("load fail analyzer runtime daemon id: %v", err)
+	}
 	var agentID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent (workspace_id, name, runtime_mode, runtime_config, runtime_id, visibility, max_concurrent_tasks, owner_id)
@@ -2356,7 +2376,7 @@ func TestFailDesignSystemProfileAnalyzeTaskMarksProfileFailed(t *testing.T) {
 	req := newDaemonTokenRequest("POST", "/api/daemon/tasks/"+taskID+"/fail", map[string]any{
 		"error":          "provider exited before returning JSON",
 		"failure_reason": "agent_error",
-	}, testWorkspaceID, "design-system-analyze-fail")
+	}, testWorkspaceID, failDaemonID)
 	req = withURLParam(req, "taskId", taskID)
 	w := httptest.NewRecorder()
 	testHandler.FailTask(w, req)
@@ -2605,7 +2625,9 @@ func TestCompleteDesignSystemProfileAnalyzeTaskDoesNotOverrideNewerDefault(t *te
 	})
 
 	output := designSystemProfileAnalyzeOutputForTest(t)
-	req := newDaemonTokenRequest("POST", "/api/daemon/tasks/"+taskID+"/complete", map[string]any{"output": output}, testWorkspaceID, "design-system-default-guard")
+	// The shared fixture runtime carries no daemon_id, so since MUL-8154 a
+	// daemon token cannot reach it; authenticate with the owner's credential.
+	req := newOwnerDaemonRequest("POST", "/api/daemon/tasks/"+taskID+"/complete", map[string]any{"output": output})
 	req = withURLParam(req, "taskId", taskID)
 	w := httptest.NewRecorder()
 	testHandler.CompleteTask(w, req)
@@ -2716,7 +2738,9 @@ func TestCompleteUIDraftCreateTaskRejectsLegacySlotPatchOutput(t *testing.T) {
 		"patch":            []any{},
 	}
 	outputJSON, _ := json.Marshal(output)
-	completeReq := newDaemonTokenRequest("POST", "/api/daemon/tasks/"+created.TaskID+"/complete", map[string]any{"output": string(outputJSON)}, testWorkspaceID, "ui-draft-legacy-output")
+	// The shared fixture runtime carries no daemon_id, so since MUL-8154 a
+	// daemon token cannot reach it; authenticate with the owner's credential.
+	completeReq := newOwnerDaemonRequest("POST", "/api/daemon/tasks/"+created.TaskID+"/complete", map[string]any{"output": string(outputJSON)})
 	completeReq = withURLParam(completeReq, "taskId", created.TaskID)
 	completeW := httptest.NewRecorder()
 	testHandler.CompleteTask(completeW, completeReq)

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { AlertCircle, ArrowDownToLine, RefreshCw, X } from "lucide-react";
+import { AlertCircle, ArrowDownToLine, RefreshCw, X } from "@multica/ui/icons";
 import { Progress } from "@multica/ui/components/ui/progress";
 import { useT } from "@multica/views/i18n";
 import type { UpdaterState } from "../../../shared/updater-types";

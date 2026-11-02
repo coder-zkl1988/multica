@@ -35,6 +35,24 @@ func claudeTerminateGrace() time.Duration {
 	return 5 * time.Second
 }
 
+// claudeErrorResultGraceNanos optionally overrides, in nanoseconds, how long
+// claude may keep running after it reported an error result. Set via atomic
+// store in tests; zero keeps the default.
+var claudeErrorResultGraceNanos atomic.Int64
+
+// claudeErrorResultGrace bounds the wait for claude to exit after an error
+// result. With stdin closed the CLI still stays alive while any background
+// task it started is running, then opens a new turn when the task ends. After
+// an error result (a spent session limit, an API failure) that turn cannot
+// change the outcome, so the daemon stops waiting instead of holding the run
+// open for the task's lifetime.
+func claudeErrorResultGrace() time.Duration {
+	if n := claudeErrorResultGraceNanos.Load(); n > 0 {
+		return time.Duration(n)
+	}
+	return 10 * time.Second
+}
+
 // claudeBackend implements Backend by spawning the Claude Code CLI
 // with --output-format stream-json.
 type claudeBackend struct {
@@ -110,7 +128,7 @@ func (b *claudeBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 	if opts.ResumeSessionID != "" {
 		snapshot, snapshotErr := captureClaudeUsageSnapshot(cmd.Env, cmd.Dir, opts.ResumeSessionID)
 		if snapshotErr != nil {
-			b.cfg.Logger.Warn("claude usage baseline unavailable; falling back to reported totals", "error", snapshotErr)
+			b.cfg.Logger.Warn("claude usage baseline unavailable; ignoring reported session totals, keeping per-run stream usage", "error", snapshotErr)
 		} else {
 			usageSnapshot = snapshot
 		}
@@ -237,6 +255,22 @@ func (b *claudeBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 		streamMetadata := newClaudeStreamMetadataCollector()
 		controlErrors := make(chan error, 1)
 		var controlWrites sync.WaitGroup
+		var stopAfterErrorResultOnce sync.Once
+		// stopAfterErrorResult terminates a claude that outlives its error
+		// result past the grace period, the same way cancellation does.
+		stopAfterErrorResult := func() {
+			select {
+			case <-procDone:
+				return
+			case <-time.After(claudeErrorResultGrace()):
+			}
+			b.cfg.Logger.Warn("claude still running after an error result; terminating process group", "pid", cmd.Process.Pid)
+			signalProcessGroup(cmd, syscall.SIGTERM)
+			if !waitProcessGroupGone(cmd, claudeTerminateGrace()) {
+				signalProcessGroup(cmd, syscall.SIGKILL)
+			}
+			_ = stdout.Close()
+		}
 
 		// On cancellation / timeout, terminate claude (and every MCP server and
 		// tool subprocess it spawned) BEFORE unblocking the scanner. EOF stdin
@@ -314,6 +348,16 @@ func (b *claudeBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 				executionBudgetExceeded = msg.IsError && msg.Subtype == "error_max_budget_usd"
 				terminalReasonError = claudeTerminalReasonFailure(msg.TerminalReason, msg.ResultText)
 				sessionID = msg.SessionID
+				// A resume whose baseline capture failed cannot trust the
+				// result's modelUsage: newer Claude Code restores the session's
+				// cumulative counters on resume, so the reported total may span
+				// every prior task (GH #9564), and without a baseline there is
+				// no way to verify it is per-run. Keep the stream-derived
+				// per-run usage in that case; the reported totals are recorded
+				// in lastUsageResult only for the resume-rejected recapture
+				// below, where the run is known to have started a fresh session
+				// whose totals are its own.
+				unverifiableBaseline := usageSnapshot == nil && opts.ResumeSessionID != ""
 				var baseline map[string]TokenUsage
 				if usageSnapshot != nil {
 					baseline = usageSnapshot.baseline
@@ -322,11 +366,16 @@ func (b *claudeBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 					executionEvidence = resultEvidence
 				}
 				if resultUsage, authoritative := claudeResultUsageSince(msg, opts.Model, baseline); authoritative {
-					usage = resultUsage
 					usageMsg := msg
 					lastUsageResult = &usageMsg
+					if !unverifiableBaseline {
+						usage = resultUsage
+					}
 				}
 				closeStdin()
+				if resultIsError || terminalReasonError != "" {
+					stopAfterErrorResultOnce.Do(func() { go stopAfterErrorResult() })
+				}
 			case "log":
 				if msg.Log != nil {
 					trySend(msgCh, Message{
@@ -1177,6 +1226,12 @@ func (s *claudeUsageSnapshot) appendedCostStateUsage() (map[string]TokenUsage, b
 		return nil, false, errors.New("Claude session file shrank during execution")
 	}
 	return readLastClaudeCostStateUsage(f, s.offset, info.Size())
+}
+
+// ClaudeConfigDir resolves Claude's config directory using the same inherited
+// environment and task overrides as the backend's child process.
+func ClaudeConfigDir(extraEnv map[string]string, cwd string) (string, error) {
+	return claudeConfigDir(buildEnv(extraEnv), cwd)
 }
 
 func claudeConfigDir(env []string, cwd string) (string, error) {

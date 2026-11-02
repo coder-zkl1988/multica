@@ -85,6 +85,11 @@ func TestDownloadDesignDocumentDesignSystemServesOnlyPinnedArchive(t *testing.T)
 	resourceID := insertRepositoryForProjectDesignSystemTest(t, uuidToString(projectID))
 	system, saved, archive, digest := seedValidatedRepositoryDesignSystemArchiveForTest(t, uuidToString(projectID), resourceID)
 	agentID, runtimeID := createProjectDesignSystemAgent(t, "online")
+	// Since MUL-8154 a daemon token reaches only runtimes carrying its own
+	// daemon_id, so bind the download runtime to the helper's token.
+	if _, err := testPool.Exec(context.Background(), `UPDATE agent_runtime SET daemon_id = 'design-system-download' WHERE id = $1`, runtimeID); err != nil {
+		t.Fatalf("set design system download runtime daemon_id: %v", err)
+	}
 	taskID := createDesignDocumentDesignSystemDownloadTask(t, agentID, runtimeID, uuidToString(projectID), resourceID, system, saved, digest, nil)
 
 	download := performDesignDocumentDesignSystemDownload(t, taskID)
@@ -105,6 +110,11 @@ func TestDownloadDesignDocumentDesignSystemRejectsMissingProvenanceAndChangedArc
 	resourceID := insertRepositoryForProjectDesignSystemTest(t, uuidToString(projectID))
 	system, saved, archive, digest := seedValidatedRepositoryDesignSystemArchiveForTest(t, uuidToString(projectID), resourceID)
 	agentID, runtimeID := createProjectDesignSystemAgent(t, "online")
+	// Since MUL-8154 a daemon token reaches only runtimes carrying its own
+	// daemon_id, so bind the download runtime to the helper's token.
+	if _, err := testPool.Exec(context.Background(), `UPDATE agent_runtime SET daemon_id = 'design-system-download' WHERE id = $1`, runtimeID); err != nil {
+		t.Fatalf("set design system download runtime daemon_id: %v", err)
+	}
 
 	missingTask := createDesignDocumentDesignSystemDownloadTask(t, agentID, runtimeID, uuidToString(projectID), resourceID, system, saved, digest, func(contextValue *service.DesignDocumentTaskContext) {
 		contextValue.DesignContext = nil

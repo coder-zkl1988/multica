@@ -69,9 +69,11 @@
     "system": "跟随系统",
     "english": "English",
     "chinese_simplified": "简体中文",
+    "chinese_traditional": "繁体中文",
     "options": {
       "english": "English",
       "chinese": "中文",
+      "chinese_traditional": "繁體中文",
       "system": "跟随系统"
     }
   },

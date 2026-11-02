@@ -424,6 +424,19 @@ func createProjectDesignSystemCompletionFixture(t *testing.T, operation service.
 	system := createProjectDesignSystemForTest(t, queries, parseUUID(testWorkspaceID), projectID, "Completion system")
 
 	runtimeID := handlerTestRuntimeID(t)
+	// Since MUL-8154 a daemon token reaches only runtimes carrying its own
+	// daemon_id, so bind the shared fixture runtime to the token the complete
+	// and fail helpers use below and restore whatever the column held before.
+	var originalDaemonID *string
+	if err := testPool.QueryRow(ctx, `SELECT daemon_id FROM agent_runtime WHERE id=$1`, runtimeID).Scan(&originalDaemonID); err != nil {
+		t.Fatalf("load completion runtime daemon id: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `UPDATE agent_runtime SET daemon_id='project-design-system-test' WHERE id=$1`, runtimeID); err != nil {
+		t.Fatalf("bind completion runtime daemon id: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `UPDATE agent_runtime SET daemon_id=$2 WHERE id=$1`, runtimeID, originalDaemonID)
+	})
 	var agentID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent (
@@ -517,6 +530,9 @@ func createOrdinaryCompletionTask(t *testing.T) string {
 	t.Helper()
 	ctx := context.Background()
 	runtimeID := createClaimReclaimRuntime(t, ctx, fmt.Sprintf("Ordinary completion runtime %d", time.Now().UnixNano()))
+	// Since MUL-8154 a daemon token reaches only runtimes carrying its own
+	// daemon_id, so bind the runtime to the complete helper's token.
+	dbfx.Exec(t, `UPDATE agent_runtime SET daemon_id = 'project-design-system-test' WHERE id = $1`, runtimeID)
 	agentID, issueID := createClaimReclaimAgentAndIssue(t, ctx, runtimeID, fmt.Sprintf("Ordinary completion %d", time.Now().UnixNano()))
 	var taskID string
 	if err := testPool.QueryRow(ctx, `

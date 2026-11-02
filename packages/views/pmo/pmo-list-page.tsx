@@ -220,8 +220,21 @@ export function PMOListPage() {
     <CollectionPageHeader
       icon={ClipboardList}
       title={t(($) => $.title)}
-      description={t(($) => $.subtitle)}
-      count={configs.length}
+      // The 1.0 header dropped its description/count slots; carry the fork's
+      // subtitle and row count in the tools slot right after the title, in
+      // the same styling the old header used.
+      tools={
+        <>
+          {configs.length > 0 ? (
+            <span className="shrink-0 font-mono text-caption tabular-nums text-muted-foreground">
+              {configs.length}
+            </span>
+          ) : null}
+          <p className="ml-2 hidden min-w-0 truncate text-caption text-muted-foreground md:block">
+            {t(($) => $.subtitle)}
+          </p>
+        </>
+      }
       actions={
         <Button size="sm" onClick={openCreateDialog}>
           <Plus className="size-4" />

@@ -288,20 +288,14 @@ func TestCompleteTaskTypedIssueCompletionAcceptsAcknowledgedPendingInputRevision
 func TestCompleteTaskTypedIssueCompletionAcceptsInterleavedPendingInputRevisions(t *testing.T) {
 	fx := newIssueCompletionFixture(t, "interleaved pending input", false)
 	baseRevision, baseStatus := fx.issueVersion(t)
-	daemonID := "typed-completion-interleaved-" + uuid.NewString()
+	// The fixture runtime is already bound to the "typed-completion" daemon
+	// token (MUL-8154), so the registrations below use that same daemon id.
+	daemonID := "typed-completion"
 	var runtimeID string
-	var originalDaemonID *string
-	dbfx.QueryRow(t, `
-		SELECT agent.runtime_id::text, runtime.daemon_id
-		FROM agent
-		JOIN agent_runtime AS runtime ON runtime.id=agent.runtime_id
-		WHERE agent.id=$1
-	`, fx.agentID).Scan(&runtimeID, &originalDaemonID)
-	dbfx.Exec(t, `UPDATE agent_runtime SET daemon_id=$2 WHERE id=$1`, runtimeID, daemonID)
+	dbfx.QueryRow(t, `SELECT runtime_id FROM agent WHERE id=$1`, fx.agentID).Scan(&runtimeID)
 	t.Cleanup(func() {
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM task_pending_input WHERE task_id=$1`, fx.taskID)
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM comment WHERE issue_id=$1`, fx.issueID)
-		_, _ = testPool.Exec(context.Background(), `UPDATE agent_runtime SET daemon_id=$2 WHERE id=$1`, runtimeID, originalDaemonID)
 	})
 
 	basePath := "/api/daemon/runtimes/" + runtimeID + "/tasks/" + fx.taskID + "/pending-inputs"
@@ -516,20 +510,14 @@ type acknowledgedPendingInput struct {
 
 func createAnsweredPendingInput(t *testing.T, fx issueCompletionFixture, baseRevision int64) acknowledgedPendingInput {
 	t.Helper()
-	daemonID := "typed-completion-pending-input-" + uuid.NewString()
+	// The fixture runtime is already bound to the "typed-completion" daemon
+	// token (MUL-8154), so the registration below uses that same daemon id.
+	daemonID := "typed-completion"
 	var runtimeID string
-	var originalDaemonID *string
-	dbfx.QueryRow(t, `
-		SELECT agent.runtime_id::text, runtime.daemon_id
-		FROM agent
-		JOIN agent_runtime AS runtime ON runtime.id=agent.runtime_id
-		WHERE agent.id=$1
-	`, fx.agentID).Scan(&runtimeID, &originalDaemonID)
-	dbfx.Exec(t, `UPDATE agent_runtime SET daemon_id=$2 WHERE id=$1`, runtimeID, daemonID)
+	dbfx.QueryRow(t, `SELECT runtime_id FROM agent WHERE id=$1`, fx.agentID).Scan(&runtimeID)
 	t.Cleanup(func() {
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM task_pending_input WHERE task_id=$1`, fx.taskID)
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM comment WHERE issue_id=$1`, fx.issueID)
-		_, _ = testPool.Exec(context.Background(), `UPDATE agent_runtime SET daemon_id=$2 WHERE id=$1`, runtimeID, originalDaemonID)
 	})
 
 	registration := validPendingInputRegistration()
@@ -585,6 +573,15 @@ func newIssueCompletionFixture(t *testing.T, title string, triggered bool) issue
 	}
 	var agentID, runtimeID string
 	dbfx.QueryRow(t, `SELECT a.id, a.runtime_id FROM agent a WHERE a.workspace_id=$1 LIMIT 1`, testWorkspaceID).Scan(&agentID, &runtimeID)
+	// Since MUL-8154 a daemon token reaches only runtimes carrying its own
+	// daemon_id, so bind the fixture runtime to the token the complete helper
+	// uses below and restore whatever the column held before the test.
+	var originalDaemonID *string
+	dbfx.QueryRow(t, `SELECT daemon_id FROM agent_runtime WHERE id=$1`, runtimeID).Scan(&originalDaemonID)
+	dbfx.Exec(t, `UPDATE agent_runtime SET daemon_id='typed-completion' WHERE id=$1`, runtimeID)
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `UPDATE agent_runtime SET daemon_id=$2 WHERE id=$1`, runtimeID, originalDaemonID)
+	})
 	issueID := dbfx.Issue(t, "typed completion "+title, testutil.Cols{
 		"status":        "in_progress",
 		"assignee_type": "agent",

@@ -20,7 +20,7 @@ import {
   Webhook,
   X as XIcon,
   Zap,
-} from "lucide-react";
+} from "@multica/ui/icons";
 import { cn } from "@multica/ui/lib/utils";
 import {
   Dialog,
@@ -114,6 +114,7 @@ export type AutopilotDialogProps =
 
 const OUTPUT_MODE_KEYS: AutopilotExecutionMode[] = ["create_issue", "run_only", "test_run"];
 
+// FlaskConical marks the test_run output mode, matching the Tests nav icon.
 const OUTPUT_MODE_ICONS: Record<AutopilotExecutionMode, typeof FilePlus2> = {
   create_issue: FilePlus2,
   run_only: Play,

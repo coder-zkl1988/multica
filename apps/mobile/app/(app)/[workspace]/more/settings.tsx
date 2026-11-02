@@ -66,9 +66,13 @@ export default function SettingsPage() {
     { value: "system", label: t("appearance.theme.system") },
   ];
 
+  // Language labels are native names (options.*), shown the same in every
+  // locale; zh-Hant falls back to the en bundle (fallbackLng), which carries
+  // the native name too. Mirrors upstream's zh-Hant picker entry.
   const languageOptions: { value: LocalePreference; label: string }[] = [
     { value: "en", label: t("language.options.english") },
     { value: "zh-Hans", label: t("language.options.chinese") },
+    { value: "zh-Hant", label: t("language.options.chinese_traditional") },
     { value: "system", label: t("language.options.system") },
   ];
 

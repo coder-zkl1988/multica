@@ -41,7 +41,10 @@ func TestReportTaskExecutionAuthorizationAndValidation(t *testing.T) {
 	}
 	snapshot := executionHandlerSnapshot()
 	testutil.Call(t, testHandler.ReportTaskExecution, request(snapshot, uuid.NewString(), "execution-daemon")).Want(http.StatusNotFound)
-	testutil.Call(t, testHandler.ReportTaskExecution, request(snapshot, testWorkspaceID, "other-daemon")).Want(http.StatusForbidden)
+	// Since MUL-8154 the runtime-binding gate refuses a foreign daemon token
+	// as a 404 before the endpoint's own daemon-match check can return 403;
+	// the foreign daemon stays blocked either way.
+	testutil.Call(t, testHandler.ReportTaskExecution, request(snapshot, testWorkspaceID, "other-daemon")).Want(http.StatusNotFound)
 	taskTokenRequest := request(snapshot, testWorkspaceID, "execution-daemon")
 	taskTokenRequest.Header.Set("X-Actor-Source", "task_token")
 	testutil.Call(t, testHandler.ReportTaskExecution, taskTokenRequest).Want(http.StatusForbidden)

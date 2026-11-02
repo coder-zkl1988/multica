@@ -337,7 +337,7 @@ func TestEnqueueRefusesADerivedRunInTriage(t *testing.T) {
 			return err
 		},
 		"rerun with no source": func() error {
-			_, err := testHandler.TaskService.RerunIssue(ctx, issue.ID, pgtype.UUID{}, pgtype.UUID{}, pgtype.UUID{}, nil, nil)
+			_, err := testHandler.TaskService.RerunIssue(ctx, issue.ID, pgtype.UUID{}, pgtype.UUID{}, pgtype.UUID{}, false, nil, nil)
 			return err
 		},
 	}

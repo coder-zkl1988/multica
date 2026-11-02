@@ -254,6 +254,11 @@ func newNativePackageUploadRequest(fixture nativePackageUploadFixture, workspace
 	req := httptest.NewRequest(http.MethodPost, "/api/daemon/tasks/"+fixture.TaskID+"/project-design-system/package", bytes.NewReader(archive))
 	req.Header.Set("Content-Type", "application/zip")
 	req.Header.Set("X-Multica-Design-Package-Digest", digest)
-	req = req.WithContext(middleware.WithDaemonContext(req.Context(), workspaceID, "native-package-test"))
+	// The completion fixture binds its runtime to this daemon_id; since
+	// MUL-8154 the upload token must carry the same id and its owner to
+	// reach it.
+	ctx := middleware.WithDaemonContext(req.Context(), workspaceID, "project-design-system-test")
+	ctx = middleware.WithDaemonTokenOwnerID(ctx, testUserID)
+	req = req.WithContext(ctx)
 	return withURLParam(req, "taskId", fixture.TaskID)
 }

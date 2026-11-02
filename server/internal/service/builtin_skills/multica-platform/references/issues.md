@@ -21,16 +21,10 @@ The CLI appends its Markdown reference. To replace an image, also use
 
 A routable issue key (`PREFIX-NUMBER`, e.g. `MUL-123`) links a PR from its
 **title**, **branch name**, or **body right after a closing keyword**
-(`Closes` / `Fixes` / `Resolves`, optional colon then whitespace).
-A bare key in the body links nothing. Members can also link or remove a PR by
-URL; a removed PR stays removed until someone links it again.
-
-```text
-MUL-123: fix login redirect        # title: links
-agent/dana/mul-123-fix-login       # branch: links
-Closes MUL-123                    # body: links
-Part of MUL-123                   # body only: no link
-```
+(`Closes` / `Fixes` / `Resolves`, optional colon then whitespace), so
+`Closes MUL-123` in a body links. A bare key in the body links nothing.
+Members can also link or remove a PR by URL; a removed PR stays removed until
+someone links it again.
 
 Open PR links follow the live title, branch and body: removing a key drops its
 automatic link. Existing links stay after merge or close.
@@ -46,11 +40,10 @@ When a run changes code in a checked-out GitHub repo, open or update a PR before
 posting the final Multica issue comment, unless the user explicitly asked for a
 local-only change or no PR. This is a default, not an unconditional command:
 if no code changed, say no PR is needed; if auth, failing tests or missing remote
-state blocks creation, report that blocker instead of pretending the run is complete.
-
-To link the delivery, put a routable issue key in the PR **title** (preferred),
-branch, or after a closing keyword in the body. In the final issue comment,
-include the PR URL when a PR exists; otherwise say why none was produced.
+state blocks creation, report that blocker instead of pretending the run is
+complete. To link the delivery, put a routable issue key in the PR **title**
+(preferred), branch, or after a closing keyword in the body; in the final issue
+comment, include the PR URL when a PR exists, or say why none was produced.
 
 ## Reading a linked PR's real state
 
@@ -67,7 +60,7 @@ The `pull_requests` array exposes:
 - `link_source`: `title`, `branch`, `manual`, or `auto` (other automatic links).
 - `state`: one enum, `merged`, `closed`, `draft`, `open`, in that precedence.
   There is no separate `draft` or `merged` boolean. `merged_at != null` also confirms merge.
-- `mergeable_state`: GitHub's `clean` / `dirty`; unknown values round-trip for compatibility.
+- `mergeable_state`: GitHub's `clean`/`dirty`; unknown values round-trip.
 - Snapshot fields: `snapshot_available`, `mergeable`, `merge_state_status`,
   `checks_rollup`, `checks_total`, `checks_passed`, `checks_failed`,
   `checks_running`, `failed_check_names`, `snapshot_fetched_at`, `snapshot_stale`.
@@ -105,8 +98,6 @@ visible in the sidebar. Read `multica property list` and
 
 ```bash
 multica issue property set <issue-id> --name Environment --value staging
-multica issue property set <issue-id> --name Platforms --value "iOS,Android"
-multica issue property set <issue-id> --name Reviewer --value Bohan
 multica issue property unset <issue-id> --name Environment
 ```
 
@@ -118,9 +109,8 @@ multica issue property unset <issue-id> --name Environment
   options. `--value` accepts comma-separated entries, skips empties and
   deduplicates in order, with at most 20 entries. Use a JSON array if any entry
   contains a comma or the input starts with `[`, for example
-  `--value '["Smith, John","https://en.wikipedia.org/wiki/Washington,_D.C."]'`
-  or `--value '["[draft] spec"]'`. Creation accepts the same forms:
-  `--property 'Aliases=["Smith, John","[draft] spec"]'`.
+  `--value '["Smith, John","https://example.com/a,b"]'`;
+  creation accepts the same forms: `--property 'Aliases=["Smith, John"]'`.
 - Definition icons affect appearance, not validation. Only owner/admin humans
   can create or edit definitions; propose missing properties in a comment.
 - Where state belongs: workflow state a human should see and filter by goes in
@@ -130,74 +120,89 @@ multica issue property unset <issue-id> --name Environment
 ```bash
 multica issue list --property "Impact=High" --property "Impact=Medium" --output json
 multica issue list --property "QA Status=__none__" --status in_review --output json
+multica issue list --property "Effort>=3" --property "Due<2026-10-01" --output json
 multica issue list --sort property:Impact --direction desc --output json
 ```
 
-`--property Name=Value` uses ANY for repeated values of one property and ALL
-across properties. Values are option names/ids, booleans, member names/emails/ids,
-or literal text, URL, number or date (`YYYY-MM-DD`). For `multi_text` / `multi_url`,
-the value matches any single list element exactly. `__none__` means unset for
-every type; it is not index-backed, so reserve it for targeted audits.
-Only `=` is supported; `>=`, `<=`, `!=` are reserved and rejected.
-`--sort property:<name-or-id>` uses option order for select and value order for
-number/date/text/URL; unset sorts last in either direction. Archived properties
-and unordered types (multi-select, checkbox, actor kinds, list types) are rejected.
-
-Issue JSON normally maps definition ids to stored values. `--resolve-properties`
-in JSON mode returns named typed rows with at most one catalog request per page:
-
-```bash
-multica issue list --status in_progress --output json --resolve-properties
-multica issue get <issue-id> --resolve-properties
-```
-
-Read `display` for single values and `display_values` for multi-value properties
-(`multi_select`, `multi_actor`, `multi_text`, `multi_url`);
-`value` keeps the stored ids / strings.
+- `--property` takes one `Name=Value` per flag. Repeating one property matches
+  ANY of its members; different properties must ALL match. Values are option
+  names or ids (select), `true`/`false` (checkbox), a member name/email/id
+  (actor), or the value itself for text, url, number and date (`YYYY-MM-DD`);
+  for `multi_text` / `multi_url` the value matches any single element exactly.
+  `__none__` matches issues where the property is unset (every type; not
+  index-backed — reserve it for targeted audits).
+- Comparisons use the same flag: `>`, `>=`, `<`, `<=` on number; `>` (after)
+  and `<` (before) on date; `~=` (contains, case-insensitive) on text and
+  url. Quote the flag so the shell does not read `<` or `>` as redirection.
+  `!=` is rejected (the server has no not-equal filter); `>=` and `<=` on a
+  date are rejected with an error naming the strict form to use. Two
+  comparisons on one property OR, so they do not form a range. Number and
+  date comparisons are not index-backed.
+- `--sort property:<name-or-id>` orders select properties by option order (an
+  ordinal scale sorts by meaning) and number/date/text/url by value; issues
+  without the property sort last either way. Archived properties and types
+  without an order (multi_select, checkbox, actor kinds, list types) are
+  rejected up front.
+- `issue list` and `issue get` return `properties` as a map of definition id to
+  stored value; add `--resolve-properties` in JSON mode to get the rows
+  `issue property list` prints instead (name, type, stored value, display
+  names), with at most one catalog request per page and no `property list` call.
+  Read `display` for single values and `display_values` for multi-value
+  properties (`multi_select`, `multi_actor`, `multi_text`, `multi_url`);
+  `value` keeps the stored ids / strings.
 
 ## Status changes have server side effects
 
-These rules name fixed built-in keys. Custom statuses carry lifecycle only:
-unstarted, started, done (successful terminal), closed (cancelled terminal).
-They do not inherit Backlog parking, In Review completion, Blocked failure or
-In Progress recovery. Built-in definitions cannot be edited or archived.
+The rules below name fixed built-in status keys; custom statuses carry only
+lifecycle semantics — unstarted, started, done (successful terminal), closed
+(cancelled terminal) — and do not inherit Backlog parking, In Review completion,
+Blocked failure or In Progress recovery. Use the built-in key when its behavior
+is needed; built-in definitions cannot be edited or archived.
 
-Archive a custom status only after moving all its issues, including terminal
-ones. An occupied status returns HTTP 409 `issue_status_in_use` with
-`issue_count` and remains active. Settings > View issues helps move them.
-Replace terminal statuses with the same lifecycle meaning, never reopen/cancel
-completed work just to retire a status. Archival does not move issues; older
-issues on archived statuses remain readable through an explicit status filter.
+Archive a custom status only after moving every issue off it, including
+completed/canceled ones. An occupied status returns HTTP 409 `issue_status_in_use`
+with `issue_count` and stays active; use Settings > View issues to inspect and
+move its issues, then retry. Replace a terminal status with the same lifecycle
+meaning (`done` to `done`, `closed` to `closed`); never reopen or cancel
+completed work just to retire a status. Archival moves no issues; historical
+issues on previously archived statuses remain readable via an explicit status
+filter.
 
 - **`backlog`** parks an agent-assigned issue without a task. Moving to `todo`
-  or another non-terminal status enqueues the assigned agent.
-- **`in_progress` / `in_review`** are explicit, agent-managed mutations,
-  not automatic side effects of a task starting or finishing. Update as soon as
-  the issue's own state changes, mid-turn included, regardless of assignee or
-  trigger type. Set `in_review` when you have delivered the issue's own ask;
-  partial delivery or
-  work continuing beyond the turn: `in_progress`; stuck: `blocked`.
-  A turn that produces none of the issue's own deliverable writes nothing.
-  Research, design, planning and review count when the issue asks for them;
-  questions, discussion and acknowledgements do not. Squad leaders:
-  dispatching members is not delivery; the parent stays `in_progress` until a
-  later turn confirms its overall goal is met.
+  or any non-done/non-cancelled status enqueues the assigned agent then.
+- **`in_progress` / `in_review`** are agent-managed CLI mutations, not automatic
+  side effects of a task starting or finishing. Write the state the issue is in
+  whenever your work changes it — not from the trigger type or the run's
+  lifecycle, and regardless of assignee — mid-turn included, never exiting with
+  a stale value: delivered the issue's own ask → `in_review`; work continues
+  beyond the turn (dispatched sub-issues, partial delivery) → `in_progress`;
+  stuck → `blocked`. A turn that produces none of the issue's own deliverable —
+  answering a question, consulting elsewhere — writes nothing.
+  Research, design, planning and review count when they are what the issue asks
+  for; questions, discussion or acknowledgements never move the status.
+  Squad leaders: dispatching members is not delivery — a dispatch turn leaves
+  the parent `in_progress` until a later re-trigger confirms the overall goal
+  is met.
 - **`in_review`** is accepted; using it while a PR awaits review is an explicit write.
 - **`done`** on a child can wake its parent (see Stages).
-- **`cancelled`** closes the issue and enqueues nothing, but does **not** stop tasks
-  already in flight. Cancel the task itself to stop a run.
-  For duplicate work use `multica issue status <id> cancelled --duplicate-of <original>`;
-  a comment alone does not link the issues. The original cannot itself be a
-  duplicate, and an issue with incoming duplicate links cannot be marked.
-  `GET /api/issues/<id>/duplicates` returns both sides; `duplicate_of` contains
-  the original id, identifier, title and status. Moving out of `cancelled`
-  removes the mark. Timeline actions are `duplicate_marked` / `duplicate_added`
-  and `duplicate_unmarked` / `duplicate_removed` (`issue timeline --action`).
-- Failed issue-triggered tasks may roll `in_progress` back to `todo` when
+- **`cancelled`** is a terminal, user-driven close. Like `done` it enqueues no
+  new agent work, but it does **not** stop tasks already in flight — to stop a
+  running task, cancel the task itself.
+  When cancelling because the work already exists elsewhere, mark it with
+  `multica issue status <id> cancelled --duplicate-of <original>`: only the
+  mark links the two, a comment does not. The original must not itself be a
+  duplicate, and an issue others are marked as duplicates of cannot be marked;
+  the command reports both refusals. `GET /api/issues/<id>/duplicates` shows
+  both sides; issue responses carry the original as `duplicate_of` while the
+  mark counts. Moving to any status other than `cancelled` removes the mark.
+  Marking logs `duplicate_marked` / `duplicate_added`; removing logs
+  `duplicate_unmarked` / `duplicate_removed` (`multica issue timeline --action`).
+- **Failed issue-triggered tasks** may roll `in_progress` back to `todo` when
   no active task / retry remains: the main server-owned status write on this path.
-- **Project workflows** can limit an issue's statuses and turn a status change
-  into a handoff to another agent. When the per-turn prompt carries a
-  `[Project workflow]` block, read `references/projects.md`.
+- **Project workflows** can limit which statuses an issue takes and turn a
+  status change into a handoff to another agent; a run whose prompt carries a
+  `[Project workflow]` block follows that block's statuses and commands instead
+  of every move above. Read `references/projects.md` when one is present.
 
 A custom terminal status can still enqueue at creation. Use built-in `done` or
 `cancelled` when creating a terminal issue.
@@ -209,7 +214,7 @@ successful process exit alone does not establish review readiness.
 
 ## Claim ownership without duplicating a run
 
-Agent assignment normally starts a run. When work is underway and the write
+Agent assignment normally starts a run; when work is underway and the write
 only records ownership/progress, use `--no-start` throughout that flow:
 
 ```bash
@@ -221,7 +226,7 @@ multica issue status <issue-id> in_progress --no-start
 Before self-assignment, check bounded comments for an existing claim. The server
 suppresses trusted self-assignment only when the exact `(issue, agent)` pair
 already has a non-terminal task. Same-agent handoffs to a fresh issue still start
-runs; cross-issue serial chains and triage batches rely on this distinction.
+runs; cross-issue serial chains and triage batches rely on this.
 
 ## Who else is running right now
 
@@ -233,9 +238,9 @@ multica issue runs <issue-id> --siblings --output json
 ```
 
 `--active` returns queued/dispatched/running/waiting_local_directory runs.
-`--siblings` reads the parent (or this issue if no parent) and all its children,
-with compact task/issue/agent/status/started rows; use `issue run-messages` for detail.
-Rows are running-first, then newest-first, capped at 20. A stderr truncation
+`--siblings` reads the parent (or this issue if no parent) and all its children
+as compact task/issue/agent/status/started rows; `issue run-messages` has detail.
+Rows are running-first then newest-first, capped at 20; a stderr truncation
 warning means the list says nothing about omitted runs.
 Nothing here reserves an issue or serialises anything: runs can start or finish
 immediately after the read. Coordinate through comments with the agents found.
@@ -267,9 +272,7 @@ the next stage's dependencies justify promotion from `backlog` to `todo`.
 
 ```bash
 multica issue create --title "Research A" --parent <id> --assignee <agent> --stage 1 --status todo
-multica issue create --title "Research B" --parent <id> --assignee <agent> --stage 1 --status todo
 multica issue create --title "Build" --parent <id> --assignee <agent> --stage 2 --status backlog
-multica issue children <parent-id>
 multica issue status <stage-2-child-id> todo
 ```
 
@@ -284,27 +287,24 @@ parent breakdown, leave it parked and comment to confirm.
 
 ## Charts and files in a comment
 
-- Fenced `html` / `mermaid` renders inline, with Preview/Source, fullscreen and
-  copy. Name the fence `title="..."`; content taller than 480px collapses behind
-  Show all. HTML uses a scripts-only sandbox without cookies/storage/parent
-  access; CDN `<script src>` works.
-- `--attachment <path>` makes non-images file cards, including HTML. An uploaded
-  report is a deliverable to open or download, not an inline chart.
+- A fenced ` ```html ` or ` ```mermaid ` block renders inside the comment with
+  a title bar (Preview / Source, fullscreen, copy) and its content's height;
+  anything taller than 480px collapses behind "Show all". Name the fence with
+  `title="..."`. HTML runs in a scripts-only sandbox (no cookies, storage or
+  parent access; CDN `<script src>` works).
+- `--attachment <path>`: every non-image file becomes a file card that opens in
+  the viewer, HTML included — an uploaded report is a deliverable to open or
+  download, not an inline chart.
 
-Theme-aware HTML uses `var(--background)`, `--foreground`, `--muted`,
-`--muted-foreground`, `--border`, `--primary`, `--chart-1` through `--chart-5`,
-and `--font-sans`. Using any opts into the app's scheme; also set body background
-and foreground. Without them HTML keeps its own look. Size to content:
-`100vh` has no fixed viewport here.
-
-````markdown
-```html title="p95 latency, last 7 days"
-<canvas id="c"></canvas>
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-<script>/* use getComputedStyle(document.documentElement)
-  .getPropertyValue("--chart-1") to draw with the theme */</script>
-```
-````
+For HTML that follows light / dark mode, style it with `var(--background)`,
+`--foreground`, `--muted`, `--muted-foreground`, `--border`, `--primary`,
+`--chart-1` through `--chart-5`, and `--font-sans`. Any of them opts the block
+into the app's color scheme, so set the page background
+(`body { background: var(--background); color: var(--foreground) }`). Never put
+token text on a fixed light fill (near-white in dark mode). HTML with no tokens
+keeps its own look. Size to the content: `100vh` has no fixed viewport to fill.
+Read a token in the sandbox with
+`getComputedStyle(document.documentElement).getPropertyValue("--chart-1")`.
 
 ## Issue wakeups
 
@@ -333,27 +333,33 @@ Conditions check stored facts about every 30 seconds. Pass exactly one
 event. An already-true condition fires on the next check, except PR checks
 exclude results finished before registration. Conditions fire once by default;
 continuous mode rearms after the predicate becomes false or underlying facts
-change (check result/head, linked PR merge, child count).
+change (check result/head, linked PR merge, a resolved conflict coming back,
+child count).
 
 ```bash
-multica issue wakeup create <issue> --until-status in_review --instruction-file ./instruction.md
 multica issue wakeup create <issue> --until-pr checks --expires-in 2h --on-timeout wake --instruction-file ./instruction.md
-multica issue wakeup create <issue> --until-pr merged --instruction-file ./instruction.md
+multica issue wakeup create <issue> --until-pr conflicts --mode continuous --instruction-file ./instruction.md
 multica issue wakeup create <issue> --until-children-done --stage 2 --instruction-file ./instruction.md
 multica issue wakeup create <issue> --until-issue <other-issue-id> --until-issue-state done --instruction-file ./instruction.md
 ```
 
 - `--until-status KEY`: this issue reaches that built-in/custom key.
 - `--until-pr checks`: a linked PR's checks finish, pass or fail, on its current
-  head. `--until-pr merged`: a linked PR merges. Any linked PR satisfies either.
-  Only PRs linked directly to this issue count; a parent's are not inherited.
-  `checks` needs the server's GitHub snapshot: a missing link or snapshot lands
-  in the rule's `last_error` and retries, it does not reject the rule.
+  head. `--until-pr merged`: a linked PR merges. `--until-pr conflicts`: an open
+  linked GitHub PR has merge conflicts on its current head; with
+  `--mode continuous` it fires again each time a resolved conflict comes back
+  or a new head is still conflicting. With
+  several linked PRs, any one satisfies each condition. Only PRs linked directly
+  to this issue count; a parent's are not inherited. `checks` and `conflicts`
+  need the server's GitHub snapshot, and conflicts are not detected on Forgejo,
+  Gitea or GitLab PRs: a missing link or snapshot lands in the rule's
+  `last_error` and retries, it does not reject the rule.
 - `--until-children-done`: all children, staged or not, are done/cancelled.
   `--stage N` limits to staged children up to N, with at least one in N.
   No children never fires. Do not duplicate the parent's built-in stage wake.
 - `--until-issue ISSUE`: another issue in this workspace (key/UUID) reaches
-  `--until-issue-state done` (default), `ended` (done/cancelled), or `in_review`.
+  `--until-issue-state done` (default), `ended` (done/cancelled), `in_review`,
+  or `blocked`.
 - Other conditions: `--until-assignee member|agent|squad:ID`,
   `--until-label LABEL_ID`, `--until-property PROPERTY_ID=VALUE` (JSON accepted).
   `wakeup create --help` lists the forms.
@@ -398,11 +404,12 @@ something changed, needs attention or completes the check's goal.
 ### Completion and loop protection
 
 Read current issue, bounded comments and runs before judging completion.
-Wait for PRs with `--until-pr checks|merged` rather than timer polling; there is
-no separate CI event. Use GitHub tools for details/logs when woken. A failed run
-does not establish business completion. Task filters do not follow automatic
-retry chains; subscribe to the new run. Disable continuous rules once done.
-Ordinary execution/comment rules apply except scheduled checks ending with checkin.
+Wait for PRs with `--until-pr checks|merged|conflicts` rather than timer
+polling; there is no separate CI event. Use GitHub tools for details/logs when
+woken. A failed run does not establish business completion. Task filters do not
+follow automatic retry chains; subscribe to the new run. Disable continuous
+rules once done. Ordinary execution/comment rules apply except scheduled checks
+ending with checkin.
 
 Self-trigger protection excludes the registering task and same-rule runs when
 source identity is known. Your comments/issue changes never wake you, nor does a

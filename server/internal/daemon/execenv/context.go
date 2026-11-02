@@ -144,7 +144,7 @@ func writeWorkspacesRootMarkerAtomic(path string, data []byte) error {
 // Copilot:     skills → {workDir}/.github/skills/{name}/SKILL.md  (native project-level discovery)
 // OpenCode:    skills → {workDir}/.opencode/skills/{name}/SKILL.md  (native discovery)
 // OpenClaw:    skills → {workDir}/skills/{name}/SKILL.md  (native discovery — paired with a per-task synthesized openclaw-config.json that pins agents.defaults.workspace to workDir; see openclaw_config.go)
-// Pi:          skills → {workDir}/.pi/skills/{name}/SKILL.md  (native discovery)
+// Pi:          skills → {workDir}/.pi/skills/{name}/SKILL.md  (explicit --skill loading)
 // Cursor:      skills → {workDir}/.cursor/skills/{name}/SKILL.md  (native discovery)
 // Kimi:        skills → {workDir}/.kimi/skills/{name}/SKILL.md  (native discovery)
 // Reasonix:    skills → {workDir}/.reasonix/skills/{name}/SKILL.md  (native discovery)
@@ -970,7 +970,7 @@ func skillsDirPath(workDir, provider string) string {
 		// no openclaw scan path ever inspected.
 		return filepath.Join(workDir, "skills")
 	case "pi":
-		// Pi natively discovers skills from .pi/skills/ in the workdir.
+		// The Pi backend explicitly loads skills from .pi/skills/ via --skill.
 		return filepath.Join(workDir, ".pi", "skills")
 	case "cursor":
 		// Cursor natively discovers skills from .cursor/skills/ in the workdir.
@@ -1006,6 +1006,8 @@ func skillsDirPath(workDir, provider string) string {
 	case "mcode":
 		// MiniMax Code discovers project-level skills from .minimax/skills/.
 		return filepath.Join(workDir, ".minimax", "skills")
+	case "devin":
+		return filepath.Join(workDir, ".devin", "skills")
 	case "muse":
 		// Muse's native project root: https://meta-models.github.io/muse-code-sdk/next/guides/extend/skills/
 		return filepath.Join(workDir, ".agents", "skills")

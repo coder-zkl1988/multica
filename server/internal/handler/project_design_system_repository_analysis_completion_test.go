@@ -130,16 +130,22 @@ func TestCompleteProjectDesignSystemRepositoryAnalysisReturnsServerErrorWhenFail
 	if err != nil {
 		t.Fatalf("load active project design system: %v", err)
 	}
+	// Corrupt the context's agent identity instead of its workspace: since
+	// MUL-8154 the daemon gate refuses a task whose context workspace no
+	// longer matches its runtime (404 before CompleteTask runs), so the
+	// server-side failure must come from a field only the completion path
+	// validates — here the failure propagation's agent identity check, which
+	// makes FailTask itself roll back and CompleteTask report 500.
 	if _, err := testPool.Exec(context.Background(), `
 		UPDATE agent_task_queue
-		SET context = jsonb_set(context, '{workspace_id}', to_jsonb($1::text))
+		SET context = jsonb_set(context, '{agent_id}', to_jsonb($1::text))
 		WHERE id = $2
-	`, "invalid-workspace", fixture.TaskID); err != nil {
-		t.Fatalf("invalidate repository analysis workspace context: %v", err)
+	`, "30000000-0000-4000-8000-000000000001", fixture.TaskID); err != nil {
+		t.Fatalf("invalidate repository analysis agent context: %v", err)
 	}
 
 	w := httptest.NewRecorder()
-	req := newDaemonTokenRequest(http.MethodPost, "/api/daemon/tasks/"+fixture.TaskID+"/complete", map[string]any{"output": `{}`}, "invalid-workspace", "project-design-system-test")
+	req := newDaemonTokenRequest(http.MethodPost, "/api/daemon/tasks/"+fixture.TaskID+"/complete", map[string]any{"output": `{}`}, testWorkspaceID, "project-design-system-test")
 	req = withURLParam(req, "taskId", fixture.TaskID)
 	testHandler.CompleteTask(w, req)
 	if w.Code != http.StatusInternalServerError {

@@ -8,6 +8,7 @@ import frAgents from "../../../locales/fr/agents.json";
 import jaAgents from "../../../locales/ja/agents.json";
 import koAgents from "../../../locales/ko/agents.json";
 import zhHansAgents from "../../../locales/zh-Hans/agents.json";
+import zhHantAgents from "../../../locales/zh-Hant/agents.json";
 
 import {
   FAILURE_REASON_I18N_KEYS,
@@ -23,6 +24,7 @@ import {
 const AGENT_RESOURCES = {
   en: enAgents,
   "zh-Hans": zhHansAgents,
+  "zh-Hant": zhHantAgents,
   ja: jaAgents,
   ko: koAgents,
   fr: frAgents,
@@ -115,6 +117,7 @@ describe("cancelReasonLabel", () => {
     const expected: Record<SupportedLocale, string> = {
       en: "Cancelled by the system",
       "zh-Hans": "已由系统取消",
+      "zh-Hant": "已由系統取消",
       ja: "システムによってキャンセルされました",
       ko: "시스템에서 취소함",
       fr: "Annulée par le système",
@@ -177,6 +180,7 @@ describe("failureReasonLabel", () => {
     const expected: Record<SupportedLocale, string> = {
       en: "Configured run budget exhausted",
       "zh-Hans": "本次运行配置的预算已用尽",
+      "zh-Hant": "本次執行配置的預算已用盡",
       ja: "設定された実行予算を使い切りました",
       ko: "설정된 실행 예산을 모두 사용함",
       fr: "Budget d'exécution configuré épuisé",

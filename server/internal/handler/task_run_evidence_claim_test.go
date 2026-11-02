@@ -63,6 +63,9 @@ func TestClaimTaskRunEvidenceModelUsageCapabilityGate(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
 			runtimeID := createClaimReclaimRuntime(t, ctx, "Model usage claim "+tc.name)
+			// Since MUL-8154 a daemon token reaches only runtimes carrying
+			// its own daemon_id, so bind the claim runtime to the token.
+			dbfx.Exec(t, `UPDATE agent_runtime SET daemon_id = 'model-usage-claim' WHERE id = $1`, runtimeID)
 			agentID, issueID := createClaimReclaimAgentAndIssue(t, ctx, runtimeID, "Model usage claim "+tc.name)
 			dbfx.Task(t, agentID, testutil.Cols{"runtime_id": runtimeID, "issue_id": issueID})
 

@@ -15,6 +15,9 @@ func TestClaimTaskByRuntimeCarriesAuthorizedIssueSnapshot(t *testing.T) {
 
 	ctx := context.Background()
 	runtimeID := createClaimReclaimRuntime(t, ctx, "Issue snapshot claim runtime")
+	// Since MUL-8154 a daemon token reaches only runtimes carrying its own
+	// daemon_id, so bind the claim runtime to the token used below.
+	dbfx.Exec(t, `UPDATE agent_runtime SET daemon_id = 'issue-snapshot-claim' WHERE id = $1`, runtimeID)
 	agentID, issueID := createClaimReclaimAgentAndIssue(t, ctx, runtimeID, "Issue snapshot claim agent")
 	dbfx.Exec(t, `
 		UPDATE issue

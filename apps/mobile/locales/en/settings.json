@@ -69,9 +69,11 @@
     "system": "System",
     "english": "English",
     "chinese_simplified": "Simplified Chinese",
+    "chinese_traditional": "Traditional Chinese",
     "options": {
       "english": "English",
       "chinese": "中文",
+      "chinese_traditional": "繁體中文",
       "system": "System"
     }
   },

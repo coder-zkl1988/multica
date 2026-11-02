@@ -253,8 +253,11 @@ func TestCommentDesignLivePreviewIsBoundAndNeverPublishesDraft(t *testing.T) {
 		t.Fatal(err)
 	}
 	post("90000000-0000-4000-8000-000000000001").Want(http.StatusNotFound)
+	// Since MUL-8154 the runtime-binding gate refuses a foreign daemon token
+	// as a 404 before the endpoint's own daemon-match check can return 403;
+	// the foreign daemon stays blocked either way.
 	foreignDaemon := withURLParam(newDaemonTokenRequest(http.MethodPost, "/api/daemon/tasks/"+delivery.TaskID+"/design-document-live-preview", snapshot, testWorkspaceID, "other-daemon"), "taskId", delivery.TaskID)
-	testutil.Call(t, testHandler.UploadDesignDocumentLivePreview, foreignDaemon).Want(http.StatusForbidden)
+	testutil.Call(t, testHandler.UploadDesignDocumentLivePreview, foreignDaemon).Want(http.StatusNotFound)
 	post(testWorkspaceID).Want(http.StatusNoContent)
 	var observed struct {
 		designdocument.LivePreview
@@ -320,6 +323,11 @@ func TestCommentDesignDeliveryDownloadsExplicitSavedSystem(t *testing.T) {
 	}
 	taskID := comment.DesignDelivery.TaskID
 	if _, err := testPool.Exec(context.Background(), "UPDATE agent_task_queue SET status = 'running', started_at = now() WHERE id = $1", taskID); err != nil {
+		t.Fatal(err)
+	}
+	// Since MUL-8154 a daemon token reaches only runtimes carrying its own
+	// daemon_id, so bind the delivery runtime to the download token.
+	if _, err := testPool.Exec(context.Background(), "UPDATE agent_runtime SET daemon_id = 'selected-system-daemon' WHERE id = (SELECT runtime_id FROM agent_task_queue WHERE id = $1)", taskID); err != nil {
 		t.Fatal(err)
 	}
 	request := withURLParam(newDaemonTokenRequest(http.MethodGet, "/api/daemon/tasks/"+taskID+"/design-document/design-system", nil, testWorkspaceID, "selected-system-daemon"), "taskId", taskID)

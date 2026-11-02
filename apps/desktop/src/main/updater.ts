@@ -1,5 +1,5 @@
 import { autoUpdater, type UpdateDownloadedEvent } from "electron-updater";
-import { app, type BrowserWindow, ipcMain } from "electron";
+import { app, type BrowserWindow, type MessageBoxOptions, ipcMain } from "electron";
 import type {
   ManualUpdateCheckResult,
   UpdaterPreferences,
@@ -12,6 +12,7 @@ import {
   updaterPreferencesPath,
 } from "./updater-preferences";
 import { configureForkUpdateFeed } from "./fork-update-feed";
+import type { DaemonInstallPrep } from "./update-install-gate";
 
 // Silent background updates: electron-updater downloads on its own as soon
 // as `update-available` fires; we only surface UI when the package is fully
@@ -55,6 +56,44 @@ configureMacX64UpdateChannel(autoUpdater);
 
 const STARTUP_CHECK_DELAY_MS = 5_000;
 const PERIODIC_CHECK_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
+// quitAndInstall only quits once the installer has been spawned. If the app is
+// still running this long afterwards, the install bailed and the daemon we
+// stopped for it must be brought back.
+const INSTALL_QUIT_WATCHDOG_MS = 10_000;
+
+// Injected so the updater does not own the daemon manager's state.
+export interface UpdaterDaemonGate {
+  prepare: (options: {
+    interruptActiveTasks: boolean;
+  }) => Promise<DaemonInstallPrep>;
+  resumeAfterAbortedInstall: () => void;
+  confirmInstallWhileBusy: (activeTasks: number) => Promise<boolean>;
+}
+
+export interface SetupAutoUpdaterOptions {
+  daemonGate?: UpdaterDaemonGate;
+  platform?: NodeJS.Platform;
+}
+
+export function createElectronBusyInstallPrompt(
+  showMessageBox: (
+    options: MessageBoxOptions,
+  ) => Promise<{ response: number }>,
+): (activeTasks: number) => Promise<boolean> {
+  return async (activeTasks) => {
+    const tasks = activeTasks === 1 ? "1 agent task is" : `${activeTasks} agent tasks are`;
+    const { response } = await showMessageBox({
+      type: "question",
+      buttons: ["Install now", "Cancel"],
+      defaultId: 1,
+      cancelId: 1,
+      title: "Install update",
+      message: `${tasks} running on this computer.`,
+      detail: "Installing now stops the local runtime and interrupts these tasks.",
+    });
+    return response === 0;
+  };
+}
 
 type RendererChannel =
   | "updater:update-available"
@@ -158,7 +197,34 @@ function checkForUpdatesOnce(
   return check;
 }
 
-export function setupAutoUpdater(getMainWindow: () => BrowserWindow | null): void {
+// The window accessor may return a single window, null, or a list: the fork
+// shipped the single-window shape and upstream the list shape, and both are
+// exercised by the merged updater suite. Normalize once here.
+function normalizeMainWindows(
+  getMainWindows: () => readonly BrowserWindow[] | BrowserWindow | null,
+): readonly BrowserWindow[] {
+  const windows = getMainWindows();
+  if (windows === null || windows === undefined) return [];
+  // Array.isArray cannot narrow `readonly T[]` out of the false branch, so the
+  // list shape keeps an explicit cast to the readonly array type.
+  if (Array.isArray(windows)) return windows as readonly BrowserWindow[];
+  return [windows as BrowserWindow];
+}
+
+export function setupAutoUpdater(
+  getMainWindows: () => readonly BrowserWindow[] | BrowserWindow | null,
+  options: SetupAutoUpdaterOptions = {},
+): void {
+  // Every main window mounts the update banner, so each one hears progress.
+  const broadcast = (channel: RendererChannel, payload: unknown) => {
+    for (const win of normalizeMainWindows(getMainWindows)) {
+      sendToLiveRenderer(win, channel, payload);
+    }
+  };
+  const platform = options.platform ?? process.platform;
+  // Only Windows locks a running executable against replacement; macOS and
+  // Linux keep their existing update path untouched.
+  const daemonGate = platform === "win32" ? (options.daemonGate ?? null) : null;
   const preferencesFilePath = updaterPreferencesPath(app.getPath("userData"));
   let automaticUpdatesEnabled =
     DEFAULT_UPDATER_PREFERENCES.automaticUpdates;
@@ -168,7 +234,7 @@ export function setupAutoUpdater(getMainWindow: () => BrowserWindow | null): voi
   let updaterState: UpdaterState = { status: "idle" };
   const publishUpdaterState = (next: UpdaterState): void => {
     updaterState = next;
-    sendToLiveRenderer(getMainWindow(), "updater:state", next);
+    broadcast("updater:state", next);
   };
   const reportDownloadError = (error: unknown): void => {
     const version =
@@ -232,6 +298,65 @@ export function setupAutoUpdater(getMainWindow: () => BrowserWindow | null): voi
     }
   };
 
+  let updateReadyToInstall = false;
+  let installFlow: Promise<void> | null = null;
+  let quitRequested = false;
+  let finishing = false;
+  let appQuitting = false;
+
+  const finish = (install: boolean, manual: boolean): void => {
+    finishing = true;
+    const previousAutoInstall = autoUpdater.autoInstallOnAppQuit;
+    if (!install) autoUpdater.autoInstallOnAppQuit = false;
+    setTimeout(() => {
+      if (appQuitting) return;
+      finishing = false;
+      quitRequested = false;
+      autoUpdater.autoInstallOnAppQuit = previousAutoInstall;
+      daemonGate?.resumeAfterAbortedInstall();
+    }, INSTALL_QUIT_WATCHDOG_MS);
+    if (install && manual) autoUpdater.quitAndInstall(false, true);
+    else app.quit();
+  };
+
+  // All entry points join this promise. Once stopping starts, nobody cancels
+  // or replaces its PID wait, and no other flow can resume the daemon.
+  const installWithDaemonGate = (manual: boolean): Promise<void> => {
+    if (installFlow) return installFlow;
+    if (finishing || !daemonGate) return Promise.resolve();
+    installFlow = (async () => {
+      let install = true;
+      try {
+        const prep = await daemonGate.prepare({ interruptActiveTasks: false });
+        if (prep.kind === "busy") {
+          install = manual && await daemonGate.confirmInstallWhileBusy(prep.activeTasks);
+          if (install) await daemonGate.prepare({ interruptActiveTasks: true });
+        }
+      } catch (err) {
+        // Preserve the existing installer fallback if preparation fails.
+        console.error("[updater] daemon preparation failed; installing anyway:", err);
+      }
+      if (install) finish(true, manual);
+      else {
+        daemonGate.resumeAfterAbortedInstall();
+        if (quitRequested) finish(false, false);
+      }
+    })().finally(() => { installFlow = null; });
+    return installFlow;
+  };
+
+  if (daemonGate) {
+    app.on("will-quit", () => { appQuitting = true; });
+    app.on("before-quit", (event) => {
+      if (finishing || !updateReadyToInstall || !autoUpdater.autoInstallOnAppQuit) return;
+      event.preventDefault();
+      quitRequested = true;
+      void installWithDaemonGate(false).catch((err) => {
+        console.error("[updater] quit-time installation failed:", err);
+      });
+    });
+  }
+
   autoUpdater.on("update-available", (info) => {
     publishUpdaterState({
       status: "downloading",
@@ -239,7 +364,7 @@ export function setupAutoUpdater(getMainWindow: () => BrowserWindow | null): voi
       percent: 0,
     });
     // Retain granular channels for older renderer bundles.
-    sendToLiveRenderer(getMainWindow(), "updater:update-available", {
+    broadcast("updater:update-available", {
       version: info.version,
       releaseNotes: info.releaseNotes,
     });
@@ -252,14 +377,16 @@ export function setupAutoUpdater(getMainWindow: () => BrowserWindow | null): voi
         percent: progress.percent,
       });
     }
-    sendToLiveRenderer(getMainWindow(), "updater:download-progress", {
+    broadcast("updater:download-progress", {
       percent: progress.percent,
     });
   });
 
   autoUpdater.on("update-downloaded", (info: UpdateDownloadedEvent) => {
+    updateReadyToInstall = true;
     publishUpdaterState({ status: "ready", version: info.version });
-    sendToLiveRenderer(getMainWindow(), "updater:update-downloaded", {
+    // Retain granular channels for older renderer bundles.
+    broadcast("updater:update-downloaded", {
       version: info.version,
       releaseNotes: info.releaseNotes,
     });
@@ -279,8 +406,12 @@ export function setupAutoUpdater(getMainWindow: () => BrowserWindow | null): voi
     return download;
   });
 
-  ipcMain.handle("updater:install", () => {
-    autoUpdater.quitAndInstall(false, true);
+  ipcMain.handle("updater:install", async () => {
+    if (!daemonGate) {
+      autoUpdater.quitAndInstall(false, true);
+      return;
+    }
+    await installWithDaemonGate(true);
   });
 
   ipcMain.handle("updater:get-state", (): UpdaterState => updaterState);

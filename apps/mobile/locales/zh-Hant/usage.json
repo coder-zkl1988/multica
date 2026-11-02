@@ -1,0 +1,50 @@
+{
+  "list": {
+    "header_title": "用量"
+  },
+  "subtitle": "查看當前工作區的 token 消耗和 AI 代理執行情況。",
+  "filter": {
+    "all_projects": "全部專案"
+  },
+  "kpi": {
+    "cost_label": "費用 · {{days}}天",
+    "tokens_label": "Token · {{days}}天",
+    "tokens_hint": "輸入 {{input}} · 輸出 {{output}}",
+    "run_time_label": "執行時長 · {{days}}天",
+    "run_time_hint": "共 {{tasks}} 個任務",
+    "tasks_label": "任務數 · {{days}}天",
+    "tasks_hint": "失敗 {{failed}} 個"
+  },
+  "dim": {
+    "daily": "按天",
+    "weekly": "按周"
+  },
+  "metric": {
+    "cost": "費用",
+    "tokens": "Token",
+    "time": "執行時長",
+    "tasks": "任務數"
+  },
+  "leaderboard": {
+    "title": "排行榜",
+    "caption": "{{count}} 個 AI 代理",
+    "caption_with_deleted": "{{count}} 個 AI 代理 · {{deleted}} 個已刪除",
+    "deleted_agents": "已刪除的 AI 代理",
+    "sort_tokens": "Token",
+    "sort_cost": "費用",
+    "sort_time": "執行時長",
+    "sort_tasks": "任務數"
+  },
+  "empty": {
+    "title": "暫無消耗資料",
+    "body": "當 AI 代理在這裡開始執行任務後，它們的 token 消耗和執行時長將出現在此處。"
+  },
+  "error": {
+    "load_prefix": "載入用量資料失敗：",
+    "unknown": "未知錯誤",
+    "retry": "重試"
+  },
+  "duration": {
+    "less_than_minute": "<1分鐘"
+  }
+}

@@ -21,7 +21,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@multica/ui/components/ui/card";
-import { Loader2, RefreshCw } from "lucide-react";
+import { Loader2, RefreshCw } from "@multica/ui/icons";
 import { LoginPage, validateCliCallback } from "@multica/views/auth";
 import { useT } from "@multica/views/i18n";
 import { setLoggedInCookie } from "@/features/auth/auth-cookie";

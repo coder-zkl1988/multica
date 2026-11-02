@@ -377,20 +377,20 @@ func validSavedDesignContextFixture(
 	}
 	savedAt := time.Date(2026, time.July, 30, 3, 58, 25, 0, time.UTC)
 	return db.ProjectDesignSystem{
-			ID: systemID, WorkspaceID: workspaceID, ProjectID: projectID,
-			Name: "Atlas", Platform: "web",
-			SavedAt: pgtype.Timestamptz{Time: savedAt, Valid: true},
-		}, db.ProjectDesignSystemPackage{
-			DesignSystemID: systemID, Slot: "saved",
-			DesignMd: artifacts.DesignMD, TokensCss: artifacts.TokensCSS, ComponentsHtml: artifacts.ComponentsHTML,
-			Manifest: manifestJSON, Validation: validationJSON, IntegritySha256: validated.Manifest.Digest,
-			SourceTaskID: sourceTaskID, RenderStatus: "passed",
-			PackageSchema: projectdesignsystem.PackageSchemaV2,
-			ArchiveObjectKey: pgtype.Text{
-				String: "project-design-systems/" + util.UUIDToString(systemID) + "/archive.zip", Valid: true,
-			},
-			ArtifactIndex: indexJSON,
-		}
+		ID: systemID, WorkspaceID: workspaceID, ProjectID: projectID,
+		Name: "Atlas", Platform: "web",
+		SavedAt: pgtype.Timestamptz{Time: savedAt, Valid: true},
+	}, db.ProjectDesignSystemPackage{
+		DesignSystemID: systemID, Slot: "saved",
+		DesignMd: artifacts.DesignMD, TokensCss: artifacts.TokensCSS, ComponentsHtml: artifacts.ComponentsHTML,
+		Manifest: manifestJSON, Validation: validationJSON, IntegritySha256: validated.Manifest.Digest,
+		SourceTaskID: sourceTaskID, RenderStatus: "passed",
+		PackageSchema: projectdesignsystem.PackageSchemaV2,
+		ArchiveObjectKey: pgtype.Text{
+			String: "project-design-systems/" + util.UUIDToString(systemID) + "/archive.zip", Valid: true,
+		},
+		ArtifactIndex: indexJSON,
+	}
 }
 
 func mustDesignContextUUID(t *testing.T, value string) pgtype.UUID {

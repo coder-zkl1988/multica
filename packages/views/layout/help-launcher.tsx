@@ -1,6 +1,15 @@
 "use client";
 
-import { ArrowUpRight, BookOpen, CircleHelp, Download, History, MessageCircle, RefreshCw, UsersRound } from "lucide-react";
+import {
+  ArrowUpRight,
+  BookOpen,
+  CircleHelp,
+  Download,
+  History,
+  MessageCircle,
+  RefreshCw,
+  Users,
+} from "@multica/ui/icons";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -10,13 +19,19 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@multica/ui/components/ui/dropdown-menu";
+import { TooltipHint } from "@multica/ui/components/common/tooltip-hint";
 import { useModalStore } from "@multica/core/modals";
 import { useConfigStore } from "@multica/core/config";
 import { isDesktopShell } from "../platform/local-directory";
 import { toast } from "sonner";
 import { useDownloadPageUrl } from "./use-download-page-url";
 import { useT } from "../i18n";
+import { RAIL_ICON_BUTTON_CLASS } from "./rail-styles";
+import { DOWNLOAD_URL } from "./help-links";
 
+// Fork product: docs and the changelog live on this fork's GitHub, not the
+// upstream marketing site, so they are kept local instead of imported from
+// ./help-links.
 const DOCS_URL = "https://github.com/coder-zkl1988/multica";
 const CHANGELOG_URL = "https://github.com/coder-zkl1988/multica/releases";
 const FEISHU_GROUP_URL =
@@ -32,11 +47,6 @@ type UpdateCheckResult =
       available: boolean;
     }
   | { ok: false; error: string };
-
-// Absolute, including on self-hosted deployments: the installers we ship are
-// the same binaries either way, and the desktop client can point at a
-// self-hosted backend once installed.
-const DOWNLOAD_URL = "https://multica.ai/download";
 
 export function HelpLauncher() {
   const { t } = useT("layout");
@@ -62,8 +72,8 @@ export function HelpLauncher() {
   };
 
   // Web-only: offering "download the desktop app" inside the desktop app is
-  // nonsense, and this sidebar is shared — apps/desktop renders the same
-  // AppSidebar as the web dashboard, so the entry has to be gated here.
+  // nonsense, and this rail is shared — apps/desktop renders the same app
+  // shell as the web dashboard, so the entry has to be gated here.
   //
   // No `mounted` deferral (cf. browser-notification-setting.tsx): the desktop
   // renderer is a locally-bundled SPA with no SSR pass, and on web
@@ -73,16 +83,17 @@ export function HelpLauncher() {
   const desktop = isDesktopShell();
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger
-        aria-label={t(($) => $.help.trigger)}
-        title={t(($) => $.help.trigger)}
-        className="inline-flex size-8 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors cursor-pointer hover:bg-accent hover:text-foreground data-popup-open:bg-accent data-popup-open:text-foreground"
-      >
-        <CircleHelp className="size-4" />
-      </DropdownMenuTrigger>
+      <TooltipHint label={t(($) => $.help.trigger)} side="right">
+        <DropdownMenuTrigger
+          aria-label={t(($) => $.help.trigger)}
+          className={RAIL_ICON_BUTTON_CLASS}
+        >
+          <CircleHelp />
+        </DropdownMenuTrigger>
+      </TooltipHint>
       <DropdownMenuContent
         align="end"
-        side="top"
+        side="right"
         sideOffset={8}
         className="min-w-40 max-w-56"
       >
@@ -139,12 +150,15 @@ export function HelpLauncher() {
           {t(($) => $.help.download_clients)}
           <ArrowUpRight className="size-3 translate-y-px text-faint-foreground" />
         </DropdownMenuItem>
+        {/* Fork product: the community invite is a Feishu group (Chinese
+            market), not upstream's Discord. ./discord.tsx stays for the
+            upstream account menu, which still links Discord. */}
         <DropdownMenuItem
           render={
             <a href={FEISHU_GROUP_URL} target="_blank" rel="noopener noreferrer" />
           }
         >
-          <UsersRound className="h-3.5 w-3.5" />
+          <Users className="h-3.5 w-3.5" />
           {t(($) => $.help.feishu_group)}
           <ArrowUpRight className="size-3 translate-y-px text-faint-foreground" />
         </DropdownMenuItem>
@@ -167,7 +181,7 @@ export function HelpLauncher() {
                 a Menu.Group context and throws if it has no Group ancestor. It
                 must always be wrapped in a DropdownMenuGroup — without it the
                 Help menu crashes the whole app on open (no error boundary sits
-                above the sidebar). */}
+                above the rail). */}
             <DropdownMenuGroup>
               {serverVersion && (
                 <DropdownMenuLabel className="font-normal break-words">

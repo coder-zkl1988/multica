@@ -438,12 +438,12 @@ func TestAdjustProjectDesignSystemPinsVerifiedOpenDesignBaseArchive(t *testing.T
 	}
 
 	download := httptest.NewRecorder()
-	downloadRequest := newDaemonTokenRequest(
+	// Since MUL-8154 a daemon token with no daemon_id binds to nothing, so
+	// fetch the pinned base archive with the runtime owner's credential.
+	downloadRequest := newOwnerDaemonRequest(
 		http.MethodGet,
 		"/api/daemon/tasks/"+adjusted.ActiveTask.ID+"/open-design/base-archive",
 		nil,
-		testWorkspaceID,
-		"",
 	)
 	downloadRoute := chi.NewRouteContext()
 	downloadRoute.URLParams.Add("taskId", adjusted.ActiveTask.ID)
@@ -564,7 +564,12 @@ type passedOpenDesignPreviewFixture struct {
 func preparePassedOpenDesignPreviewDraft(t *testing.T, name string) passedOpenDesignPreviewFixture {
 	t.Helper()
 	projectID := createProjectForDesignTest(t, name)
-	agentID, _ := createProjectDesignSystemAgent(t, "online")
+	agentID, runtimeID := createProjectDesignSystemAgent(t, "online")
+	// The preview callback authenticates as the "project-design-system-test"
+	// daemon, so since MUL-8154 the runtime must carry that daemon_id.
+	if _, err := testPool.Exec(context.Background(), `UPDATE agent_runtime SET daemon_id = 'project-design-system-test' WHERE id = $1`, runtimeID); err != nil {
+		t.Fatalf("bind preview runtime daemon id: %v", err)
+	}
 	created := performProjectDesignSystemRequest(t, testHandler.CreateProjectDesignSystem, http.MethodPost, "/api/project-design-systems", map[string]any{
 		"project_id": projectID,
 		"agent_id":   agentID,

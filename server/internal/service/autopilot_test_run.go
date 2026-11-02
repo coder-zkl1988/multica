@@ -124,7 +124,7 @@ func (s *AutopilotService) SettleAutopilotTestRun(ctx context.Context, testRun d
 			"status":      testRun.Status,
 			"results":     results,
 		})
-		updated, err := s.completeAutopilotRun(ctx, db.UpdateAutopilotRunCompletedParams{ID: apRun.ID, Result: resultJSON})
+		updated, err := s.completeAutopilotRun(ctx, autopilotRunCompletion{ID: apRun.ID, Result: resultJSON})
 		if err != nil {
 			if !errors.Is(err, pgx.ErrNoRows) {
 				slog.Warn("failed to complete autopilot run from test run", "run_id", util.UUIDToString(apRun.ID), "error", err)
@@ -141,7 +141,7 @@ func (s *AutopilotService) SettleAutopilotTestRun(ctx context.Context, testRun d
 		if testRun.Status == "blocked" {
 			code = dispatch.ReasonTargetUnavailable
 		}
-		updated, err := s.failAutopilotRun(ctx, db.UpdateAutopilotRunFailedParams{
+		updated, err := s.failAutopilotRun(ctx, autopilotRunFailure{
 			ID:            apRun.ID,
 			FailureReason: pgtype.Text{String: reason, Valid: true},
 			ReasonCode:    pgtype.Text{String: string(code), Valid: true},

@@ -1,0 +1,98 @@
+{
+  "title": "選擇工作區",
+  "members": "成員",
+  "agents": "AI 代理",
+  "select": "選擇工作區",
+  "switch": {
+    "title": "切換工作區",
+    "message": "切換到 {{name}}？",
+    "confirm": "切換",
+    "current_a11y": "{{name}} 是當前工作區",
+    "switch_a11y": "切換到 {{name}}"
+  },
+  "empty": "你還沒有加入任何工作區。請聯絡工作區管理員以獲取邀請。",
+  "agent": {
+    "coming_soon": "AI 代理功能即將上線。",
+    "title": "AI 代理",
+    "empty": "還沒有 AI 代理",
+    "search_placeholder": "搜尋 AI 代理..."
+  },
+  "actions": {
+    "retry": "重試",
+    "sign_out": "退出登入"
+  },
+  "auth": {
+    "signed_in_as": "當前登入帳號"
+  },
+  "errors": {
+    "load_failed": "工作區載入失敗：{{message}}"
+  },
+  "pins": {
+    "errors": {
+      "load_failed": "固定項載入失敗：{{message}}"
+    },
+    "empty": {
+      "message": "暫無固定項。可在 issue 或專案的操作選單中固定，將其顯示在這裡。"
+    },
+    "unavailable_issue": "該固定任務不可用。",
+    "unavailable_project": "該固定專案不可用。",
+    "header_title": "固定",
+    "error": {
+      "load_prefix": "載入固定項失敗：",
+      "unknown": "未知錯誤",
+      "retry": "重試"
+    },
+    "missing": {
+      "item_type": {
+        "issue": "issue",
+        "project": "專案"
+      },
+      "a11y": "無法訪問的{{itemType}}，點按取消固定",
+      "label": "無法訪問的{{itemType}} — 點按取消固定"
+    }
+  },
+  "agents_placeholder": {
+    "header_title": "AI 代理",
+    "message": "AI 代理功能即將上線。"
+  },
+  "search": {
+    "header_title": "搜尋",
+    "placeholder": "搜尋 issue 和專案",
+    "section": {
+      "recent": "最近",
+      "projects": "專案",
+      "issues": "任務",
+      "cancelled": "已取消"
+    },
+    "no_results": "未找到與“{{query}}”相符的結果",
+    "empty_prompt": "輸入關鍵字搜尋 issue 和專案。"
+  },
+  "more_page": {
+    "section_title": "工作區",
+    "nav": {
+      "pinned": "固定",
+      "projects": "專案",
+      "skills": "skill",
+      "runtimes": "執行時",
+      "usage": "用量"
+    },
+    "account_settings_a11y": "帳號設定",
+    "switch_workspace_a11y": "切換工作區",
+    "workspace_fallback": "工作區"
+  },
+  "markdown_toolbar": {
+    "mention_a11y": "提及某人",
+    "bullet_list_a11y": "項目符號清單",
+    "checklist_a11y": "清單",
+    "code_block_a11y": "程式碼塊",
+    "quote_a11y": "引用",
+    "attach_image_a11y": "新增圖片",
+    "attach_file_a11y": "新增檔案"
+  },
+  "use_file_attach": {
+    "file_too_large_title": "檔案過大",
+    "file_too_large_message": "檔案大小需小於 100 MB。",
+    "upload_failed_title": "上傳失敗",
+    "unknown_error": "未知錯誤"
+  }
+}

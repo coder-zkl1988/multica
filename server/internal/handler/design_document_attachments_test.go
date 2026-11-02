@@ -144,6 +144,11 @@ func TestDownloadDesignDocumentAttachmentServesOnlyPinnedBytes(t *testing.T) {
 	unlisted := createDesignDocumentAttachmentForTest(t, storage, "other.png", "image/png", []byte("other"))
 
 	agentID, runtimeID := createProjectDesignSystemAgent(t, "online")
+	// Since MUL-8154 a daemon token reaches only runtimes carrying its own
+	// daemon_id, so bind the download runtime to the token used below.
+	if _, err := testPool.Exec(context.Background(), `UPDATE agent_runtime SET daemon_id = 'design-document-attachments' WHERE id = $1`, runtimeID); err != nil {
+		t.Fatalf("set attachment download runtime daemon_id: %v", err)
+	}
 	projectID := createProjectDesignSystemProject(t, testWorkspaceID, "Attachment download")
 	contextJSON, err := json.Marshal(service.DesignDocumentTaskContext{
 		Type: service.DesignDocumentTaskContextType, Operation: service.DesignDocumentGenerate,
