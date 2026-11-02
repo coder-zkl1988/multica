@@ -6,6 +6,11 @@ WORKDIR /app
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json turbo.json .npmrc ./
 COPY apps/docs/package.json apps/docs/
 COPY apps/docs/source.config.ts apps/docs/source.config.ts
+# The lockfile records mobile's patchedDependencies (expo-modules-core);
+# pnpm hashes every patch file the lockfile references even when the mobile
+# workspace itself is not part of this build, so the patches directory must
+# be present. Dockerfile.web already copies it for the same reason.
+COPY apps/mobile/patches/ apps/mobile/patches/
 COPY packages/core/package.json packages/core/
 COPY packages/ui/package.json packages/ui/
 COPY packages/views/package.json packages/views/
