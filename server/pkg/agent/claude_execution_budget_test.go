@@ -43,9 +43,17 @@ func TestClaudeExecutionBudgetRequiresStructuredFailure(t *testing.T) {
 			if result.Status != wantStatus || result.SessionID != "budget-session" || result.ResumeRejected {
 				t.Fatalf("unexpected terminal/session state: %+v", result)
 			}
-			usage := result.Usage["fixture-model"]
-			if usage.InputTokens != 12 || usage.OutputTokens != 3 || usage.CacheReadTokens != 21 || usage.CacheWriteTokens != 4 {
-				t.Fatalf("terminal usage lost: %+v", usage)
+			// The fixture resumes "budget-session" while the daemon-visible
+			// config dir holds no transcript for it, so the baseline capture
+			// fails and the result's modelUsage is an unverifiable cumulative
+			// total (GH #9564): the backend must keep the per-run stream usage
+			// rather than store the reported totals. This stream carries no
+			// usage events, so the reported numbers must not appear at all.
+			// The verifiable counterpart — a locatable transcript whose
+			// baseline is subtracted before the totals are trusted — is
+			// TestClaudeExecuteSubtractsResumedCostStateBaseline.
+			if usage := result.Usage["fixture-model"]; usage != (TokenUsage{}) {
+				t.Fatalf("unverifiable reported usage stored on resume: %+v", usage)
 			}
 		})
 	}

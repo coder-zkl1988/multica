@@ -226,8 +226,14 @@ func runClaudeFixture(t *testing.T, frames, resumeSessionID string) Result {
 
 	backend, err := New("claude", Config{
 		ExecutablePath: fakePath,
-		Env:            map[string]string{"IS_SANDBOX": "1"},
-		Logger:         slog.Default(),
+		Env: map[string]string{
+			"IS_SANDBOX": "1",
+			// Point the resume baseline lookup at an empty config dir so no
+			// test depends on the developer's ambient ~/.claude (a transcript
+			// named like the fixture's session id would change the outcome).
+			"CLAUDE_CONFIG_DIR": t.TempDir(),
+		},
+		Logger: slog.Default(),
 	})
 	if err != nil {
 		t.Fatalf("new claude backend: %v", err)

@@ -1681,7 +1681,10 @@ func TestScanKimiMainTurnFailureErrorMessageFormats(t *testing.T) {
 		{name: "array", raw: `["private-details"]`},
 		{name: "number", raw: `42`},
 		{name: "boolean", raw: `true`},
-		{name: "redacted object", raw: `{"code":"provider.failure","message":"api_key=fixture-secret","details":"private-details"}`, want: "[provider.failure] [REDACTED CREDENTIAL]"},
+		// The fork's redact.Text keeps the credential's field name and masks
+		// only the value (pkg/redact generic credential rule), so the masked
+		// key survives alongside the placeholder. The secret itself is gone.
+		{name: "redacted object", raw: `{"code":"provider.failure","message":"api_key=fixture-secret","details":"private-details"}`, want: "[provider.failure] api_key=[REDACTED CREDENTIAL]"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

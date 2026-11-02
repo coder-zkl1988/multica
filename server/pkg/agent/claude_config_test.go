@@ -15,7 +15,13 @@ func TestClaudeConfigDir(t *testing.T) {
 		overrides map[string]string
 		want      string
 	}{
-		{name: "inherited config", inherited: inheritedConfig, want: inheritedConfig},
+		// The agentguard inherited-env allowlist deliberately strips an ambient
+		// CLAUDE_CONFIG_DIR: agent-specific env must reach the child through the
+		// task's checked custom_env, and the daemon re-layers its own value via
+		// claudeTranscriptEnv (task custom_env > daemon ambient > $HOME/.claude).
+		// So an inherited config dir must NOT be seen here — resolution falls
+		// back to $HOME/.claude, and only an explicit override map wins.
+		{name: "inherited config is stripped", inherited: inheritedConfig, want: filepath.Join(home, ".claude")},
 		{name: "task config wins", inherited: inheritedConfig, overrides: map[string]string{"CLAUDE_CONFIG_DIR": taskConfig}, want: taskConfig},
 		{name: "empty task config uses home", inherited: inheritedConfig, overrides: map[string]string{"CLAUDE_CONFIG_DIR": ""}, want: filepath.Join(home, ".claude")},
 		{name: "inherited home", want: filepath.Join(home, ".claude")},
