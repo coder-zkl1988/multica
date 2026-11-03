@@ -52,6 +52,7 @@ func EvaluateCapture(capture Capture, policy Policy) TargetVerification {
 		InteractionRequired:       capture.InteractionRequired,
 		InteractiveElementCount:   capture.InteractiveElementCount,
 		InteractionChanged:        capture.InteractionChanged,
+		DeckSlides:                capture.DeckSlides,
 		Screenshot:                capture.Screenshot,
 	}
 	switch {
@@ -75,6 +76,8 @@ func EvaluateCapture(capture Capture, policy Policy) TargetVerification {
 		verification.FailureCode = FailureInteractionMissing
 	case capture.InteractionRequired && !capture.InteractionChanged:
 		verification.FailureCode = FailureInteractionNoEffect
+	case capture.DeckProtocolUnresponsive:
+		verification.FailureCode = FailureDeckProtocolUnresponsive
 	case capture.Screenshot.SHA256 == "" || capture.Screenshot.Bytes <= 0 || capture.Screenshot.Width <= 0 || capture.Screenshot.Height <= 0:
 		verification.FailureCode = FailureScreenshotMissing
 	case capture.Screenshot.Entropy < policy.MinEntropy || capture.Screenshot.MaxChannelStddev < policy.MinMaxChannelStddev:
@@ -144,6 +147,9 @@ func ValidateVerification(verification Verification, expectedPolicy Policy) erro
 	if len(verification.Targets) == 0 || len(verification.Targets) > targetMaxCount {
 		return errors.New("Design Preview verification has an invalid target count")
 	}
+	if verification.DeckSlides < 0 || verification.DeckSlides > metricMaxCount {
+		return errors.New("Design Preview verification has an invalid deck slide count")
+	}
 	seen := make(map[string]struct{}, len(verification.Targets))
 	allPassed := true
 	for _, target := range verification.Targets {
@@ -204,12 +210,29 @@ func validateTargetVerification(target TargetVerification, policy Policy) error 
 			return errors.New("Design Preview target has an invalid count")
 		}
 	}
+	// DeckSlides is additive evidence: a receipt written before deck support
+	// decodes it as zero, so only the bounds are pinned here. The field is
+	// deliberately absent from the Policy equality check as well.
+	if target.DeckSlides < 0 || target.DeckSlides > metricMaxCount {
+		return errors.New("Design Preview target has an invalid deck slide count")
+	}
 	if target.FailedImageCount > target.ImageCount || target.BodyWidth < 0 || target.BodyWidth > dimensionEvidenceMax ||
 		target.BodyHeight < 0 || target.BodyHeight > dimensionEvidenceMax {
 		return errors.New("Design Preview target has invalid dimensions or image counts")
 	}
 	if err := validateScreenshot(target.Screenshot, target.Passed); err != nil {
 		return err
+	}
+	if target.FailureCode == FailureDeckProtocolUnresponsive {
+		// The sweep verdict is a browser-timed observation that the receipt's
+		// static fields cannot reproduce, so a deck-protocol failure is checked
+		// for shape instead: it must name a deck and it must fail. Accepting
+		// only this failure code keeps a forged receipt from turning a failed
+		// target into a passing one.
+		if target.Passed || target.DeckSlides <= 0 {
+			return errors.New("Design Preview deck protocol failure is inconsistent")
+		}
+		return nil
 	}
 	capture := Capture{
 		Target:                    target.Target,
@@ -228,6 +251,7 @@ func validateTargetVerification(target TargetVerification, policy Policy) error 
 		InteractionRequired:       target.InteractionRequired,
 		InteractiveElementCount:   target.InteractiveElementCount,
 		InteractionChanged:        target.InteractionChanged,
+		DeckSlides:                target.DeckSlides,
 		Screenshot:                target.Screenshot,
 	}
 	evaluated := EvaluateCapture(capture, policy)

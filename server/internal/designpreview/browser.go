@@ -224,6 +224,191 @@ const interactionEndExpression = `(() => {
   return typeof hash === 'function' ? hash() : 0;
 })()`
 
+const (
+	// deckSweepStepTimeoutMS is how long one od:slide post waits for the deck
+	// to report the posted index as active. An unresponsive deck must fail the
+	// target with deck_protocol_unresponsive instead of hanging the capture.
+	deckSweepStepTimeoutMS = 2_000
+	// deckSweepPollIntervalMS is the resolution of the per-step reply check.
+	deckSweepPollIntervalMS = 10
+)
+
+// errDeckProtocolUnresponsive is wrapped by every deck sweep failure. It marks
+// a browser-timed verdict (the page answered nothing, the wrong number of
+// slides, or the wrong active slide), not an infrastructure error.
+var errDeckProtocolUnresponsive = errors.New("deck protocol unresponsive")
+
+// deckState is one od:slide-state message the deck runtime posts on every slide
+// change. Count is the framework's own slide total; Active is the zero-based
+// index it made current.
+type deckState struct {
+	ProtocolVersion int `json:"protocolVersion"`
+	Active          int `json:"active"`
+	Count           int `json:"count"`
+}
+
+// deckSweepStepResult is the per-post reply the sweep waits on. OK is false
+// when the deck never reported the posted index before the step deadline.
+type deckSweepStepResult struct {
+	OK     bool   `json:"ok"`
+	Reason string `json:"reason,omitempty"`
+}
+
+// deckSweepInstallExpression installs the od:slide-state collector used by the
+// sweep. The page is the top-level preview document, so the deck runtime's
+// window.parent.postMessage(..., '*') replies land back in this window.
+const deckSweepInstallExpression = `(() => {
+  window.__multicaDeckSweep = { states: [] };
+  window.addEventListener('message', (event) => {
+    const data = event && event.data;
+    if (!data || data.type !== 'od:slide-state') return;
+    window.__multicaDeckSweep.states.push({
+      protocolVersion: data.protocolVersion,
+      active: data.active,
+      count: data.count
+    });
+  });
+  return true;
+})()`
+
+// deckSweepGoExpression posts one Od deck protocol v1 absolute-navigation
+// message and resolves once a newer od:slide-state reports that index active.
+// It resolves a failed step instead of rejecting so a silent deck produces a
+// verdict the receipt can carry.
+const deckSweepGoExpression = `(() => {
+  const sweep = window.__multicaDeckSweep;
+  if (!sweep) return Promise.resolve({ ok: false, reason: 'listener_missing' });
+  const index = %d;
+  const start = sweep.states.length;
+  window.postMessage({ type: 'od:slide', protocolVersion: 1, action: 'go', index: index }, '*');
+  return new Promise((resolve) => {
+    const deadline = Date.now() + %d;
+    const poll = () => {
+      for (let i = start; i < sweep.states.length; i += 1) {
+        if (sweep.states[i].active === index) {
+          resolve({ ok: true });
+          return;
+        }
+      }
+      if (Date.now() >= deadline) {
+        resolve({ ok: false, reason: 'timeout' });
+        return;
+      }
+      setTimeout(poll, %d);
+    };
+    poll();
+  });
+})()`
+
+// deckSweepStatesExpression reads every od:slide-state message collected since
+// the listener was installed.
+const deckSweepStatesExpression = `(() => {
+  const sweep = window.__multicaDeckSweep;
+  return sweep ? sweep.states : [];
+})()`
+
+// deckPage is the page surface the deck protocol sweep needs. The production
+// implementation evaluates against the same chromedp target the static capture
+// used; tests substitute a fake deck runtime.
+type deckPage interface {
+	installDeckStateListener(ctx context.Context) error
+	goToDeckSlide(ctx context.Context, index int) error
+	deckStates(ctx context.Context) ([]deckState, error)
+}
+
+// chromiumDeckPage drives a settled chromedp target.
+type chromiumDeckPage struct{}
+
+// deckAwaitPromise makes chromedp.Evaluate wait for the step promise.
+func deckAwaitPromise(params *cdpruntime.EvaluateParams) *cdpruntime.EvaluateParams {
+	return params.WithAwaitPromise(true)
+}
+
+func (chromiumDeckPage) installDeckStateListener(ctx context.Context) error {
+	var installed bool
+	if err := chromedp.Run(ctx, chromedp.Evaluate(deckSweepInstallExpression, &installed)); err != nil {
+		return fmt.Errorf("install deck message listener: %w", err)
+	}
+	if !installed {
+		return errors.New("install deck message listener: the page did not install the listener")
+	}
+	return nil
+}
+
+func (chromiumDeckPage) goToDeckSlide(ctx context.Context, index int) error {
+	var result deckSweepStepResult
+	expression := fmt.Sprintf(deckSweepGoExpression, index, deckSweepStepTimeoutMS, deckSweepPollIntervalMS)
+	if err := chromedp.Run(ctx, chromedp.Evaluate(expression, &result, deckAwaitPromise)); err != nil {
+		return fmt.Errorf("post deck slide %d: %w", index, err)
+	}
+	if !result.OK {
+		reason := result.Reason
+		if reason == "" {
+			reason = "no od:slide-state reply"
+		}
+		return fmt.Errorf("%w: slide %d: %s", errDeckProtocolUnresponsive, index, reason)
+	}
+	return nil
+}
+
+func (chromiumDeckPage) deckStates(ctx context.Context) ([]deckState, error) {
+	var states []deckState
+	if err := chromedp.Run(ctx, chromedp.Evaluate(deckSweepStatesExpression, &states)); err != nil {
+		return nil, fmt.Errorf("read deck slide states: %w", err)
+	}
+	return states, nil
+}
+
+// runDeckProtocolSweep drives Od deck protocol v1 on an already settled page.
+// Every slide the manifest declares is posted as an od:slide go message on the
+// SAME top-level page — a deck is one document, so there are no per-slide
+// targets — and each post must produce an od:slide-state reply that makes that
+// index active. The collected messages must also report the manifest's slide
+// count on every reply.
+func runDeckProtocolSweep(ctx context.Context, page deckPage, slides int) error {
+	if slides <= 0 {
+		return nil
+	}
+	if err := page.installDeckStateListener(ctx); err != nil {
+		return err
+	}
+	for index := 0; index < slides; index++ {
+		if err := page.goToDeckSlide(ctx, index); err != nil {
+			return err
+		}
+	}
+	states, err := page.deckStates(ctx)
+	if err != nil {
+		return err
+	}
+	return validateDeckSweepStates(states, slides)
+}
+
+// validateDeckSweepStates checks the collected od:slide-state messages. A deck
+// that never answered, reported a different slide count, or skipped one of the
+// posted indexes is unresponsive.
+func validateDeckSweepStates(states []deckState, slides int) error {
+	if len(states) == 0 {
+		return fmt.Errorf("%w: no od:slide-state message was received", errDeckProtocolUnresponsive)
+	}
+	active := make(map[int]struct{}, len(states))
+	for _, state := range states {
+		if state.Count != slides {
+			return fmt.Errorf("%w: the deck reported %d slides, want %d", errDeckProtocolUnresponsive, state.Count, slides)
+		}
+		if state.Active < 0 || state.Active >= slides {
+			return fmt.Errorf("%w: the deck reported active slide %d outside 0..%d", errDeckProtocolUnresponsive, state.Active, slides-1)
+		}
+		active[state.Active] = struct{}{}
+	}
+	for index := 0; index < slides; index++ {
+		if _, ok := active[index]; !ok {
+			return fmt.Errorf("%w: slide %d never became active", errDeckProtocolUnresponsive, index)
+		}
+	}
+	return nil
+}
+
 type ChromiumVerifier struct {
 	browserPath string
 	policy      Policy
@@ -358,6 +543,9 @@ func (v *ChromiumVerifier) Verify(ctx context.Context, targets []TargetURL) (Ver
 		}
 		result := EvaluateCapture(capture, v.policy)
 		verification.Targets = append(verification.Targets, result)
+		if result.DeckSlides > verification.DeckSlides {
+			verification.DeckSlides = result.DeckSlides
+		}
 		verification.Passed = verification.Passed && result.Passed
 	}
 	return verification, nil
@@ -426,6 +614,19 @@ func (v *ChromiumVerifier) captureTarget(parent context.Context, allowedOrigin s
 	if err != nil {
 		return Capture{}, fmt.Errorf("analyze Design Preview screenshot for %q: %w", target.Target.Path, err)
 	}
+	// The deck sweep runs last so the DOM metrics and the screenshot describe
+	// the document as it was loaded, not the slide the sweep stopped on.
+	deckSlides := 0
+	deckUnresponsive := false
+	if target.DeckSlides > 0 {
+		deckSlides = target.DeckSlides
+		if err := runDeckProtocolSweep(targetCtx, chromiumDeckPage{}, target.DeckSlides); err != nil {
+			if !errors.Is(err, errDeckProtocolUnresponsive) {
+				return Capture{}, fmt.Errorf("sweep Design Preview deck protocol for %q: %w", target.Target.Path, err)
+			}
+			deckUnresponsive = true
+		}
+	}
 	failedResources, consoleErrors, outboundRequests := evidence.counts()
 	return Capture{
 		Target:                    target.Target,
@@ -444,6 +645,8 @@ func (v *ChromiumVerifier) captureTarget(parent context.Context, allowedOrigin s
 		InteractionRequired:       target.RequireInteraction,
 		InteractiveElementCount:   interaction.Count,
 		InteractionChanged:        target.RequireInteraction && interaction.Before != interactionAfter,
+		DeckSlides:                deckSlides,
+		DeckProtocolUnresponsive:  deckUnresponsive,
 		Screenshot:                screenshotMetrics,
 	}, nil
 }
@@ -539,6 +742,9 @@ func validateBrowserTargets(targets []TargetURL) (string, error) {
 	for _, target := range targets {
 		if err := ValidateTarget(target.Target); err != nil {
 			return "", err
+		}
+		if target.DeckSlides < 0 || target.DeckSlides > metricMaxCount {
+			return "", errors.New("Design Preview browser target has an invalid deck slide count")
 		}
 		parsed, err := url.Parse(target.URL)
 		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" {

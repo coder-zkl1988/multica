@@ -222,7 +222,12 @@ func finalizeDesignDocumentResult(
 		_ = server.Shutdown(shutdownCtx)
 	}()
 
-	targets, targetErr := buildDesignDocumentTargetURLs(collected.Manifest.PreviewTargets, baseURL, prefix)
+	targets, targetErr := buildDesignDocumentTargetURLsWithDeckSlides(
+		collected.Manifest.PreviewTargets,
+		len(collected.Manifest.Slides),
+		baseURL,
+		prefix,
+	)
 	if targetErr != nil {
 		return blockDesignDocumentResult(result,
 			"design document preview failed: "+targetErr.Error(),
@@ -583,9 +588,28 @@ func buildDesignDocumentPreviewCSP() string {
 // loopback URLs the verifier will open. The manifest order is preserved rather
 // than re-sorted: DiscoverPreviewTargets puts the prototype entry first on
 // purpose so the gate opens the document root before its sub pages.
+//
+// This form keeps the pre-deck call sites working: no target declares a deck
+// slide count, so the verifier performs no deck protocol sweep.
 func buildDesignDocumentTargetURLs(targets []designdocument.PreviewTarget, baseURL, prefix string) ([]designpreview.TargetURL, error) {
+	return buildDesignDocumentTargetURLsWithDeckSlides(targets, 0, baseURL, prefix)
+}
+
+// designDocumentPreviewTargetEntryKind mirrors the kind
+// designdocument.DiscoverPreviewTargets assigns to prototype/index.html. A deck
+// is a single-file prototype, so only that target carries the deck sweep.
+const designDocumentPreviewTargetEntryKind = "prototype_entry"
+
+// buildDesignDocumentTargetURLsWithDeckSlides is the deck-aware form of
+// buildDesignDocumentTargetURLs. deckSlides is the manifest slide projection;
+// it is attached to the prototype entry target alone and stays zero for a
+// non-deck package or a manifest written before deck support (nil Slides).
+func buildDesignDocumentTargetURLsWithDeckSlides(targets []designdocument.PreviewTarget, deckSlides int, baseURL, prefix string) ([]designpreview.TargetURL, error) {
 	if len(targets) == 0 {
 		return nil, errors.New("design document package has no preview targets")
+	}
+	if deckSlides < 0 {
+		return nil, errors.New("design document package has an invalid deck slide count")
 	}
 	out := make([]designpreview.TargetURL, 0, len(targets))
 	for _, target := range targets {
@@ -598,13 +622,18 @@ func buildDesignDocumentTargetURLs(targets []designdocument.PreviewTarget, baseU
 		if err != nil {
 			return nil, fmt.Errorf("build preview URL for %q: %w", target.ID, err)
 		}
+		targetDeckSlides := 0
+		if deckSlides > 0 && target.Kind == designDocumentPreviewTargetEntryKind {
+			targetDeckSlides = deckSlides
+		}
 		out = append(out, designpreview.TargetURL{
 			Target: designpreview.Target{
 				Kind: kind,
 				ID:   target.ID,
 				Path: target.Path,
 			},
-			URL: parsed.String(),
+			URL:        parsed.String(),
+			DeckSlides: targetDeckSlides,
 		})
 	}
 	return out, nil

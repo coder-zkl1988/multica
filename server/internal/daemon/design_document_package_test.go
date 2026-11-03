@@ -1289,6 +1289,44 @@ func TestDesignDocumentPreviewTargetsMapOntoTheReceiptVocabulary(t *testing.T) {
 	}
 }
 
+// TestDesignDocumentPreviewTargetsCarryDeckSlides asserts the deck sweep is
+// scoped to the prototype entry target: a deck manifest's slide count rides on
+// prototype/index.html only, so the gate never posts od:slide messages at a
+// sub page that has no deck runtime. A non-deck package and a manifest written
+// before deck support both leave the count at zero.
+func TestDesignDocumentPreviewTargetsCarryDeckSlides(t *testing.T) {
+	targets := []designdocument.PreviewTarget{
+		{ID: "index", Kind: "prototype_entry", Path: "prototype/index.html"},
+		{ID: "orders", Kind: "prototype_page", Path: "prototype/orders.html"},
+	}
+	built, err := buildDesignDocumentTargetURLsWithDeckSlides(targets, 3, "http://127.0.0.1:1234", "prefix")
+	if err != nil {
+		t.Fatalf("build target URLs: %v", err)
+	}
+	if built[0].DeckSlides != 3 {
+		t.Fatalf("entry target DeckSlides = %d, want 3", built[0].DeckSlides)
+	}
+	if built[1].DeckSlides != 0 {
+		t.Fatalf("sub page target DeckSlides = %d, want 0", built[1].DeckSlides)
+	}
+
+	nonDeck, err := buildDesignDocumentTargetURLsWithDeckSlides(targets, 0, "http://127.0.0.1:1234", "prefix")
+	if err != nil {
+		t.Fatalf("build non-deck target URLs: %v", err)
+	}
+	legacy, err := buildDesignDocumentTargetURLs(targets, "http://127.0.0.1:1234", "prefix")
+	if err != nil {
+		t.Fatalf("build legacy target URLs: %v", err)
+	}
+	for _, group := range [][]designpreview.TargetURL{nonDeck, legacy} {
+		for _, target := range group {
+			if target.DeckSlides != 0 {
+				t.Fatalf("non-deck target %q DeckSlides = %d, want 0", target.Target.ID, target.DeckSlides)
+			}
+		}
+	}
+}
+
 // TestIsDesignDocumentTask keeps the enqueue marker and the daemon predicate in
 // agreement, including the negative case a design system context must produce.
 func TestIsDesignDocumentTask(t *testing.T) {
