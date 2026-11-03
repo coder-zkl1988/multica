@@ -170,9 +170,9 @@ func finalizeDesignDocumentResult(
 	collected, collectErr := designdocument.CollectDirectory(collectRoot, binding)
 	if collectErr != nil {
 		if designDocumentAuditVerdict(collected) {
-			return blockDesignDocumentResult(result,
+			return blockDesignDocumentResultWithDiagnostics(result,
 				"design document package failed static audit: "+designDocumentAuditSummary(collected.Audit),
-				finalizeFailureDesignDocumentAuditFailed), nil
+				finalizeFailureDesignDocumentAuditFailed, collected.Audit.Diagnostics), nil
 		}
 		return blockDesignDocumentResult(result,
 			"design document package invalid: "+collectErr.Error(),
@@ -181,9 +181,9 @@ func finalizeDesignDocumentResult(
 	if !collected.Audit.Passed {
 		// Defensive: CollectDirectory reports a failing audit through its error,
 		// so reaching here means the contract changed underneath us. Fail closed.
-		return blockDesignDocumentResult(result,
+		return blockDesignDocumentResultWithDiagnostics(result,
 			"design document package failed static audit: "+designDocumentAuditSummary(collected.Audit),
-			finalizeFailureDesignDocumentAuditFailed), nil
+			finalizeFailureDesignDocumentAuditFailed, collected.Audit.Diagnostics), nil
 	}
 
 	// Stage 3: resolve the browser up front so an uninstalled browser fails the
@@ -284,9 +284,18 @@ func finalizeDesignDocumentResult(
 // blocked return path goes through here so a blocked result can never keep a
 // half-built receipt from an earlier attempt.
 func blockDesignDocumentResult(result TaskResult, comment, failureReason string) TaskResult {
+	return blockDesignDocumentResultWithDiagnostics(result, comment, failureReason, nil)
+}
+
+// blockDesignDocumentResultWithDiagnostics is the audit-failure form: it also
+// carries every error-severity finding so the server can persist the full rule
+// list in the document's last_error rather than only the first line of the
+// comment. Warnings are filtered out — they never rejected the package.
+func blockDesignDocumentResultWithDiagnostics(result TaskResult, comment, failureReason string, diagnostics []designdocument.Diagnostic) TaskResult {
 	result.Status = "blocked"
 	result.Comment = comment
 	result.FailureReason = failureReason
+	result.FailureDiagnostics = designdocument.ErrorDiagnostics(diagnostics)
 	result.DesignDocumentPackage = nil
 	return result
 }
@@ -300,19 +309,27 @@ func designDocumentAuditVerdict(collected designdocument.CollectedPackage) bool 
 	return collected.Audit.SchemaVersion == designdocument.AuditSchemaV1 && !collected.Audit.Passed
 }
 
-// designDocumentAuditSummary renders the first error diagnostic so the blocked
-// comment names the failing rule and file instead of only a generic verdict.
+// designDocumentAuditSummary renders every error diagnostic, one per line, so
+// the blocked comment names every failing rule and file instead of only the
+// first. A package can break several independent rules at once; naming one
+// produces a rerun that fixes it and trips on the next, which is the failure
+// loop this summary exists to end. Warnings are excluded — they never gate.
 func designDocumentAuditSummary(report designdocument.AuditReport) string {
-	for _, diagnostic := range report.Diagnostics {
-		if diagnostic.Severity != designdocument.DiagnosticError {
-			continue
-		}
-		if diagnostic.Path == "" {
-			return diagnostic.Code + ": " + diagnostic.Message
-		}
-		return diagnostic.Code + " (" + diagnostic.Path + "): " + diagnostic.Message
+	lines := make([]string, 0, len(report.Diagnostics))
+	for _, diagnostic := range designdocument.ErrorDiagnostics(report.Diagnostics) {
+		lines = append(lines, designDocumentDiagnosticLine(diagnostic))
 	}
-	return "audit reported no error diagnostic"
+	if len(lines) == 0 {
+		return "audit reported no error diagnostic"
+	}
+	return strings.Join(lines, "\n")
+}
+
+func designDocumentDiagnosticLine(diagnostic designdocument.Diagnostic) string {
+	if diagnostic.Path == "" {
+		return diagnostic.Code + ": " + diagnostic.Message
+	}
+	return diagnostic.Code + " (" + diagnostic.Path + "): " + diagnostic.Message
 }
 
 // isDesignDocumentTask mirrors the enqueue-time marker so the daemon can decide

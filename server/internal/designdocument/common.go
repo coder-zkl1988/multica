@@ -37,6 +37,21 @@ func hasErrors(diagnostics []Diagnostic) bool {
 	return false
 }
 
+// ErrorDiagnostics returns only the findings that block the package, in report
+// order. Warnings advise the agent and never gate anything, so every consumer
+// that reports why a package failed must read this rather than Diagnostics —
+// a warning in a failure payload would claim a rule that did not actually
+// reject the run.
+func ErrorDiagnostics(diagnostics []Diagnostic) []Diagnostic {
+	errors := make([]Diagnostic, 0, len(diagnostics))
+	for _, diagnostic := range diagnostics {
+		if diagnostic.Severity == DiagnosticError {
+			errors = append(errors, diagnostic)
+		}
+	}
+	return errors
+}
+
 func nonNilDiagnostics(values []Diagnostic) []Diagnostic {
 	if values == nil {
 		return []Diagnostic{}

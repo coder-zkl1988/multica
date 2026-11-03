@@ -820,7 +820,7 @@ func (h *Handler) enqueueDesignDocumentTask(
 	}
 
 	contextJSON, err := h.designDocumentGenerateTaskContext(
-		ctx, queries, requesterID, workspaceID, projectID, scope.ProjectResourceID, issueID, document.ID, agent.ID, input, inputJSON, attachments,
+		ctx, queries, requesterID, workspaceID, projectID, scope.ProjectResourceID, issueID, document.ID, agent.ID, input, inputJSON, attachments, nil,
 	)
 	if err != nil {
 		return db.DesignDocument{}, db.AgentTaskQueue{}, err
@@ -986,6 +986,7 @@ func (h *Handler) designDocumentGenerateTaskContext(
 	input designDocumentInputSnapshot,
 	inputJSON []byte,
 	attachments []designDocumentAttachmentSnapshot,
+	previousFailures *service.DesignDocumentPreviousFailures,
 ) ([]byte, error) {
 	designContext, err := designDocumentPinnedContext(db.DesignDocument{
 		ProjectID: projectID, ProjectResourceID: projectResourceID,
@@ -1038,6 +1039,7 @@ func (h *Handler) designDocumentGenerateTaskContext(
 		InputSnapshotSHA256: inputDigest,
 		ExecutionReady:      true,
 		Input:               designDocumentGenerateInput(projectResourceID.Valid, attachments, designContext),
+		PreviousFailures:    previousFailures,
 	})
 	if err != nil {
 		return nil, projectDesignSystemInternalError("context_failed", "failed to build agent task context")

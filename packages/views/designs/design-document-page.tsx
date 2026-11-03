@@ -62,6 +62,7 @@ import { agentListOptions } from "@multica/core/workspace/queries";
 import type {
   Agent,
   DesignDocument,
+  DesignDocumentFailureDiagnostic,
   ProjectDesignSystemPlatform,
   DesignDocumentAdjustmentScope,
   DesignDocumentRevisionSummary,
@@ -161,6 +162,29 @@ export function defaultRevisionId(document: DesignDocument | undefined, revision
   return revisions[0]?.id ?? "";
 }
 
+
+/**
+ * The error diagnostics recorded on a design document's last_error.
+ *
+ * The array is optional on the wire — old rows, cancellations and agent
+ * failures carry only a code — so every level is optional-chained and a
+ * malformed entry is skipped rather than rendered as blanks. Warnings never
+ * reach last_error, so anything here broke the previous package.
+ */
+export function documentFailureDiagnostics(value: unknown): DesignDocumentFailureDiagnostic[] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+  const diagnostics = (value as { diagnostics?: unknown }).diagnostics;
+  if (!Array.isArray(diagnostics)) return [];
+  return diagnostics.flatMap((entry): DesignDocumentFailureDiagnostic[] => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
+    const record = entry as Record<string, unknown>;
+    const code = typeof record.code === "string" ? record.code : "";
+    const path = typeof record.path === "string" ? record.path : "";
+    const message = typeof record.message === "string" ? record.message : "";
+    if (!code && !message) return [];
+    return [{ code, path, message }];
+  });
+}
 
 /** A readable message out of the server's last_error, whatever shape it took. */
 export function documentErrorMessage(value: unknown): string | null {
@@ -488,6 +512,7 @@ export function DesignDocumentPage({ documentId }: { documentId: string }) {
     return [{ id: linked, identifier: "当前任务", title: "文档关联的任务", status: "in_progress" } as (typeof projectIssues)[number], ...projectIssues];
   }, [document?.issue_id, projectIssues]);
   const errorMessage = status === "failed" ? documentErrorMessage(document?.last_error) : null;
+  const failureDiagnostics = status === "failed" ? documentFailureDiagnostics(document?.last_error) : [];
   const provenance = useMemo(
     () => parseDesignDocumentProvenance({
       inputSnapshot: document?.input_snapshot,
@@ -1628,7 +1653,20 @@ export function DesignDocumentPage({ documentId }: { documentId: string }) {
                     <CircleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-destructive" />
                     <div className="min-w-0">
                       <div className="font-medium text-destructive">{activeTask ? `${taskOperationLabel(activeTask.operation)}失败` : "运行失败"}</div>
-                      <div className="text-muted-foreground">{errorMessage}</div>
+                      <div className="whitespace-pre-line text-muted-foreground">{errorMessage}</div>
+                      {failureDiagnostics.length > 0 ? (
+                        <ul className="mt-2 space-y-1.5">
+                          {failureDiagnostics.map((diagnostic, index) => (
+                            <li key={`${diagnostic.code}-${diagnostic.path}-${index}`} className="min-w-0 break-words">
+                              <div className="font-mono text-caption text-destructive">
+                                {diagnostic.code || "audit_failed"}
+                                {diagnostic.path ? <span className="text-muted-foreground"> · {diagnostic.path}</span> : null}
+                              </div>
+                              {diagnostic.message ? <div className="text-muted-foreground">{diagnostic.message}</div> : null}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : null}
                       {revisions.length > 0 ? <div className="mt-1 text-muted-foreground">上一版仍然可用，可以在此基础上继续调整。</div> : null}
                     </div>
                   </div>

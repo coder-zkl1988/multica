@@ -843,6 +843,29 @@ export interface CreateDesignDocumentRequest {
   attachments?: Array<{ attachment_id: string }>;
 }
 
+/**
+ * One error-severity audit finding recorded in a design document's
+ * `last_error`. Warnings never gate a package, so they never appear here.
+ */
+export interface DesignDocumentFailureDiagnostic {
+  code: string;
+  path: string;
+  message: string;
+}
+
+/**
+ * The structured form of a design document's `last_error`. `diagnostics` is
+ * optional on the wire: it is present for audit failures from a backend that
+ * records them, and absent for older rows, cancellations and agent failures.
+ */
+export interface DesignDocumentLastError {
+  code: string;
+  message: string;
+  task_id?: string;
+  operation?: string;
+  diagnostics: DesignDocumentFailureDiagnostic[];
+}
+
 export interface DesignDocument {
   id: string;
   design_ref: string;
@@ -861,6 +884,12 @@ export interface DesignDocument {
   saved_revision_id: string;
   active_task: ProjectDesignSystemTask | null;
   input_snapshot: unknown;
+  /**
+   * Kept `unknown` on purpose: three shapes have shipped (null, a bare
+   * string, the flat `DesignDocumentLastError` object), and a legacy or
+   * malformed record must degrade in the page rather than narrow the type
+   * out of existence. `DesignDocumentLastError` describes the current shape.
+   */
   last_error: unknown;
   /**
    * Whether this run actually had repository evidence. The UI must never let

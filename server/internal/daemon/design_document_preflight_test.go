@@ -110,6 +110,14 @@ func TestPreflightDesignDocumentPackageReportsEveryAuditError(t *testing.T) {
 	if !strings.Contains(report.Error, "static audit") {
 		t.Fatalf("error = %q, want the finalize gate's audit wording", report.Error)
 	}
+	// The preflight is the agent's own gate: its message must name every rule
+	// it broke, so one fix round covers them all instead of revealing them one
+	// at a time. This is the same summary the finalize gate renders.
+	for _, want := range []string{"prototype_script_navigation_forbidden", "prototype_script_forbidden_api"} {
+		if !strings.Contains(report.Error, want) {
+			t.Fatalf("preflight error %q does not name %s", report.Error, want)
+		}
+	}
 }
 
 // A malformed binding fails before the package directory is read, as in the

@@ -3117,7 +3117,7 @@ func (s *TaskService) cancelTasksForAgent(ctx context.Context, agentID pgtype.UU
 			if err := s.markProjectDesignSystemTaskFailed(ctx, qtx, task, "project_design_system_cancelled", "project design system task was cancelled"); err != nil {
 				return err
 			}
-			if err := s.markDesignDocumentTaskFailed(ctx, qtx, task, "design_document_cancelled", "design document task was cancelled"); err != nil {
+			if err := s.markDesignDocumentTaskFailed(ctx, qtx, task, "design_document_cancelled", "design document task was cancelled", nil); err != nil {
 				return err
 			}
 		}
@@ -3400,7 +3400,7 @@ func (s *TaskService) CancelTaskWithResult(ctx context.Context, taskID pgtype.UU
 			if err := s.markProjectDesignSystemTaskFailed(ctx, qtx, task, "project_design_system_cancelled", "project design system task was cancelled"); err != nil {
 				return fmt.Errorf("mark project design system task cancelled: %w", err)
 			}
-			if err := s.markDesignDocumentTaskFailed(ctx, qtx, task, "design_document_cancelled", "design document task was cancelled"); err != nil {
+			if err := s.markDesignDocumentTaskFailed(ctx, qtx, task, "design_document_cancelled", "design document task was cancelled", nil); err != nil {
 				return fmt.Errorf("mark design document task cancelled: %w", err)
 			}
 			return nil
@@ -3451,7 +3451,7 @@ func (s *TaskService) CancelTaskWithResult(ctx context.Context, taskID pgtype.UU
 			// Design documents were missing here: stopping a run left the
 			// document's active_task_id pointing at the cancelled task forever,
 			// and every later adjust/save/discard answered operation_in_progress.
-			if err := s.markDesignDocumentTaskFailed(ctx, qtx, cancelled, "design_document_cancelled", "design document task was cancelled"); err != nil {
+			if err := s.markDesignDocumentTaskFailed(ctx, qtx, cancelled, "design_document_cancelled", "design document task was cancelled", nil); err != nil {
 				return fmt.Errorf("mark design document task cancelled: %w", err)
 			}
 			// CancelAgentTaskByUser appends the recovery receipt in the same
@@ -5554,14 +5554,14 @@ func (s *TaskService) observeChatOutputLocalPath(task db.AgentTaskQueue, body st
 // (via classifyPoisonedError, the timeout / runtime classifier, etc.)
 // will have their value preserved untouched.
 func (s *TaskService) FailTask(ctx context.Context, taskID pgtype.UUID, errMsg, sessionID, workDir, branchName, failureReason string, sessionRolloutMissing bool, retiredSessionID, durableWorkDir string) (*db.AgentTaskQueue, error) {
-	task, _, err := s.FailTaskWithTransition(ctx, taskID, errMsg, sessionID, workDir, branchName, failureReason, sessionRolloutMissing, retiredSessionID, durableWorkDir)
+	task, _, err := s.FailTaskWithTransition(ctx, taskID, errMsg, sessionID, workDir, branchName, failureReason, sessionRolloutMissing, retiredSessionID, durableWorkDir, nil)
 	return task, err
 }
 
 // FailTaskWithTransition is the failure counterpart to
 // CompleteTaskWithTransition. The bool is false for an idempotent replay that
 // observed an already-terminal row.
-func (s *TaskService) FailTaskWithTransition(ctx context.Context, taskID pgtype.UUID, errMsg, sessionID, workDir, branchName, failureReason string, sessionRolloutMissing bool, retiredSessionID, durableWorkDir string) (*db.AgentTaskQueue, bool, error) {
+func (s *TaskService) FailTaskWithTransition(ctx context.Context, taskID pgtype.UUID, errMsg, sessionID, workDir, branchName, failureReason string, sessionRolloutMissing bool, retiredSessionID, durableWorkDir string, diagnostics []DesignDocumentFailureDiagnostic) (*db.AgentTaskQueue, bool, error) {
 	// Strip bytes PostgreSQL cannot store before anything else reads errMsg, so
 	// the classifier, the transaction and every downstream consumer see the one
 	// text we will actually persist (GH #7098). Kept at the service boundary
@@ -5738,7 +5738,7 @@ func (s *TaskService) FailTaskWithTransition(ctx context.Context, taskID pgtype.
 		// disconnect, a crashed CLI) leaves active_task_id pointing at a task
 		// that will never finish, and the document reads 生成中 forever while
 		// every guard keyed on that pointer refuses to touch it.
-		if err := s.markDesignDocumentTaskFailed(ctx, qtx, t, failureReason, errMsg); err != nil {
+		if err := s.markDesignDocumentTaskFailed(ctx, qtx, t, failureReason, errMsg, diagnostics); err != nil {
 			return fmt.Errorf("mark design document task failed: %w", err)
 		}
 
@@ -6016,7 +6016,7 @@ func (s *TaskService) FailTasksWithProfileSync(ctx context.Context, fail func(*d
 			if task.FailureReason.Valid && strings.TrimSpace(task.FailureReason.String) != "" {
 				designDocumentCode = task.FailureReason.String
 			}
-			if err := s.markDesignDocumentTaskFailed(ctx, qtx, task, designDocumentCode, message); err != nil {
+			if err := s.markDesignDocumentTaskFailed(ctx, qtx, task, designDocumentCode, message, nil); err != nil {
 				return err
 			}
 		}
@@ -6197,6 +6197,16 @@ func (s *TaskService) markProjectDesignSystemTaskFailed(
 	return err
 }
 
+// DesignDocumentFailureDiagnostic is one error-severity finding the daemon's
+// package gate reported for a failed page-design run. It is the wire and the
+// last_error shape: code/path/message, no severity, because only errors ever
+// travel here.
+type DesignDocumentFailureDiagnostic struct {
+	Code    string `json:"code"`
+	Path    string `json:"path,omitempty"`
+	Message string `json:"message"`
+}
+
 // markDesignDocumentTaskFailed releases the document a failed page-design task
 // was holding.
 //
@@ -6219,6 +6229,7 @@ func (s *TaskService) markDesignDocumentTaskFailed(
 	task db.AgentTaskQueue,
 	code string,
 	message string,
+	diagnostics []DesignDocumentFailureDiagnostic,
 ) error {
 	taskContext, ok := s.parseDesignDocumentTaskWorkspaceContext(task)
 	if !ok {
@@ -6250,12 +6261,20 @@ func (s *TaskService) markDesignDocumentTaskFailed(
 	if message == "" {
 		message = "design document task failed"
 	}
-	lastError, err := json.Marshal(map[string]any{
+	payload := map[string]any{
 		"code":      code,
 		"message":   message,
 		"task_id":   util.UUIDToString(task.ID),
 		"operation": document.ActiveOperation.String,
-	})
+	}
+	// Additive on purpose: existing keys keep their meaning so every reader —
+	// including an installed desktop on an older build — still finds the
+	// failure code and message. Empty stays absent rather than an empty array,
+	// so a run with no structured findings reads exactly as before.
+	if len(diagnostics) > 0 {
+		payload["diagnostics"] = diagnostics
+	}
+	lastError, err := json.Marshal(payload)
 	if err != nil {
 		return err
 	}
@@ -7170,7 +7189,7 @@ func (s *TaskService) HandleFailedTasks(ctx context.Context, tasks []db.AgentTas
 		if t.FailureReason.Valid && strings.TrimSpace(t.FailureReason.String) != "" {
 			designDocumentCode = t.FailureReason.String
 		}
-		if err := s.markDesignDocumentTaskFailed(ctx, s.Queries, t, designDocumentCode, failureMessage); err != nil {
+		if err := s.markDesignDocumentTaskFailed(ctx, s.Queries, t, designDocumentCode, failureMessage, nil); err != nil {
 			slog.Warn("handle failed tasks: failed to update design document",
 				"task_id", util.UUIDToString(t.ID),
 				"error", err,
@@ -9506,4 +9525,17 @@ type DesignDocumentTaskContext struct {
 	// run. The daemon applies them exactly as written and no model reads them,
 	// which is what makes a manual edit reproducible (DC-062).
 	ManualEdits json.RawMessage `json:"manual_edits,omitempty"`
+	// PreviousFailures is the failure feedback a rerun carries: the failure
+	// code and the error diagnostics the document's last_error recorded for the
+	// attempt this rerun replaces. Empty for a first generation. It is feedback,
+	// not input — it never participates in the frozen snapshot digest.
+	PreviousFailures *DesignDocumentPreviousFailures `json:"previous_failures,omitempty"`
+}
+
+// DesignDocumentPreviousFailures is the last attempt's verdict, handed to a
+// rerun so it can address every rule the previous package broke instead of
+// starting blind.
+type DesignDocumentPreviousFailures struct {
+	FailureCode string                            `json:"failure_code,omitempty"`
+	Diagnostics []DesignDocumentFailureDiagnostic `json:"diagnostics,omitempty"`
 }

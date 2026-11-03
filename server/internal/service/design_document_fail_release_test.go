@@ -209,3 +209,84 @@ func TestFailTaskReleasesTheDesignDocumentItWasGenerating(t *testing.T) {
 		t.Fatalf("last_error code = %v, want the task's own failure reason", recorded["code"])
 	}
 }
+
+// A failed package audit must leave every broken rule on the document, not
+// only the first line of the failure text. The rerun reads this back as its
+// previous-failures feedback, so dropping the array makes the retry blind.
+func TestFailTaskRecordsEveryFailureDiagnosticOnTheDocument(t *testing.T) {
+	ctx := context.Background()
+	pool := newDesignDocumentFailPool(t)
+	fixture := createDesignDocumentFailFixture(t, ctx, pool)
+
+	svc := &TaskService{Queries: db.New(pool), TxStarter: pool, Bus: events.New()}
+	taskUUID, err := util.ParseUUID(fixture.taskID)
+	if err != nil {
+		t.Fatalf("parse task id: %v", err)
+	}
+
+	diagnostics := []DesignDocumentFailureDiagnostic{
+		{Code: "prototype_inline_handler", Path: "prototype/orders.html", Message: "inline event handler is not allowed"},
+		{Code: "prototype_script_forbidden_api", Path: "prototype/app.js", Message: "network access is not allowed"},
+	}
+	if _, _, err := svc.FailTaskWithTransition(ctx, taskUUID,
+		"design document package failed static audit", "", "", "",
+		"design_document_audit_failed", false, "", "", diagnostics); err != nil {
+		t.Fatalf("FailTaskWithTransition: %v", err)
+	}
+
+	activeTaskID, lastError := fixture.readDocument(t, ctx)
+	if activeTaskID != nil {
+		t.Fatalf("document still points at the failed task %s", *activeTaskID)
+	}
+	var recorded struct {
+		Code        string                            `json:"code"`
+		Message     string                            `json:"message"`
+		TaskID      string                            `json:"task_id"`
+		Operation   string                            `json:"operation"`
+		Diagnostics []DesignDocumentFailureDiagnostic `json:"diagnostics"`
+	}
+	if err := json.Unmarshal(lastError, &recorded); err != nil {
+		t.Fatalf("last_error is not valid JSON: %v (%s)", err, lastError)
+	}
+	// The pre-existing keys keep their contract: an older client still finds
+	// the failure code and message.
+	if recorded.Code != "design_document_audit_failed" || recorded.Message == "" ||
+		recorded.TaskID != fixture.taskID || recorded.Operation != "generate" {
+		t.Fatalf("last_error lost its original keys: %s", lastError)
+	}
+	if len(recorded.Diagnostics) != len(diagnostics) {
+		t.Fatalf("last_error diagnostics = %+v, want %+v", recorded.Diagnostics, diagnostics)
+	}
+	for index, want := range diagnostics {
+		if recorded.Diagnostics[index] != want {
+			t.Fatalf("diagnostic %d = %+v, want %+v", index, recorded.Diagnostics[index], want)
+		}
+	}
+}
+
+// A failure with no structured findings keeps the old shape exactly: no empty
+// diagnostics key that a reader could mistake for "the audit found nothing".
+func TestFailTaskOmitsEmptyDiagnosticsFromLastError(t *testing.T) {
+	ctx := context.Background()
+	pool := newDesignDocumentFailPool(t)
+	fixture := createDesignDocumentFailFixture(t, ctx, pool)
+
+	svc := &TaskService{Queries: db.New(pool), TxStarter: pool, Bus: events.New()}
+	taskUUID, err := util.ParseUUID(fixture.taskID)
+	if err != nil {
+		t.Fatalf("parse task id: %v", err)
+	}
+	if _, err := svc.FailTask(ctx, taskUUID, "stream disconnected before completion", "", "", "",
+		"agent_error.provider_network", false, "", ""); err != nil {
+		t.Fatalf("FailTask: %v", err)
+	}
+
+	_, lastError := fixture.readDocument(t, ctx)
+	var recorded map[string]json.RawMessage
+	if err := json.Unmarshal(lastError, &recorded); err != nil {
+		t.Fatalf("last_error is not valid JSON: %v", err)
+	}
+	if _, present := recorded["diagnostics"]; present {
+		t.Fatalf("last_error carries an empty diagnostics key: %s", lastError)
+	}
+}

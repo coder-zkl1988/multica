@@ -756,10 +756,18 @@ func invalidPackage(code, filePath, message, digest string) (ValidatedPackage, e
 	return ValidatedPackage{Audit: report}, fmt.Errorf("%w: %s", ErrInvalidPackage, code)
 }
 
+// auditFailure names every rule the audit rejected, not only the first one.
+// The agent fixes a package from this text, so collapsing a multi-rule failure
+// into one code invites a rerun that fixes one rule and trips on the next.
 func auditFailure(report AuditReport) error {
-	code := "audit_failed"
-	if len(report.Diagnostics) > 0 {
-		code = report.Diagnostics[0].Code
+	codes := make([]string, 0, len(report.Diagnostics))
+	for _, diagnostic := range ErrorDiagnostics(report.Diagnostics) {
+		if code := strings.TrimSpace(diagnostic.Code); code != "" {
+			codes = append(codes, code)
+		}
 	}
-	return fmt.Errorf("%w: %s", ErrInvalidPackage, code)
+	if len(codes) == 0 {
+		codes = append(codes, "audit_failed")
+	}
+	return fmt.Errorf("%w: %s", ErrInvalidPackage, strings.Join(codes, ", "))
 }

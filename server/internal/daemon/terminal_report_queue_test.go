@@ -47,7 +47,10 @@ func TestTerminalReportStoreRoundTripAndPermissions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list terminal reports: %v", err)
 	}
-	if len(items) != 1 || items[0].report != report {
+	// terminalTaskReport now carries a diagnostics slice, so it is no longer
+	// comparable with ==; the store's own equality helper is the same check the
+	// conflict path uses.
+	if len(items) != 1 || !terminalReportsEqual(items[0].report, report) {
 		t.Fatalf("round trip = %+v, want %+v", items, report)
 	}
 
@@ -182,7 +185,7 @@ func TestTerminalReportStoreRecoversFlushedTempFileAfterCrash(t *testing.T) {
 	if err != nil {
 		t.Fatalf("recover interrupted report: %v", err)
 	}
-	if len(items) != 1 || items[0].report != report {
+	if len(items) != 1 || !terminalReportsEqual(items[0].report, report) {
 		t.Fatalf("recovered reports = %+v, want %+v", items, report)
 	}
 	if _, err := os.Stat(tempName); !errors.Is(err, os.ErrNotExist) {
@@ -298,7 +301,7 @@ func TestTerminalReportReplaysAfterDaemonRestart(t *testing.T) {
 	if pending != 0 || delivered != 1 {
 		t.Fatalf("restart replay pending=%d delivered=%d, want 0/1", pending, delivered)
 	}
-	if replayed != report {
+	if !terminalReportsEqual(replayed, report) {
 		t.Fatalf("restart replay = %+v, want %+v", replayed, report)
 	}
 }
@@ -403,7 +406,7 @@ func TestTerminalReportPermanentRejectionQuarantinesOriginalAndStopsReplay(t *te
 	if err != nil {
 		t.Fatalf("validate failed terminal report: %v", err)
 	}
-	if got != report {
+	if !terminalReportsEqual(got, report) {
 		t.Fatalf("quarantined payload = %+v, want original %+v", got, report)
 	}
 	if record.PermanentRejectionCount != terminalReportPermanentRejectionLimit || record.QuarantinedAt == nil {

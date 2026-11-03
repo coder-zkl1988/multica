@@ -131,7 +131,7 @@ vi.mock("../common/actor-avatar", () => ({
 
 import { I18nProvider } from "@multica/core/i18n/react";
 import zhCommon from "../locales/zh-Hans/common.json";
-import { DesignDocumentPage, defaultRevisionId, documentErrorMessage } from "./design-document-page";
+import { DesignDocumentPage, defaultRevisionId, documentErrorMessage, documentFailureDiagnostics } from "./design-document-page";
 import { previewEntries } from "./design-document-preview";
 
 const AGENT = { id: "agent-1", workspace_id: "ws-1", name: "小设计", runtime_id: "runtime-1", runtime_bound: true, archived_at: null };
@@ -339,6 +339,27 @@ describe("design document page helpers", () => {
     expect(documentErrorMessage({ code: "runtime_offline", message: "runtime went offline" })).toBe("runtime went offline");
     expect(documentErrorMessage({ code: "audit_failed" })).toBe("audit_failed");
     expect(documentErrorMessage({})).toBe("任务未能产出可用的设计稿。");
+  });
+
+  // last_error gained an optional diagnostics array; older rows have none, and
+  // any level of the payload can be malformed. Every case degrades to the
+  // entries that are readable rather than rendering blanks.
+  it("reads only the readable error diagnostics out of last_error", () => {
+    expect(documentFailureDiagnostics(null)).toEqual([]);
+    expect(documentFailureDiagnostics("runtime went offline")).toEqual([]);
+    expect(documentFailureDiagnostics({ code: "audit_failed" })).toEqual([]);
+    expect(documentFailureDiagnostics({ diagnostics: { code: "audit_failed" } })).toEqual([]);
+    expect(documentFailureDiagnostics({
+      diagnostics: [
+        { code: "prototype_inline_handler", path: "prototype/orders.html", message: "inline handler" },
+        { code: "", path: "prototype/app.js", message: "" },
+        { code: 7, message: null },
+        "nope",
+        null,
+      ],
+    })).toEqual([
+      { code: "prototype_inline_handler", path: "prototype/orders.html", message: "inline handler" },
+    ]);
   });
 });
 
@@ -613,6 +634,33 @@ describe("DesignDocumentPage", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("上一版仍然可用");
     // The prototype of the draft that failed run never replaced is still framed.
     expect(await screen.findByTitle("订单总览 · 首页")).toBeInTheDocument();
+  });
+
+  // A failed audit can break several rules. The page lists every one, with the
+  // file it broke, instead of repeating only the first line of the message.
+  it("lists every audit rule the failed package broke", async () => {
+    getDesignDocument.mockResolvedValue(document({
+      status: "failed",
+      draft_revision_id: "",
+      saved_revision_id: "",
+      last_error: {
+        code: "design_document_audit_failed",
+        message: "design document package failed static audit",
+        diagnostics: [
+          { code: "prototype_inline_handler", path: "prototype/orders.html", message: "inline event handler is not allowed" },
+          { code: "prototype_script_forbidden_api", path: "prototype/app.js", message: "network access is not allowed" },
+        ],
+      },
+      active_task: null,
+    }));
+    listDesignDocumentRevisions.mockResolvedValue({ revisions: [] });
+    renderPage();
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("prototype_inline_handler");
+    expect(alert).toHaveTextContent("prototype/orders.html");
+    expect(alert).toHaveTextContent("inline event handler is not allowed");
+    expect(alert).toHaveTextContent("prototype_script_forbidden_api");
+    expect(alert).toHaveTextContent("network access is not allowed");
   });
 
   it("explains an empty document instead of framing nothing", async () => {

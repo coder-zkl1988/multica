@@ -2952,6 +2952,51 @@ export const DesignDocumentLivePreviewSchema = z.object({
 }).refine((preview) => !!preview.files[preview.entry_path]);
 
 /**
+ * One error-severity finding from the package audit, carried in a design
+ * document's `last_error`. Only errors travel here; warnings never gated the
+ * run. Every field degrades instead of dropping the entry: an older backend
+ * may send a partial shape, and the UI can still name the rule it has.
+ */
+export const DesignDocumentFailureDiagnosticSchema = z.object({
+  code: z.string().catch("").default(""),
+  path: z.string().catch("").default(""),
+  message: z.string().catch("").default(""),
+}).loose();
+
+/**
+ * A design document's `last_error`. The server writes
+ * `{code,message,task_id,operation}` and, for audit failures, an optional
+ * `diagnostics` array. Older rows and older backends omit the array, so it
+ * defaults to empty rather than failing the document parse.
+ */
+export const DesignDocumentLastErrorSchema = z.object({
+  code: z.string().catch("").default(""),
+  message: z.string().catch("").default(""),
+  task_id: z.string().catch("").default(""),
+  operation: z.string().catch("").default(""),
+  // A single malformed entry must not discard the readable siblings, so each
+  // one is independently degraded to null and filtered out afterwards.
+  diagnostics: z.preprocess(
+    (value) => Array.isArray(value) ? value : [],
+    z.array(DesignDocumentFailureDiagnosticSchema.nullable().catch(null)).catch([]),
+  ).transform((entries) => entries.filter((entry): entry is z.infer<typeof DesignDocumentFailureDiagnosticSchema> => entry !== null)),
+}).loose();
+
+/**
+ * Normalise `last_error` without ever failing the document that carries it.
+ * Three shapes have shipped: null, a bare string, and the flat object above.
+ * Anything else degrades to null. Unknown object keys survive (`.loose()`) so
+ * the page can still show a legacy `error` / `reason` message.
+ */
+function normalizeDesignDocumentLastError(value: unknown): unknown {
+  if (value == null) return null;
+  if (typeof value === "string") return value;
+  if (typeof value !== "object" || Array.isArray(value)) return null;
+  const parsed = DesignDocumentLastErrorSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
+}
+
+/**
  * Design document created by the design centre home composer (DC-042).
  *
  * `repository_grounded` decides whether the UI may say the agent read code
@@ -2982,7 +3027,9 @@ export const DesignDocumentSchema = z.object({
     ProjectDesignSystemTaskSchema.nullable().catch(null),
   ),
   input_snapshot: z.unknown().transform((value) => value ?? null),
-  last_error: z.unknown().transform((value) => value ?? null),
+  // Tolerates the old flat shape and the new optional diagnostics array, and
+  // never fails the document parse over a malformed failure record.
+  last_error: z.unknown().transform(normalizeDesignDocumentLastError),
   repository_grounded: z.boolean().catch(false).default(false),
   created_at: z.string().catch("").default(""),
   updated_at: z.string().catch("").default(""),

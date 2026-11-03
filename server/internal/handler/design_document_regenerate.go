@@ -71,6 +71,49 @@ func designDocumentRegenerateInput(snapshot []byte, agentOverride string) (desig
 	return input, inputJSON, attachments, nil
 }
 
+// designDocumentPreviousFailures reads the document's recorded last_error back
+// into the feedback a rerun carries. The rerun overwrites last_error when it
+// attaches, so this is the only moment the previous verdict still exists.
+//
+// It tolerates every shape the server has written: the flat
+// {code,message,task_id,operation} object predating structured diagnostics, and
+// the current shape with an optional diagnostics array. A document with no
+// readable failure returns nil — a first generation carries no feedback rather
+// than an empty section.
+func designDocumentPreviousFailures(lastError []byte) *service.DesignDocumentPreviousFailures {
+	if len(lastError) == 0 || strings.TrimSpace(string(lastError)) == "null" {
+		return nil
+	}
+	var stored struct {
+		Code        string `json:"code"`
+		Diagnostics []struct {
+			Code    string `json:"code"`
+			Path    string `json:"path"`
+			Message string `json:"message"`
+		} `json:"diagnostics"`
+	}
+	if err := json.Unmarshal(lastError, &stored); err != nil {
+		return nil
+	}
+	failures := &service.DesignDocumentPreviousFailures{FailureCode: strings.TrimSpace(stored.Code)}
+	for _, diagnostic := range stored.Diagnostics {
+		code := strings.TrimSpace(diagnostic.Code)
+		message := strings.TrimSpace(diagnostic.Message)
+		if code == "" && message == "" {
+			continue
+		}
+		failures.Diagnostics = append(failures.Diagnostics, service.DesignDocumentFailureDiagnostic{
+			Code:    code,
+			Path:    strings.TrimSpace(diagnostic.Path),
+			Message: message,
+		})
+	}
+	if failures.FailureCode == "" && len(failures.Diagnostics) == 0 {
+		return nil
+	}
+	return failures
+}
+
 func (h *Handler) RegenerateDesignDocument(w http.ResponseWriter, r *http.Request) {
 	var req RegenerateDesignDocumentRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
@@ -159,6 +202,7 @@ func (h *Handler) regenerateDesignDocumentTask(
 
 	contextJSON, err := h.designDocumentGenerateTaskContext(
 		ctx, queries, requesterID, workspaceID, document.ProjectID, document.ProjectResourceID, document.IssueID, document.ID, agent.ID, input, inputJSON, attachments,
+		designDocumentPreviousFailures(document.LastError),
 	)
 	if err != nil {
 		return db.DesignDocument{}, db.AgentTaskQueue{}, err

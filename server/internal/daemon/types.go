@@ -355,6 +355,11 @@ type TaskResult struct {
 	WorkDir       string `json:"work_dir,omitempty"`   // working directory used during execution
 	EnvRoot       string `json:"-"`                    // env root dir for writing GC metadata (not sent to server)
 	FailureReason string `json:"-"`                    // classifier forwarded to FailTask on the blocked path; empty falls back to 'agent_error'
+	// FailureDiagnostics carries the error-severity findings behind a blocked
+	// page-design result so the server can persist every rule the package
+	// broke, not only the one the comment happened to name. Warnings are
+	// deliberately absent: they never gated the run.
+	FailureDiagnostics []designdocument.Diagnostic `json:"failure_diagnostics,omitempty"`
 	// DurableWorkDir replaces WorkDir only after a disposable local worktree
 	// was finalized and its removal was confirmed. Empty keeps WorkDir authoritative.
 	DurableWorkDir        string `json:"durable_work_dir,omitempty"`

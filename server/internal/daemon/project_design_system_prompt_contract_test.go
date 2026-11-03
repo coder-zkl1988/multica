@@ -612,3 +612,42 @@ func TestDesignDocumentPromptExplainsEveryDesignContextSource(t *testing.T) {
 		}
 	}
 }
+
+// A rerun must know what the previous attempt broke. The prompt section is
+// conditional: a first generation gets no fiction about a failure that never
+// happened, while a rerun gets every rule and an instruction to self-verify.
+func TestDesignDocumentPromptCarriesPreviousFailuresOnlyOnARerun(t *testing.T) {
+	const sectionMarker = "replaces a previous attempt that failed"
+	if prompt := BuildPrompt(designDocumentPromptTask(t, ""), "opencode"); strings.Contains(prompt, sectionMarker) {
+		t.Fatalf("a first generation was told it replaces a failed attempt:\n%s", prompt)
+	}
+
+	task := designDocumentPromptTask(t, "")
+	var envelope map[string]any
+	if err := json.Unmarshal(task.DesignDocumentContext, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	envelope["previous_failures"] = map[string]any{
+		"failure_code": "design_document_audit_failed",
+		"diagnostics": []map[string]any{
+			{"code": "prototype_inline_handler", "path": "prototype/orders.html", "message": "inline event handler is not allowed"},
+			{"code": "prototype_script_forbidden_api", "path": "prototype/app.js", "message": "network access is not allowed"},
+		},
+	}
+	raw, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt := BuildPrompt(Task{DesignDocumentContext: raw}, "opencode")
+	for _, want := range []string{
+		sectionMarker,
+		"design_document_audit_failed",
+		"prototype_inline_handler (prototype/orders.html): inline event handler is not allowed",
+		"prototype_script_forbidden_api (prototype/app.js): network access is not allowed",
+		"verify each finding",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("rerun prompt is missing %q:\n%s", want, prompt)
+		}
+	}
+}

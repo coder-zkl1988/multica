@@ -283,6 +283,7 @@ type terminalTaskReport struct {
 	sessionID                    string
 	workDir                      string
 	failureReason                string
+	failureDiagnostics           []designdocument.Diagnostic
 	projectDesignSystemArtifacts *ProjectDesignSystemArtifacts
 	projectDesignSystemPackage   *ProjectDesignSystemPackageReceipt
 	designDocumentGrounding      *designdocument.RepositoryGrounding
@@ -6716,6 +6717,7 @@ func (d *Daemon) reportTaskResult(ctx context.Context, taskID string, result Tas
 			// they want to see how far it got.
 			branchName:                   result.BranchName,
 			failureReason:                failureReason,
+			failureDiagnostics:           result.FailureDiagnostics,
 			projectDesignSystemArtifacts: result.ProjectDesignSystemArtifacts,
 			projectDesignSystemPackage:   result.ProjectDesignSystemPackage,
 			designDocumentGrounding:      result.DesignDocumentGrounding,
@@ -6823,7 +6825,7 @@ func (d *Daemon) sendTerminalTaskReport(ctx context.Context, report terminalTask
 	case terminalTaskReportComplete:
 		return d.client.completeTaskWithRetrySchedule(ctx, report.taskID, report.output, report.branchName, report.sessionID, report.workDir, report.sessionRolloutMissing, report.retiredSessionID, report.durableWorkDir, schedule, report.projectDesignSystemArtifacts, report.projectDesignSystemPackage, report.designDocumentGrounding, report.designDocumentPackage, report.designImplementation, IssueCompletionReport{ClaimGeneration: report.claimGeneration, Intent: report.issueCompletion})
 	case terminalTaskReportFail:
-		return d.client.failTaskWithRetrySchedule(ctx, report.taskID, report.errorMessage, report.sessionID, report.workDir, report.branchName, report.failureReason, report.sessionRolloutMissing, report.retiredSessionID, report.durableWorkDir, schedule)
+		return d.client.failTaskWithRetrySchedule(ctx, report.taskID, report.errorMessage, report.sessionID, report.workDir, report.branchName, report.failureReason, report.sessionRolloutMissing, report.retiredSessionID, report.durableWorkDir, report.failureDiagnostics, schedule)
 	default:
 		return fmt.Errorf("unsupported terminal task report kind %d", report.kind)
 	}

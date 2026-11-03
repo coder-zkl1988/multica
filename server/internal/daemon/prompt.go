@@ -2050,6 +2050,7 @@ func buildDesignDocumentPrompt(task Task, outputDir string) string {
 	b.WriteString("For adjust or regenerate operations, also read every file under the immutable `base/` directory before designing. That is the revision you are changing.\n\n")
 
 	b.WriteString(designDocumentAdjustment(task))
+	b.WriteString(designDocumentPreviousFailures(task))
 
 	// Craft standard before task contract: the stages below say what to
 	// produce, the charter says what "good" means. Stacked first so the
@@ -2210,6 +2211,82 @@ func designDocumentAdjustment(task Task) string {
 	b.WriteString("- Write a complete package to `$MULTICA_OUTPUT_DIR`, not a patch. Everything the base carried that the request does not change must be carried forward: the platform replaces the package wholesale, so a file you leave out is content the next revision loses.\n")
 	b.WriteString("- Stay internally consistent even when the requested change is local. `brief.json`, `coverage.json` and the prototype are verified against each other, so a local edit that leaves behind a stale ID, a broken flow or an unrevised coverage claim fails the whole package.\n\n")
 	return b.String()
+}
+
+// designDocumentPreviousFailures renders the feedback a rerun carries: the
+// failure code and every error diagnostic the previous package broke. A rerun
+// without it repeats the same mistakes, because the failure text alone names
+// one rule at best and the agent has no other memory of the attempt.
+//
+// Returns the empty string when the task carries no previous failures, so the
+// caller can append it unconditionally. This is feedback, not input: it does
+// not change the frozen snapshot or the package binding.
+func designDocumentPreviousFailures(task Task) string {
+	if len(task.DesignDocumentContext) == 0 {
+		return ""
+	}
+	var envelope struct {
+		PreviousFailures *struct {
+			FailureCode string `json:"failure_code"`
+			Diagnostics []struct {
+				Code    string `json:"code"`
+				Path    string `json:"path"`
+				Message string `json:"message"`
+			} `json:"diagnostics"`
+		} `json:"previous_failures"`
+	}
+	if err := jsonUnmarshal(task.DesignDocumentContext, &envelope); err != nil {
+		return ""
+	}
+	previous := envelope.PreviousFailures
+	if previous == nil {
+		return ""
+	}
+	failureCode := strings.TrimSpace(previous.FailureCode)
+	diagnostics := make([]string, 0, len(previous.Diagnostics))
+	for _, diagnostic := range previous.Diagnostics {
+		code := strings.TrimSpace(diagnostic.Code)
+		message := strings.TrimSpace(diagnostic.Message)
+		if code == "" && message == "" {
+			continue
+		}
+		if path := strings.TrimSpace(diagnostic.Path); path != "" {
+			diagnostics = append(diagnostics, entityLine(code+" ("+path+")", message))
+			continue
+		}
+		diagnostics = append(diagnostics, entityLine(code, message))
+	}
+	if failureCode == "" && len(diagnostics) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString("This run replaces a previous attempt that failed. The platform's own gate rejected that package; the findings below are the rules it broke.\n\n")
+	if failureCode != "" {
+		fmt.Fprintf(&b, "Failure code: `%s`\n", failureCode)
+	}
+	if len(diagnostics) > 0 {
+		b.WriteString("Every finding must be fixed in this run:\n")
+		for _, line := range diagnostics {
+			b.WriteString(line)
+			b.WriteString("\n")
+		}
+	}
+	b.WriteString("Treat these as requirements, not suggestions. Before you exit, verify each finding against the package you produced and state in your final message how you addressed it; a package that repeats any of them fails the same way again.\n\n")
+	return b.String()
+}
+
+// entityLine renders "label: message" while staying readable when one half is
+// missing.
+func entityLine(label, message string) string {
+	switch {
+	case label == "":
+		return "- " + message
+	case message == "":
+		return "- " + label
+	default:
+		return "- " + label + ": " + message
+	}
 }
 
 // designDocumentTaskIsUngrounded reports whether the task ran without a

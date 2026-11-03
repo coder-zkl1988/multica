@@ -1479,3 +1479,96 @@ func resolveAgainst(t *testing.T, base, reference string) string {
 	}
 	return resolved.String()
 }
+
+// The blocked comment is what a user and an agent read first, so a package
+// that breaks several rules must be reported with every one of them — naming
+// only the first produces a rerun that fixes it and trips on the next.
+func TestDesignDocumentAuditSummaryNamesEveryErrorAndNoWarning(t *testing.T) {
+	report := designdocument.AuditReport{
+		SchemaVersion: designdocument.AuditSchemaV1,
+		Passed:        false,
+		Diagnostics: []designdocument.Diagnostic{
+			{Code: "lint_ai_default_indigo", Severity: designdocument.DiagnosticWarning, Path: "prototype/index.html", Message: "default indigo"},
+			{Code: "prototype_inline_handler", Severity: designdocument.DiagnosticError, Path: "prototype/orders.html", Message: "inline handler"},
+			{Code: "prototype_script_forbidden_api", Severity: designdocument.DiagnosticError, Path: "prototype/app.js", Message: "network api"},
+		},
+	}
+
+	summary := designDocumentAuditSummary(report)
+	want := "prototype_inline_handler (prototype/orders.html): inline handler\n" +
+		"prototype_script_forbidden_api (prototype/app.js): network api"
+	if summary != want {
+		t.Fatalf("summary = %q, want every error one per line and no warning:\n%s", summary, want)
+	}
+	if strings.Contains(summary, "lint_ai_default_indigo") {
+		t.Fatalf("summary named a warning that never gated the package: %q", summary)
+	}
+
+	// A report with only warnings has no error to name; keep the existing
+	// fallback rather than rendering an empty comment.
+	onlyWarnings := designdocument.AuditReport{
+		SchemaVersion: designdocument.AuditSchemaV1,
+		Diagnostics:   report.Diagnostics[:1],
+	}
+	if got := designDocumentAuditSummary(onlyWarnings); got != "audit reported no error diagnostic" {
+		t.Fatalf("warning-only summary = %q", got)
+	}
+}
+
+// The finalize caller must carry every audit error into the blocked result:
+// the comment names them all, and the structured payload hands the server the
+// full array so last_error can persist it.
+func TestFinalizeDesignDocumentPackageCarriesEveryAuditDiagnostic(t *testing.T) {
+	envRoot := t.TempDir()
+	outputDir := stageDesignDocumentPackage(t, envRoot)
+	// Two independent audit failures: a forbidden network call and an inline
+	// event handler. The gate must not stop at the first.
+	writeDesignDocumentFile(t, outputDir, "prototype/app.js",
+		"const params = new URLSearchParams(window.location.search);\nfetch('/api/orders');\n")
+	writeDesignDocumentFile(t, outputDir, "prototype/orders.html",
+		strings.Replace(designDocumentOrdersHTML,
+			`<button id="approve" type="button">Approve order</button>`,
+			`<button id="approve" type="button" onclick="alert(1)">Approve order</button>`, 1))
+
+	uploader := newDesignDocumentUploader()
+	verifier := &designDocumentVerifier{}
+	finalized, err := finalizeDesignDocumentResult(context.Background(),
+		designDocumentTask("task-audit", stageDesignDocumentTaskContext(t)),
+		TaskResult{Status: "completed", Comment: "done", EnvRoot: envRoot},
+		designDocumentDeps(uploader, verifier))
+	if err != nil {
+		t.Fatalf("finalize: %v", err)
+	}
+	if finalized.Status != "blocked" || finalized.FailureReason != finalizeFailureDesignDocumentAuditFailed {
+		t.Fatalf("result = %+v, want a blocked audit failure", finalized)
+	}
+	for _, want := range []string{"prototype_script_forbidden_api", "prototype_inline_handler"} {
+		if !strings.Contains(finalized.Comment, want) {
+			t.Fatalf("comment %q does not name %s", finalized.Comment, want)
+		}
+	}
+	if verifier.called != 0 || len(uploader.stages) != 0 {
+		t.Fatalf("verifier ran %d times and uploader saw %v after an audit failure", verifier.called, uploader.stages)
+	}
+
+	// The structured payload is what reaches last_error. Every entry is an
+	// error, and the path/message survive so the UI can point at the file.
+	if len(finalized.FailureDiagnostics) < 2 {
+		t.Fatalf("failure diagnostics = %+v, want every audit error", finalized.FailureDiagnostics)
+	}
+	seen := map[string]bool{}
+	for _, diagnostic := range finalized.FailureDiagnostics {
+		if diagnostic.Severity != designdocument.DiagnosticError {
+			t.Fatalf("failure diagnostics carry a non-error finding: %+v", diagnostic)
+		}
+		if diagnostic.Path == "" || diagnostic.Message == "" {
+			t.Fatalf("failure diagnostic lost its path or message: %+v", diagnostic)
+		}
+		seen[diagnostic.Code] = true
+	}
+	for _, want := range []string{"prototype_script_forbidden_api", "prototype_inline_handler"} {
+		if !seen[want] {
+			t.Fatalf("failure diagnostics %v do not include %s", seen, want)
+		}
+	}
+}

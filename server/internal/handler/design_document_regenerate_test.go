@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -86,6 +87,61 @@ func TestDesignDocumentRegenerateInputRefusesAnUnreadableSnapshot(t *testing.T) 
 	}
 }
 
+// The rerun reads the previous verdict from last_error before attaching clears
+// it. It must understand every shape the server has written: the old flat
+// object and the current object with an optional diagnostics array.
+func TestDesignDocumentPreviousFailuresParsesEveryStoredShape(t *testing.T) {
+	if got := designDocumentPreviousFailures(nil); got != nil {
+		t.Fatalf("nil last_error produced %+v", got)
+	}
+	if got := designDocumentPreviousFailures([]byte("null")); got != nil {
+		t.Fatalf("null last_error produced %+v", got)
+	}
+	if got := designDocumentPreviousFailures([]byte(`"runtime went offline"`)); got != nil {
+		t.Fatalf("bare-string last_error produced %+v", got)
+	}
+	if got := designDocumentPreviousFailures([]byte("{")); got != nil {
+		t.Fatalf("unreadable last_error produced %+v", got)
+	}
+
+	// Old flat shape: no diagnostics array, still a usable failure code.
+	flat := designDocumentPreviousFailures([]byte(`{"code":"design_document_cancelled","message":"cancelled","task_id":"t","operation":"generate"}`))
+	if flat == nil || flat.FailureCode != "design_document_cancelled" || len(flat.Diagnostics) != 0 {
+		t.Fatalf("flat last_error parsed as %+v", flat)
+	}
+
+	// Current shape: the code plus every structured finding, in order.
+	withDiagnostics := designDocumentPreviousFailures([]byte(`{
+		"code": "design_document_audit_failed",
+		"message": "static audit failed",
+		"diagnostics": [
+			{"code": "prototype_inline_handler", "path": "prototype/orders.html", "message": "inline handler"},
+			{"code": "prototype_script_forbidden_api", "path": "prototype/app.js", "message": "network api"}
+		]
+	}`))
+	if withDiagnostics == nil || withDiagnostics.FailureCode != "design_document_audit_failed" {
+		t.Fatalf("last_error with diagnostics parsed as %+v", withDiagnostics)
+	}
+	want := []service.DesignDocumentFailureDiagnostic{
+		{Code: "prototype_inline_handler", Path: "prototype/orders.html", Message: "inline handler"},
+		{Code: "prototype_script_forbidden_api", Path: "prototype/app.js", Message: "network api"},
+	}
+	if len(withDiagnostics.Diagnostics) != len(want) {
+		t.Fatalf("diagnostics = %+v, want %+v", withDiagnostics.Diagnostics, want)
+	}
+	for index := range want {
+		if withDiagnostics.Diagnostics[index] != want[index] {
+			t.Fatalf("diagnostic %d = %+v, want %+v", index, withDiagnostics.Diagnostics[index], want[index])
+		}
+	}
+
+	// A partial/malformed entry is skipped instead of becoming an empty line.
+	partial := designDocumentPreviousFailures([]byte(`{"diagnostics":[{"code":""},{"message":"kept"}]}`))
+	if partial == nil || len(partial.Diagnostics) != 1 || partial.Diagnostics[0].Message != "kept" {
+		t.Fatalf("partial diagnostics parsed as %+v", partial)
+	}
+}
+
 func performDesignDocumentRegenerate(t *testing.T, documentID string, body any) *httptest.ResponseRecorder {
 	t.Helper()
 	recorder := httptest.NewRecorder()
@@ -125,6 +181,22 @@ func TestStoppedFirstGenerationReleasesTheDocumentAndRegenerates(t *testing.T) {
 	})
 	if document.ActiveTask == nil {
 		t.Fatal("create left no active task")
+	}
+
+	// A first generation carries no failure feedback: there is no previous
+	// attempt, and an injected section would be fiction.
+	var firstTaskContext []byte
+	if err := testPool.QueryRow(ctx, `SELECT context FROM agent_task_queue WHERE id = $1`, parseUUID(document.ActiveTask.ID)).Scan(&firstTaskContext); err != nil {
+		t.Fatalf("load first task context: %v", err)
+	}
+	var firstEnvelope struct {
+		PreviousFailures json.RawMessage `json:"previous_failures"`
+	}
+	if err := json.Unmarshal(firstTaskContext, &firstEnvelope); err != nil {
+		t.Fatalf("decode first task context: %v", err)
+	}
+	if len(firstEnvelope.PreviousFailures) != 0 && string(firstEnvelope.PreviousFailures) != "null" {
+		t.Fatalf("first generation carried previous_failures: %s", firstEnvelope.PreviousFailures)
 	}
 
 	// While the first run is live, a rerun must be refused.
@@ -191,12 +263,18 @@ func TestStoppedFirstGenerationReleasesTheDocumentAndRegenerates(t *testing.T) {
 		Input          struct {
 			RepositoryGrounding string `json:"repository_grounding"`
 		} `json:"input"`
+		PreviousFailures *service.DesignDocumentPreviousFailures `json:"previous_failures"`
 	}
 	if err := json.Unmarshal(taskContextJSON, &taskContext); err != nil {
 		t.Fatal(err)
 	}
 	if taskContext.Operation != "generate" || !taskContext.ExecutionReady || taskContext.Input.RepositoryGrounding != "unavailable" {
 		t.Fatalf("rerun task context = %+v", taskContext)
+	}
+	// The rerun carries the stopped run's verdict as feedback. It is not input:
+	// the frozen snapshot above still matches the original brief.
+	if taskContext.PreviousFailures == nil || taskContext.PreviousFailures.FailureCode != "design_document_cancelled" {
+		t.Fatalf("rerun previous_failures = %+v, want the cancelled run's code", taskContext.PreviousFailures)
 	}
 }
 
