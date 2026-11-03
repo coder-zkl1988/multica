@@ -2469,6 +2469,11 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			r.Get("/api/project-design-systems/catalogue", h.ListWorkspaceDesignSystemCatalogue)
 			r.Get("/api/design-documents", h.ListDesignDocuments)
 			r.Get("/api/design-recipes", h.ListDesignScenarioRecipes)
+			// Personal saves over the community catalogue (DC-067). Both
+			// methods are idempotent: saving a saved recipe keeps it saved,
+			// so a retry cannot leave the server disagreeing with the button.
+			r.Post("/api/design-recipes/{id}/favorite", h.FavoriteDesignScenarioRecipe)
+			r.Delete("/api/design-recipes/{id}/favorite", h.UnfavoriteDesignScenarioRecipe)
 			r.Get("/api/design-systems/builtin", h.ListBuiltinDesignSystems)
 			r.Get("/api/design-systems/builtin/{slug}", h.GetBuiltinDesignSystem)
 			r.Post("/api/design-documents", h.CreateDesignDocument)

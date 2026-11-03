@@ -307,6 +307,7 @@ import type {
   BuiltinDesignSystemDetail,
   ListBuiltinDesignSystemsResponse,
   ListDesignScenarioRecipesResponse,
+  DesignScenarioRecipeFavoriteResponse,
   ListDesignSystemProfilesResponse,
   ListDesignTemplatesResponse,
   PublishDesignTemplateRequest,
@@ -660,6 +661,7 @@ import {
   EMPTY_BUILTIN_DESIGN_SYSTEM_DETAIL,
   EMPTY_LIST_BUILTIN_DESIGN_SYSTEMS_RESPONSE,
   ListDesignScenarioRecipesResponseSchema,
+  DesignScenarioRecipeFavoriteResponseSchema,
   ListDesignSystemProfilesResponseSchema,
   ListDesignRestoreTasksResponseSchema,
   EMPTY_LIST_DESIGN_SCENARIO_RECIPES_RESPONSE,
@@ -5381,6 +5383,39 @@ export class ApiClient {
     );
   }
 
+  /**
+   * Saves a catalogue recipe for the signed-in user. Idempotent server-side,
+   * so a retry after an ambiguous failure settles on "saved" rather than
+   * flipping the state back.
+   */
+  async favoriteDesignScenarioRecipe(recipeId: string): Promise<DesignScenarioRecipeFavoriteResponse> {
+    const raw = await this.fetch<unknown>(
+      `/api/design-recipes/${encodeURIComponent(recipeId)}/favorite`,
+      { method: "POST" },
+    );
+    const parsed = parseWithFallback(
+      raw,
+      DesignScenarioRecipeFavoriteResponseSchema,
+      {} as { favorited?: boolean },
+      { endpoint: "POST /api/design-recipes/{id}/favorite" },
+    );
+    return { favorited: parsed.favorited ?? true };
+  }
+
+  async unfavoriteDesignScenarioRecipe(recipeId: string): Promise<DesignScenarioRecipeFavoriteResponse> {
+    const raw = await this.fetch<unknown>(
+      `/api/design-recipes/${encodeURIComponent(recipeId)}/favorite`,
+      { method: "DELETE" },
+    );
+    const parsed = parseWithFallback(
+      raw,
+      DesignScenarioRecipeFavoriteResponseSchema,
+      {} as { favorited?: boolean },
+      { endpoint: "DELETE /api/design-recipes/{id}/favorite" },
+    );
+    return { favorited: parsed.favorited ?? false };
+  }
+
   async listDesignDrafts(): Promise<ListDesignDraftsResponse> {
     const raw = await this.fetch<unknown>("/api/design-drafts");
     return parseWithFallback(raw, ListDesignDraftsResponseSchema, EMPTY_LIST_DESIGN_DRAFTS_RESPONSE, {
@@ -5551,6 +5586,16 @@ export class ApiClient {
     });
   }
 
+  /**
+   * Renames a document (DC-066). Only the title moves — revisions and the
+   * draft/saved pointers are untouched — and the response is the whole
+   * document, so a caller can replace its cached copy without a second read.
+   *
+   * The schema tolerates a malformed `title` by catching it to "", which would
+   * make a confirmed rename look ignored. The parsed title is the server's
+   * answer whenever it has one; the requested title fills in only when the
+   * body carried none.
+   */
   /**
    * Deletes a document and every revision it owns. 204 with no body — there
    * is nothing left to parse, and nothing to fall back to.

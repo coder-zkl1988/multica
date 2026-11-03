@@ -77,6 +77,8 @@ export const designKeys = {
   documentShares: (wsId: string, documentId: string) => ["designs", wsId, "documents", "document", documentId, "shares"] as const,
   // The community catalogue mixes built-in recipes with the workspace's own,
   // so it is workspace-scoped even though most rows are global (DC-041).
+  // The listing carries each row's `favorited` flag (DC-067), so a save needs
+  // no separate cache entry — one key keeps the flag and the row together.
   scenarioRecipes: (wsId: string) => ["designs", wsId, "scenario-recipes"] as const,
   // Bundled built-in systems, kept apart from projectDesignSystem* keys so a
   // read-only catalogue entry never shares a cache slot with a saved system.

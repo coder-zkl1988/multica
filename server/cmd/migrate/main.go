@@ -389,6 +389,7 @@ var concurrentIndexCleanups = map[string]string{
 	"886_idx_design_scenario_recipe_builtin_slug":          "idx_design_scenario_recipe_builtin_slug",
 	"887_idx_design_scenario_recipe_workspace_slug":        "idx_design_scenario_recipe_workspace_slug",
 	"888_idx_design_scenario_recipe_gallery":               "idx_design_scenario_recipe_gallery",
+	"931_idx_design_scenario_recipe_favorite_user_recipe":  "idx_design_scenario_recipe_favorite_user_recipe",
 	"902_idx_design_document_share_token":                  "idx_design_document_share_token",
 	"903_idx_design_document_share_live_revision":          "idx_design_document_share_live_revision",
 	"906_idx_design_document_workspace":                    "idx_design_document_workspace",

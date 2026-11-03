@@ -6,22 +6,34 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   createDesignDocument,
+  favoriteDesignScenarioRecipe,
   listAgents,
   listDesignScenarioRecipes,
   listProjects,
   toastError,
   toastSuccess,
+  unfavoriteDesignScenarioRecipe,
 } = vi.hoisted(() => ({
   createDesignDocument: vi.fn(),
+  favoriteDesignScenarioRecipe: vi.fn(),
   listAgents: vi.fn(),
   listDesignScenarioRecipes: vi.fn(),
   listProjects: vi.fn(),
   toastError: vi.fn(),
   toastSuccess: vi.fn(),
+  unfavoriteDesignScenarioRecipe: vi.fn(),
 }));
 
 vi.mock("@multica/core/api", () => ({
-  api: { createDesignDocument, listAgents, listDesignScenarioRecipes, listProjects, getBaseUrl: () => "http://api.test" },
+  api: {
+    createDesignDocument,
+    favoriteDesignScenarioRecipe,
+    listAgents,
+    listDesignScenarioRecipes,
+    listProjects,
+    unfavoriteDesignScenarioRecipe,
+    getBaseUrl: () => "http://api.test",
+  },
 }));
 
 vi.mock("@multica/core/hooks", () => ({
@@ -54,6 +66,7 @@ const AGENT = {
 
 function recipe(overrides: Record<string, unknown> = {}) {
   return {
+    id: `id-${String(overrides.slug ?? "crm-console")}`,
     slug: "crm-console",
     title: "CRM 控制台",
     summary: "带筛选与批量操作的客户列表",
@@ -67,6 +80,7 @@ function recipe(overrides: Record<string, unknown> = {}) {
     preview_url: "",
     origin: "builtin",
     published_at: "2026-08-16T00:00:00Z",
+    favorited: false,
     ...overrides,
   };
 }
@@ -91,6 +105,8 @@ function renderGallery() {
 describe("DesignRecipeGallery", () => {
   beforeEach(() => {
     createDesignDocument.mockReset();
+    favoriteDesignScenarioRecipe.mockReset();
+    unfavoriteDesignScenarioRecipe.mockReset();
     listAgents.mockReset();
     listDesignScenarioRecipes.mockReset();
     listProjects.mockReset();
@@ -102,6 +118,8 @@ describe("DesignRecipeGallery", () => {
       total: 1,
     });
     listDesignScenarioRecipes.mockResolvedValue({ recipes: [recipe()] });
+    favoriteDesignScenarioRecipe.mockResolvedValue({ favorited: true });
+    unfavoriteDesignScenarioRecipe.mockResolvedValue({ favorited: false });
     createDesignDocument.mockResolvedValue({
       id: "document-1",
       workspace_id: "ws-1",
@@ -408,5 +426,92 @@ describe("DesignRecipeGallery", () => {
     await waitFor(() => expect(toastError).toHaveBeenCalledWith("agent unavailable"));
     expect(onStarted).not.toHaveBeenCalled();
     expect(screen.getByLabelText("页面需求描述")).toHaveValue(recipe().prompt);
+  });
+
+  it("saves a recipe from its card and shows only saved recipes under 收藏", async () => {
+    const user = userEvent.setup();
+    // Server state the listing actually returns: the save has to survive the
+    // invalidation on settle, so the mock flips with the write rather than
+    // answering a stale snapshot.
+    const saved: Record<string, boolean> = { "id-crm-console": false, "id-dashboard": false };
+    listDesignScenarioRecipes.mockImplementation(async () => ({
+      recipes: [
+        recipe({ slug: "crm-console", title: "CRM 控制台", favorited: saved["id-crm-console"] }),
+        recipe({ slug: "dashboard", title: "数据看板", favorited: saved["id-dashboard"] }),
+      ],
+    }));
+    favoriteDesignScenarioRecipe.mockImplementation(async (id: string) => {
+      saved[id] = true;
+      return { favorited: true };
+    });
+    renderGallery();
+
+    // Two cards, neither saved: the saved chip counts zero rather than
+    // vanishing, so the filter is discoverable before anything is starred.
+    expect(await screen.findByText("CRM 控制台")).toBeInTheDocument();
+    expect(within(screen.getByRole("group", { name: "收藏筛选" })).getByRole("button", { name: /收藏/ })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "收藏「CRM 控制台」" }));
+    await waitFor(() =>
+      expect(favoriteDesignScenarioRecipe).toHaveBeenCalledWith("id-crm-console"),
+    );
+    expect(await screen.findByRole("button", { name: "取消收藏「CRM 控制台」" })).toBeInTheDocument();
+    expect(unfavoriteDesignScenarioRecipe).not.toHaveBeenCalled();
+
+    await user.click(within(screen.getByRole("group", { name: "收藏筛选" })).getByRole("button", { name: /收藏/ }));
+    expect(screen.getByText("CRM 控制台")).toBeInTheDocument();
+    expect(screen.queryByText("数据看板")).not.toBeInTheDocument();
+  });
+
+  it("counts the saved recipes from the listing, so a reload restores the filter", async () => {
+    listDesignScenarioRecipes.mockResolvedValue({
+      recipes: [recipe({ slug: "crm-console", title: "CRM 控制台", favorited: true })],
+    });
+    renderGallery();
+
+    // The chip counts the saved row on first render: no separate favourites
+    // request is needed for the filter to work after a reload.
+    const chip = await within(await screen.findByRole("group", { name: "收藏筛选" })).findByRole("button", { name: /收藏/ });
+    expect(within(chip).getByText("1")).toBeInTheDocument();
+  });
+
+  it("rolls the star back when the save request fails", async () => {
+    const user = userEvent.setup();
+    favoriteDesignScenarioRecipe.mockRejectedValue(new Error("offline"));
+    renderGallery();
+
+    await user.click(await screen.findByRole("button", { name: "收藏「CRM 控制台」" }));
+
+    await waitFor(() => expect(favoriteDesignScenarioRecipe).toHaveBeenCalled());
+    // The optimistic patch is undone, so the button offers 收藏 again rather
+    // than keeping a state the server never accepted.
+    expect(await screen.findByRole("button", { name: "收藏「CRM 控制台」" })).toBeInTheDocument();
+  });
+
+  it("says what 收藏 is for when nothing has been saved yet", async () => {
+    const user = userEvent.setup();
+    renderGallery();
+
+    const savedFilter = await screen.findByRole("group", { name: "收藏筛选" });
+    await user.click(within(savedFilter).getByRole("button", { name: /收藏/ }));
+
+    expect(screen.getByText("还没有收藏的配方")).toBeInTheDocument();
+    expect(screen.getByText(/点星标就能把配方收藏到这里/)).toBeInTheDocument();
+  });
+
+  it("keeps deck cards startable when they are saved", async () => {
+    listDesignScenarioRecipes.mockResolvedValue({
+      recipes: [
+        recipe({ slug: "pitch", title: "路演材料", mode: "deck", category: "融资路演" }),
+      ],
+    });
+    renderGallery();
+
+    expect(await screen.findByText("路演材料")).toBeInTheDocument();
+    // The card's save control sits beside the origin badge and does not
+    // disturb the two start actions.
+    expect(screen.getByRole("button", { name: "收藏「路演材料」" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "填入首页" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "直接创建" })).toBeEnabled();
   });
 });

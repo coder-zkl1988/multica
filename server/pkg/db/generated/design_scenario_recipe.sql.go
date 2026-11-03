@@ -11,6 +11,22 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const addDesignScenarioRecipeFavorite = `-- name: AddDesignScenarioRecipeFavorite :exec
+INSERT INTO design_scenario_recipe_favorite (user_id, recipe_id)
+VALUES ($1, $2)
+ON CONFLICT (user_id, recipe_id) DO NOTHING
+`
+
+type AddDesignScenarioRecipeFavoriteParams struct {
+	UserID   pgtype.UUID `json:"user_id"`
+	RecipeID pgtype.UUID `json:"recipe_id"`
+}
+
+func (q *Queries) AddDesignScenarioRecipeFavorite(ctx context.Context, arg AddDesignScenarioRecipeFavoriteParams) error {
+	_, err := q.db.Exec(ctx, addDesignScenarioRecipeFavorite, arg.UserID, arg.RecipeID)
+	return err
+}
+
 const deleteWorkspaceDesignScenarioRecipes = `-- name: DeleteWorkspaceDesignScenarioRecipes :exec
 DELETE FROM design_scenario_recipe
 WHERE workspace_id = $1
@@ -19,6 +35,45 @@ WHERE workspace_id = $1
 func (q *Queries) DeleteWorkspaceDesignScenarioRecipes(ctx context.Context, workspaceID pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, deleteWorkspaceDesignScenarioRecipes, workspaceID)
 	return err
+}
+
+const getPublishedDesignScenarioRecipeByID = `-- name: GetPublishedDesignScenarioRecipeByID :one
+SELECT id, workspace_id, slug, title, summary, category, subcategory, mode, platform, prompt, preview_object_key, origin, published_at, position, created_by, created_at, updated_at FROM design_scenario_recipe
+WHERE id = $1
+  AND published_at IS NOT NULL
+  AND (workspace_id IS NULL OR workspace_id = $2)
+`
+
+type GetPublishedDesignScenarioRecipeByIDParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+// The favourite endpoints resolve the id through this same visibility gate, so
+// a person can only save a recipe their workspace can already list.
+func (q *Queries) GetPublishedDesignScenarioRecipeByID(ctx context.Context, arg GetPublishedDesignScenarioRecipeByIDParams) (DesignScenarioRecipe, error) {
+	row := q.db.QueryRow(ctx, getPublishedDesignScenarioRecipeByID, arg.ID, arg.WorkspaceID)
+	var i DesignScenarioRecipe
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Slug,
+		&i.Title,
+		&i.Summary,
+		&i.Category,
+		&i.Subcategory,
+		&i.Mode,
+		&i.Platform,
+		&i.Prompt,
+		&i.PreviewObjectKey,
+		&i.Origin,
+		&i.PublishedAt,
+		&i.Position,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const getPublishedDesignScenarioRecipeBySlug = `-- name: GetPublishedDesignScenarioRecipeBySlug :one
@@ -60,6 +115,31 @@ func (q *Queries) GetPublishedDesignScenarioRecipeBySlug(ctx context.Context, ar
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const listDesignScenarioRecipeFavorites = `-- name: ListDesignScenarioRecipeFavorites :many
+SELECT recipe_id FROM design_scenario_recipe_favorite
+WHERE user_id = $1
+`
+
+func (q *Queries) ListDesignScenarioRecipeFavorites(ctx context.Context, userID pgtype.UUID) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, listDesignScenarioRecipeFavorites, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var recipe_id pgtype.UUID
+		if err := rows.Scan(&recipe_id); err != nil {
+			return nil, err
+		}
+		items = append(items, recipe_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listPublishedDesignScenarioRecipes = `-- name: ListPublishedDesignScenarioRecipes :many
@@ -111,6 +191,22 @@ func (q *Queries) ListPublishedDesignScenarioRecipes(ctx context.Context, worksp
 		return nil, err
 	}
 	return items, nil
+}
+
+const removeDesignScenarioRecipeFavorite = `-- name: RemoveDesignScenarioRecipeFavorite :exec
+DELETE FROM design_scenario_recipe_favorite
+WHERE user_id = $1
+  AND recipe_id = $2
+`
+
+type RemoveDesignScenarioRecipeFavoriteParams struct {
+	UserID   pgtype.UUID `json:"user_id"`
+	RecipeID pgtype.UUID `json:"recipe_id"`
+}
+
+func (q *Queries) RemoveDesignScenarioRecipeFavorite(ctx context.Context, arg RemoveDesignScenarioRecipeFavoriteParams) error {
+	_, err := q.db.Exec(ctx, removeDesignScenarioRecipeFavorite, arg.UserID, arg.RecipeID)
+	return err
 }
 
 const upsertBuiltinDesignScenarioRecipe = `-- name: UpsertBuiltinDesignScenarioRecipe :one

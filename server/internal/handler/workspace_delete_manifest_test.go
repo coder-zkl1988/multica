@@ -202,6 +202,12 @@ var workspaceDeletionManifest = map[string]workspaceDeleteAction{
 	"issue_source_context":               workspaceDelete,
 	"issue_source_context_object_intent": workspaceDeleteSettle,
 	"plugin_hook_schedule":               workspaceDelete,
+
+	// Personal recipe saves are keyed by user and recipe with no workspace_id,
+	// so they outlive the workspace like the user's other bookmarks. A save
+	// pointing at a deleted workspace recipe simply stops matching a row the
+	// listing can see, and no cleanup is needed for it.
+	"design_scenario_recipe_favorite": workspaceDeleteKeep,
 }
 
 func TestWorkspaceDeletionManifestCoversPublicSchema(t *testing.T) {

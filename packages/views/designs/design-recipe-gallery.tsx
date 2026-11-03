@@ -15,11 +15,13 @@ import {
   Minimize2,
   Presentation,
   Search,
+  Star,
   Video,
 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@multica/core/api";
 import { designKeys } from "@multica/core/designs/keys";
+import { useToggleDesignScenarioRecipeFavorite } from "@multica/core/designs/mutations";
 import { designScenarioRecipeListOptions } from "@multica/core/designs/queries";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { agentListOptions } from "@multica/core/workspace/queries";
@@ -247,16 +249,54 @@ export function RecipePreview({ recipe }: { recipe: DesignScenarioRecipe }) {
   );
 }
 
+/**
+ * The per-card save control. A star rather than a button with a label: the
+ * card's action row is already two buttons, and the saved state has to be
+ * legible at a glance from the grid. Rendered even while the toggle is in
+ * flight — the optimistic patch has already flipped `favorited`, so disabling
+ * it would only make the card feel stuck.
+ */
+function FavoriteButton({
+  recipe,
+  onToggle,
+}: {
+  recipe: DesignScenarioRecipe;
+  onToggle: (recipe: DesignScenarioRecipe) => void;
+}) {
+  // A catalogue from a backend older than this feature has no id, so there is
+  // nothing to address. Hide the control rather than offer a dead one.
+  if (!recipe.id) return null;
+  return (
+    <Button
+      type="button"
+      size="icon-sm"
+      variant="ghost"
+      aria-label={recipe.favorited ? `取消收藏「${recipe.title || recipe.slug}」` : `收藏「${recipe.title || recipe.slug}」`}
+      aria-pressed={recipe.favorited}
+      title={recipe.favorited ? "取消收藏" : "收藏"}
+      onClick={() => onToggle(recipe)}
+      className={cn(
+        "shrink-0",
+        recipe.favorited ? "text-primary hover:text-primary" : "text-muted-foreground",
+      )}
+    >
+      <Star className={cn("size-4", recipe.favorited ? "fill-current" : "")} />
+    </Button>
+  );
+}
+
 function RecipeCard({
   recipe,
   onUseInComposer,
   onStart,
   onOpenDetail,
+  onToggleFavorite,
 }: {
   recipe: DesignScenarioRecipe;
   onUseInComposer: (recipe: DesignScenarioRecipe) => void;
   onStart: (recipe: DesignScenarioRecipe) => void;
   onOpenDetail: (recipe: DesignScenarioRecipe) => void;
+  onToggleFavorite: (recipe: DesignScenarioRecipe) => void;
 }) {
   const startable = canStartRecipe(recipe);
   const origin = originLabel(recipe.origin);
@@ -283,11 +323,14 @@ function RecipeCard({
               {title}
             </button>
           </h3>
-          {origin ? (
-            <Badge variant="secondary" className="shrink-0 px-1.5 text-micro font-normal">
-              {origin}
-            </Badge>
-          ) : null}
+          <div className="flex shrink-0 items-center gap-1">
+            {origin ? (
+              <Badge variant="secondary" className="shrink-0 px-1.5 text-micro font-normal">
+                {origin}
+              </Badge>
+            ) : null}
+            <FavoriteButton recipe={recipe} onToggle={onToggleFavorite} />
+          </div>
         </div>
         <p className="line-clamp-3 break-words text-caption text-muted-foreground">
           {recipe.summary || "该配方还没有说明。"}
@@ -346,11 +389,13 @@ function RecipeDetailDialog({
   onClose,
   onUseInComposer,
   onStart,
+  onToggleFavorite,
 }: {
   recipe: DesignScenarioRecipe;
   onClose: () => void;
   onUseInComposer: (recipe: DesignScenarioRecipe) => void;
   onStart: (recipe: DesignScenarioRecipe) => void;
+  onToggleFavorite: (recipe: DesignScenarioRecipe) => void;
 }) {
   const [fullscreen, setFullscreen] = useState(false);
   const startable = canStartRecipe(recipe);
@@ -455,6 +500,16 @@ function RecipeDetailDialog({
                 </section>
               ) : null}
               <div className="mt-auto flex flex-col gap-2 pt-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={!recipe.id}
+                  onClick={() => onToggleFavorite(recipe)}
+                >
+                  <Star className={cn("size-3.5", recipe.favorited ? "fill-current" : "")} />
+                  {recipe.favorited ? "取消收藏" : "收藏"}
+                </Button>
                 <Button type="button" size="sm" disabled={!startable} onClick={() => { onClose(); onStart(recipe); }}>
                   直接创建
                 </Button>
@@ -632,8 +687,26 @@ export function DesignRecipeGallery({
   // stranding the grid.
   const [pickedMode, setPickedMode] = useState<RecipeMode | "">("");
   const [category, setCategory] = useState(ALL_FACET);
+  // Saved is a view filter, not a second request: every row already carries
+  // its `favorited` flag from the listing, so a reload restores the same
+  // filter with the same data.
+  const [savedOnly, setSavedOnly] = useState(false);
   const [startTarget, setStartTarget] = useState<DesignScenarioRecipe | null>(null);
   const [detailTarget, setDetailTarget] = useState<DesignScenarioRecipe | null>(null);
+  const toggleFavorite = useToggleDesignScenarioRecipeFavorite();
+  const savedCount = useMemo(
+    () => recipes.filter((recipe) => recipe.favorited).length,
+    [recipes],
+  );
+  const onToggleFavorite = (recipe: DesignScenarioRecipe) => {
+    toggleFavorite.mutate({ recipeId: recipe.id, favorited: !recipe.favorited });
+  };
+  // The detail dialog is keyed by slug but its props come from state captured
+  // when it opened; re-point it at the freshest row so its save button shows
+  // the state the optimistic patch already wrote.
+  const detailRecipe = detailTarget
+    ? recipes.find((recipe) => recipe.id === detailTarget.id) ?? detailTarget
+    : null;
 
   const modeCounts = useMemo(
     () => RECIPE_MODES.map((option) => ({
@@ -664,7 +737,9 @@ export function DesignRecipeGallery({
 
   const query = search.trim().toLowerCase();
   const filtered = useMemo(() => {
-    const scoped = categoryMatches;
+    const scoped = savedOnly
+      ? categoryMatches.filter((recipe) => recipe.favorited)
+      : categoryMatches;
     if (!query) return scoped;
     return scoped.filter((recipe) => [
       recipe.title,
@@ -673,12 +748,13 @@ export function DesignRecipeGallery({
       recipe.subcategory,
       recipe.slug,
     ].join(" ").toLowerCase().includes(query));
-  }, [categoryMatches, query]);
+  }, [categoryMatches, query, savedOnly]);
 
-  const filtersApplied = activeCategory !== ALL_FACET || !!query;
+  const filtersApplied = activeCategory !== ALL_FACET || !!query || savedOnly;
   const clearFilters = () => {
     setSearch("");
     setCategory(ALL_FACET);
+    setSavedOnly(false);
   };
 
   return (
@@ -748,27 +824,41 @@ export function DesignRecipeGallery({
                   />
                 </div>
               </div>
-              {/* Row two: the categories inside the chosen mode. Hidden when a
-                  mode has only one, since a lone pill beside 全部 says nothing. */}
-              {categories.length > 1 ? (
-                <div role="group" aria-label="配方分类" className="flex flex-wrap items-center gap-1.5">
+              {/* Row two: saved first, then the categories inside the chosen
+                  mode. The category list is hidden when a mode has only one,
+                  since a lone pill beside 全部 says nothing — but the saved
+                  chip stays, because a personal bookmark filter is useful on
+                  its own, and its count is the account's total saved. */}
+              <div className="flex flex-wrap items-center gap-1.5">
+                <div role="group" aria-label="收藏筛选">
                   <DesignFilterPill
-                    label="全部"
-                    count={modeMatches.length}
-                    selected={activeCategory === ALL_FACET}
-                    onClick={() => setCategory(ALL_FACET)}
+                    label="收藏"
+                    icon={Star}
+                    count={savedCount}
+                    selected={savedOnly}
+                    onClick={() => setSavedOnly((value) => !value)}
                   />
-                  {categories.map((item) => (
-                    <DesignFilterPill
-                      key={item}
-                      label={item}
-                      count={modeMatches.filter((recipe) => recipe.category === item).length}
-                      selected={activeCategory === item}
-                      onClick={() => setCategory(item)}
-                    />
-                  ))}
                 </div>
-              ) : null}
+                {categories.length > 1 ? (
+                  <div role="group" aria-label="配方分类" className="flex flex-wrap items-center gap-1.5">
+                    <DesignFilterPill
+                      label="全部"
+                      count={modeMatches.length}
+                      selected={activeCategory === ALL_FACET}
+                      onClick={() => setCategory(ALL_FACET)}
+                    />
+                    {categories.map((item) => (
+                      <DesignFilterPill
+                        key={item}
+                        label={item}
+                        count={modeMatches.filter((recipe) => recipe.category === item).length}
+                        selected={activeCategory === item}
+                        onClick={() => setCategory(item)}
+                      />
+                    ))}
+                  </div>
+                ) : null}
+              </div>
             </div>
 
             {filtered.length === 0 ? (
@@ -777,9 +867,20 @@ export function DesignRecipeGallery({
                   <EmptyMedia variant="icon">
                     <Search />
                   </EmptyMedia>
-                  <EmptyTitle>没有匹配的配方</EmptyTitle>
+                  <EmptyTitle>
+                    {savedOnly && savedCount === 0 ? "还没有收藏的配方" : "没有匹配的配方"}
+                  </EmptyTitle>
                   <EmptyDescription>
-                    {query ? "换一个关键词，或者清除筛选看看这一类的全部配方。" : "这一类还没有配方。"}
+                    {query
+                      ? "换一个关键词，或者清除筛选看看这一类的全部配方。"
+                      : savedOnly && savedCount === 0
+                        ? "在卡片上点星标就能把配方收藏到这里，收藏会保存在你的账号里。"
+                        : savedOnly
+                          // Saved recipes exist, just not under the facets the
+                          // user is scoped to — say so instead of implying
+                          // nothing has ever been saved.
+                          ? "当前的产物形态和分类下没有收藏的配方，切换筛选或者清除筛选看看。"
+                          : "这一类还没有配方。"}
                   </EmptyDescription>
                 </EmptyHeader>
                 {filtersApplied ? (
@@ -799,6 +900,7 @@ export function DesignRecipeGallery({
                     onUseInComposer={onUseInComposer}
                     onStart={setStartTarget}
                     onOpenDetail={setDetailTarget}
+                    onToggleFavorite={onToggleFavorite}
                   />
                 ))}
               </div>
@@ -806,13 +908,14 @@ export function DesignRecipeGallery({
           </>
         )}
       </div>
-      {detailTarget ? (
+      {detailRecipe ? (
         <RecipeDetailDialog
-          key={detailTarget.slug}
-          recipe={detailTarget}
+          key={detailRecipe.slug}
+          recipe={detailRecipe}
           onClose={() => setDetailTarget(null)}
           onUseInComposer={onUseInComposer}
           onStart={setStartTarget}
+          onToggleFavorite={onToggleFavorite}
         />
       ) : null}
       {startTarget ? (

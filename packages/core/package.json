@@ -109,6 +109,7 @@
     "./designs": "./designs/index.ts",
     "./designs/keys": "./designs/keys.ts",
     "./designs/queries": "./designs/queries.ts",
+    "./designs/mutations": "./designs/mutations.ts",
     "./designs/schema": "./designs/schema.ts",
     "./designs/agent-ui": "./designs/agent-ui.ts",
     "./plugins": "./plugins/index.ts",

@@ -767,6 +767,8 @@ export interface BuiltinDesignSystemDetail extends BuiltinDesignSystem {
 }
 
 export interface DesignScenarioRecipe {
+  /** Catalogue row id. Favourite toggles address it. */
+  id: string;
   slug: string;
   title: string;
   summary: string;
@@ -788,10 +790,17 @@ export interface DesignScenarioRecipe {
   /** `builtin`, `workspace` or `community`. */
   origin: string;
   published_at: string;
+  /** Whether the signed-in requester has saved this recipe. */
+  favorited: boolean;
 }
 
 export interface ListDesignScenarioRecipesResponse {
   recipes: DesignScenarioRecipe[];
+}
+
+/** Result of saving or unsaving a recipe: the state the server now holds. */
+export interface DesignScenarioRecipeFavoriteResponse {
+  favorited: boolean;
 }
 
 export type DesignDocumentStatus =

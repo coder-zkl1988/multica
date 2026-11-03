@@ -34,6 +34,7 @@ import {
   DesignScenarioRecipeSchema,
   ListDesignScenarioRecipesResponseSchema,
   EMPTY_LIST_DESIGN_SCENARIO_RECIPES_RESPONSE,
+  DesignScenarioRecipeFavoriteResponseSchema,
   DesignDraftSchema,
   ListDesignDraftsResponseSchema,
   ChatDraftRestoresResponseSchema,
@@ -1674,6 +1675,68 @@ describe("DesignScenarioRecipeSchema", () => {
 
     expect(parsed.recipes).toHaveLength(1);
     expect(parsed.recipes[0]?.slug).toBe("keeps-me");
+  });
+
+  it("reads the save state and row id, defaulting them absent on an older backend", () => {
+    // A backend from before the favourite feature sends neither field. The
+    // card still renders; it just cannot be saved.
+    const older = DesignScenarioRecipeSchema.parse({
+      slug: "crm-console",
+      title: "CRM 控制台",
+      summary: "",
+      category: "业务系统",
+      mode: "prototype",
+      prompt: "p",
+      origin: "builtin",
+    });
+    expect(older.id).toBe("");
+    expect(older.favorited).toBe(false);
+
+    const current = DesignScenarioRecipeSchema.parse({
+      id: "8f0f0b9e-0000-4000-8000-000000000000",
+      slug: "crm-console",
+      title: "CRM 控制台",
+      summary: "",
+      category: "业务系统",
+      mode: "prototype",
+      prompt: "p",
+      origin: "builtin",
+      favorited: true,
+    });
+    expect(current.id).toBe("8f0f0b9e-0000-4000-8000-000000000000");
+    expect(current.favorited).toBe(true);
+
+    // A non-boolean flag must not read as saved by truthiness.
+    expect(
+      DesignScenarioRecipeSchema.parse({
+        slug: "crm-console",
+        title: "CRM 控制台",
+        summary: "",
+        category: "业务系统",
+        mode: "prototype",
+        prompt: "p",
+        origin: "builtin",
+        favorited: "yes",
+      }).favorited,
+    ).toBe(false);
+  });
+
+  it("reads the toggle result and leaves an absent flag for the caller to fill", () => {
+    expect(DesignScenarioRecipeFavoriteResponseSchema.parse({ favorited: true }).favorited).toBe(true);
+    expect(DesignScenarioRecipeFavoriteResponseSchema.parse({ favorited: false }).favorited).toBe(false);
+    // A 204 or an unexpected body must not read as "false": absence is not a
+    // server disagreement, and the caller knows the direction it asked for.
+    expect(DesignScenarioRecipeFavoriteResponseSchema.parse({}).favorited).toBeUndefined();
+    // A garbage flag fails the row, and the parse fallback is still absence
+    // rather than "false" for the same reason.
+    expect(
+      parseWithFallback(
+        { favorited: "yes" },
+        DesignScenarioRecipeFavoriteResponseSchema,
+        {} as { favorited?: boolean },
+        { endpoint: "POST /api/design-recipes/{id}/favorite" },
+      ).favorited,
+    ).toBeUndefined();
   });
 
   it("degrades a malformed catalogue to an empty catalogue", () => {

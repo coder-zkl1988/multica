@@ -5,6 +5,7 @@ import { designDocumentArtifactMode } from "./design-artifact-mode";
 
 function published(slug: string, mode: string): DesignScenarioRecipe {
   return {
+    id: `id-${slug}`,
     slug,
     title: slug,
     summary: "",
@@ -18,6 +19,7 @@ function published(slug: string, mode: string): DesignScenarioRecipe {
     preview_url: "",
     origin: "workspace",
     published_at: "2026-09-01T00:00:00Z",
+    favorited: false,
   };
 }
 

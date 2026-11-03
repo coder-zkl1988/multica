@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
@@ -21,6 +22,9 @@ import (
 // create call, and the recipe only decides what it is pre-filled with.
 
 type DesignScenarioRecipeResponse struct {
+	// The catalogue row's id. Favourite toggles address it, so two rows that
+	// share a slug (a workspace's override and its built-in) stay distinct.
+	ID          string `json:"id"`
 	Slug        string `json:"slug"`
 	Title       string `json:"title"`
 	Summary     string `json:"summary"`
@@ -42,12 +46,15 @@ type DesignScenarioRecipeResponse struct {
 	PreviewURL  string `json:"preview_url,omitempty"`
 	Origin      string `json:"origin"`
 	PublishedAt string `json:"published_at,omitempty"`
+	// Whether the requester has saved this recipe. Read on every listing so a
+	// reload restores the saved filter without a second round trip.
+	Favorited bool `json:"favorited"`
 }
 
 // ListDesignScenarioRecipes returns the published catalogue visible to this
 // workspace: everything built in, plus the workspace's own.
 func (h *Handler) ListDesignScenarioRecipes(w http.ResponseWriter, r *http.Request) {
-	workspaceUUID, _, ok := h.projectDesignSystemRequestScope(w, r)
+	workspaceUUID, requesterID, ok := h.projectDesignSystemRequestScope(w, r)
 	if !ok {
 		return
 	}
@@ -55,6 +62,19 @@ func (h *Handler) ListDesignScenarioRecipes(w http.ResponseWriter, r *http.Reque
 	if err != nil {
 		writeProjectDesignSystemError(w, http.StatusInternalServerError, "lookup_failed", "failed to load the design recipe catalogue")
 		return
+	}
+	// Favourite state rides the listing instead of a second endpoint: the
+	// gallery already needs the whole catalogue, and a separate favourites
+	// list would make the Saved filter wait on a second request and would
+	// have to be merged by the client anyway.
+	favoriteIDs, err := h.Queries.ListDesignScenarioRecipeFavorites(r.Context(), requesterID)
+	if err != nil {
+		writeProjectDesignSystemError(w, http.StatusInternalServerError, "lookup_failed", "failed to load saved design recipes")
+		return
+	}
+	favorited := make(map[pgtype.UUID]bool, len(favoriteIDs))
+	for _, id := range favoriteIDs {
+		favorited[id] = true
 	}
 	// A workspace recipe shadows a built-in with the same slug: the workspace
 	// deliberately overrode it, so showing both would be confusing and would
@@ -74,20 +94,22 @@ func (h *Handler) ListDesignScenarioRecipes(w http.ResponseWriter, r *http.Reque
 	}
 	recipes := make([]DesignScenarioRecipeResponse, 0, len(order))
 	for _, slug := range order {
-		recipes = append(recipes, designScenarioRecipeResponse(bySlug[slug]))
+		recipes = append(recipes, designScenarioRecipeResponse(bySlug[slug], favorited))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"recipes": recipes})
 }
 
-func designScenarioRecipeResponse(row db.DesignScenarioRecipe) DesignScenarioRecipeResponse {
+func designScenarioRecipeResponse(row db.DesignScenarioRecipe, favorited map[pgtype.UUID]bool) DesignScenarioRecipeResponse {
 	response := DesignScenarioRecipeResponse{
-		Slug:     row.Slug,
-		Title:    row.Title,
-		Summary:  row.Summary,
-		Category: row.Category,
-		Mode:     row.Mode,
-		Prompt:   row.Prompt,
-		Origin:   row.Origin,
+		ID:        uuidToString(row.ID),
+		Favorited: favorited[row.ID],
+		Slug:      row.Slug,
+		Title:     row.Title,
+		Summary:   row.Summary,
+		Category:  row.Category,
+		Mode:      row.Mode,
+		Prompt:    row.Prompt,
+		Origin:    row.Origin,
 	}
 	if row.Subcategory.Valid {
 		response.Subcategory = row.Subcategory.String
@@ -148,4 +170,70 @@ func (h *Handler) resolveDesignDocumentRecipe(
 		return "", false
 	}
 	return row.Slug, true
+}
+
+// FavoriteDesignScenarioRecipe saves a catalogue recipe for the requester.
+// Toggle-style and idempotent: saving an already-saved recipe is the same
+// state, not an error, so a retried request from a flaky network cannot leave
+// the button in a state the server disagrees with.
+func (h *Handler) FavoriteDesignScenarioRecipe(w http.ResponseWriter, r *http.Request) {
+	workspaceUUID, requesterID, ok := h.projectDesignSystemRequestScope(w, r)
+	if !ok {
+		return
+	}
+	recipeUUID, ok := h.resolveFavoriteRecipe(w, r, workspaceUUID)
+	if !ok {
+		return
+	}
+	if err := h.Queries.AddDesignScenarioRecipeFavorite(r.Context(), db.AddDesignScenarioRecipeFavoriteParams{
+		UserID:   requesterID,
+		RecipeID: recipeUUID,
+	}); err != nil {
+		writeProjectDesignSystemError(w, http.StatusInternalServerError, "favorite_failed", "failed to save the design recipe")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"favorited": true})
+}
+
+// UnfavoriteDesignScenarioRecipe removes the requester's save. Also
+// idempotent, and it never reports whether a row existed: the caller only
+// needs the resulting state.
+func (h *Handler) UnfavoriteDesignScenarioRecipe(w http.ResponseWriter, r *http.Request) {
+	workspaceUUID, requesterID, ok := h.projectDesignSystemRequestScope(w, r)
+	if !ok {
+		return
+	}
+	recipeUUID, ok := h.resolveFavoriteRecipe(w, r, workspaceUUID)
+	if !ok {
+		return
+	}
+	if err := h.Queries.RemoveDesignScenarioRecipeFavorite(r.Context(), db.RemoveDesignScenarioRecipeFavoriteParams{
+		UserID:   requesterID,
+		RecipeID: recipeUUID,
+	}); err != nil {
+		writeProjectDesignSystemError(w, http.StatusInternalServerError, "unfavorite_failed", "failed to remove the saved design recipe")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"favorited": false})
+}
+
+// resolveFavoriteRecipe applies the same visibility gate the listing uses, so
+// a recipe the workspace cannot see cannot be saved by naming its id.
+func (h *Handler) resolveFavoriteRecipe(w http.ResponseWriter, r *http.Request, workspaceUUID pgtype.UUID) (pgtype.UUID, bool) {
+	recipeUUID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "id"), "recipe_id")
+	if !ok {
+		return pgtype.UUID{}, false
+	}
+	if _, err := h.Queries.GetPublishedDesignScenarioRecipeByID(r.Context(), db.GetPublishedDesignScenarioRecipeByIDParams{
+		ID:          recipeUUID,
+		WorkspaceID: workspaceUUID,
+	}); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeProjectDesignSystemError(w, http.StatusNotFound, "recipe_not_found", "design recipe not found")
+			return pgtype.UUID{}, false
+		}
+		writeProjectDesignSystemError(w, http.StatusInternalServerError, "recipe_lookup_failed", "failed to resolve the design recipe")
+		return pgtype.UUID{}, false
+	}
+	return recipeUUID, true
 }

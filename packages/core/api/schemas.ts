@@ -3191,6 +3191,9 @@ export const EMPTY_BUILTIN_DESIGN_SYSTEM_DETAIL: BuiltinDesignSystemDetail = {
 };
 
 export const DesignScenarioRecipeSchema = z.object({
+  // Catalogues from a backend older than the favourite feature have no id;
+  // the row is still showable, it just cannot be saved.
+  id: z.string().catch("").default(""),
   slug: z.string().min(1),
   title: z.string().catch("").default(""),
   summary: z.string().catch("").default(""),
@@ -3204,6 +3207,14 @@ export const DesignScenarioRecipeSchema = z.object({
   preview_url: z.string().catch("").default(""),
   origin: z.string().catch("").default(""),
   published_at: z.string().catch("").default(""),
+  favorited: z.boolean().catch(false).default(false),
+}).loose();
+
+// The state the server now holds. Left optional rather than defaulted: a
+// backend that answers 204 (or omits the field) did not disagree with the
+// request, and the caller knows the direction it asked for.
+export const DesignScenarioRecipeFavoriteResponseSchema = z.object({
+  favorited: z.boolean().optional(),
 }).loose();
 
 export const ListDesignScenarioRecipesResponseSchema = z.object({

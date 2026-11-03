@@ -142,6 +142,7 @@ function createdDocument(overrides: Record<string, unknown> = {}) {
 }
 
 const RECIPE = {
+  id: "recipe-1",
   slug: "crm-console",
   title: "CRM 控制台",
   summary: "带筛选与批量操作的客户列表",
@@ -155,6 +156,7 @@ const RECIPE = {
   preview_url: "",
   origin: "builtin",
   published_at: "2026-08-16T00:00:00Z",
+  favorited: false,
 };
 
 function renderComposer(

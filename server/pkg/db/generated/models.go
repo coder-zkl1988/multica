@@ -1061,6 +1061,13 @@ type DesignScenarioRecipe struct {
 	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
 }
 
+type DesignScenarioRecipeFavorite struct {
+	ID        pgtype.UUID        `json:"id"`
+	UserID    pgtype.UUID        `json:"user_id"`
+	RecipeID  pgtype.UUID        `json:"recipe_id"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
 type DesignSystemProfile struct {
 	ID               pgtype.UUID        `json:"id"`
 	WorkspaceID      pgtype.UUID        `json:"workspace_id"`

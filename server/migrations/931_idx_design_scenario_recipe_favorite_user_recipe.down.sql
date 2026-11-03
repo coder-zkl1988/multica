@@ -1,0 +1,1 @@
+DROP INDEX CONCURRENTLY IF EXISTS idx_design_scenario_recipe_favorite_user_recipe;
