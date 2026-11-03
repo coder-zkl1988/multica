@@ -17,6 +17,7 @@ function revision(over: Partial<DesignDocumentRevisionSummary>): DesignDocumentR
     is_saved: false,
     page_count: 1,
     flow_count: 0,
+    slide_count: 0,
     created_at: "2026-08-22T10:00:00Z",
     ...over,
   };

@@ -2364,6 +2364,7 @@ const DesignDocumentRevisionSummaryShape = {
   is_saved: z.boolean().catch(false).default(false),
   page_count: z.number().int().catch(0).default(0),
   flow_count: z.number().int().catch(0).default(0),
+  slide_count: z.number().int().catch(0).default(0),
   created_at: z.string().catch("").default(""),
 };
 
@@ -2396,6 +2397,21 @@ const DesignDocumentFlowSchema = z.object({
   title: z.string().catch("").default(""),
 }).loose();
 
+const DesignDocumentSlideSchema = z.object({
+  index: z.number().int().catch(0).default(0),
+  label: z.string().catch("").default(""),
+  id: z.string().catch("").default(""),
+}).loose();
+
+// Non-object rows are dropped instead of collapsing the whole projection, so
+// one rotted slide cannot hide the rest of the deck.
+const DesignDocumentSlidesSchema = z.preprocess(
+  (value) => Array.isArray(value)
+    ? value.filter((row) => row !== null && typeof row === "object")
+    : [],
+  z.array(DesignDocumentSlideSchema).catch([]).default([]),
+);
+
 const DesignDocumentPreviewTargetSchema = z.object({
   id: z.string().catch("").default(""),
   kind: z.string().catch("").default(""),
@@ -2419,6 +2435,7 @@ export const DesignDocumentRevisionSchema = z.object({
   prototype_entry: z.string().catch("").default(""),
   pages: z.array(DesignDocumentPageSchema).catch([]).default([]),
   flows: z.array(DesignDocumentFlowSchema).catch([]).default([]),
+  slides: DesignDocumentSlidesSchema,
   preview_targets: z.array(DesignDocumentPreviewTargetSchema).catch([]).default([]),
   files: z.array(DesignDocumentFileSchema).catch([]).default([]),
   resource_base_path: z.string().catch("").default(""),
@@ -2439,6 +2456,7 @@ export const EMPTY_DESIGN_DOCUMENT_REVISION: DesignDocumentRevision = {
   is_saved: false,
   page_count: 0,
   flow_count: 0,
+  slide_count: 0,
   created_at: "",
   brief: null,
   coverage: null,
@@ -2448,6 +2466,7 @@ export const EMPTY_DESIGN_DOCUMENT_REVISION: DesignDocumentRevision = {
   prototype_entry: "",
   pages: [],
   flows: [],
+  slides: [],
   preview_targets: [],
   files: [],
   resource_base_path: "",
@@ -2494,6 +2513,8 @@ export const EMPTY_DESIGN_DOCUMENT_SHARE: DesignDocumentShare = {
 export const DesignDocumentShareExchangeSchema = z.object({
   document_title: z.string().catch("").default(""),
   pages: z.array(DesignDocumentPageSchema).catch([]).default([]),
+  slides: DesignDocumentSlidesSchema,
+  slide_count: z.number().int().catch(0).default(0),
   prototype_entry: z.string().catch("").default(""),
   resource_base_path: z.string().catch("").default(""),
   resource_access_token: z.string().catch("").default(""),
@@ -2503,6 +2524,8 @@ export const DesignDocumentShareExchangeSchema = z.object({
 export const EMPTY_DESIGN_DOCUMENT_SHARE_EXCHANGE: DesignDocumentShareExchange = {
   document_title: "",
   pages: [],
+  slides: [],
+  slide_count: 0,
   prototype_entry: "",
   resource_base_path: "",
   resource_access_token: "",

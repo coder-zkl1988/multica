@@ -1063,6 +1063,17 @@ export interface DesignDocumentFlow {
   title: string;
 }
 
+/**
+ * One deck slide as the manifest projects it (`multica.design-document/v1`).
+ * Decks are single-file prototypes, so a non-deck revision carries none.
+ */
+export interface DesignDocumentSlide {
+  /** 1-based slide number in document order. */
+  index: number;
+  label: string;
+  id: string;
+}
+
 export type DesignDocumentAdjustmentScopeKind = "document" | "page" | "state" | "overlay" | "block";
 
 /**
@@ -1152,6 +1163,8 @@ export interface DesignDocumentRevisionSummary {
   is_saved: boolean;
   page_count: number;
   flow_count: number;
+  /** Slides a deck manifest projects; 0 for a non-deck revision. */
+  slide_count: number;
   created_at: string;
 }
 
@@ -1173,6 +1186,8 @@ export interface DesignDocumentRevision extends DesignDocumentRevisionSummary {
   prototype_entry: string;
   pages: DesignDocumentPage[];
   flows: DesignDocumentFlow[];
+  /** Deck slides; always an array, empty for a non-deck revision. */
+  slides: DesignDocumentSlide[];
   preview_targets: DesignDocumentPreviewTarget[];
   /** The package's artifact index: the source view and per-file download. */
   files: DesignDocumentFileEntry[];
@@ -1687,6 +1702,10 @@ export interface ListDesignDocumentSharesResponse {
 export interface DesignDocumentShareExchange {
   document_title: string;
   pages: DesignDocumentPage[];
+  /** Deck slides; always an array, empty for a non-deck revision. */
+  slides: DesignDocumentSlide[];
+  /** Slides the shared revision's deck manifest projects; 0 for a non-deck revision. */
+  slide_count: number;
   /** Package path of the entry prototype document; empty falls back to the first page's entry. */
   prototype_entry: string;
   /** Server-relative prefix; append a package path such as `prototype/index.html`. */

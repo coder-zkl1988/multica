@@ -216,6 +216,48 @@ describe("Design Document revision schemas", () => {
     });
     expect(parsed.revisions.map((row) => row.id)).toEqual(["revision-1", "revision-2"]);
   });
+
+  it("keeps a deck revision's slides and count", () => {
+    const parsed = DesignDocumentRevisionSchema.parse({
+      ...revision,
+      slide_count: 2,
+      slides: [
+        { index: 1, label: "01 Title", id: "title" },
+        { index: 2, label: "02 Why", id: "why" },
+      ],
+    });
+    expect(parsed.slide_count).toBe(2);
+    expect(parsed.slides).toEqual([
+      { index: 1, label: "01 Title", id: "title" },
+      { index: 2, label: "02 Why", id: "why" },
+    ]);
+  });
+
+  it("degrades missing, null and malformed slides instead of throwing", () => {
+    const missing = DesignDocumentRevisionSchema.parse(revision);
+    expect(missing.slides).toEqual([]);
+    expect(missing.slide_count).toBe(0);
+
+    const nulled = DesignDocumentRevisionSchema.parse({ ...revision, slides: null, slide_count: "two" });
+    expect(nulled.slides).toEqual([]);
+    expect(nulled.slide_count).toBe(0);
+
+    // A non-object row is dropped, and a rotted field inside a row degrades to
+    // its own default without taking the good rows with it.
+    const malformed = DesignDocumentRevisionSchema.parse({
+      ...revision,
+      slides: [
+        { index: "one", label: 7, id: null },
+        "garbage",
+        { index: 2, label: "02 Why", id: "why" },
+      ],
+      slide_count: 2,
+    });
+    expect(malformed.slides).toEqual([
+      { index: 0, label: "", id: "" },
+      { index: 2, label: "02 Why", id: "why" },
+    ]);
+  });
 });
 
 describe("project resource schemas", () => {
@@ -495,6 +537,24 @@ describe("Design document share schemas", () => {
     expect(parsed.pages).toEqual([]);
     expect(parsed.resource_base_path).toBe("/api/design-document-previews/ws/rev/files");
     expect(parsed.resource_access_token).toBe("token");
+  });
+
+  it("keeps a shared deck's slides and degrades a rotted projection", () => {
+    const parsed = DesignDocumentShareExchangeSchema.parse({
+      document_title: "Pitch deck",
+      pages: [],
+      slides: [{ index: 1, label: "01 Title", id: "title" }],
+      slide_count: 1,
+    });
+    expect(parsed.slides).toEqual([{ index: 1, label: "01 Title", id: "title" }]);
+    expect(parsed.slide_count).toBe(1);
+
+    const degraded = DesignDocumentShareExchangeSchema.parse({
+      document_title: "Pitch deck",
+      slides: "nope",
+    });
+    expect(degraded.slides).toEqual([]);
+    expect(degraded.slide_count).toBe(0);
   });
 
   it("parses an unparsable exchange down to the empty fallback", () => {

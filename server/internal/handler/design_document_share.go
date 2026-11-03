@@ -47,12 +47,16 @@ type ListDesignDocumentSharesResponse struct {
 // minimal on purpose: a title for the tab, the page index and entry the frame
 // needs to boot, and a capability scoped to this visit.
 type DesignDocumentShareExchangeResponse struct {
-	DocumentTitle           string                          `json:"document_title"`
-	Pages                   []designdocument.PageIndexEntry `json:"pages"`
-	PrototypeEntry          string                          `json:"prototype_entry"`
-	ResourceBasePath        string                          `json:"resource_base_path"`
-	ResourceAccessToken     string                          `json:"resource_access_token"`
-	ResourceAccessExpiresAt string                          `json:"resource_access_expires_at"`
+	DocumentTitle string `json:"document_title"`
+	// Pages is the manifest page projection; Slides is the deck projection and
+	// stays empty for a non-deck package.
+	Pages                   []designdocument.PageIndexEntry  `json:"pages"`
+	Slides                  []designdocument.SlideIndexEntry `json:"slides"`
+	SlideCount              int                              `json:"slide_count"`
+	PrototypeEntry          string                           `json:"prototype_entry"`
+	ResourceBasePath        string                           `json:"resource_base_path"`
+	ResourceAccessToken     string                           `json:"resource_access_token"`
+	ResourceAccessExpiresAt string                           `json:"resource_access_expires_at"`
 }
 
 func designDocumentShareResponse(document db.DesignDocument, share db.DesignDocumentShare) DesignDocumentShareResponse {
@@ -259,12 +263,18 @@ func (h *Handler) GetDesignDocumentShareExchange(w http.ResponseWriter, r *http.
 	if pages == nil {
 		pages = []designdocument.PageIndexEntry{}
 	}
+	slides := manifest.Slides
+	if slides == nil {
+		slides = []designdocument.SlideIndexEntry{}
+	}
 	// The capability is minted per visit and expires on its own; a cached
 	// exchange body would hand later visitors a stale, already-expired token.
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, DesignDocumentShareExchangeResponse{
 		DocumentTitle:  document.Title,
 		Pages:          pages,
+		Slides:         slides,
+		SlideCount:     len(slides),
 		PrototypeEntry: manifest.PrototypeEntry,
 		ResourceBasePath: designDocumentPreviewResourceBasePath(
 			uuidToString(share.WorkspaceID), uuidToString(revision.ID), revision.ContentDigest, accessToken,

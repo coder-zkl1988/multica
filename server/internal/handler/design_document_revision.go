@@ -54,7 +54,10 @@ type DesignDocumentRevisionSummaryResponse struct {
 	IsSaved        bool            `json:"is_saved"`
 	PageCount      int             `json:"page_count"`
 	FlowCount      int             `json:"flow_count"`
-	CreatedAt      string          `json:"created_at"`
+	// SlideCount is the number of slides a deck manifest projects. Decks are
+	// additive and non-deck manifests carry no slides, so it stays 0 there.
+	SlideCount int    `json:"slide_count"`
+	CreatedAt  string `json:"created_at"`
 }
 
 // DesignDocumentRevisionResponse is one revision in full: the agent's brief and
@@ -72,9 +75,10 @@ type DesignDocumentRevisionResponse struct {
 	Critique       json.RawMessage `json:"critique"`
 	PrototypeEntry string          `json:"prototype_entry"`
 	// Manifest projections. Never nil so a client can index into them.
-	Pages          []designdocument.PageIndexEntry `json:"pages"`
-	Flows          []designdocument.FlowIndexEntry `json:"flows"`
-	PreviewTargets []designdocument.PreviewTarget  `json:"preview_targets"`
+	Pages          []designdocument.PageIndexEntry  `json:"pages"`
+	Flows          []designdocument.FlowIndexEntry  `json:"flows"`
+	Slides         []designdocument.SlideIndexEntry `json:"slides"`
+	PreviewTargets []designdocument.PreviewTarget   `json:"preview_targets"`
 	// Files is the package's artifact index, so the workspace can offer a
 	// source view and per-file download over the same capability route the
 	// preview frame already uses.
@@ -154,6 +158,7 @@ func (h *Handler) GetDesignDocumentRevision(w http.ResponseWriter, r *http.Reque
 		PrototypeEntry:                        manifest.PrototypeEntry,
 		Pages:                                 manifest.Pages,
 		Flows:                                 manifest.Flows,
+		Slides:                                manifest.Slides,
 		PreviewTargets:                        manifest.PreviewTargets,
 		Files:                                 manifest.Files,
 		ResourceBasePath: designDocumentPreviewResourceBasePath(
@@ -167,6 +172,9 @@ func (h *Handler) GetDesignDocumentRevision(w http.ResponseWriter, r *http.Reque
 	}
 	if response.Flows == nil {
 		response.Flows = []designdocument.FlowIndexEntry{}
+	}
+	if response.Slides == nil {
+		response.Slides = []designdocument.SlideIndexEntry{}
 	}
 	if response.PreviewTargets == nil {
 		response.PreviewTargets = []designdocument.PreviewTarget{}
@@ -293,6 +301,7 @@ func designDocumentRevisionSummary(document db.DesignDocument, revision db.Desig
 	if json.Unmarshal(revision.Manifest, &manifest) == nil {
 		summary.PageCount = len(manifest.Pages)
 		summary.FlowCount = len(manifest.Flows)
+		summary.SlideCount = len(manifest.Slides)
 	}
 	if revision.CreatedAt.Valid {
 		summary.CreatedAt = revision.CreatedAt.Time.UTC().Format(time.RFC3339Nano)
