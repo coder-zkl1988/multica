@@ -1,7 +1,13 @@
 // @vitest-environment node
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { designDocumentRevisionOptions } from "./queries";
+vi.mock("../api", () => ({
+  api: { listDesignDocumentsInWorkspace: vi.fn() },
+}));
+
+import { api } from "../api";
+import { designKeys } from "./keys";
+import { designDocumentRevisionOptions, designDocumentWorkspaceListOptions } from "./queries";
 
 /**
  * The server issues a design document preview capability with a 30-minute
@@ -46,5 +52,57 @@ describe("designDocumentRevisionOptions", () => {
     expect(designDocumentRevisionOptions("ws-1", "", "rev-1").enabled).toBe(false);
     expect(designDocumentRevisionOptions("ws-1", "doc-1", "").enabled).toBe(false);
     expect(designDocumentRevisionOptions("ws-1", "doc-1", "rev-1").enabled).toBe(true);
+  });
+});
+
+describe("designDocumentWorkspaceListOptions", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(api.listDesignDocumentsInWorkspace).mockResolvedValue({ documents: [] } as never);
+  });
+
+  it("passes the limit through to the endpoint", async () => {
+    const options = designDocumentWorkspaceListOptions("ws-1", 10);
+    await options.queryFn?.(undefined as never);
+
+    expect(api.listDesignDocumentsInWorkspace).toHaveBeenCalledWith(10);
+  });
+
+  it("keeps the unlimited picker read when no limit is given", async () => {
+    const options = designDocumentWorkspaceListOptions("ws-1");
+    await options.queryFn?.(undefined as never);
+
+    expect(api.listDesignDocumentsInWorkspace).toHaveBeenCalledWith(undefined);
+  });
+
+  it("caches differently limited reads apart, under the workspace key", () => {
+    // The home page's newest-ten and the create-project picker's full list are
+    // different answers; sharing a cache slot would show one where the other
+    // was requested.
+    expect(designDocumentWorkspaceListOptions("ws-1", 10).queryKey).not.toEqual(
+      designDocumentWorkspaceListOptions("ws-1").queryKey,
+    );
+    expect(designDocumentWorkspaceListOptions("ws-1", 10).queryKey).not.toEqual(
+      designDocumentWorkspaceListOptions("ws-1", 25).queryKey,
+    );
+    // Both stay under the documents prefix, so a document write invalidates
+    // them together, and both carry the workspace.
+    for (const key of [
+      designDocumentWorkspaceListOptions("ws-1", 10).queryKey,
+      designDocumentWorkspaceListOptions("ws-1").queryKey,
+    ]) {
+      expect(key).toEqual(expect.arrayContaining(["designs", "ws-1", "documents", "workspace"]));
+    }
+    expect(designDocumentWorkspaceListOptions("ws-2", 10).queryKey).not.toEqual(
+      designDocumentWorkspaceListOptions("ws-1", 10).queryKey,
+    );
+  });
+
+  it("stays idle without a workspace", () => {
+    expect(designDocumentWorkspaceListOptions("", 10).enabled).toBe(false);
+    expect(designDocumentWorkspaceListOptions("ws-1", 10).enabled).toBe(true);
+    expect(designDocumentWorkspaceListOptions("ws-1", 10).queryKey).toEqual(
+      designKeys.documentsInWorkspace("ws-1", 10),
+    );
   });
 });

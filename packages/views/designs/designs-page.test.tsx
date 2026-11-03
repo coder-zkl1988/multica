@@ -12,6 +12,7 @@ const {
   listAgents,
   listDesignDocuments,
   listDesignDocumentsForWorkspaceRepository,
+  listDesignDocumentsInWorkspace,
   listDesignDrafts,
   listDesignFiles,
   listDesignFolders,
@@ -31,6 +32,7 @@ const {
   listAgents: vi.fn(),
   listDesignDocuments: vi.fn(),
   listDesignDocumentsForWorkspaceRepository: vi.fn(),
+  listDesignDocumentsInWorkspace: vi.fn(),
   listDesignDrafts: vi.fn(),
   listDesignFiles: vi.fn(),
   listDesignFolders: vi.fn(),
@@ -57,6 +59,7 @@ vi.mock("@multica/core/api", () => ({
     listAgents,
     listDesignDocuments,
     listDesignDocumentsForWorkspaceRepository,
+    listDesignDocumentsInWorkspace,
     listDesignDrafts,
     listDesignFiles,
     listDesignFolders,
@@ -191,6 +194,7 @@ describe("DesignsPage", () => {
     listAgents.mockReset();
     listDesignDocuments.mockReset();
     listDesignDocumentsForWorkspaceRepository.mockReset();
+    listDesignDocumentsInWorkspace.mockReset();
     listDesignDrafts.mockReset();
     listDesignFiles.mockReset();
     listDesignFolders.mockReset();
@@ -205,6 +209,7 @@ describe("DesignsPage", () => {
     listAgents.mockResolvedValue([]);
     listDesignDocuments.mockResolvedValue({ documents: [] });
     listDesignDocumentsForWorkspaceRepository.mockResolvedValue({ documents: [] });
+    listDesignDocumentsInWorkspace.mockResolvedValue({ documents: [] });
     getDesignDocumentRevision.mockImplementation(async (_documentId: string, id: string) => ({
       id,
       pages: (id === "revision-1" ? ["home", "orders"] : ["home", "orders", "draft-only"]).map((page) => ({
@@ -481,6 +486,9 @@ describe("DesignsPage", () => {
       { ...document, id: "document-draft", title: "未保存客户表单", status: "draft", saved_revision_id: "" },
     ];
     listDesignDocuments.mockResolvedValue({ documents: scope === "project" ? documents : [] });
+    // The 首页 tab's 最近生成 wall reads the workspace-wide listing now; the
+    // home tab must offer the same documents the project grid does.
+    listDesignDocumentsInWorkspace.mockResolvedValue({ documents });
     listDesignDocumentsForWorkspaceRepository.mockResolvedValue({ documents: scope === "repository" ? documents : [] });
     listDesignRepositories.mockResolvedValue({ repositories: [{
       id: "resource-h5", project_id: "", project_title: "", label: "crm-h5", description: "CRM H5",

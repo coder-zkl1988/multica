@@ -87,6 +87,23 @@ describe("ApiClient design documents", () => {
     ]);
   });
 
+  it("asks the workspace listing for a bounded number of rows when given a limit", async () => {
+    const document = { id: "document-1", project_id: "project-1", title: "Checkout", created_at: "2026-08-14T00:00:00Z", updated_at: "2026-08-14T00:00:00Z" };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ documents: [document] }), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ documents: [document] }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+    // The home page's "recent" strip reads the newest ten; the create-project
+    // picker reads the whole workspace. Both are the same endpoint.
+    await expect(client.listDesignDocumentsInWorkspace(10)).resolves.toEqual({ documents: [expect.objectContaining(document)] });
+    await expect(client.listDesignDocumentsInWorkspace()).resolves.toEqual({ documents: [expect.objectContaining(document)] });
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "https://api.example.test/api/design-documents?limit=10",
+      "https://api.example.test/api/design-documents",
+    ]);
+  });
+
   it("adjusts, saves, discards and restores a Design Document through its lifecycle routes", async () => {
     const document = { id: "document-1", project_id: "project-1", title: "Checkout", draft_revision_id: "revision-1", saved_revision_id: "revision-1", created_at: "2026-08-14T00:00:00Z", updated_at: "2026-08-14T00:00:00Z" };
     const ok = () => new Response(JSON.stringify(document), { status: 200, headers: { "Content-Type": "application/json" } });

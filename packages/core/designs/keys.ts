@@ -49,7 +49,10 @@ export const designKeys = {
   // Under the same "documents" prefix, so the task-lifecycle invalidation of
   // that prefix refreshes the picker along with the per-project lists. The
   // literal "workspace" segment cannot collide with a project UUID.
-  documentsInWorkspace: (wsId: string) => ["designs", wsId, "documents", "workspace"] as const,
+  // The limit is part of the key: the home page's newest-ten cache and the
+  // picker's unlimited cache are different answers to different questions.
+  documentsInWorkspace: (wsId: string, limit?: number) =>
+    ["designs", wsId, "documents", "workspace", limit ?? "all"] as const,
   // Kept under the same "documents" prefix so a document write invalidates the
   // issue's view of it along with the project's.
   documentsByIssue: (wsId: string, issueId: string) =>

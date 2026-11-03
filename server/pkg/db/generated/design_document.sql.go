@@ -1123,14 +1123,23 @@ const listDesignDocumentsInWorkspace = `-- name: ListDesignDocumentsInWorkspace 
 SELECT id, workspace_id, project_id, project_resource_id, issue_id, title, platform, recipe, draft_revision_id, saved_revision_id, current_agent_id, active_task_id, active_operation, input_snapshot, last_error, created_by, created_at, updated_at, saved_at, workspace_repository_id FROM design_document
 WHERE workspace_id = $1
 ORDER BY updated_at DESC
+LIMIT $2::bigint
 `
 
-// The workspace-wide list, most recently touched first. The project create
-// modal's design picker is the one caller: it must offer documents from every
-// project, because the project being created does not own any yet. Backed by
-// idx_design_document_workspace — add an index migration if that ever changes.
-func (q *Queries) ListDesignDocumentsInWorkspace(ctx context.Context, workspaceID pgtype.UUID) ([]DesignDocument, error) {
-	rows, err := q.db.Query(ctx, listDesignDocumentsInWorkspace, workspaceID)
+type ListDesignDocumentsInWorkspaceParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	RowLimit    pgtype.Int8 `json:"row_limit"`
+}
+
+// The workspace-wide list, most recently touched first. Callers include the
+// project create modal's design picker, which must offer documents from every
+// project, and the home page's "recent" strip, which only needs the newest few.
+// A NULL row_limit means every row, which is the picker's contract; the home
+// page passes a bounded limit so it does not read the whole history to render
+// ten cards. Backed by idx_design_document_workspace — add an index migration
+// if that ever changes.
+func (q *Queries) ListDesignDocumentsInWorkspace(ctx context.Context, arg ListDesignDocumentsInWorkspaceParams) ([]DesignDocument, error) {
+	rows, err := q.db.Query(ctx, listDesignDocumentsInWorkspace, arg.WorkspaceID, arg.RowLimit)
 	if err != nil {
 		return nil, err
 	}

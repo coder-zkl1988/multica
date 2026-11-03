@@ -5313,9 +5313,14 @@ export class ApiClient {
    * Every design document in the workspace, most recently touched first. The
    * create-project modal's design picker reads this: the project being created
    * owns no documents yet, so a per-project list has nothing to offer it.
+   *
+   * `limit` bounds the answer server-side so the home page's "recent" strip
+   * can read ten cards without paging the whole history. Omitting it keeps the
+   * historic "every document" contract.
    */
-  async listDesignDocumentsInWorkspace(): Promise<ListDesignDocumentsResponse> {
-    const raw = await this.fetch<unknown>("/api/design-documents");
+  async listDesignDocumentsInWorkspace(limit?: number): Promise<ListDesignDocumentsResponse> {
+    const search = limit === undefined ? "" : `?limit=${encodeURIComponent(String(limit))}`;
+    const raw = await this.fetch<unknown>(`/api/design-documents${search}`);
     return parseWithFallback(raw, ListDesignDocumentsResponseSchema, EMPTY_LIST_DESIGN_DOCUMENTS_RESPONSE, {
       endpoint: "GET /api/design-documents",
     });

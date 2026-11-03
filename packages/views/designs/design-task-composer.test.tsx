@@ -10,6 +10,7 @@ const {
   getIssue,
   listAgents,
   listDesignDocuments,
+  listDesignDocumentsInWorkspace,
   listDesignScenarioRecipes,
   listIssues,
   listProjectResources,
@@ -26,6 +27,7 @@ const {
   getIssue: vi.fn(),
   listAgents: vi.fn(),
   listDesignDocuments: vi.fn(),
+  listDesignDocumentsInWorkspace: vi.fn(),
   listDesignScenarioRecipes: vi.fn(),
   listIssues: vi.fn(),
   listProjectResources: vi.fn(),
@@ -47,6 +49,7 @@ vi.mock("@multica/core/api", () => ({
     sendChatMessage,
     listAgents,
     listDesignDocuments,
+    listDesignDocumentsInWorkspace,
     listDesignScenarioRecipes,
     listIssues,
     listProjectResources,
@@ -191,6 +194,7 @@ describe("DesignTaskComposer", () => {
     getIssue.mockReset();
     listAgents.mockReset();
     listDesignDocuments.mockReset();
+    listDesignDocumentsInWorkspace.mockReset();
     listDesignScenarioRecipes.mockReset();
     listIssues.mockReset();
     listProjectResources.mockReset();
@@ -220,6 +224,7 @@ describe("DesignTaskComposer", () => {
     });
     listAgents.mockResolvedValue([AGENT]);
     listDesignDocuments.mockResolvedValue({ documents: [] });
+    listDesignDocumentsInWorkspace.mockResolvedValue({ documents: [] });
     listDesignScenarioRecipes.mockResolvedValue({ recipes: [] });
     listIssues.mockResolvedValue({ issues: [], total: 0 });
     listProjectResources.mockResolvedValue({ resources: [REPOSITORY], total: 1 });
@@ -790,7 +795,11 @@ describe("DesignTaskComposer", () => {
     renderComposer();
 
     expect(await screen.findByText("最近生成")).toBeInTheDocument();
-    expect(screen.getByText(/还没有生成过页面设计/)).toBeInTheDocument();
+    // The wall now reads one workspace query, so it starts in its loading
+    // state and settles on the empty copy. Before, an unstarted per-project
+    // fan-out read as "empty" on the very first render.
+    expect(await screen.findByText(/还没有生成过页面设计/)).toBeInTheDocument();
+    expect(listDesignDocumentsInWorkspace).toHaveBeenCalledWith(10);
   });
 
   it("keeps the gallery's recipe after the user rewrites the brief", async () => {

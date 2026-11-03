@@ -310,14 +310,16 @@ export function designRepositoryCatalogueOptions(wsId: string) {
 
 /**
  * Every design document in the workspace, most recently touched first. The
- * create-project modal's design picker reads this — the project being created
- * owns no documents yet, so only a workspace-wide list has anything to offer.
+ * create-project modal's design picker reads this without a limit — the
+ * project being created owns no documents yet, so only a workspace-wide list
+ * has anything to offer. The home page's "recent" strip passes a small limit
+ * so it fetches only the cards it renders instead of the whole history.
  * An empty `wsId` stays idle.
  */
-export function designDocumentWorkspaceListOptions(wsId: string) {
+export function designDocumentWorkspaceListOptions(wsId: string, limit?: number) {
   return queryOptions({
-    queryKey: designKeys.documentsInWorkspace(wsId),
-    queryFn: () => api.listDesignDocumentsInWorkspace(),
+    queryKey: designKeys.documentsInWorkspace(wsId, limit),
+    queryFn: () => api.listDesignDocumentsInWorkspace(limit),
     select: (data) => data.documents,
     enabled: !!wsId,
   });

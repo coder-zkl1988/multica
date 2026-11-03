@@ -93,14 +93,18 @@ SELECT count(*) FROM design_document
 WHERE workspace_id = sqlc.arg('workspace_id')
   AND workspace_repository_id = sqlc.arg('workspace_repository_id');
 
--- The workspace-wide list, most recently touched first. The project create
--- modal's design picker is the one caller: it must offer documents from every
--- project, because the project being created does not own any yet. Backed by
--- idx_design_document_workspace — add an index migration if that ever changes.
+-- The workspace-wide list, most recently touched first. Callers include the
+-- project create modal's design picker, which must offer documents from every
+-- project, and the home page's "recent" strip, which only needs the newest few.
+-- A NULL row_limit means every row, which is the picker's contract; the home
+-- page passes a bounded limit so it does not read the whole history to render
+-- ten cards. Backed by idx_design_document_workspace — add an index migration
+-- if that ever changes.
 -- name: ListDesignDocumentsInWorkspace :many
 SELECT * FROM design_document
 WHERE workspace_id = sqlc.arg('workspace_id')
-ORDER BY updated_at DESC;
+ORDER BY updated_at DESC
+LIMIT sqlc.narg('row_limit')::bigint;
 
 -- name: GetDesignDocumentByActiveTask :one
 SELECT * FROM design_document

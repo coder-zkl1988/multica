@@ -8,6 +8,7 @@ import (
 	"github.com/multica-ai/multica/server/pkg/dbid"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -37,6 +38,10 @@ const (
 	designDocumentDefaultRecipe    = "default"
 	// The package protocol this slice produces (P-011).
 	designDocumentPackageSchema = "multica.design-document/v1"
+	// designDocumentListLimitCap bounds one workspace-wide listing. A client
+	// that asks for more rows than this gets the cap rather than an error: the
+	// limit is an optimisation, not a contract the caller can violate.
+	designDocumentListLimitCap = 200
 )
 
 // designDocumentRecipes are the scenario chips the first home composer ships
@@ -467,6 +472,19 @@ func (h *Handler) ListDesignDocuments(w http.ResponseWriter, r *http.Request) {
 	rawIssueID := strings.TrimSpace(query.Get("issue_id"))
 	rawResourceID := strings.TrimSpace(query.Get("project_resource_id"))
 	rawWorkspaceRepositoryID := strings.TrimSpace(query.Get("workspace_repository_id"))
+	// `limit` bounds the workspace-wide listing (the default scope). Scoped
+	// listings are already bounded by their project, issue or repository, so
+	// the parameter is not applied to them. An absent value keeps the historic
+	// "every document" contract the project create picker relies on.
+	rowLimit := pgtype.Int8{}
+	if raw := strings.TrimSpace(query.Get("limit")); raw != "" {
+		parsed, parseErr := strconv.Atoi(raw)
+		if parseErr != nil || parsed < 1 {
+			writeProjectDesignSystemError(w, http.StatusBadRequest, "invalid_limit", "limit must be a positive integer")
+			return
+		}
+		rowLimit = pgtype.Int8{Int64: int64(min(parsed, designDocumentListLimitCap)), Valid: true}
+	}
 	if rawWorkspaceRepositoryID != "" && (rawProjectID != "" || rawIssueID != "" || rawResourceID != "") {
 		writeProjectDesignSystemError(w, http.StatusBadRequest, "invalid_request", "settings repository scope cannot be combined with project or issue scope")
 		return
@@ -533,7 +551,10 @@ func (h *Handler) ListDesignDocuments(w http.ResponseWriter, r *http.Request) {
 			ProjectID:   projectUUID,
 		})
 	default:
-		documents, err = h.Queries.ListDesignDocumentsInWorkspace(r.Context(), workspaceUUID)
+		documents, err = h.Queries.ListDesignDocumentsInWorkspace(r.Context(), db.ListDesignDocumentsInWorkspaceParams{
+			WorkspaceID: workspaceUUID,
+			RowLimit:    rowLimit,
+		})
 	}
 	if err != nil {
 		writeProjectDesignSystemError(w, http.StatusInternalServerError, "lookup_failed", "failed to load design documents")
