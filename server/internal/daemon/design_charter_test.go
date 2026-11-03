@@ -315,11 +315,17 @@ func TestDesignRecipesCoverTheFormatChips(t *testing.T) {
 	if deck == longForm {
 		t.Fatal("a deck and a long-form document produce the same prompt")
 	}
-	// Each names the failure its own format invites: a deck nobody can advance,
-	// a reading layout dressed up as a landing page.
-	if !strings.Contains(deck, "cannot be advanced") {
-		t.Fatal("the deck recipe does not require the deck to be navigable")
+	// The deck format is now a single document with the skeleton working the
+	// navigation (DC-068), not one page per slide: the old wording told the
+	// agent to make every slide its own page, which is the package shape the
+	// single-file deck replaced.
+	if strings.Contains(deck, "Every slide is its own page") {
+		t.Fatal("the deck recipe still asks for one page per slide")
 	}
+	if !strings.Contains(deck, "exactly ONE page") {
+		t.Fatal("the deck recipe does not require a single-page brief")
+	}
+	// The reading layout still names the failure its own format invites.
 	if !strings.Contains(longForm, "not a marketing page") {
 		t.Fatal("the long-form recipe does not rule out marketing-page tropes")
 	}

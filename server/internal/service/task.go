@@ -9497,7 +9497,12 @@ type DesignDocumentTaskContext struct {
 	Project          json.RawMessage `json:"project"`
 	Platform         string          `json:"platform"`
 	// The home composer's scenario recipe (DC-049).
-	Recipe      string          `json:"recipe"`
+	Recipe string `json:"recipe"`
+	// RecipeMode is the catalogue's artifact mode for Recipe ("prototype" or
+	// "deck"), stamped so the daemon can identify a deck without re-reading
+	// the catalogue. Task contexts created before this field existed decode it
+	// empty, and the daemon then falls back to recipe == "deck" (DC-068).
+	RecipeMode  string          `json:"recipe_mode,omitempty"`
 	Brief       string          `json:"brief"`
 	Attachments json.RawMessage `json:"attachments,omitempty"`
 	// The project's saved design system, resolved through the repository ->

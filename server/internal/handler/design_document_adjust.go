@@ -376,6 +376,7 @@ func (h *Handler) designDocumentBaseBoundTaskContext(
 		Project:           projectJSON,
 		Platform:          document.Platform,
 		Recipe:            document.Recipe,
+		RecipeMode:        designDocumentRecipeMode(ctx, queries, document.WorkspaceID, document.Recipe),
 		Brief:             input.Brief,
 		Attachments:       runAttachmentsJSON,
 		DesignContext:     designContextJSON,

@@ -973,6 +973,38 @@ func designDocumentPinnedContext(document db.DesignDocument, input designDocumen
 	return *input.ResolvedDesignContext, nil
 }
 
+// designDocumentRecipeMode resolves the artifact mode a recipe produces, so
+// the daemon can tell a single-file deck from a generic prototype without
+// re-reading the catalogue (DC-068). Built-in chips resolve locally; a
+// published recipe is read under the same visibility rule the create endpoint
+// applied. An unreadable or unknown recipe returns "" — the daemon then falls
+// back to recipe == "deck", which is the built-in chip alone.
+func designDocumentRecipeMode(
+	ctx context.Context,
+	queries *db.Queries,
+	workspaceID pgtype.UUID,
+	recipe string,
+) string {
+	recipe = strings.TrimSpace(recipe)
+	if recipe == "" {
+		return ""
+	}
+	if recipe == "deck" {
+		return "deck"
+	}
+	if _, builtin := designDocumentRecipes[recipe]; builtin {
+		return "prototype"
+	}
+	row, err := queries.GetPublishedDesignScenarioRecipeBySlug(ctx, db.GetPublishedDesignScenarioRecipeBySlugParams{
+		Slug:        recipe,
+		WorkspaceID: workspaceID,
+	})
+	if err != nil {
+		return ""
+	}
+	return row.Mode
+}
+
 func (h *Handler) designDocumentGenerateTaskContext(
 	ctx context.Context,
 	queries *db.Queries,
@@ -1031,6 +1063,7 @@ func (h *Handler) designDocumentGenerateTaskContext(
 		Project:             projectJSON,
 		Platform:            input.Platform,
 		Recipe:              input.Recipe,
+		RecipeMode:          designDocumentRecipeMode(ctx, queries, workspaceID, input.Recipe),
 		Brief:               input.Brief,
 		Attachments:         input.Attachments,
 		DesignContext:       designContextJSON,

@@ -2073,6 +2073,14 @@ func buildDesignDocumentPrompt(task Task, outputDir string) string {
 		b.WriteString("\n")
 	}
 
+	// A deck is not the multi-page prototype the stages below describe, so the
+	// skeleton and its editable surface have to arrive before them. The recipe
+	// body says what the format demands; this says what the document IS.
+	deck := designDocumentIsDeck(task)
+	if deck {
+		b.WriteString(designDeckContract())
+	}
+
 	b.WriteString("Stages (one Agent session, no delegation):\n")
 	b.WriteString("1. Inventory the evidence — the requirement, the pinned design system, the optional task (Issue), the optional repository grounding, and the immutable base for adjust / regenerate. Classify each item as a confirmed fact, a conflict needing a decision, or a documented fallback.\n")
 	b.WriteString("2. Decide the page set. A document may hold a main page, its sub-pages, page states, overlays and the key flows that connect them. Design only what the requirement supports — pages nobody asked for are template residue.\n")
@@ -2083,7 +2091,7 @@ func buildDesignDocumentPrompt(task Task, outputDir string) string {
 	b.WriteString("7. Run `\"$MULTICA_CLI\" design audit` from the working directory. It is the platform's own gate — the same collector, static audit and headless Chromium preview the daemon runs once after you exit — and it names every failing rule and file. Fix each one and run it again until it prints PASS; a package that fails that gate after you exit ends the run with no draft, and nobody gets to fix it. `$MULTICA_CLI` is the exact `multica` binary this daemon runs; a plain `multica` on your shell's PATH may be an older install that does not have the command.\n")
 	b.WriteString("8. Read back every file, open the prototype's own logic in your head end to end, and verify each declared flow is reachable. Promise-only or delegated work is not completion.\n\n")
 
-	b.WriteString(designDocumentPackageContract(outputDir))
+	b.WriteString(designDocumentPackageContract(outputDir, deck))
 
 	b.WriteString("Rules:\n")
 	b.WriteString("- The pinned design system arrives as `design_context` in task.json, and its `source` says what you were given. `cloud_saved_project_design_system` / `cloud_saved_repository_design_system` is this project's or repository's own saved package — the accumulated house style. `cloud_saved_workspace_design_system` is a system the user picked from the workspace library for this run: treat it as the governing visual language even though it was authored elsewhere, and do not blend it with any other project's. `builtin_catalogue_design_system` is a bundled catalogue system inlined as `design_context.builtin` (`design_markdown` plus `tokens_css`, no validated components package): design under its token families, type and spacing logic, and say in the prototype's own notes which of its decisions you followed — but do not reproduce its brand identity, product names or copy. `none` means no design system was pinned: design from the requirement alone and never claim a system constrained you.\n")
@@ -2304,10 +2312,36 @@ func designDocumentTaskIsUngrounded(task Task) bool {
 	return strings.TrimSpace(envelope.ProjectResourceID) == ""
 }
 
+// designDocumentIsDeck reports whether this run produces a single-file deck
+// (DC-068). recipe_mode is the catalogue's artifact mode, stamped by the
+// server; it is the only signal for a published deck recipe, whose slug is the
+// workspace's own. Task contexts created before that field existed decode it
+// empty, so the built-in chip slug remains the fallback.
+func designDocumentIsDeck(task Task) bool {
+	if len(task.DesignDocumentContext) == 0 {
+		return false
+	}
+	var envelope struct {
+		Recipe     string `json:"recipe"`
+		RecipeMode string `json:"recipe_mode"`
+	}
+	if err := jsonUnmarshal(task.DesignDocumentContext, &envelope); err != nil {
+		return false
+	}
+	if strings.TrimSpace(envelope.RecipeMode) == "deck" {
+		return true
+	}
+	return strings.TrimSpace(envelope.Recipe) == "deck"
+}
+
 // designDocumentPackageContract states the exact file set the platform
 // collector accepts, mirroring designdocument's classifier. Any other path is
 // rejected before the audit runs.
-func designDocumentPackageContract(outputDir string) string {
+//
+// deck tightens the prototype entry rule rather than replacing it: a deck adds
+// slides inside prototype/index.html and must not ship a second prototype
+// document for them.
+func designDocumentPackageContract(outputDir string, deck bool) string {
 	var b strings.Builder
 	b.WriteString("Package contract — write these files under `$MULTICA_OUTPUT_DIR`. Any other path is rejected before the audit runs:\n\n")
 	if outputDir != "" {
@@ -2319,6 +2353,9 @@ func designDocumentPackageContract(outputDir string) string {
 	b.WriteString("- `brief.json` — the semantic layer described above.\n")
 	b.WriteString("- In `brief.json`, every `pages[].entry` must be a package-relative `prototype/*.html` path (for example `prototype/index.html`), never a page ID, route, or filename outside `prototype/`.\n")
 	b.WriteString("- `prototype/index.html` — the prototype entry point, a complete HTML document.\n")
+	if deck {
+		b.WriteString("- A deck is exactly one prototype HTML: `prototype/index.html`. Its slides are sections inside that document, so this package has no second `prototype/*.html` page.\n")
+	}
 	b.WriteString("- `coverage.json` — requirement coverage and honest gaps.\n\n")
 	b.WriteString("- every `coverage.json` reference or gap `ref_id` must name an ID declared in `brief.json`; describe external facts in reason or notes instead of using them as `ref_id` values.\n\n")
 	b.WriteString("Optional:\n")
