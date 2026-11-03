@@ -164,7 +164,9 @@ function platformLabel(platform: ProjectDesignSystemPlatform | ""): string {
 }
 
 function canStartRecipe(recipe: DesignScenarioRecipe): boolean {
-  return recipe.mode === "prototype";
+  // Decks run the same page-design pipeline as prototypes — the create gate
+  // accepts the mode server-side — so deck recipes are startable too.
+  return recipe.mode === "prototype" || recipe.mode === "deck";
 }
 
 function uniqueInOrder(values: string[]): string[] {

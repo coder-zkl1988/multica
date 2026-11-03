@@ -409,10 +409,10 @@ describe("DesignsPage", () => {
     await user.click(await screen.findByRole("button", { name: "打开项目" }));
     await user.click(screen.getByRole("menuitem", { name: "CRM" }));
 
-    // Nothing produces a deck yet, so the position is laid out but closed
-    // rather than a filter that quietly matches everything.
+    // The 幻灯片 row is a real position now that deck recipes create
+    // documents; with none saved yet it shows its zero.
     const slides = await screen.findByRole("button", { name: /幻灯片/ });
-    expect(slides).toBeDisabled();
+    expect(slides).toBeEnabled();
     expect(await screen.findByText(/还没有生成过页面设计/)).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "新建设计稿" }));
@@ -420,6 +420,49 @@ describe("DesignsPage", () => {
     expect(
       within(screen.getByRole("tabpanel", { name: "首页" })).getByLabelText("页面需求描述"),
     ).toBeInTheDocument();
+  });
+
+  it("splits the 设计稿 grid into prototypes and decks through the documents' recipes", async () => {
+    const user = userEvent.setup();
+    listDesignScenarioRecipes.mockResolvedValue({ recipes: [{
+      slug: "pitch-deck", title: "路演", summary: "", category: "融资路演", subcategory: "",
+      mode: "deck", platform: "web", prompt: "", preview_path: "", preview_kind: "", preview_url: "",
+      origin: "workspace", published_at: "2026-09-01T00:00:00Z",
+    }] });
+    const document = {
+      id: "document-1", workspace_id: "ws-1", project_id: "project-1", project_resource_id: "",
+      issue_id: "", title: "客户列表页", platform: "web", recipe: "ui-mockup",
+      status: "saved", draft_revision_id: "revision-1", saved_revision_id: "revision-1",
+      active_task: null, input_snapshot: {}, last_error: null, repository_grounded: false,
+      created_at: "2026-08-20T00:00:00Z", updated_at: "2026-08-21T00:00:00Z", saved_at: "2026-08-20T00:00:00Z",
+    };
+    listDesignDocuments.mockResolvedValue({ documents: [
+      document,
+      // The built-in deck chip and a published deck recipe both make a deck.
+      { ...document, id: "document-deck", title: "路演幻灯片", recipe: "deck" },
+      { ...document, id: "document-published", title: "社区路演", recipe: "pitch-deck" },
+    ] });
+    renderWithClient(<DesignsPage />);
+    await user.click(await screen.findByRole("button", { name: "打开项目" }));
+    await user.click(screen.getByRole("menuitem", { name: "CRM" }));
+
+    const panel = await screen.findByRole("tabpanel", { name: /设计稿/ });
+    expect(await within(panel).findByText("客户列表页")).toBeInTheDocument();
+    expect(within(panel).getByText("路演幻灯片")).toBeInTheDocument();
+    expect(within(panel).getByText("社区路演")).toBeInTheDocument();
+
+    await user.click(within(panel).getByRole("button", { name: /原型/ }));
+    expect(within(panel).getByText("客户列表页")).toBeInTheDocument();
+    expect(within(panel).queryByText("路演幻灯片")).not.toBeInTheDocument();
+    expect(within(panel).queryByText("社区路演")).not.toBeInTheDocument();
+
+    const slides = within(panel).getByRole("button", { name: /幻灯片/ });
+    expect(slides).toBeEnabled();
+    expect(within(slides).getByText("2")).toBeInTheDocument();
+    await user.click(slides);
+    expect(within(panel).getByText("路演幻灯片")).toBeInTheDocument();
+    expect(within(panel).getByText("社区路演")).toBeInTheDocument();
+    expect(within(panel).queryByText("客户列表页")).not.toBeInTheDocument();
   });
 
   it.each(["project", "repository"] as const)("opens saved %s documents in the viewer while drafts remain editable", async (scope) => {

@@ -43,6 +43,7 @@ import {
   AlertDialogTitle,
 } from "@multica/ui/components/ui/alert-dialog";
 import { AppLink, useNavigation } from "../navigation";
+import { designDocumentArtifactMode } from "./design-artifact-mode";
 import { useDesignDocumentActions } from "./design-document-actions";
 import { DesignDocumentCard } from "./design-document-card";
 import { DesignFilterPill } from "./design-filter-pill";
@@ -63,9 +64,9 @@ type DesignAssetTab = "designs" | "drafts" | "templates" | "systems";
 /** The three surfaces the design centre migrates from Open Design (DC-047). */
 type DesignHomePanel = "create" | "community" | "systems";
 /**
- * Artifact row on a project's 设计稿 tab. Only prototypes have a producer in
- * this phase, so 幻灯片 is a real position with nothing behind it rather than
- * a filter that silently matches everything.
+ * Artifact row on a project's 设计稿 tab. Prototypes and decks both have a
+ * producer; each document's row is resolved from its recipe (see
+ * `designDocumentArtifactMode`).
  */
 type DesignArtifactFilter = "all" | "prototype" | "slides";
 
@@ -670,9 +671,22 @@ export function DesignsPage({ figmaPluginDownloadUrl }: { figmaPluginDownloadUrl
       .toLowerCase()
       .includes(searchQuery));
   }, [draftDocuments, searchQuery]);
-  // Every recipe in this phase produces a prototype, so the artifact row can
-  // filter honestly without inventing a kind the documents do not carry.
-  const visibleDocuments = artifactFilter === "slides" ? [] : savedDocuments;
+  // The artifact row resolves each document's kind through its recipe: the
+  // built-in chips are fixed, published recipes carry their mode in the
+  // catalogue the page already loads.
+  const artifactCounts = useMemo(() => {
+    const counts = { prototype: 0, deck: 0 };
+    for (const document of savedDocuments) {
+      if (designDocumentArtifactMode(document.recipe, scenarioRecipes) === "deck") counts.deck += 1;
+      else counts.prototype += 1;
+    }
+    return counts;
+  }, [savedDocuments, scenarioRecipes]);
+  const visibleDocuments = useMemo(() => {
+    if (artifactFilter === "all") return savedDocuments;
+    const wanted = artifactFilter === "slides" ? "deck" : "prototype";
+    return savedDocuments.filter((document) => designDocumentArtifactMode(document.recipe, scenarioRecipes) === wanted);
+  }, [savedDocuments, scenarioRecipes, artifactFilter]);
   const openDocument = (document: DesignDocument) => {
     navigation.push(paths.designDocumentDetail(document.id));
   };
@@ -995,16 +1009,14 @@ export function DesignsPage({ figmaPluginDownloadUrl }: { figmaPluginDownloadUrl
                     />
                     <DesignFilterPill
                       label="原型"
-                      count={savedDocuments.length}
+                      count={artifactCounts.prototype}
                       selected={artifactFilter === "prototype"}
                       onClick={() => setArtifactFilter("prototype")}
                     />
                     <DesignFilterPill
                       label="幻灯片"
-                      count={0}
+                      count={artifactCounts.deck}
                       selected={artifactFilter === "slides"}
-                      disabled
-                      title="幻灯片产物暂未支持"
                       onClick={() => setArtifactFilter("slides")}
                     />
                   </div>
@@ -1041,7 +1053,7 @@ export function DesignsPage({ figmaPluginDownloadUrl }: { figmaPluginDownloadUrl
                 ) : (
                   <InlineEmpty>
                     {artifactFilter === "slides"
-                      ? "幻灯片产物暂未支持，这里还不会有内容。"
+                      ? "还没有幻灯片产物。用「新建设计稿」的幻灯片场景发起一次。"
                       : "还没有生成过页面设计。用「新建设计稿」在首页发起一次。"}
                   </InlineEmpty>
                 )}

@@ -248,13 +248,39 @@ describe("DesignRecipeGallery", () => {
     expect(onStarted).toHaveBeenCalledWith(expect.objectContaining({ project_id: "project-1" }));
   });
 
+  it("starts a deck recipe through the same create flow as a prototype", async () => {
+    const user = userEvent.setup();
+    listDesignScenarioRecipes.mockResolvedValue({
+      recipes: [recipe({ slug: "pitch", title: "路演材料", mode: "deck", category: "融资路演" })],
+    });
+    const { onStarted } = renderGallery();
+
+    const card = await screen.findByText("路演材料");
+    expect(card).toBeInTheDocument();
+    // Deck recipes are startable: the create gate accepts the mode.
+    expect(screen.getByRole("button", { name: "填入首页" })).toBeEnabled();
+    expect(screen.queryByText(/暂时还不能创建/)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "直接创建" }));
+    await user.click(screen.getByRole("button", { name: "项目" }));
+    await user.click(await screen.findByRole("button", { name: "CRM" }));
+    await user.click(screen.getByRole("button", { name: "设计智能体" }));
+    await user.click(await screen.findByRole("button", { name: AGENT.name }));
+    await user.click(screen.getByRole("button", { name: "生成页面设计" }));
+
+    await waitFor(() => expect(createDesignDocument).toHaveBeenCalledWith(
+      expect.objectContaining({ recipe: "pitch" }),
+    ));
+    expect(onStarted).toHaveBeenCalled();
+  });
+
   it("closes both actions for an artifact kind that has no producer yet", async () => {
     listDesignScenarioRecipes.mockResolvedValue({
-      recipes: [recipe({ slug: "pitch", title: "路演材料", mode: "deck" })],
+      recipes: [recipe({ slug: "clip", title: "宣传视频", mode: "video" })],
     });
     renderGallery();
 
-    expect(await screen.findByText("路演材料")).toBeInTheDocument();
+    expect(await screen.findByText("宣传视频")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "填入首页" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "直接创建" })).toBeDisabled();
     expect(screen.getByText(/暂时还不能创建/)).toBeInTheDocument();

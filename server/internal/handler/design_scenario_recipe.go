@@ -139,9 +139,11 @@ func (h *Handler) resolveDesignDocumentRecipe(
 		writeProjectDesignSystemError(w, http.StatusInternalServerError, "recipe_lookup_failed", "failed to resolve the design recipe")
 		return "", false
 	}
-	// Only prototype recipes can drive a page-design task; the other modes
-	// exist in the schema but have no producer in this phase.
-	if row.Mode != "prototype" {
+	// Prototype and deck recipes drive a page-design task: a deck is the same
+	// package pipeline with slides as its pages, matching what the built-in
+	// deck chip already produces. The remaining modes exist in the schema but
+	// have no producer yet.
+	if row.Mode != "prototype" && row.Mode != "deck" {
 		writeProjectDesignSystemError(w, http.StatusBadRequest, "recipe_mode_unsupported", "this recipe produces an artifact kind that is not supported yet")
 		return "", false
 	}
