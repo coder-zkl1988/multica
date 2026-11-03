@@ -118,6 +118,8 @@ import { formatDuration, taskOperationLabel } from "./project-design-system-task
 import { DesignDocumentConversation } from "./design-document-conversation";
 import { DesignNextSteps } from "./design-next-steps";
 import { DesignRunPlan, latestTodoRows } from "./design-run-plan";
+import { useDesignDocumentDelete } from "./design-document-actions";
+import { useDesignDocumentShareActions } from "./design-document-share-actions";
 import { previewEntries } from "./design-document-preview";
 
 /** What the workbench's main pane is showing. */
@@ -445,6 +447,17 @@ export function DesignDocumentPage({ documentId }: { documentId: string }) {
   const [agentOverride, setAgentOverride] = useState("");
   const [discardOpen, setDiscardOpen] = useState(false);
   const [latestSystemOpen, setLatestSystemOpen] = useState(false);
+
+  // The more-menu's share entries and destructive delete share their
+  // implementations with the card surfaces. Deletion navigates back to 设计库
+  // only after the server confirmed and the lists refetched.
+  const documentDelete = useDesignDocumentDelete({
+    onDeleted: () => navigation.push(paths.designs()),
+  });
+  const shareActions = useDesignDocumentShareActions({
+    documentId,
+    savedRevisionId: document?.saved_revision_id ?? "",
+  });
 
   const status = document?.status ?? "empty";
   const activeTask = document?.active_task ?? null;
@@ -1544,11 +1557,18 @@ export function DesignDocumentPage({ documentId }: { documentId: string }) {
                 <DropdownMenuItem disabled={!revision || downloadArchive.isPending} onClick={() => downloadArchive.mutate()}>
                   {revision ? `下载 v${revision.revision_number} 原型包 (.zip)` : "下载原型包 (.zip)"}
                 </DropdownMenuItem>
+                {shareActions.items}
                 <DropdownMenuItem onClick={() => navigation.push(paths.designs())}>返回设计库</DropdownMenuItem>
                 {canDiscard ? (
                   <>
                     <DropdownMenuSeparator />
                     <DropdownMenuItem variant="destructive" onClick={() => setDiscardOpen(true)}>放弃草稿</DropdownMenuItem>
+                  </>
+                ) : null}
+                {document ? (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem variant="destructive" onClick={() => documentDelete.confirm(document)}>删除设计稿</DropdownMenuItem>
                   </>
                 ) : null}
               </DropdownMenuContent>
@@ -2046,6 +2066,9 @@ export function DesignDocumentPage({ documentId }: { documentId: string }) {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {documentDelete.dialog}
+      {shareActions.dialog}
     </div>
   );
 }

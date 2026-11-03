@@ -26,6 +26,10 @@ const {
   getProject,
   listAgents,
   listDesignDocumentRevisions,
+  listDesignDocumentShares,
+  createDesignDocumentRevisionShare,
+  revokeDesignDocumentShare,
+  deleteDesignDocument,
   listTaskMessages,
   deliverDesignDocument,
   listIssues,
@@ -47,6 +51,10 @@ const {
   getProject: vi.fn(),
   listAgents: vi.fn(),
   listDesignDocumentRevisions: vi.fn(),
+  listDesignDocumentShares: vi.fn(),
+  createDesignDocumentRevisionShare: vi.fn(),
+  revokeDesignDocumentShare: vi.fn(),
+  deleteDesignDocument: vi.fn(),
   listTaskMessages: vi.fn(),
   deliverDesignDocument: vi.fn(),
   listIssues: vi.fn(),
@@ -72,6 +80,10 @@ vi.mock("@multica/core/api", () => ({
     getProject,
     listAgents,
     listDesignDocumentRevisions,
+    listDesignDocumentShares,
+    createDesignDocumentRevisionShare,
+    revokeDesignDocumentShare,
+    deleteDesignDocument,
     deliverDesignDocument,
     listIssues,
     listTaskMessages,
@@ -97,6 +109,11 @@ vi.mock("@multica/core/paths", () => ({
 vi.mock("../navigation", () => ({
   AppLink: ({ children, href }: { children: ReactNode; href: string }) => <a href={href}>{children}</a>,
   useNavigation: () => ({ push: navigate }),
+  // The share entries resolve the public origin through the adapter, as they
+  // do on desktop.
+  useOptionalNavigation: () => ({
+    getShareableUrl: (path: string) => `https://app.test${path}`,
+  }),
 }));
 
 vi.mock("sonner", () => ({
@@ -269,6 +286,19 @@ beforeEach(() => {
   saveDesignDocument.mockResolvedValue(document({ status: "saved", saved_revision_id: "revision-2" }));
   discardDesignDocumentDraft.mockResolvedValue(document({ status: "empty", draft_revision_id: "" }));
   restoreDesignDocumentRevision.mockResolvedValue(document({ draft_revision_id: "revision-1" }));
+  listDesignDocumentShares.mockResolvedValue({ shares: [] });
+  createDesignDocumentRevisionShare.mockResolvedValue({
+    share_id: "share-1",
+    token: "token-1",
+    url: "https://app.test/shares/token-1",
+    revision_id: "revision-2",
+    document_id: "document-1",
+    document_title: "订单总览",
+    created_at: "2026-08-21T00:00:00Z",
+    revoked_at: null,
+  });
+  revokeDesignDocumentShare.mockResolvedValue(undefined);
+  deleteDesignDocument.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -981,5 +1011,64 @@ describe("DesignDocumentPage", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  // The more-menu's share and delete entries share implementations with the
+  // card surfaces; this suite keeps only the workspace wiring (presence and
+  // the saved-revision gate). The flows themselves live in
+  // design-document-share-actions.test.tsx and design-document-card.test.tsx.
+  it("keeps share and delete entries in the more-menu, gating copy on a saved revision", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByTitle("订单总览 · 首页");
+
+    await user.click(screen.getByRole("button", { name: "更多操作" }));
+    const menu = await screen.findByRole("menu");
+    // The default document is draft-only: a share pins the saved revision,
+    // which does not exist yet, so the entry says so instead of erroring later.
+    expect(within(menu).getByRole("menuitem", { name: "复制分享链接（保存后可分享）" })).toHaveAttribute("data-disabled");
+    expect(within(menu).queryByRole("menuitem", { name: "停止分享" })).not.toBeInTheDocument();
+    expect(within(menu).getByRole("menuitem", { name: "删除设计稿" })).toBeEnabled();
+    expect(within(menu).getByRole("menuitem", { name: "放弃草稿" })).toBeEnabled();
+    // Presence alone never mints a link.
+    expect(createDesignDocumentRevisionShare).not.toHaveBeenCalled();
+  });
+
+  it("shows 停止分享 once a link is live for the saved revision", async () => {
+    const user = userEvent.setup();
+    getDesignDocument.mockResolvedValue(document({ status: "saved", draft_revision_id: "", saved_revision_id: "revision-2" }));
+    listDesignDocumentShares.mockResolvedValue({
+      shares: [{
+        share_id: "share-1", token: "token-1", url: "https://app.test/shares/token-1",
+        revision_id: "revision-2", document_id: "document-1", document_title: "订单总览",
+        created_at: "2026-08-21T00:00:00Z", revoked_at: null,
+      }],
+    });
+    renderPage();
+    await screen.findByTitle("订单总览 · 首页");
+
+    await user.click(screen.getByRole("button", { name: "更多操作" }));
+    const menu = await screen.findByRole("menu");
+    expect(within(menu).getByRole("menuitem", { name: "复制分享链接" })).toBeEnabled();
+    expect(within(menu).getByRole("menuitem", { name: "停止分享" })).toBeEnabled();
+  });
+
+  it("deletes only after confirmation and navigates to 设计库 once the server agrees", async () => {
+    const user = userEvent.setup();
+    getDesignDocument.mockResolvedValue(document({ status: "saved", draft_revision_id: "", saved_revision_id: "revision-2" }));
+    renderPage();
+    await screen.findByTitle("订单总览 · 首页");
+
+    await user.click(screen.getByRole("button", { name: "更多操作" }));
+    await user.click(await screen.findByRole("menuitem", { name: "删除设计稿" }));
+    // Confirmation first: the destroy must not have started at menu click.
+    expect(deleteDesignDocument).not.toHaveBeenCalled();
+    expect(await screen.findByText(/全部历史版本会一并删除/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "删除" }));
+    await waitFor(() => expect(deleteDesignDocument).toHaveBeenCalledWith("document-1"));
+    // Navigation rides the shared delete hook's onDeleted, which runs after
+    // the server confirmed — never at the menu click itself.
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith("/acme/designs"));
   });
 });

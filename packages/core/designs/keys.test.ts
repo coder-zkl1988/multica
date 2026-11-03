@@ -5,6 +5,7 @@ import {
   designDocumentListOptions,
   designDocumentRevisionListOptions,
   designDocumentRevisionOptions,
+  designDocumentSharesOptions,
   projectDesignSystemByProjectOptions,
   projectDesignSystemCatalogueOptions,
   projectDesignSystemDetailOptions,
@@ -116,14 +117,21 @@ describe("designKeys", () => {
     expect(designKeys.documentRevision("ws-1", "doc-1", "rev-1")).toEqual([
       "designs", "ws-1", "documents", "document", "doc-1", "revisions", "rev-1",
     ]);
+    // Share links sit under the same prefix, so the task-lifecycle sweep
+    // refreshes them along with everything else the document owns.
+    expect(designKeys.documentShares("ws-1", "doc-1")).toEqual([
+      "designs", "ws-1", "documents", "document", "doc-1", "shares",
+    ]);
     // A document key can never collide with a project's list key.
     expect(designKeys.document("ws-1", "project-1")).not.toEqual(designKeys.documents("ws-1", "project-1"));
     expect(designDocumentDetailOptions("ws-1", "doc-1").queryKey).toEqual(designKeys.document("ws-1", "doc-1"));
     expect(designDocumentRevisionListOptions("ws-1", "doc-1").queryKey).toEqual(designKeys.documentRevisions("ws-1", "doc-1"));
     expect(designDocumentRevisionOptions("ws-1", "doc-1", "rev-1").queryKey).toEqual(designKeys.documentRevision("ws-1", "doc-1", "rev-1"));
+    expect(designDocumentSharesOptions("ws-1", "doc-1").queryKey).toEqual(designKeys.documentShares("ws-1", "doc-1"));
     expect(designDocumentDetailOptions("ws-1", "").enabled).toBe(false);
     expect(designDocumentRevisionListOptions("ws-1", "").enabled).toBe(false);
     expect(designDocumentRevisionOptions("ws-1", "doc-1", "").enabled).toBe(false);
+    expect(designDocumentSharesOptions("ws-1", "").enabled).toBe(false);
   });
 
   it("keeps project design system query options workspace-scoped", () => {

@@ -69,6 +69,9 @@ export const designKeys = {
   document: (wsId: string, documentId: string) => ["designs", wsId, "documents", "document", documentId] as const,
   documentRevisions: (wsId: string, documentId: string) => ["designs", wsId, "documents", "document", documentId, "revisions"] as const,
   documentRevision: (wsId: string, documentId: string, revisionId: string) => ["designs", wsId, "documents", "document", documentId, "revisions", revisionId] as const,
+  // The document's live share links, under the same "document" prefix as its
+  // other caches so a document write sweeps them too.
+  documentShares: (wsId: string, documentId: string) => ["designs", wsId, "documents", "document", documentId, "shares"] as const,
   // The community catalogue mixes built-in recipes with the workspace's own,
   // so it is workspace-scoped even though most rows are global (DC-041).
   scenarioRecipes: (wsId: string) => ["designs", wsId, "scenario-recipes"] as const,

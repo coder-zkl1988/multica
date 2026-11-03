@@ -365,6 +365,16 @@ export function designDocumentRevisionListOptions(wsId: string, documentId: stri
   });
 }
 
+/** The document's live share links, newest first; revoked links are absent. */
+export function designDocumentSharesOptions(wsId: string, documentId: string) {
+  return queryOptions({
+    queryKey: designKeys.documentShares(wsId, documentId),
+    queryFn: () => api.listDesignDocumentShares(documentId),
+    select: (data) => data.shares,
+    enabled: !!documentId,
+  });
+}
+
 /**
  * How often a mounted revision re-reads its preview capability. The server
  * issues one with a 30-minute life (`designDocumentPreviewAccessTokenLifetime`
