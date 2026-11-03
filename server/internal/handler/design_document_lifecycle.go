@@ -193,6 +193,65 @@ func (h *Handler) GetDesignDocument(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, response)
 }
 
+type UpdateDesignDocumentRequest struct {
+	Title string `json:"title"`
+}
+
+// UpdateDesignDocument renames a document (DC-066). The title is the only
+// field a PATCH may move: revisions are immutable, and the draft/saved
+// pointers record the content the user actually approved, so a rename must
+// never look like a content change. Nothing but the title and updated_at is
+// written.
+//
+// The authorization boundary is the one every other document mutation uses:
+// loadDesignDocumentForRequest resolves the workspace from the request and
+// loads the document inside it, so a caller from another workspace gets the
+// same not-found answer as for a document that does not exist.
+func (h *Handler) UpdateDesignDocument(w http.ResponseWriter, r *http.Request) {
+	var req UpdateDesignDocumentRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeProjectDesignSystemError(w, http.StatusBadRequest, "invalid_request", "invalid request body")
+		return
+	}
+	req.Title = strings.TrimSpace(req.Title)
+	if req.Title == "" {
+		writeProjectDesignSystemError(w, http.StatusBadRequest, "title_required", "title is required")
+		return
+	}
+	if len(req.Title) > designDocumentMaxTitleBytes {
+		writeProjectDesignSystemError(w, http.StatusBadRequest, "title_too_large", "title exceeds the size limit")
+		return
+	}
+
+	document, workspaceUUID, ok := h.loadDesignDocumentForRequest(w, r)
+	if !ok {
+		return
+	}
+	updated, err := h.Queries.UpdateDesignDocumentTitle(r.Context(), db.UpdateDesignDocumentTitleParams{
+		ID:          document.ID,
+		WorkspaceID: workspaceUUID,
+		Title:       req.Title,
+	})
+	if err != nil {
+		writeProjectDesignSystemError(w, http.StatusInternalServerError, "rename_failed", "failed to rename the design document")
+		return
+	}
+
+	// The response carries the active task like GET does, so a client that
+	// replaces its cached document with this answer does not drop the run
+	// indicator from the header while the rename settles.
+	var task *db.AgentTaskQueue
+	if updated.ActiveTaskID.Valid {
+		loaded, err := h.Queries.GetAgentTaskInWorkspace(r.Context(), db.GetAgentTaskInWorkspaceParams{
+			ID: updated.ActiveTaskID, WorkspaceID: updated.WorkspaceID,
+		})
+		if err == nil {
+			task = &loaded
+		}
+	}
+	writeJSON(w, http.StatusOK, designDocumentResponse(updated, task, h.designDocumentRepositoryGrounded(r.Context(), updated)))
+}
+
 func (h *Handler) loadDesignDocumentForRequest(w http.ResponseWriter, r *http.Request) (db.DesignDocument, pgtype.UUID, bool) {
 	document, workspaceUUID, _, ok := h.loadDesignDocumentForRequester(w, r)
 	return document, workspaceUUID, ok

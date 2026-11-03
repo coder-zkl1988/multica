@@ -121,6 +121,7 @@ import { DesignNextSteps } from "./design-next-steps";
 import { DesignRunPlan, latestTodoRows } from "./design-run-plan";
 import { useDesignDocumentDelete } from "./design-document-actions";
 import { useDesignDocumentShareActions } from "./design-document-share-actions";
+import { DesignDocumentTitleEditor } from "./design-document-title";
 import { previewEntries } from "./design-document-preview";
 
 /** What the workbench's main pane is showing. */
@@ -625,6 +626,31 @@ export function DesignDocumentPage({ documentId }: { documentId: string }) {
       await refresh();
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : "放弃草稿失败"),
+  });
+
+  // Renaming is awaited and never optimistic: the title is the one field the
+  // header, every card and every list read, and a refused write must not leave
+  // any of them showing a name the server never accepted (DC-066).
+  const rename = useMutation({
+    mutationFn: (nextTitle: string) => api.updateDesignDocument(documentId, { title: nextTitle }),
+    onSuccess: async (next) => {
+      applyDocument(next);
+      toast.success("已重命名设计稿");
+      // The whole documents prefix, not just the project list: the same title
+      // is read by the workspace 最近生成 wall, the create-project picker, the
+      // issue view and the document's own cache. The mixed asset lists carry
+      // documents too, so they are refreshed explicitly.
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: designKeys.documentsAll(wsId) }),
+        queryClient.invalidateQueries({ queryKey: designKeys.assetsByProject(wsId, next.project_id) }),
+        next.project_resource_id
+          ? queryClient.invalidateQueries({
+              queryKey: designKeys.assetsByRepository(wsId, next.project_id, next.project_resource_id),
+            })
+          : Promise.resolve(),
+      ]);
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "重命名失败"),
   });
 
   const title = document?.title.trim() || "设计稿";
@@ -1563,7 +1589,7 @@ export function DesignDocumentPage({ documentId }: { documentId: string }) {
           { href: paths.designs(), label: "设计库" },
           ...(project ? [{ href: paths.projectDetail(project.id), label: project.title }] : []),
         ]}
-        leaf={<span className="flex min-w-0 items-center gap-2"><span className="truncate font-medium">{title}</span>{statusLabel ? <Badge variant="secondary" className="px-1.5 text-micro font-normal">{statusLabel}</Badge> : null}</span>}
+        leaf={<span className="flex min-w-0 items-center gap-2"><DesignDocumentTitleEditor title={document?.title ?? ""} disabled={!document} onRename={(nextTitle) => rename.mutateAsync(nextTitle)} />{statusLabel ? <Badge variant="secondary" className="px-1.5 text-micro font-normal">{statusLabel}</Badge> : null}</span>}
         actions={(
           <div className="flex items-center gap-2">
             {canSave ? (

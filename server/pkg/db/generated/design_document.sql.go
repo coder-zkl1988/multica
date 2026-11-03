@@ -1515,3 +1515,51 @@ func (q *Queries) UpdateDesignDocumentActiveTask(ctx context.Context, arg Update
 	)
 	return i, err
 }
+
+const updateDesignDocumentTitle = `-- name: UpdateDesignDocumentTitle :one
+UPDATE design_document SET
+    title = $1,
+    updated_at = now()
+WHERE id = $2
+  AND workspace_id = $3
+RETURNING id, workspace_id, project_id, project_resource_id, issue_id, title, platform, recipe, draft_revision_id, saved_revision_id, current_agent_id, active_task_id, active_operation, input_snapshot, last_error, created_by, created_at, updated_at, saved_at, workspace_repository_id
+`
+
+type UpdateDesignDocumentTitleParams struct {
+	Title       string      `json:"title"`
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+// Renaming moves the title and nothing else (DC-066). Revisions are immutable,
+// and a rename must not look like a content change: the draft and saved
+// pointers, the active task and the failure record all stay where they are.
+// updated_at moves because the workspace lists are ordered by it — a renamed
+// document is one the user just touched.
+func (q *Queries) UpdateDesignDocumentTitle(ctx context.Context, arg UpdateDesignDocumentTitleParams) (DesignDocument, error) {
+	row := q.db.QueryRow(ctx, updateDesignDocumentTitle, arg.Title, arg.ID, arg.WorkspaceID)
+	var i DesignDocument
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.ProjectID,
+		&i.ProjectResourceID,
+		&i.IssueID,
+		&i.Title,
+		&i.Platform,
+		&i.Recipe,
+		&i.DraftRevisionID,
+		&i.SavedRevisionID,
+		&i.CurrentAgentID,
+		&i.ActiveTaskID,
+		&i.ActiveOperation,
+		&i.InputSnapshot,
+		&i.LastError,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.SavedAt,
+		&i.WorkspaceRepositoryID,
+	)
+	return i, err
+}

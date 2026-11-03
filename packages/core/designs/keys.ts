@@ -45,6 +45,12 @@ export const designKeys = {
   projectDesignSystemCatalogue: (wsId: string) => ["designs", wsId, "project-design-systems", "catalogue"] as const,
   // Design documents are listed per project, never workspace-wide (DC-042).
   documents: (wsId: string, projectId: string) => ["designs", wsId, "documents", projectId] as const,
+  // The whole documents subtree, for a write that changes a field every
+  // surface shows (a rename, DC-066). Prefix-matching this key refreshes the
+  // per-project lists, the workspace listings, the issue and repository
+  // views, and the document's own cached copy in one call, so no surface can
+  // keep showing the old title.
+  documentsAll: (wsId: string) => ["designs", wsId, "documents"] as const,
   // The workspace-wide exception: the create-project modal's design picker.
   // Under the same "documents" prefix, so the task-lifecycle invalidation of
   // that prefix refreshes the picker along with the per-project lists. The

@@ -37,6 +37,7 @@ const {
   regenerateDesignDocument,
   restoreDesignDocumentRevision,
   saveDesignDocument,
+  updateDesignDocument,
   toastError,
   toastSuccess,
 } = vi.hoisted(() => ({
@@ -62,6 +63,7 @@ const {
   regenerateDesignDocument: vi.fn(),
   restoreDesignDocumentRevision: vi.fn(),
   saveDesignDocument: vi.fn(),
+  updateDesignDocument: vi.fn(),
   toastError: vi.fn(),
   toastSuccess: vi.fn(),
 }));
@@ -90,6 +92,7 @@ vi.mock("@multica/core/api", () => ({
     regenerateDesignDocument,
     restoreDesignDocumentRevision,
     saveDesignDocument,
+    updateDesignDocument,
     cancelTaskById: vi.fn(),
   },
 }));
@@ -299,6 +302,7 @@ beforeEach(() => {
   });
   revokeDesignDocumentShare.mockResolvedValue(undefined);
   deleteDesignDocument.mockResolvedValue(undefined);
+  updateDesignDocument.mockResolvedValue(document({ title: "已更名" }));
 });
 
 afterEach(() => {
@@ -914,6 +918,56 @@ describe("DesignDocumentPage", () => {
     renderPage();
     await screen.findByTitle("订单总览 · 首页");
     expect(screen.queryByRole("button", { name: "重新生成" })).not.toBeInTheDocument();
+  });
+
+  // The workspace header is the only surface that renames (DC-066). The
+  // editor's own interaction matrix lives in design-document-title.test.tsx;
+  // this keeps the wiring — the request, the awaited success, the toast, and
+  // the cache settlement that refreshes every list showing the old title.
+  it("renames the document from the header and refreshes the documents caches", async () => {
+    const renamed = document({ title: "新版订单总览" });
+    // The invalidated document refetch (and the lists, which share the mock)
+    // must answer with the renamed row, exactly as the server would.
+    updateDesignDocument.mockImplementation(async () => {
+      getDesignDocument.mockResolvedValue(renamed);
+      return renamed;
+    });
+    renderPage();
+    await screen.findByTitle("订单总览 · 首页");
+
+    await userEvent.click(screen.getByRole("button", { name: "重命名设计稿" }));
+    const input = screen.getByRole("textbox", { name: "设计稿标题" });
+    await userEvent.clear(input);
+    await userEvent.type(input, "  新版订单总览  ");
+    await userEvent.keyboard("{Enter}");
+
+    await waitFor(() =>
+      expect(updateDesignDocument).toHaveBeenCalledWith("document-1", { title: "新版订单总览" }),
+    );
+    expect(toastSuccess).toHaveBeenCalledWith("已重命名设计稿");
+
+    // The header, and the framed page titles derived from the document, move
+    // to the new name — and stay there after the invalidated refetch lands.
+    expect(await screen.findByRole("button", { name: "重命名设计稿" })).toBeInTheDocument();
+    expect(screen.getByText("新版订单总览")).toBeInTheDocument();
+    await waitFor(() => expect(getDesignDocument.mock.calls.length).toBeGreaterThan(1));
+    expect(screen.getByText("新版订单总览")).toBeInTheDocument();
+  });
+
+  it("surfaces a refused rename as a toast and leaves the stored title alone", async () => {
+    updateDesignDocument.mockRejectedValue(new Error("标题已被占用"));
+    renderPage();
+    await screen.findByTitle("订单总览 · 首页");
+
+    await userEvent.click(screen.getByRole("button", { name: "重命名设计稿" }));
+    const input = screen.getByRole("textbox", { name: "设计稿标题" });
+    await userEvent.clear(input);
+    await userEvent.type(input, "另一个名字");
+    await userEvent.keyboard("{Enter}");
+
+    await waitFor(() => expect(toastError).toHaveBeenCalledWith("标题已被占用"));
+    // The editor stayed open with the draft, so a retry need not retype.
+    expect(screen.getByRole("textbox", { name: "设计稿标题" })).toHaveValue("另一个名字");
   });
 
   // Open Design queues chat sends during a run; the composer does the same:

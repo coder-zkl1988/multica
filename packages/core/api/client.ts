@@ -244,6 +244,7 @@ import type {
   ManualEditDesignDocumentRequest,
   RegenerateDesignDocumentRequest,
   SaveDesignDocumentRequest,
+  UpdateDesignDocumentRequest,
   SetDesignAssetRepositoryAssociationRequest,
   SetDesignAssetRepositoryAssociationResponse,
   DesignDocument,
@@ -5596,6 +5597,24 @@ export class ApiClient {
    * answer whenever it has one; the requested title fills in only when the
    * body carried none.
    */
+  async updateDesignDocument(documentId: string, data: UpdateDesignDocumentRequest): Promise<DesignDocument> {
+    const raw = await this.fetch<unknown>(`/api/design-documents/${encodeURIComponent(documentId)}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    });
+    const parsed = parseWithFallback(
+      raw,
+      DesignDocumentSchema,
+      { ...EMPTY_DESIGN_DOCUMENT, id: documentId, title: data.title },
+      { endpoint: "PATCH /api/design-documents/{id}" },
+    );
+    return {
+      ...parsed,
+      id: parsed.id || documentId,
+      title: parsed.title || data.title,
+    };
+  }
+
   /**
    * Deletes a document and every revision it owns. 204 with no body — there
    * is nothing left to parse, and nothing to fall back to.

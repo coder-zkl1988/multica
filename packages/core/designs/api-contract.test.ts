@@ -244,3 +244,62 @@ describe("ApiClient design repository catalogue", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("ApiClient design document rename", () => {
+  const renamedDocument = {
+    id: "document-1",
+    workspace_id: "ws-1",
+    project_id: "project-1",
+    title: "新的标题",
+    platform: "web",
+    recipe: "ui-mockup",
+    status: "draft",
+    created_at: "2026-08-19T00:00:00Z",
+    updated_at: "2026-08-19T00:10:00Z",
+  };
+
+  it("PATCHes only the title and parses the whole document back", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(renamedDocument)));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+
+    const result = await client.updateDesignDocument("document-1", { title: "新的标题" });
+
+    expect(result.id).toBe("document-1");
+    expect(result.title).toBe("新的标题");
+    expect(result.status).toBe("draft");
+    // The response is a design document, not a wrapper: the endpoint returns
+    // the row itself, which the client replaces the cached copy with.
+    expect(result.project_id).toBe("project-1");
+
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(url).toBe("https://api.example.test/api/design-documents/document-1");
+    expect(init?.method).toBe("PATCH");
+    expect(JSON.parse(String(init?.body))).toEqual({ title: "新的标题" });
+  });
+
+  it("percent-encodes the document id in the rename path", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(renamedDocument)));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+
+    await client.updateDesignDocument("document/1", { title: "新的标题" });
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://api.example.test/api/design-documents/document%2F1",
+    );
+  });
+
+  it("keeps the new title even when the response body is malformed", async () => {
+    // A backend that drifts must not make a confirmed rename look ignored: the
+    // fallback carries the title the user just saved.
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ title: 42 })));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+
+    const result = await client.updateDesignDocument("document-1", { title: "新的标题" });
+
+    expect(result.title).toBe("新的标题");
+    expect(result.id).toBe("document-1");
+  });
+});

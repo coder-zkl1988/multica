@@ -295,6 +295,19 @@ deleted_document AS (
 )
 SELECT id, project_id FROM deleted_references;
 
+-- Renaming moves the title and nothing else (DC-066). Revisions are immutable,
+-- and a rename must not look like a content change: the draft and saved
+-- pointers, the active task and the failure record all stay where they are.
+-- updated_at moves because the workspace lists are ordered by it — a renamed
+-- document is one the user just touched.
+-- name: UpdateDesignDocumentTitle :one
+UPDATE design_document SET
+    title = sqlc.arg('title'),
+    updated_at = now()
+WHERE id = sqlc.arg('id')
+  AND workspace_id = sqlc.arg('workspace_id')
+RETURNING *;
+
 -- Delivery links a design document to the issue whose implementation it
 -- governs (DC-062). Only the link moves: draft/saved pointers, the active
 -- task and the failure record are untouched, and the issue's own status is

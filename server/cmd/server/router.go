@@ -2478,6 +2478,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			r.Get("/api/design-systems/builtin/{slug}", h.GetBuiltinDesignSystem)
 			r.Post("/api/design-documents", h.CreateDesignDocument)
 			r.Get("/api/design-documents/{id}", h.GetDesignDocument)
+			r.Patch("/api/design-documents/{id}", h.UpdateDesignDocument)
 			r.Get("/api/design-documents/{id}/live-preview", h.GetDesignDocumentLivePreview)
 			r.Get("/api/design-documents/{id}/revisions", h.ListDesignDocumentRevisions)
 			r.Get("/api/design-documents/{id}/revisions/{revisionId}", h.GetDesignDocumentRevision)

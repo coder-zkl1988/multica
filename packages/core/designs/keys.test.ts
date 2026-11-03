@@ -114,6 +114,13 @@ describe("designKeys", () => {
     const prefix = ["designs", "ws-1", "documents"];
     expect(designKeys.document("ws-1", "doc-1").slice(0, 3)).toEqual(prefix);
     expect(designKeys.documentRevisions("ws-1", "doc-1").slice(0, 3)).toEqual(prefix);
+    // A rename (DC-066) invalidates this prefix so no surface keeps the old
+    // title; every documents key must stay under it, and the prefix must not
+    // reach into another workspace.
+    expect(designKeys.documentsAll("ws-1")).toEqual(prefix);
+    expect(designKeys.documentsAll("ws-2")).not.toEqual(prefix);
+    expect(designKeys.documentsInWorkspace("ws-1", 10).slice(0, 3)).toEqual(prefix);
+    expect(designKeys.documentsByIssue("ws-1", "issue-1").slice(0, 3)).toEqual(prefix);
     expect(designKeys.documentRevision("ws-1", "doc-1", "rev-1")).toEqual([
       "designs", "ws-1", "documents", "document", "doc-1", "revisions", "rev-1",
     ]);

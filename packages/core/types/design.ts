@@ -1131,6 +1131,11 @@ export interface SaveDesignDocumentRequest {
   draft_revision_id: string;
 }
 
+/** Renaming a document (DC-066). The title is the only field a PATCH moves. */
+export interface UpdateDesignDocumentRequest {
+  title: string;
+}
+
 /** One row of a document's revision timeline, newest first. */
 export interface DesignDocumentRevisionSummary {
   id: string;
