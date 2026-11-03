@@ -782,3 +782,12 @@ Open Design 的两类预置资源按各自性质分别落地，不共用一套�
 - 状态：`confirmed`（排期，非本轮实施）
 - 日期：2026-11-03
 - 决策：设计体系用户侧 `.zip` + `SKILLS.md` 下载、以及复制为独立体系（DC-060，支持空 `project_id` 的复制端点）排入后续切片，本轮不实现。`SKILLS.md` 的内容与生成规则在实施前先单独定义。
+
+### DC-068 D1/D2 实施记录（单文件 deck 契约落地）
+
+- 状态：`evidence`
+- 日期：2026-11-04
+- D1（生产者+契约+审计+门禁）：契约权威在 `server/internal/designdocument/deck.go`——framework `<style>` 逐字节冻结（sha256 允许清单），骨架相对上游三处偏离（固定 `multica.deck.index` 存储 key、保留 `parent.postMessage` 通道、新增 `od:present-escape`），外加内嵌空 `speaker-notes` 块。审计新增九个 `deck_*` error 级门禁诊断；备注块剥离模板残留扫描；`window.parent.postMessage` 仅在 deck 文档放行（`parent.location`/`open`/`document`、`opener`、`top`、`frames`、一切 `location` 仍拒绝）；framework 运行时按摘要豁免通用脚本规则（声称是 framework 但漂移报 `deck_framework_drift`）；非 deck 文档诊断集字节级不变。manifest 为 JSONB 新增 `slides`（旧归档解码为 nil，容错比较），无迁移、无新增包 role。prompt 注入完整骨架与槽位/禁区清单，`recipe_mode` 进任务上下文使社区 deck 配方同享骨架；端到端一致性测试证明 prompt 逐字骨架通过真实收集与审计。浏览器门禁同页 `od:slide` 逐 index 扫描，失败码 `deck_protocol_unresponsive`，旧 receipt 兼容。
+- D2（消费者）：revision/summary/share 响应投影 `slides` + `slide_count`（旧 manifest 返回 `[]`/`0`，zod 逐项降级）。演示模式对单文件 deck 走 od:slide 协议（单 iframe、计数来自 `od:slide-state`、键盘转发为消息、`od:present-escape` 退出），非 deck 演示路径行为不变；备注为演示内只读右侧抽屉（本页没有备注/无法读取备注降级）。缩略图按 `slideIndex` 缓存并用纯 CSS `activateDeckSlide` 选页；/view 呈现幻灯片网格（`{N} 张幻灯片`）；inspect 按 slide 定位；PDF/PPTX/PNG 按 slide 展开，备注不写入导出（与上游一致）。
+- 兼容性结论：旧多页 deck 归档（无 marker、manifest.slides 为 nil）全部走 legacy 路径原样渲染；新生成一律单文件。对旧 deck 的 adjust/regenerate 会产出单文件修订（时间线上形态切换），UI 不额外标注。消费者一律以 `manifest.slides`/内容 marker 判断形态，不得用 `document.recipe` 推断。
+- 边界与后续：备注只读（修订不可变，写回需新服务端操作）；无独立演讲者窗口（单窗口抽屉）；演示期 capability 30 分钟过期仅提示不续签；`design preflight --preview` 尚未接 deck 扫描（finalize 门禁已接）；骨架脚本的 `</script>` 截断与 `#deck-stage` 非_slide 首子元素属已知解析边界。jsdom 无法执行骨架脚本，键盘/点击/备注抽屉/导出的真机（Chromium/桌面端）人工验收仍待执行，不得视为已验收。
