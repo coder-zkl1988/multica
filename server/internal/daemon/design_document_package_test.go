@@ -508,6 +508,17 @@ func writeDesignDocumentFile(t *testing.T, outputDir, name, contents string) {
 	}
 }
 
+// hasDesignDocumentLintWarning reports whether the audit carries the given
+// anti-slop rule as a warning — the severity that never blocks the gate.
+func hasDesignDocumentLintWarning(audit designdocument.AuditReport, code string) bool {
+	for _, diagnostic := range audit.Diagnostics {
+		if diagnostic.Code == code && diagnostic.Severity == designdocument.DiagnosticWarning {
+			return true
+		}
+	}
+	return false
+}
+
 // stageDesignDocumentTaskContext builds the enqueue-time page-design task
 // context, matching what handler.createDesignDocumentTask serialises.
 func stageDesignDocumentTaskContext(t *testing.T) json.RawMessage {
@@ -676,7 +687,14 @@ func designDocumentTask(taskID string, context json.RawMessage) Task {
 // ran before the browser rendered anything would change the recorded sequence.
 func TestFinalizeDesignDocumentPackageCollectsAuditsPreviewsAndUploads(t *testing.T) {
 	envRoot := t.TempDir()
-	stageDesignDocumentPackage(t, envRoot)
+	outputDir := stageDesignDocumentPackage(t, envRoot)
+	// An anti-slop lint warning rides along without changing the verdict: the
+	// gate blocks on DiagnosticError only, so a package carrying this warning
+	// still becomes a draft and the warning is reported with it.
+	writeDesignDocumentFile(t, outputDir, "prototype/index.html",
+		strings.Replace(designDocumentIndexHTML,
+			`<strong>Order operations</strong>`,
+			`<strong style="background:#6366f1">Order operations</strong>`, 1))
 
 	uploader := newDesignDocumentUploader()
 	verifier := &designDocumentVerifier{}
@@ -705,6 +723,9 @@ func TestFinalizeDesignDocumentPackageCollectsAuditsPreviewsAndUploads(t *testin
 	}
 	if !receipt.Audit.Passed || receipt.Audit.SchemaVersion != designdocument.AuditSchemaV1 {
 		t.Fatalf("audit = %+v", receipt.Audit)
+	}
+	if !hasDesignDocumentLintWarning(receipt.Audit, "lint_ai_default_indigo") {
+		t.Fatalf("audit diagnostics = %+v, want a lint_ai_default_indigo warning", receipt.Audit.Diagnostics)
 	}
 	if receipt.Preview.ContentDigest != receipt.ContentDigest {
 		t.Fatalf("preview digest %q does not match package digest %q", receipt.Preview.ContentDigest, receipt.ContentDigest)

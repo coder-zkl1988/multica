@@ -59,8 +59,13 @@ func auditPackage(
 		switch entry.Role {
 		case "prototype_entry", "prototype_page":
 			diagnostics = append(diagnostics, auditMarkup(contents, entry.Path, artifactByPath)...)
+			// Anti-slop lint findings are warning-level advice (DC-050): they
+			// ride along in the report and never reach the verdict, because
+			// hasErrors counts DiagnosticError only.
+			diagnostics = append(diagnostics, lintPrototypeDocument(string(contents), entry.Path)...)
 		case "prototype_style":
 			diagnostics = append(diagnostics, auditStyle(string(contents), entry.Path, false, artifactByPath)...)
+			diagnostics = append(diagnostics, lintPrototypeStylesheet(string(contents), entry.Path)...)
 		case "prototype_script":
 			diagnostics = append(diagnostics, auditScript(contents, entry.Path, artifactByPath)...)
 		case "asset":

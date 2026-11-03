@@ -82,14 +82,28 @@ func runDesignAuditForTest(t *testing.T, args ...string) (string, error) {
 
 // The command is the agent's view of the platform gate, so a package the
 // gate accepts must pass, and the verdict must be readable without JSON.
+// Anti-slop lint warnings render with their rule and file but never fail the
+// verdict: the gate blocks on errors only.
 func TestDesignAuditPassesTheValidPackage(t *testing.T) {
 	packageDir, contextPath := designAuditFixture(t)
+	stylesPath := filepath.Join(packageDir, "prototype", "styles.css")
+	styles, err := os.ReadFile(stylesPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(stylesPath,
+		append(styles, []byte("\n.eyebrow {\n  text-transform: uppercase;\n  font-weight: 600;\n}\n")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	out, err := runDesignAuditForTest(t, "--dir", packageDir, "--context", contextPath, "--task-id", "task-1", "--preview=false")
 	if err != nil {
 		t.Fatalf("audit failed: %v\n%s", err, out)
 	}
 	if !strings.HasPrefix(out, "design audit: PASS") || !strings.Contains(out, "preview was skipped") {
 		t.Fatalf("output = %q, want a PASS verdict that says the preview was skipped", out)
+	}
+	if !strings.Contains(out, "warning lint_all_caps_no_tracking (prototype/styles.css)") {
+		t.Fatalf("output = %q, want the lint warning rendered with its rule and file", out)
 	}
 }
 
