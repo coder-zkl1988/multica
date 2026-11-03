@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { DesignDocument, DesignDocumentRevision } from "@multica/core/types";
 import { designDocumentRevisionOptions } from "@multica/core/designs/queries";
+import { isDeckRevision } from "./deck-protocol";
 import { previewEntries } from "./design-document-preview";
 import { loadRevisionThumbnail, thumbnailKey } from "./design-document-thumbnail-renderer";
 
@@ -11,19 +12,23 @@ function ThumbnailStatus({ children, failed = false }: { children: React.ReactNo
   return <div role={failed ? "alert" : "status"} className="flex h-full w-full items-center justify-center bg-muted/30 p-4 text-center text-caption text-muted-foreground">{children}</div>;
 }
 
-export function DesignDocumentThumbnail({ revision, entryPath, title }: {
+export function DesignDocumentThumbnail({ revision, entryPath, title, slideIndex }: {
   revision: DesignDocumentRevision;
   entryPath: string;
   title: string;
+  /** 0-based deck slide to show; omitted for a plain page. */
+  slideIndex?: number;
 }) {
-  // A revision switch must discard the old image before the next effect runs.
-  return <RevisionThumbnail key={thumbnailKey(revision, entryPath)} revision={revision} entryPath={entryPath} title={title} />;
+  // A revision or slide switch must discard the old image before the next
+  // effect runs.
+  return <RevisionThumbnail key={thumbnailKey(revision, entryPath, slideIndex)} revision={revision} entryPath={entryPath} title={title} slideIndex={slideIndex} />;
 }
 
-function RevisionThumbnail({ revision, entryPath, title }: {
+function RevisionThumbnail({ revision, entryPath, title, slideIndex }: {
   revision: DesignDocumentRevision;
   entryPath: string;
   title: string;
+  slideIndex?: number;
 }) {
   const container = useRef<HTMLDivElement>(null);
   const [visible, setVisible] = useState(false);
@@ -51,7 +56,7 @@ function RevisionThumbnail({ revision, entryPath, title }: {
     let objectUrl = "";
     setFailed(false);
     setImage("");
-    void loadRevisionThumbnail(revision, entryPath).then((blob) => {
+    void loadRevisionThumbnail(revision, entryPath, slideIndex).then((blob) => {
       if (cancelled) return;
       objectUrl = URL.createObjectURL(blob);
       setImage(objectUrl);
@@ -62,7 +67,7 @@ function RevisionThumbnail({ revision, entryPath, title }: {
       cancelled = true;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [visible, revision, entryPath]);
+  }, [visible, revision, entryPath, slideIndex]);
 
   return (
     <div ref={container} className="h-full w-full overflow-hidden bg-background">
@@ -82,6 +87,8 @@ export function DesignDocumentCover({ document, variant }: {
   const revision = revisionId && query.data?.id === revisionId ? query.data : undefined;
   const entries = useMemo(() => previewEntries(revision), [revision]);
   const firstPage = entries[0];
+  const deck = revision ? isDeckRevision(revision) : false;
+  const count = deck ? revision!.slides.length : entries.length;
 
   return (
     <div className="relative h-full w-full">
@@ -90,7 +97,7 @@ export function DesignDocumentCover({ document, variant }: {
           : !revision ? <ThumbnailStatus>正在加载版本…</ThumbnailStatus>
             : !firstPage ? <ThumbnailStatus>此版本没有可预览的页面</ThumbnailStatus>
               : <DesignDocumentThumbnail revision={revision} entryPath={firstPage.entry} title={`${document.title} · ${firstPage.title}`} />}
-      {revision ? <span className="absolute right-2 bottom-2 rounded-sm bg-background/90 px-2 py-1 text-caption text-foreground">{entries.length} 个页面</span> : null}
+      {revision ? <span className="absolute right-2 bottom-2 rounded-sm bg-background/90 px-2 py-1 text-caption text-foreground">{count} {deck ? "张幻灯片" : "个页面"}</span> : null}
     </div>
   );
 }

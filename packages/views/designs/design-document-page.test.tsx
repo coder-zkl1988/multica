@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -210,6 +210,31 @@ function revision(overrides: Record<string, unknown> = {}) {
     resource_access_expires_at: "2026-08-19T00:40:00Z",
     ...overrides,
   };
+}
+
+// A deck revision is one single-file document; its pages list is empty and
+// the manifest projects the slides the runtime navigates.
+function deckRevision(overrides: Record<string, unknown> = {}) {
+  return revision({
+    pages: [],
+    preview_targets: [{ id: "prototype-index", kind: "prototype_entry", path: "prototype/index.html" }],
+    slides: [
+      { index: 1, label: "01 Title", id: "slide-1" },
+      { index: 2, label: "02 Agenda", id: "slide-2" },
+    ],
+    slide_count: 2,
+    ...overrides,
+  });
+}
+
+const DECK_HTML = `<!doctype html><html data-od-deck-protocol="1"><head><title>deck</title></head><body><div class="deck-stage" id="deck-stage"><section class="slide active">one</section><section class="slide">two</section></div><script type="application/json" id="speaker-notes">["开场备注","第二页备注"]</script></body></html>`;
+
+function stubDeckFetch(html = DECK_HTML) {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+    ok: true,
+    headers: new Headers({ "content-type": "text/html" }),
+    arrayBuffer: async () => new TextEncoder().encode(html).buffer,
+  }));
 }
 
 function inputSnapshot(overrides: Record<string, unknown> = {}) {
@@ -1047,6 +1072,126 @@ describe("DesignDocumentPage", () => {
 
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("dialog", { name: "演示模式" })).not.toBeInTheDocument();
+  });
+
+  // A deck is one document with its own runtime. Presenting it must keep one
+  // iframe (never swap pages), take the counter from od:slide-state, forward
+  // keys as od:slide, and treat od:present-escape as Esc.
+  it("presents a deck as one frame and navigates it over deck protocol v1", async () => {
+    stubDeckFetch();
+    getDesignDocumentRevision.mockImplementation(async (_documentId: string, revisionId: string) =>
+      revisionId === "revision-1"
+        ? revision({ ...FIRST, resource_base_path: "/api/design-document-previews/ws-1/revision-1/aa/token/files" })
+        : deckRevision(),
+    );
+    const user = userEvent.setup();
+    renderPage();
+    expect(await screen.findByTitle("订单总览 · 首页")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "演示模式" }));
+    const dialog = screen.getByRole("dialog", { name: "演示模式" });
+    const frame = within(dialog).getByTitle("订单总览 · 首页") as HTMLIFrameElement;
+    expect(frame).toHaveAttribute(
+      "src",
+      "https://api.test/api/design-document-previews/ws-1/revision-2/bb/token/files/prototype/index.html",
+    );
+    // Placeholder until the runtime reports.
+    expect(within(dialog).getByText("— / —")).toBeInTheDocument();
+
+    const post = (data: unknown) => act(() => {
+      window.dispatchEvent(new MessageEvent("message", { data, source: frame.contentWindow as MessageEventSource }));
+    });
+
+    post({ type: "od:deck-ready", protocolVersion: 1 });
+    post({ type: "od:slide-state", protocolVersion: 1, active: 0, count: 2 });
+    expect(await within(dialog).findByText("1 / 2")).toBeInTheDocument();
+    expect(within(dialog).getByText("01 Title")).toBeInTheDocument();
+
+    const framePost = vi.spyOn(frame.contentWindow!, "postMessage");
+    await user.click(within(dialog).getByRole("button", { name: "下一页" }));
+    expect(framePost).toHaveBeenCalledWith({ type: "od:slide", action: "next" }, "*");
+    // Still the same single frame, still the same document.
+    expect(within(dialog).getByTitle("订单总览 · 首页")).toBe(frame);
+
+    post({ type: "od:slide-state", protocolVersion: 1, active: 1, count: 2 });
+    expect(await within(dialog).findByText("2 / 2")).toBeInTheDocument();
+    expect(within(dialog).getByText("02 Agenda")).toBeInTheDocument();
+
+    post({ type: "od:present-escape", protocolVersion: 1 });
+    expect(screen.queryByRole("dialog", { name: "演示模式" })).not.toBeInTheDocument();
+  });
+
+  it("shows the active slide's speaker notes in a read-only drawer", async () => {
+    stubDeckFetch();
+    getDesignDocumentRevision.mockImplementation(async (_documentId: string, revisionId: string) =>
+      revisionId === "revision-1"
+        ? revision({ ...FIRST, resource_base_path: "/api/design-document-previews/ws-1/revision-1/aa/token/files" })
+        : deckRevision(),
+    );
+    const user = userEvent.setup();
+    renderPage();
+    expect(await screen.findByTitle("订单总览 · 首页")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "演示模式" }));
+    const dialog = screen.getByRole("dialog", { name: "演示模式" });
+    const frame = within(dialog).getByTitle("订单总览 · 首页") as HTMLIFrameElement;
+
+    await user.click(within(dialog).getByRole("button", { name: "备注" }));
+    const drawer = within(dialog).getByRole("complementary", { name: "演讲者备注" });
+    expect(await within(drawer).findByText("开场备注")).toBeInTheDocument();
+    expect(within(drawer).getByText("01 Title")).toBeInTheDocument();
+
+    act(() => {
+      window.dispatchEvent(new MessageEvent("message", {
+        data: { type: "od:slide-state", active: 1, count: 2 },
+        source: frame.contentWindow as MessageEventSource,
+      }));
+    });
+    expect(await within(drawer).findByText("第二页备注")).toBeInTheDocument();
+    expect(within(drawer).getByText("02 Agenda")).toBeInTheDocument();
+  });
+
+  it("degrades to 无法读取备注 when the deck HTML cannot be read", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 404 }));
+    getDesignDocumentRevision.mockImplementation(async (_documentId: string, revisionId: string) =>
+      revisionId === "revision-1"
+        ? revision({ ...FIRST, resource_base_path: "/api/design-document-previews/ws-1/revision-1/aa/token/files" })
+        : deckRevision(),
+    );
+    const user = userEvent.setup();
+    renderPage();
+    expect(await screen.findByTitle("订单总览 · 首页")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "演示模式" }));
+    const dialog = screen.getByRole("dialog", { name: "演示模式" });
+    await user.click(within(dialog).getByRole("button", { name: "备注" }));
+    expect(await within(dialog).findByText("无法读取备注")).toBeInTheDocument();
+  });
+
+  it("says 本页没有备注 for a slide without one", async () => {
+    stubDeckFetch(`<!doctype html><html data-od-deck-protocol="1"><head></head><body><div class="deck-stage" id="deck-stage"><section class="slide active">one</section><section class="slide">two</section></div><script type="application/json" id="speaker-notes">["开场备注"]</script></body></html>`);
+    getDesignDocumentRevision.mockImplementation(async (_documentId: string, revisionId: string) =>
+      revisionId === "revision-1"
+        ? revision({ ...FIRST, resource_base_path: "/api/design-document-previews/ws-1/revision-1/aa/token/files" })
+        : deckRevision(),
+    );
+    const user = userEvent.setup();
+    renderPage();
+    expect(await screen.findByTitle("订单总览 · 首页")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "演示模式" }));
+    const dialog = screen.getByRole("dialog", { name: "演示模式" });
+    const frame = within(dialog).getByTitle("订单总览 · 首页") as HTMLIFrameElement;
+    await user.click(within(dialog).getByRole("button", { name: "备注" }));
+    expect(await within(dialog).findByText("开场备注")).toBeInTheDocument();
+
+    act(() => {
+      window.dispatchEvent(new MessageEvent("message", {
+        data: { type: "od:slide-state", active: 1, count: 2 },
+        source: frame.contentWindow as MessageEventSource,
+      }));
+    });
+    expect(await within(dialog).findByText("本页没有备注")).toBeInTheDocument();
   });
 
   // 历史版本: browse what each revision looks like before committing; only

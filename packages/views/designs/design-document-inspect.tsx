@@ -1,10 +1,11 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Code2, Layers, MousePointer2 } from "lucide-react";
 import { api } from "@multica/core/api";
 import type { DesignDocumentRevision } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
+import { activateDeckSlide, isDeckRevision } from "./deck-protocol";
 import { PrototypeCanvas, usePrototypeDocument } from "./prototype-canvas";
 import { thumbnailViewport } from "./design-document-thumbnail-renderer";
 import { DesignDocumentAssets } from "./design-document-assets";
@@ -23,6 +24,8 @@ type Props = {
   onOverview: () => void;
   onPrevious?: () => void;
   onNext?: () => void;
+  /** 0-based deck slide to open; omitted for a plain page. */
+  slideIndex?: number;
 };
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
@@ -37,10 +40,12 @@ function Color({ label, value }: { label: string; value: string | undefined }) {
 const px = (value: number) => `${Math.round(value * 100) / 100}px`;
 
 export function DesignDocumentInspect(props: Props) {
-  return <Detail key={`${props.revision.id}:${props.entryPath}`} {...props} />;
+  // A different slide is a different view: element selection and zoom must not
+  // carry over from the slide before it.
+  return <Detail key={`${props.revision.id}:${props.entryPath}:${props.slideIndex ?? ""}`} {...props} />;
 }
 
-function Detail({ revision, entryPath, title, onOverview, onPrevious, onNext }: Props) {
+function Detail({ revision, entryPath, title, onOverview, onPrevious, onNext, slideIndex }: Props) {
   const [inspecting, setInspecting] = useState(false);
   const [zoom, setZoom] = useState(1);
   const [selected, setSelected] = useState<Selection | null>(null);
@@ -48,7 +53,38 @@ function Detail({ revision, entryPath, title, onOverview, onPrevious, onNext }: 
   const query = usePrototypeDocument(revision, entryPath, { enabled: inspecting });
   const viewport = thumbnailViewport(revision);
   const previewUrl = revision.resource_base_path ? api.getDesignDocumentPreviewFileURL(revision.resource_base_path, entryPath) : "";
+  const deck = isDeckRevision(revision);
+  const frame = useRef<HTMLIFrameElement>(null);
+  const [slideReady, setSlideReady] = useState(false);
   const css = selected?.css;
+
+  // A deck is one live document for every slide. The runtime restores its own
+  // last position on boot, so the requested slide is sent to it explicitly:
+  // once when the frame loads, and again after od:deck-ready proves the
+  // message listener exists.
+  const postSlide = () => {
+    if (slideIndex === undefined) return;
+    frame.current?.contentWindow?.postMessage({ type: "od:slide", protocolVersion: 1, action: "go", index: slideIndex }, "*");
+  };
+  useEffect(() => {
+    if (slideIndex === undefined) return;
+    setSlideReady(false);
+    const onMessage = (event: MessageEvent) => {
+      if (event.source !== frame.current?.contentWindow) return;
+      const data = event.data as { type?: unknown } | null;
+      if (data && typeof data === "object" && data.type === "od:deck-ready") setSlideReady(true);
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [slideIndex, previewUrl]);
+  useEffect(() => {
+    if (!slideReady || slideIndex === undefined) return;
+    frame.current?.contentWindow?.postMessage({ type: "od:slide", protocolVersion: 1, action: "go", index: slideIndex }, "*");
+  }, [slideReady, slideIndex]);
+
+  const inspectionHtml = inspecting && query.data
+    ? (slideIndex === undefined ? query.data.html : activateDeckSlide(query.data.html, slideIndex))
+    : "";
   const styleText = css ? properties.map((name) => `${name}: ${css[name]};`).join("\n") : "";
   function changeMode(value: boolean) {
     setInspecting(value);
@@ -80,7 +116,7 @@ function Detail({ revision, entryPath, title, onOverview, onPrevious, onNext }: 
               <div className="absolute left-0 top-0 origin-top-left" style={{ width: viewport.width, height: viewport.height, transform: `scale(${zoom})` }}>
                 {inspecting && query.data ? (
                   <PrototypeCanvas
-                    html={query.data.html}
+                    html={inspectionHtml}
                     title={title}
                     frameWidth={viewport.width}
                     zoom={1}
@@ -98,7 +134,7 @@ function Detail({ revision, entryPath, title, onOverview, onPrevious, onNext }: 
                     }}
                     onDocumentReady={() => { setSelected(null); setCopyState(""); }}
                   />
-                ) : <iframe title={title} src={previewUrl} sandbox="allow-scripts" referrerPolicy="no-referrer" className="h-full w-full rounded-md border bg-background shadow-sm" />}
+                ) : <iframe ref={frame} title={title} src={previewUrl} sandbox="allow-scripts" referrerPolicy="no-referrer" onLoad={postSlide} className="h-full w-full rounded-md border bg-background shadow-sm" />}
               </div>
             </div>
           )}
@@ -107,9 +143,15 @@ function Detail({ revision, entryPath, title, onOverview, onPrevious, onNext }: 
           <Button size="icon" variant="ghost" className="h-8 w-8" aria-label="缩小" disabled={zoom <= 0.25} onClick={() => setZoom((value) => Math.max(0.25, value / 1.2))}>−</Button>
           <Button size="sm" variant="ghost" className="min-w-16 tabular-nums" aria-label="重置为 100%" onClick={() => setZoom(1)}>{Math.round(zoom * 100)}%</Button>
           <Button size="icon" variant="ghost" className="h-8 w-8" aria-label="放大" disabled={zoom >= 2} onClick={() => setZoom((value) => Math.min(2, value * 1.2))}>+</Button>
-          <span className="mx-1 h-5 w-px bg-border" />
-          <Button size="sm" variant="ghost" disabled={!onPrevious} onClick={onPrevious}>上一页</Button>
-          <Button size="sm" variant="ghost" disabled={!onNext} onClick={onNext}>下一页</Button>
+          {/* A deck's slides are moved by the deck runtime inside the frame,
+              so paging through the package's pages here would leave it. */}
+          {deck ? null : (
+            <>
+              <span className="mx-1 h-5 w-px bg-border" />
+              <Button size="sm" variant="ghost" disabled={!onPrevious} onClick={onPrevious}>上一页</Button>
+              <Button size="sm" variant="ghost" disabled={!onNext} onClick={onNext}>下一页</Button>
+            </>
+          )}
         </div>
       </section>
       <aside aria-label="检查面板" className="min-h-0 overflow-auto rounded-2xl border bg-background">

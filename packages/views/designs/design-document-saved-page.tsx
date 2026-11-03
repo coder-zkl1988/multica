@@ -10,6 +10,7 @@ import { Button } from "@multica/ui/components/ui/button";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { BreadcrumbHeader } from "../layout/breadcrumb-header";
 import { useNavigation } from "../navigation";
+import { isDeckRevision } from "./deck-protocol";
 import { previewEntries } from "./design-document-preview";
 import { DesignDocumentThumbnail } from "./design-document-thumbnail";
 import { DesignDocumentInspect } from "./design-document-inspect";
@@ -25,10 +26,19 @@ export function DesignDocumentSavedPage({ documentId }: { documentId: string }) 
   const revisionQuery = useQuery(designDocumentRevisionOptions(wsId, documentId, savedRevisionId));
   const revision = savedRevisionId && revisionQuery.data?.id === savedRevisionId ? revisionQuery.data : undefined;
   const entries = useMemo(() => previewEntries(revision), [revision]);
-  const [selection, setSelection] = useState<{ revisionId: string; entry: string } | null>(null);
+  const deck = revision ? isDeckRevision(revision) : false;
+  const slides = revision?.slides ?? [];
+  // A deck is one document: every card opens the same entry at its own slide.
+  const deckEntry = entries[0]?.entry || revision?.prototype_entry || "";
+  const [selection, setSelection] = useState<{ revisionId: string; entry: string; slideIndex?: number } | null>(null);
   const page = selection?.revisionId === savedRevisionId
     ? entries.find((entry) => entry.entry === selection.entry)
     : undefined;
+  const selectedSlide = selection?.revisionId === savedRevisionId && selection.slideIndex !== undefined
+    ? slides.find((slide) => slide.index - 1 === selection.slideIndex)
+    : undefined;
+  const slideLabel = (slide: { index: number; label: string }, position: number) =>
+    slide.label.trim() || `第 ${slide.index || position + 1} 张`;
   const pageIndex = entries.findIndex((entry) => entry.entry === page?.entry);
   const previous = entries[pageIndex - 1];
   const next = entries[pageIndex + 1];
@@ -63,20 +73,41 @@ export function DesignDocumentSavedPage({ documentId }: { documentId: string }) 
         <DesignDocumentInspect
           revision={revision}
           entryPath={page.entry}
-          title={title + " · " + page.title}
+          title={title + " · " + (selectedSlide ? slideLabel(selectedSlide, selection?.slideIndex ?? 0) : page.title)}
           onOverview={() => setSelection(null)}
-          onPrevious={previous ? () => setSelection({ revisionId: savedRevisionId, entry: previous.entry }) : undefined}
-          onNext={next ? () => setSelection({ revisionId: savedRevisionId, entry: next.entry }) : undefined}
+          onPrevious={deck || !previous ? undefined : () => setSelection({ revisionId: savedRevisionId, entry: previous.entry })}
+          onNext={deck || !next ? undefined : () => setSelection({ revisionId: savedRevisionId, entry: next.entry })}
+          slideIndex={deck ? selection?.slideIndex : undefined}
         />
       ) : (
         <>
           <div className="flex flex-wrap items-center gap-3 border-b bg-background px-4 py-3">
             <Badge variant="secondary">已保存{revision ? ` · v${revision.revision_number}` : ""}</Badge>
             <span className="text-caption text-muted-foreground">只读查看</span>
-            <span className="text-caption text-muted-foreground">{entries.length} 个页面</span>
+            <span className="text-caption text-muted-foreground">{deck ? `${slides.length} 张幻灯片` : `${entries.length} 个页面`}</span>
           </div>
           <div className="flex min-h-0 flex-1 justify-center overflow-auto bg-muted/30 p-4">
-            {!page && revision && entries.length > 0 ? (
+            {deck && revision && slides.length > 0 ? (
+              <section aria-label="幻灯片概览" className="grid w-full content-start grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-3">
+                {slides.map((slide, position) => {
+                  const label = slideLabel(slide, position);
+                  return (
+                    <button
+                      key={slide.id || String(position)}
+                      type="button"
+                      aria-label={`查看幻灯片：${label}`}
+                      onClick={() => setSelection({ revisionId: savedRevisionId, entry: deckEntry, slideIndex: slide.index - 1 })}
+                      className="group flex min-w-0 flex-col gap-2 rounded-lg text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    >
+                      <div className="aspect-[16/9] w-full overflow-hidden rounded-lg border bg-background group-hover:border-primary">
+                        <DesignDocumentThumbnail revision={revision} entryPath={deckEntry} title={label} slideIndex={slide.index - 1} />
+                      </div>
+                      <span className="w-full truncate text-body font-medium">{label}</span>
+                    </button>
+                  );
+                })}
+              </section>
+            ) : !page && revision && entries.length > 0 ? (
               <section aria-label="页面概览" className="grid w-full content-start grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-3">
                 {entries.map((entry) => (
                   <button
@@ -94,7 +125,7 @@ export function DesignDocumentSavedPage({ documentId }: { documentId: string }) 
                 ))}
               </section>
             ) : (
-              <p role="status" className="self-center text-muted-foreground">已保存版本没有可预览的页面。</p>
+              <p role="status" className="self-center text-muted-foreground">{deck ? "已保存版本没有可预览的幻灯片。" : "已保存版本没有可预览的页面。"}</p>
             )}
           </div>
         </>

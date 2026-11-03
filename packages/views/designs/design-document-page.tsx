@@ -115,6 +115,8 @@ import { DesignDocumentStaticView } from "./design-document-static-view";
 import { AgentSetting, IssueSetting } from "./design-task-composer";
 import { rasterizePage } from "./export-raster";
 import { isStyleableElement, revisionFileSource, safeQuery, type CanvasMode } from "./prototype-canvas";
+import { isDeckRevision, parseSpeakerNotes } from "./deck-protocol";
+import { useDeckState } from "./use-deck-state";
 import { formatDuration, taskOperationLabel } from "./project-design-system-task-activity";
 import { DesignDocumentConversation } from "./design-document-conversation";
 import { DesignNextSteps } from "./design-next-steps";
@@ -383,17 +385,81 @@ export function DesignDocumentPage({ documentId }: { documentId: string }) {
   // the demo. Keyboard navigation walks the document's pages.
   const [presenting, setPresenting] = useState(false);
   const [presentIndex, setPresentIndex] = useState(0);
-  const presentEntry = entries[Math.min(presentIndex, Math.max(0, entries.length - 1))] ?? null;
+  // A deck revision is ONE document with an internal runtime. Presenting it
+  // must not walk preview entries; the runtime owns navigation and reports
+  // its state back over deck protocol v1.
+  const deckPresenting = isDeckRevision(revision);
+  const deckEntryPath = deckPresenting ? revision?.prototype_entry || entries[0]?.entry || "" : "";
+  const deckPresentEntry = deckPresenting && deckEntryPath
+    ? entries.find((entry) => entry.entry === deckEntryPath)
+      ?? { id: "deck", title: entries[0]?.title ?? "首页", entry: deckEntryPath, page: null }
+    : null;
+  const presentEntry = deckPresentEntry ?? entries[Math.min(presentIndex, Math.max(0, entries.length - 1))] ?? null;
+  const deck = useDeckState({
+    enabled: presenting && deckPresenting,
+    resetKey: `${selectedRevisionId}:${deckEntryPath}`,
+    onPresentEscape: () => setPresenting(false),
+  });
+  const deckSend = deck.send;
+  // 演讲者备注 is read once per deck revision: the deck HTML carries the notes
+  // inline, and the capability URL behind it is the same one the frame loads.
+  const [notesOpen, setNotesOpen] = useState(false);
+  const [notesByRevision, setNotesByRevision] = useState<Record<string, string[] | "error">>({});
+  const notesPending = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!presenting || !deckPresenting || !revision || !revision.prototype_entry) return;
+    const revisionId = revision.id;
+    if (notesByRevision[revisionId] !== undefined || notesPending.current.has(revisionId)) return;
+    notesPending.current.add(revisionId);
+    let cancelled = false;
+    void revisionFileSource(revision).read(revision.prototype_entry)
+      .then(({ bytes }) => {
+        const notes = parseSpeakerNotes(new TextDecoder().decode(bytes), revision.slides.length);
+        if (!cancelled) setNotesByRevision((current) => ({ ...current, [revisionId]: notes ?? "error" }));
+      })
+      .catch(() => {
+        if (!cancelled) setNotesByRevision((current) => ({ ...current, [revisionId]: "error" }));
+      })
+      .finally(() => {
+        notesPending.current.delete(revisionId);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [presenting, deckPresenting, revision, notesByRevision]);
+  const deckNotes = revision ? notesByRevision[revision.id] : undefined;
+  const deckSlideLabel = revision?.slides?.[deck.active]?.label?.trim() || `第 ${deck.active + 1} 页`;
+  const deckNoteText = deckNotes === "error"
+    ? "无法读取备注"
+    : deckNotes === undefined
+      ? "正在读取备注…"
+      : (deckNotes[deck.active] ?? "").trim() || "本页没有备注";
   const startPresenting = () => {
     const index = entries.findIndex((entry) => entry.entry === shownEntry);
     setPresentIndex(index >= 0 ? index : 0);
+    setNotesOpen(false);
     setPresenting(true);
   };
   useEffect(() => {
     if (!presenting) return;
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setPresenting(false);
-      else if ((event.key === "ArrowRight" || event.key === "PageDown" || event.key === " ") && presentIndex < entries.length - 1) {
+      if (event.key === "Escape") {
+        setPresenting(false);
+        return;
+      }
+      if (deckPresenting) {
+        // The deck runtime is the navigator; the parent only forwards keys it
+        // heard itself (focus outside the frame), never swaps documents.
+        if (event.key === "ArrowRight" || event.key === "PageDown" || event.key === " ") {
+          event.preventDefault();
+          deckSend("next");
+        } else if (event.key === "ArrowLeft" || event.key === "PageUp") {
+          event.preventDefault();
+          deckSend("prev");
+        }
+        return;
+      }
+      if ((event.key === "ArrowRight" || event.key === "PageDown" || event.key === " ") && presentIndex < entries.length - 1) {
         event.preventDefault();
         setPresentIndex((index) => index + 1);
       } else if ((event.key === "ArrowLeft" || event.key === "PageUp") && presentIndex > 0) {
@@ -403,7 +469,7 @@ export function DesignDocumentPage({ documentId }: { documentId: string }) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [presenting, presentIndex, entries.length]);
+  }, [presenting, presentIndex, entries.length, deckPresenting, deckSend]);
 
   // Open Design's comment pins: every open mark is numbered on the canvas, so
   // the list in the composer and the marks on the page read as one list.
@@ -1437,57 +1503,137 @@ export function DesignDocumentPage({ documentId }: { documentId: string }) {
           (pages, counter, arrows, exit) hangs off the bottom edge. */}
       {presenting && presentEntry ? (
         <div className="fixed inset-0 z-50 flex flex-col bg-black" role="dialog" aria-modal="true" aria-label="演示模式">
-          <div className="flex min-h-0 flex-1 items-center justify-center p-2">
-            <iframe
-              key={`${selectedRevisionId}:${presentEntry.entry}`}
-              title={`${title} · ${presentEntry.title}`}
-              src={api.getDesignDocumentPreviewFileURL(revision?.resource_base_path ?? "", presentEntry.entry)}
-              sandbox="allow-scripts"
-              referrerPolicy="no-referrer"
-              className="h-full w-full rounded-md bg-background"
-            />
-          </div>
-          <footer className="flex shrink-0 items-center gap-3 px-4 py-2 text-caption text-white/80">
-            <span className="min-w-0 flex-1 truncate">{presentEntry.title}</span>
-            <span className="tabular-nums">{presentIndex + 1} / {entries.length}</span>
-            <div className="flex items-center gap-1">
-              <Button
-                type="button"
-                size="icon-sm"
-                variant="ghost"
-                title="上一页"
-                aria-label="上一页"
-                className="text-white/80 hover:bg-white/10 hover:text-white"
-                disabled={presentIndex === 0}
-                onClick={() => setPresentIndex((index) => Math.max(0, index - 1))}
-              >
-                <ChevronLeft className="h-4 w-4" />
-              </Button>
-              <Button
-                type="button"
-                size="icon-sm"
-                variant="ghost"
-                title="下一页"
-                aria-label="下一页"
-                className="text-white/80 hover:bg-white/10 hover:text-white"
-                disabled={presentIndex >= entries.length - 1}
-                onClick={() => setPresentIndex((index) => Math.min(entries.length - 1, index + 1))}
-              >
-                <ChevronRight className="h-4 w-4" />
-              </Button>
-              <Button
-                type="button"
-                size="icon-sm"
-                variant="ghost"
-                title="退出演示 (Esc)"
-                aria-label="退出演示"
-                className="text-white/80 hover:bg-white/10 hover:text-white"
-                onClick={() => setPresenting(false)}
-              >
-                <X className="h-4 w-4" />
-              </Button>
-            </div>
-          </footer>
+          {deckPresenting ? (
+            <>
+              <div className="flex min-h-0 flex-1 items-center justify-center p-2">
+                <iframe
+                  ref={deck.iframeRef}
+                  title={`${title} · ${presentEntry.title}`}
+                  src={api.getDesignDocumentPreviewFileURL(revision?.resource_base_path ?? "", presentEntry.entry)}
+                  sandbox="allow-scripts"
+                  referrerPolicy="no-referrer"
+                  className="h-full w-full rounded-md bg-background"
+                />
+              </div>
+              {notesOpen ? (
+                <aside
+                  className="fixed right-0 top-0 z-10 flex h-full w-80 flex-col gap-3 border-l border-white/10 bg-neutral-950/95 p-5 text-white shadow-2xl"
+                  aria-label="演讲者备注"
+                >
+                  <div className="text-caption uppercase tracking-widest text-white/50">演讲者备注</div>
+                  <div className="text-body font-medium">{deckSlideLabel}</div>
+                  <p className="whitespace-pre-wrap text-caption leading-6 text-white/80">{deckNoteText}</p>
+                </aside>
+              ) : null}
+              <footer className="flex shrink-0 items-center gap-3 px-4 py-2 text-caption text-white/80">
+                <span className="min-w-0 flex-1 truncate">{deckSlideLabel}</span>
+                <span className="tabular-nums">{deck.ready ? `${deck.active + 1} / ${deck.count}` : "— / —"}</span>
+                <div className="flex items-center gap-1">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    title="备注"
+                    aria-label="备注"
+                    aria-pressed={notesOpen}
+                    className={cn("h-7 text-white/80 hover:bg-white/10 hover:text-white", notesOpen && "bg-white/10 text-white")}
+                    onClick={() => setNotesOpen((open) => !open)}
+                  >
+                    备注
+                  </Button>
+                  <Button
+                    type="button"
+                    size="icon-sm"
+                    variant="ghost"
+                    title="上一页"
+                    aria-label="上一页"
+                    className="text-white/80 hover:bg-white/10 hover:text-white"
+                    disabled={!deck.ready || deck.active <= 0}
+                    onClick={() => deck.send("prev")}
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    type="button"
+                    size="icon-sm"
+                    variant="ghost"
+                    title="下一页"
+                    aria-label="下一页"
+                    className="text-white/80 hover:bg-white/10 hover:text-white"
+                    disabled={!deck.ready || deck.active >= deck.count - 1}
+                    onClick={() => deck.send("next")}
+                  >
+                    <ChevronRight className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    type="button"
+                    size="icon-sm"
+                    variant="ghost"
+                    title="退出演示 (Esc)"
+                    aria-label="退出演示"
+                    className="text-white/80 hover:bg-white/10 hover:text-white"
+                    onClick={() => setPresenting(false)}
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                </div>
+              </footer>
+            </>
+          ) : (
+            <>
+              <div className="flex min-h-0 flex-1 items-center justify-center p-2">
+                <iframe
+                  key={`${selectedRevisionId}:${presentEntry.entry}`}
+                  title={`${title} · ${presentEntry.title}`}
+                  src={api.getDesignDocumentPreviewFileURL(revision?.resource_base_path ?? "", presentEntry.entry)}
+                  sandbox="allow-scripts"
+                  referrerPolicy="no-referrer"
+                  className="h-full w-full rounded-md bg-background"
+                />
+              </div>
+              <footer className="flex shrink-0 items-center gap-3 px-4 py-2 text-caption text-white/80">
+                <span className="min-w-0 flex-1 truncate">{presentEntry.title}</span>
+                <span className="tabular-nums">{presentIndex + 1} / {entries.length}</span>
+                <div className="flex items-center gap-1">
+                  <Button
+                    type="button"
+                    size="icon-sm"
+                    variant="ghost"
+                    title="上一页"
+                    aria-label="上一页"
+                    className="text-white/80 hover:bg-white/10 hover:text-white"
+                    disabled={presentIndex === 0}
+                    onClick={() => setPresentIndex((index) => Math.max(0, index - 1))}
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    type="button"
+                    size="icon-sm"
+                    variant="ghost"
+                    title="下一页"
+                    aria-label="下一页"
+                    className="text-white/80 hover:bg-white/10 hover:text-white"
+                    disabled={presentIndex >= entries.length - 1}
+                    onClick={() => setPresentIndex((index) => Math.min(entries.length - 1, index + 1))}
+                  >
+                    <ChevronRight className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    type="button"
+                    size="icon-sm"
+                    variant="ghost"
+                    title="退出演示 (Esc)"
+                    aria-label="退出演示"
+                    className="text-white/80 hover:bg-white/10 hover:text-white"
+                    onClick={() => setPresenting(false)}
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                </div>
+              </footer>
+            </>
+          )}
         </div>
       ) : null}
       {/* 历史版本: Open Design's versions dialog — browse what each revision

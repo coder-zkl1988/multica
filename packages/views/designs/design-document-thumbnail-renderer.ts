@@ -1,6 +1,7 @@
 "use client";
 
 import type { DesignDocumentRevision } from "@multica/core/types";
+import { activateDeckSlide } from "./deck-protocol";
 import { rasterizePage } from "./export-raster";
 import { inlinePrototypePage } from "./inline-prototype";
 import { revisionFileSource } from "./prototype-canvas";
@@ -24,9 +25,13 @@ export function thumbnailViewport(revision: DesignDocumentRevision) {
   };
 }
 
-export function thumbnailKey(revision: DesignDocumentRevision, entryPath: string): string {
+/**
+ * A deck's slides share one entry, so the slide ordinal is part of the cache
+ * identity: without it every card in the overview would show the first slide.
+ */
+export function thumbnailKey(revision: DesignDocumentRevision, entryPath: string, slideIndex?: number): string {
   const viewport = thumbnailViewport(revision);
-  return JSON.stringify([revision.id, revision.content_digest, entryPath, viewport.width, viewport.height]);
+  return JSON.stringify([revision.id, revision.content_digest, entryPath, viewport.width, viewport.height, slideIndex ?? null]);
 }
 
 /** Defense in depth on top of the rasterizer's script-disabled iframe sandbox. */
@@ -50,8 +55,8 @@ export function thumbnailHtml(html: string): string {
   return `<!doctype html>\n${new XMLSerializer().serializeToString(document.documentElement)}`;
 }
 
-export function loadRevisionThumbnail(revision: DesignDocumentRevision, entryPath: string): Promise<Blob> {
-  const key = thumbnailKey(revision, entryPath);
+export function loadRevisionThumbnail(revision: DesignDocumentRevision, entryPath: string, slideIndex?: number): Promise<Blob> {
+  const key = thumbnailKey(revision, entryPath, slideIndex);
   const existing = thumbnails.get(key);
   if (existing) {
     thumbnails.delete(key);
@@ -63,7 +68,10 @@ export function loadRevisionThumbnail(revision: DesignDocumentRevision, entryPat
     if (!revision.resource_base_path || !entryPath) throw new Error("没有可预览的页面");
     const page = await inlinePrototypePage(entryPath, revisionFileSource(revision), { stripScripts: true });
     if (page.missing.length > 0) throw new Error("页面资源不完整，无法生成缩略图");
-    const result = await rasterizePage(thumbnailHtml(page.html), {
+    // The deck runtime's script is stripped above, so selecting the slide has
+    // to happen on the serialized document: moving .active is pure DOM state.
+    const html = slideIndex === undefined ? page.html : activateDeckSlide(page.html, slideIndex);
+    const result = await rasterizePage(thumbnailHtml(html), {
       width: viewport.width,
       scale: Math.min(1, 512 / viewport.width),
       maxHeight: viewport.height,

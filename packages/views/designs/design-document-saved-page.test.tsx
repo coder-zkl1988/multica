@@ -55,6 +55,22 @@ function revision(id: string) {
   };
 }
 
+function deckRevision(id: string) {
+  return {
+    id, revision_number: 1,
+    prototype_entry: "prototype/index.html",
+    pages: [{ id: "deck", title: "演示文稿", entry: "prototype/index.html", parent_id: "", state_ids: [] }],
+    preview_targets: [],
+    slides: [
+      { index: 1, label: "01 封面", id: "cover" },
+      { index: 2, label: "", id: "agenda" },
+      { index: 3, label: "03 收尾", id: "end" },
+    ],
+    slide_count: 3,
+    resource_base_path: `/preview/${id}`,
+  };
+}
+
 function renderPage() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   // A previously visited workbench must not leak its cached draft into this viewer.
@@ -99,6 +115,30 @@ describe("saved document viewer", () => {
     expect(screen.getByTitle("订单总览 · saved-1 订单")).toHaveAttribute("src", "https://api.test/preview/saved-1/prototype/orders.html");
     await user.click(screen.getByRole("button", { name: "继续调整" }));
     expect(navigate).toHaveBeenCalledWith("/acme/designs/documents/document-1");
+  });
+
+  it("shows a deck as a slide grid and opens the chosen slide without page paging", async () => {
+    getDesignDocumentRevision.mockImplementation(async (_documentId: string, id: string) => deckRevision(id));
+    const user = userEvent.setup();
+    const { container } = renderPage();
+
+    await screen.findByRole("region", { name: "幻灯片概览" });
+    expect(screen.getByText("3 张幻灯片")).toBeInTheDocument();
+    expect(screen.queryByText("3 个页面")).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "页面概览" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "查看幻灯片：01 封面" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "查看幻灯片：03 收尾" })).toBeInTheDocument();
+
+    // A slide without a data-screen-label falls back to its ordinal.
+    await user.click(screen.getByRole("button", { name: "查看幻灯片：第 2 张" }));
+    expect(screen.getByTitle("订单总览 · 第 2 张")).toHaveAttribute("src", "https://api.test/preview/saved-1/prototype/index.html");
+    // Slides belong to the deck runtime inside the frame.
+    expect(screen.queryByRole("button", { name: "上一页" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "下一页" })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "返回页面概览" }));
+    expect(screen.getByRole("region", { name: "幻灯片概览" })).toBeInTheDocument();
+    expect(container.querySelector("iframe")).toBeNull();
   });
 
   it("does not fall back to a draft when there is no saved version", async () => {

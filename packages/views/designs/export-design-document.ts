@@ -1,5 +1,6 @@
 "use client";
 
+import { activateDeckSlide } from "./deck-protocol";
 import { createPdf, type PdfPageImage } from "./export-pdf";
 import { createPptx, type PptxSlideImage } from "./export-pptx";
 import { blobToBytes, downloadBlob, exportFilename, rasterizePage } from "./export-raster";
@@ -20,6 +21,12 @@ export interface ExportPage {
   /** Package path, e.g. prototype/orders.html. */
   entry: string;
   title: string;
+  /**
+   * 0-based deck slide this page exports. A deck is one prototype document,
+   * so every slide shares an entry and only this ordinal distinguishes them;
+   * omitted for a plain multi-page design.
+   */
+  slideIndex?: number;
 }
 
 export interface ExportRequest {
@@ -36,6 +43,15 @@ export interface ExportRequest {
   loadPage: (entry: string) => Promise<string>;
   /** Progress for the multi-page formats, so a long deck is not a frozen menu. */
   onProgress?: (done: number, total: number) => void;
+  /**
+   * Slides the revision's deck manifest projects. 0 or omitted for a page
+   * document; the format then exports pages, not slides.
+   */
+  slideCount?: number;
+  /** Slide labels in document order, used as the per-slide export title. */
+  slideLabels?: ReadonlyArray<string>;
+  /** The slide on screen; the single-slide formats export this one. */
+  currentSlideIndex?: number;
 }
 
 /** Which pages a format covers. Pure, so the menu can describe it up front. */
@@ -43,14 +59,56 @@ export function exportScope(format: ExportFormat): "current" | "all" {
   return format === "html" || format === "png" ? "current" : "all";
 }
 
-export function exportScopeLabel(format: ExportFormat, pageCount: number): string {
-  return exportScope(format) === "current" ? "当前页" : `全部 ${pageCount} 页`;
+export function exportScopeLabel(format: ExportFormat, pageCount: number, deck = false): string {
+  if (exportScope(format) === "current") return "当前页";
+  return deck ? `全部 ${pageCount} 张` : `全部 ${pageCount} 页`;
 }
 
-function pagesFor(request: ExportRequest): ExportPage[] {
+/**
+ * Expands a deck to one export page per slide.
+ *
+ * A single-file deck is one prototype document; every slide is the same
+ * entry, rendered with a different `.active` section. An empty result means
+ * this is not a deck, so the caller keeps the page semantics.
+ */
+function deckPages(request: ExportRequest): ExportPage[] {
+  const count = Math.max(0, Math.floor(request.slideCount ?? 0));
+  if (count === 0) return [];
+  // The deck document is the revision's first page; the slide ordinal, not
+  // the entry, is what the workbench is switching through.
+  const source = request.pages[0];
+  if (!source) return [];
+  return Array.from({ length: count }, (_, index) => ({
+    entry: source.entry,
+    title: request.slideLabels?.[index]?.trim() || `第 ${index + 1} 张`,
+    slideIndex: index,
+  }));
+}
+
+/** Which pages (or slides) a format covers. Pure, so the menu can describe it up front. */
+export function pagesFor(request: ExportRequest): ExportPage[] {
+  const slides = deckPages(request);
+  if (slides.length > 0) {
+    if (exportScope(request.format) === "all") return slides;
+    const current = Math.min(slides.length - 1, Math.max(0, Math.floor(request.currentSlideIndex ?? 0)));
+    return [slides[current]!];
+  }
   if (exportScope(request.format) === "all") return [...request.pages];
   const current = request.pages.find((page) => page.entry === request.currentEntry);
   return current ? [current] : [...request.pages].slice(0, 1);
+}
+
+/**
+ * The document one export page renders.
+ *
+ * A deck slide is selected by toggling `.active` in the serialized document —
+ * pure DOM state, so it survives the script stripping the inliner performs
+ * and does not depend on the deck runtime having booted under the rasterizer.
+ */
+function loadExportHtml(request: ExportRequest, page: ExportPage): Promise<string> {
+  return request.loadPage(page.entry).then((html) =>
+    page.slideIndex === undefined ? html : activateDeckSlide(html, page.slideIndex),
+  );
 }
 
 /**
@@ -59,13 +117,18 @@ function pagesFor(request: ExportRequest): ExportPage[] {
  * Rasterising is sequential on purpose: each page mounts a full document and
  * decodes an image of it, and doing several at once on a large design is how
  * a renderer runs out of memory mid-export.
+ *
+ * Speaker notes are deliberately NOT written into any export here. A deck
+ * keeps them in its own `#speaker-notes` block for the in-app presenter, and
+ * the PDF/PPTX path captures the slide pixels only — matching upstream, where
+ * exporting a deck never becomes "export with notes".
  */
 export async function exportDesignDocument(request: ExportRequest): Promise<void> {
   const pages = pagesFor(request);
   if (pages.length === 0) throw new Error("这个版本没有可导出的页面");
 
   if (request.format === "html") {
-    const html = await request.loadPage(pages[0]!.entry);
+    const html = await loadExportHtml(request, pages[0]!);
     downloadBlob(
       new Blob([html], { type: "text/html;charset=utf-8" }),
       exportFilename(request.title, pages[0]!.title, "html"),
@@ -74,7 +137,7 @@ export async function exportDesignDocument(request: ExportRequest): Promise<void
   }
 
   if (request.format === "png") {
-    const html = await request.loadPage(pages[0]!.entry);
+    const html = await loadExportHtml(request, pages[0]!);
     const raster = await rasterizePage(html, { width: request.width, type: "image/png" });
     downloadBlob(raster.blob, exportFilename(request.title, pages[0]!.title, "png"));
     return;
@@ -83,7 +146,7 @@ export async function exportDesignDocument(request: ExportRequest): Promise<void
   const rasters: Array<{ page: ExportPage; blob: Blob; width: number; height: number }> = [];
   for (const [index, page] of pages.entries()) {
     request.onProgress?.(index, pages.length);
-    const html = await request.loadPage(page.entry);
+    const html = await loadExportHtml(request, page);
     const raster = await rasterizePage(html, {
       width: request.width,
       // JPEG for the PDF, which embeds it verbatim; PNG for the deck, where
