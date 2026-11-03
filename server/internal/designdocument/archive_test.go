@@ -699,3 +699,110 @@ func assertDiagnosticCode(t *testing.T, report AuditReport, err error, code stri
 	}
 	t.Fatalf("diagnostics = %#v, want code %q", report.Diagnostics, code)
 }
+
+// A deck manifest carries the slide projection; a page-design manifest keeps
+// Slides nil so the key is absent and the manifest stays byte-identical.
+func TestCollectDirectoryProjectsDeckSlidesIntoManifest(t *testing.T) {
+	deck, err := CollectDirectory(deckFixture(t), validBinding())
+	if err != nil {
+		t.Fatalf("CollectDirectory(deck) error = %v", err)
+	}
+	want := []SlideIndexEntry{
+		{Index: 1, Label: "01 Title"},
+		{Index: 2, Label: "02 Agenda"},
+	}
+	if !reflect.DeepEqual(deck.Manifest.Slides, want) {
+		t.Fatalf("deck manifest slides = %#v, want %#v", deck.Manifest.Slides, want)
+	}
+
+	entries := readZipEntries(t, deck.Archive)
+	var encoded map[string]any
+	if err := json.Unmarshal(entries[manifestPath], &encoded); err != nil {
+		t.Fatal(err)
+	}
+	if _, present := encoded["slides"]; !present {
+		t.Fatal("deck manifest does not carry a slides key")
+	}
+
+	page := collectValid(t, validBinding())
+	if page.Manifest.Slides != nil {
+		t.Fatalf("page-design manifest slides = %#v, want nil", page.Manifest.Slides)
+	}
+	pageEntries := readZipEntries(t, page.Archive)
+	if strings.Contains(string(pageEntries[manifestPath]), `"slides"`) {
+		t.Fatal("page-design manifest carries a slides key")
+	}
+}
+
+// A deck manifest round-trips through archive validation with its slide
+// projection intact.
+func TestValidateArchiveSlidesRoundTrip(t *testing.T) {
+	deck, err := CollectDirectory(deckFixture(t), validBinding())
+	if err != nil {
+		t.Fatalf("CollectDirectory(deck) error = %v", err)
+	}
+	validated, err := ValidateArchive(deck.Archive, validBinding())
+	if err != nil {
+		t.Fatalf("ValidateArchive(deck) error = %v", err)
+	}
+	if !reflect.DeepEqual(validated.Manifest.Slides, deck.Manifest.Slides) {
+		t.Fatalf("validated slides = %#v, want %#v", validated.Manifest.Slides, deck.Manifest.Slides)
+	}
+}
+
+// A page-design archive written before deck support has no slides key. It still
+// validates: the audit projects no slides, and nil and an absent key are the
+// same package.
+func TestValidateArchiveAcceptsManifestWithoutSlidesKey(t *testing.T) {
+	collected := collectValid(t, validBinding())
+	entries := readZipEntries(t, collected.Archive)
+	if strings.Contains(string(entries[manifestPath]), `"slides"`) {
+		t.Fatal("page-design manifest carries a slides key")
+	}
+	if _, err := ValidateArchive(collected.Archive, validBinding()); err != nil {
+		t.Fatalf("archive without a slides key failed validation: %v", err)
+	}
+}
+
+// A manifest that gained an empty slides array for a non-deck package is still
+// accepted: nil and empty describe the same projection.
+func TestValidateArchiveAcceptsEmptySlidesForPageDesign(t *testing.T) {
+	collected := collectValid(t, validBinding())
+	entries := readZipEntries(t, collected.Archive)
+	var manifest Manifest
+	if err := json.Unmarshal(entries[manifestPath], &manifest); err != nil {
+		t.Fatal(err)
+	}
+	manifest.Slides = []SlideIndexEntry{}
+	encoded, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries[manifestPath] = encoded
+	if _, err := ValidateArchive(buildZipFromMap(t, entries), validBinding()); err != nil {
+		t.Fatalf("empty slides array rejected: %v", err)
+	}
+}
+
+// A deck manifest that lost its slides projection is still a mismatch: the
+// tolerance covers absence for non-deck packages, not a missing deck projection.
+func TestValidateArchiveRejectsDroppedDeckSlides(t *testing.T) {
+	deck, err := CollectDirectory(deckFixture(t), validBinding())
+	if err != nil {
+		t.Fatalf("CollectDirectory(deck) error = %v", err)
+	}
+	entries := readZipEntries(t, deck.Archive)
+	var manifest Manifest
+	if err := json.Unmarshal(entries[manifestPath], &manifest); err != nil {
+		t.Fatal(err)
+	}
+	manifest.Slides = nil
+	encoded, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries[manifestPath] = encoded
+	if _, err := ValidateArchive(buildZipFromMap(t, entries), validBinding()); err == nil {
+		t.Fatal("deck archive without slides validated, want manifest_audit_index_mismatch")
+	}
+}

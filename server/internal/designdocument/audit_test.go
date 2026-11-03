@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -768,4 +769,341 @@ func assertAuditCode(t *testing.T, report AuditReport, err error, code string) {
 		}
 	}
 	t.Fatalf("diagnostics = %#v, want code %q (error %v)", report.Diagnostics, code, err)
+}
+
+// deckFixture turns the shared page-design fixture into a single-file deck
+// package: the prototype entry becomes a deck document and the brief and
+// coverage declare exactly that one page. The second fixture page and its
+// script are removed because a deck is a single prototype document.
+func deckFixture(t *testing.T) string {
+	t.Helper()
+	root := copyFixture(t)
+	writeFixtureFile(t, root, prototypeEntryPath, []byte(deckDocument(deckProtocolScript())))
+	if err := os.Remove(filepath.Join(root, "prototype", "orders.html")); err != nil {
+		t.Fatalf("remove non-deck fixture page: %v", err)
+	}
+	if err := os.Remove(filepath.Join(root, "prototype", "app.js")); err != nil {
+		t.Fatalf("remove non-deck fixture script: %v", err)
+	}
+	writeBrief(t, root, deckBrief())
+	writeCoverage(t, root, deckCoverage())
+	return root
+}
+
+// deckProtocolScript returns the frozen framework runtime from the shipped
+// skeleton. A hand-written lookalike would now be deck_framework_drift: the
+// framework script is platform code and is accepted only byte-identical.
+var deckProtocolScript = DeckFrameworkScript
+
+// deckDocument builds a conformant deck document: the frozen framework style
+// first, a deck stage with numbered slides, one active slide, the navigation
+// chrome ids, the inline protocol script and the speaker-notes block.
+func deckDocument(script string) string {
+	return `<!doctype html>
+<html lang="en" data-od-deck-protocol="1">
+<head>
+  <meta charset="utf-8">
+  <title>Quarterly plan</title>
+  <style>` + DeckFrameworkStyleV1 + `</style>
+  <style>.title { font-weight: 700; }</style>
+</head>
+<body>
+  <div class="deck-shell">
+    <div class="deck-stage" id="deck-stage">
+      <section class="slide active" data-screen-label="01 Title"><h1 class="title">Quarterly plan</h1></section>
+      <section class="slide" data-screen-label="02 Agenda"><p>Agenda</p></section>
+    </div>
+  </div>
+  <nav class="deck-counter" role="navigation" aria-label="Deck navigation">
+    <button type="button" id="deck-prev">‹</button>
+    <span id="deck-cur">01</span>
+    <span id="deck-total">02</span>
+    <button type="button" id="deck-next">›</button>
+  </nav>
+  <script>` + script + `</script>
+  <script type="application/json" id="speaker-notes">[]</script>
+</body>
+</html>`
+}
+
+func deckBrief() Brief {
+	return Brief{
+		SchemaVersion:      BriefSchemaV1,
+		Goal:               "Present the quarterly plan as a navigable deck.",
+		RequirementSummary: "A presenter pages through one slide at a time and the host knows which slide is active.",
+		Requirements: []BriefRequirement{
+			{ID: "req.deck.paging", Summary: "The deck pages forward and backward.", Origin: "user_input"},
+		},
+		Pages: []BriefPage{
+			{ID: "page.deck", Title: "Quarterly plan", Entry: prototypeEntryPath, States: []BriefState{}, Overlays: []BriefOverlay{}, Blocks: []BriefNamedRef{}},
+		},
+		Flows:             []BriefFlow{},
+		MockDataScenarios: []BriefMockDataScenario{},
+		Accessibility:     []BriefExpectation{},
+		Interactions:      []BriefExpectation{},
+		NonGoals:          []string{"Speaker notes audio"},
+	}
+}
+
+func deckCoverage() Coverage {
+	return Coverage{
+		SchemaVersion: CoverageSchemaV1,
+		RequirementCoverage: []CoverageRequirement{
+			{RequirementID: "req.deck.paging", Status: "covered", PageIDs: []string{"page.deck"}, StateIDs: []string{}},
+		},
+		IssueRequirementCoverage: []CoverageRequirement{},
+		PageCoverage:             []CoverageEntry{{RefID: "page.deck", Status: "covered"}},
+		StateCoverage:            []CoverageEntry{},
+		OverlayCoverage:          []CoverageEntry{},
+		FlowCoverage:             []CoverageEntry{},
+		InteractionCoverage:      []CoverageEntry{},
+		DesignSystemConsistency: CoverageDesignSystem{
+			DesignSystemSHA256: validBinding().DesignSystemSHA256,
+			Checked:            true,
+			Findings:           []string{},
+		},
+		TemplateResidue: CoverageTemplateResidue{Checked: true, Findings: []string{}},
+		Uncovered:       []CoverageGap{},
+		AgentChecks:     []CoverageAgentCheck{},
+	}
+}
+
+func TestAuditAcceptsDeckDocument(t *testing.T) {
+	collected, err := CollectDirectory(deckFixture(t), validBinding())
+	if err != nil {
+		t.Fatalf("CollectDirectory() rejected a conformant deck: %v (%#v)", err, collected.Audit.Diagnostics)
+	}
+	want := []SlideIndexEntry{
+		{Index: 1, Label: "01 Title"},
+		{Index: 2, Label: "02 Agenda"},
+	}
+	if !reflect.DeepEqual(collected.Manifest.Slides, want) {
+		t.Fatalf("manifest slides = %#v, want %#v", collected.Manifest.Slides, want)
+	}
+}
+
+// The shipped skeleton is the deck starting point. It must carry no deck_*
+// finding; the only diagnostics it currently draws come from the pre-existing
+// prototype script value-flow rules, which are outside the deck contract.
+func TestAuditDeckSkeletonHasNoDeckDiagnostics(t *testing.T) {
+	root := deckFixture(t)
+	writeFixtureFile(t, root, prototypeEntryPath, []byte(DeckSkeletonHTML))
+	collected, _ := CollectDirectory(root, validBinding())
+	for _, diagnostic := range collected.Audit.Diagnostics {
+		if strings.HasPrefix(diagnostic.Code, "deck_") {
+			t.Fatalf("shipped skeleton failed the deck contract: %+v", diagnostic)
+		}
+	}
+}
+
+// The prompt tells the agent to copy DeckSkeletonHTML verbatim, so the full
+// audit — generic script rules included — must accept it unchanged. The
+// framework runtime is byte-frozen platform code (exempt by digest); anything
+// the agent adds outside the marked slots still goes through the normal rules.
+func TestAuditAcceptsShippedSkeletonVerbatim(t *testing.T) {
+	root := deckFixture(t)
+	writeFixtureFile(t, root, prototypeEntryPath, []byte(DeckSkeletonHTML))
+	collected, err := CollectDirectory(root, validBinding())
+	if err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	if len(collected.Audit.Diagnostics) != 0 {
+		t.Fatalf("shipped skeleton must audit clean, got %+v", collected.Audit.Diagnostics)
+	}
+	if len(collected.Manifest.Slides) == 0 {
+		t.Fatalf("shipped skeleton must project slides into the manifest")
+	}
+}
+
+// A framework script that claims to be the runtime but drifted from the
+// skeleton is a contract violation, reported as drift instead of the generic
+// value-flow errors its transforms would otherwise trip.
+func TestAuditRejectsDeckFrameworkScriptDrift(t *testing.T) {
+	root := deckFixture(t)
+	source := strings.Replace(DeckSkeletonHTML, "var pad = 32;", "var pad = 33;", 1)
+	writeFixtureFile(t, root, prototypeEntryPath, []byte(source))
+	collected, _ := CollectDirectory(root, validBinding())
+	for _, diagnostic := range collected.Audit.Diagnostics {
+		if diagnostic.Code == "deck_framework_drift" {
+			return
+		}
+	}
+	t.Fatalf("expected deck_framework_drift, got %+v", collected.Audit.Diagnostics)
+}
+
+func TestAuditRejectsDeckContractViolations(t *testing.T) {
+	base := deckDocument(deckProtocolScript())
+	tests := []struct {
+		name   string
+		code   string
+		mutate func(t *testing.T, root string)
+	}{
+		{
+			name: "no slide section",
+			code: "deck_slide_missing",
+			mutate: func(t *testing.T, root string) {
+				source := strings.ReplaceAll(base, `<section class="slide`, `<div class="slide`)
+				writeFixtureFile(t, root, prototypeEntryPath, []byte(source))
+			},
+		},
+		{
+			name: "two active slides",
+			code: "deck_slide_active_invalid",
+			mutate: func(t *testing.T, root string) {
+				source := strings.Replace(base, `<section class="slide" data-screen-label="02 Agenda">`,
+					`<section class="slide active" data-screen-label="02 Agenda">`, 1)
+				writeFixtureFile(t, root, prototypeEntryPath, []byte(source))
+			},
+		},
+		{
+			name: "label is not numbered",
+			code: "deck_slide_label_invalid",
+			mutate: func(t *testing.T, root string) {
+				source := strings.Replace(base, `data-screen-label="02 Agenda"`, `data-screen-label="Agenda"`, 1)
+				writeFixtureFile(t, root, prototypeEntryPath, []byte(source))
+			},
+		},
+		{
+			name: "label numbering skips",
+			code: "deck_slide_label_invalid",
+			mutate: func(t *testing.T, root string) {
+				source := strings.Replace(base, `data-screen-label="02 Agenda"`, `data-screen-label="03 Agenda"`, 1)
+				writeFixtureFile(t, root, prototypeEntryPath, []byte(source))
+			},
+		},
+		{
+			name: "label numbering repeats",
+			code: "deck_slide_label_invalid",
+			mutate: func(t *testing.T, root string) {
+				source := strings.Replace(base, `data-screen-label="02 Agenda"`, `data-screen-label="01 Agenda"`, 1)
+				writeFixtureFile(t, root, prototypeEntryPath, []byte(source))
+			},
+		},
+		{
+			name: "missing navigation chrome",
+			code: "deck_chrome_missing",
+			mutate: func(t *testing.T, root string) {
+				source := strings.Replace(base, ` id="deck-next"`, ``, 1)
+				writeFixtureFile(t, root, prototypeEntryPath, []byte(source))
+			},
+		},
+		{
+			name: "missing protocol literal",
+			code: "deck_protocol_missing",
+			mutate: func(t *testing.T, root string) {
+				source := strings.Replace(base, `'od:deck-ready'`, `'od:unknown-ready'`, 1)
+				writeFixtureFile(t, root, prototypeEntryPath, []byte(source))
+			},
+		},
+		{
+			name: "framework style drift",
+			code: "deck_skeleton_drift",
+			mutate: func(t *testing.T, root string) {
+				source := strings.Replace(base, `<style>`+DeckFrameworkStyleV1, `<style>/* drifted */`+DeckFrameworkStyleV1, 1)
+				writeFixtureFile(t, root, prototypeEntryPath, []byte(source))
+			},
+		},
+		{
+			name: "brief declares a different page",
+			code: "deck_page_count_invalid",
+			mutate: func(t *testing.T, root string) {
+				brief := loadBrief(t, root)
+				brief.Pages[0].Entry = "prototype/orders.html"
+				writeBrief(t, root, brief)
+			},
+		},
+		{
+			name: "speaker notes block missing",
+			code: "deck_notes_missing",
+			mutate: func(t *testing.T, root string) {
+				source := strings.Replace(base, `<script type="application/json" id="speaker-notes">[]</script>`, ``, 1)
+				writeFixtureFile(t, root, prototypeEntryPath, []byte(source))
+			},
+		},
+		{
+			name: "speaker notes payload invalid",
+			code: "deck_notes_invalid",
+			mutate: func(t *testing.T, root string) {
+				source := strings.Replace(base, `<script type="application/json" id="speaker-notes">[]</script>`,
+					`<script type="application/json" id="speaker-notes">[</script>`, 1)
+				writeFixtureFile(t, root, prototypeEntryPath, []byte(source))
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := deckFixture(t)
+			tt.mutate(t, root)
+			collected, err := CollectDirectory(root, validBinding())
+			assertAuditCode(t, collected.Audit, err, tt.code)
+		})
+	}
+}
+
+// Speaker notes are authored presenter copy. A note that mentions a residue
+// marker or quotes lorem ipsum must not fail the package, unlike the same text
+// in the slide body. The notes script is also the one application/json script a
+// deck may carry.
+func TestAuditAcceptsDeckSpeakerNotesWithResidueMarkers(t *testing.T) {
+	root := deckFixture(t)
+	notes := `["TODO: tighten the opening line", "Lorem ipsum is quoted here on purpose"]`
+	source := strings.Replace(deckDocument(deckProtocolScript()),
+		`<script type="application/json" id="speaker-notes">[]</script>`,
+		`<script type="application/json" id="speaker-notes">`+notes+`</script>`, 1)
+	writeFixtureFile(t, root, prototypeEntryPath, []byte(source))
+
+	collected, err := CollectDirectory(root, validBinding())
+	if err != nil {
+		t.Fatalf("speaker notes changed the verdict: %v (%#v)", err, collected.Audit.Diagnostics)
+	}
+	if !collected.Audit.Passed {
+		t.Fatalf("audit failed: %#v", collected.Audit.Diagnostics)
+	}
+}
+
+// Every deck exception is scoped to a deck document. A plain prototype that
+// carries the same constructs still produces exactly the diagnostics it
+// produced before deck support existed: the JSON script is a forbidden script
+// type, window.parent stays a navigation escape, and a residue marker in the
+// notes body still fails the package.
+func TestAuditNonDeckDiagnosticsGolden(t *testing.T) {
+	root := copyFixture(t)
+	page := `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Order workspace</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="workspace" data-page="page.orders">
+    <script type="application/json" id="speaker-notes">["TODO: reconsider this note"]</script>
+    <script>window.parent.postMessage({ type: "od:deck-ready" }, "*");</script>
+  </main>
+</body>
+</html>
+`
+	writeFixtureFile(t, root, prototypeEntryPath, []byte(page))
+
+	collected, err := CollectDirectory(root, validBinding())
+	assertAuditCode(t, collected.Audit, err, "prototype_script_type_forbidden")
+	want := [][2]string{
+		{"prototype_script_type_forbidden", prototypeEntryPath},
+		{"prototype_script_navigation_forbidden", prototypeEntryPath},
+		{"template_residue_detected", prototypeEntryPath},
+	}
+	if got := errorDiagnosticPairs(collected.Audit.Diagnostics); !reflect.DeepEqual(got, want) {
+		t.Fatalf("non-deck error diagnostics = %#v, want %#v", got, want)
+	}
+}
+
+func errorDiagnosticPairs(diagnostics []Diagnostic) [][2]string {
+	pairs := make([][2]string, 0, len(diagnostics))
+	for _, diagnostic := range diagnostics {
+		if diagnostic.Severity != DiagnosticError {
+			continue
+		}
+		pairs = append(pairs, [2]string{diagnostic.Code, diagnostic.Path})
+	}
+	return pairs
 }

@@ -218,6 +218,9 @@ func CollectDirectory(root string, binding PackageBinding) (CollectedPackage, er
 		PreviewTargets: nonNilPreviewTargets(previewTargets),
 		Pages:          nonNilPages(audit.pages),
 		Flows:          nonNilFlows(audit.flows),
+		// Slides is nil unless the package is a deck: omitempty keeps a
+		// non-deck manifest byte-identical and never coerces it to [].
+		Slides: audit.slides,
 	}
 	collected := CollectedPackage{Manifest: manifest, Audit: audit.report}
 	if !audit.report.Passed {
@@ -297,10 +300,23 @@ func ValidateArchive(archive []byte, expected PackageBinding) (ValidatedPackage,
 		return result, auditFailure(audit.report)
 	}
 	if !reflect.DeepEqual(manifest.Pages, nonNilPages(audit.pages)) ||
-		!reflect.DeepEqual(manifest.Flows, nonNilFlows(audit.flows)) {
+		!reflect.DeepEqual(manifest.Flows, nonNilFlows(audit.flows)) ||
+		!archiveSlidesMatch(manifest.Slides, audit.slides) {
 		return invalidPackage("manifest_audit_index_mismatch", manifestPath, "manifest derived indexes do not match audited artifacts", contentDigest)
 	}
 	return result, nil
+}
+
+// archiveSlidesMatch compares the manifest slide projection tolerantly. A
+// manifest written before deck support has no slides key and decodes to nil,
+// and a non-deck audit projects no slides either, so nil and an empty slice
+// describe the same package. A deck manifest that lost or changed its slides
+// still fails.
+func archiveSlidesMatch(manifestSlides, auditedSlides []SlideIndexEntry) bool {
+	if len(manifestSlides) == 0 && len(auditedSlides) == 0 {
+		return true
+	}
+	return reflect.DeepEqual(manifestSlides, auditedSlides)
 }
 
 // ReadArtifact returns one package file after re-validating the whole archive

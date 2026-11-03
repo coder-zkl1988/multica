@@ -47,16 +47,21 @@ type markupAudit struct {
 	path        string
 	artifacts   map[string]ArtifactIndexEntry
 	diagnostics []Diagnostic
+	// deck marks the prototype entry of a deck document. It exempts the
+	// speaker-notes JSON block and widens the script navigation rule for the
+	// deck host channel.
+	deck bool
 }
 
 // auditMarkup parses one prototype document with a real HTML parser and checks
-// every element and attribute that could reach outside the package.
-func auditMarkup(source []byte, basePath string, artifacts map[string]ArtifactIndexEntry) []Diagnostic {
+// every element and attribute that could reach outside the package. deck marks
+// the prototype entry of a deck document.
+func auditMarkup(source []byte, basePath string, deck bool, artifacts map[string]ArtifactIndexEntry) []Diagnostic {
 	document, err := html.Parse(bytes.NewReader(source))
 	if err != nil {
 		return []Diagnostic{errorDiagnostic("prototype_html_invalid", basePath, "prototype page is not valid HTML")}
 	}
-	audit := &markupAudit{path: basePath, artifacts: artifacts, diagnostics: make([]Diagnostic, 0)}
+	audit := &markupAudit{path: basePath, artifacts: artifacts, diagnostics: make([]Diagnostic, 0), deck: deck}
 	audit.walk(document)
 	return audit.diagnostics
 }
@@ -157,6 +162,12 @@ func (audit *markupAudit) checkMediaSource(value, tag string) {
 func (audit *markupAudit) checkScript(node *html.Node) {
 	source, hasSource := attributeValue(node, "src")
 	scriptType, _ := attributeValue(node, "type")
+	// The deck speaker-notes block is JSON data, not executable script, and the
+	// deck contract requires exactly this node. Every other application/json
+	// script stays forbidden below.
+	if audit.deck && !hasSource && speakerNotesScript(node) {
+		return
+	}
 	if _, allowed := allowedScriptTypes[strings.ToLower(scriptType)]; !allowed {
 		audit.report("prototype_script_type_forbidden", "script type "+scriptType+" is not allowed")
 		return
@@ -166,7 +177,19 @@ func (audit *markupAudit) checkScript(node *html.Node) {
 		if strings.TrimSpace(inline) == "" {
 			return
 		}
-		audit.diagnostics = append(audit.diagnostics, auditScript([]byte(inline), audit.path, audit.artifacts)...)
+		// A deck's framework runtime announces itself with the ready literal.
+		// Byte-frozen platform code is exempt from the generic script audit
+		// (it is shipped, not authored); anything claiming to be it but
+		// drifting from the skeleton is a contract violation, reported as
+		// drift rather than as confusing value-flow errors.
+		if audit.deck && strings.Contains(inline, "od:deck-ready") {
+			if IsDeckFrameworkScript(inline) {
+				return
+			}
+			audit.report("deck_framework_drift", "the deck framework script must stay byte-identical to the skeleton; only the marked slots may change")
+			return
+		}
+		audit.diagnostics = append(audit.diagnostics, auditScript([]byte(inline), audit.path, audit.deck, audit.artifacts)...)
 		return
 	}
 	if strings.TrimSpace(inline) != "" {
@@ -180,6 +203,14 @@ func (audit *markupAudit) checkScript(node *html.Node) {
 	if entry, exists := audit.artifacts[resolved]; !exists || entry.Role != "prototype_script" {
 		audit.report("prototype_script_external", "scripts must be package-local prototype scripts")
 	}
+}
+
+// speakerNotesScript reports whether node is the deck speaker-notes JSON block.
+// The id and the JSON type are both required, so an id-only lookalike stays
+// subject to the script policy.
+func speakerNotesScript(node *html.Node) bool {
+	return strings.EqualFold(attributeText(node, "id"), "speaker-notes") &&
+		strings.EqualFold(attributeText(node, "type"), "application/json")
 }
 
 func (audit *markupAudit) checkLink(node *html.Node) {

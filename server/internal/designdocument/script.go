@@ -88,7 +88,11 @@ var forbiddenURLSchemes = map[string]struct{}{
 }
 
 type scriptAudit struct {
-	path                string
+	path string
+	// deck widens exactly one navigation rule: a deck document may reach its
+	// host through window.parent.postMessage. Every other receiver and member
+	// stays rejected, and non-deck prototypes keep the original rule.
+	deck                bool
 	artifacts           map[string]ArtifactIndexEntry
 	globalBindings      map[*js.Var]struct{}
 	functions           map[*js.Var][]*js.Params
@@ -126,8 +130,10 @@ type safeDOMQueryFunction struct {
 	rootArgumentIndex int
 }
 
-// auditScript parses one prototype script and applies the AST audit.
-func auditScript(source []byte, basePath string, artifacts map[string]ArtifactIndexEntry) []Diagnostic {
+// auditScript parses one prototype script and applies the AST audit. deck marks
+// the prototype entry of a deck document, which is the only context where the
+// window.parent.postMessage host channel is allowed.
+func auditScript(source []byte, basePath string, deck bool, artifacts map[string]ArtifactIndexEntry) []Diagnostic {
 	ast, err := js.Parse(parse.NewInputBytes(source), js.Options{})
 	if err != nil {
 		return []Diagnostic{errorDiagnostic("prototype_script_invalid", basePath, "prototype JavaScript is invalid: "+err.Error())}
@@ -155,6 +161,7 @@ func auditScript(source []byte, basePath string, artifacts map[string]ArtifactIn
 	}
 	audit := &scriptAudit{
 		path:                basePath,
+		deck:                deck,
 		artifacts:           artifacts,
 		globalBindings:      globalBindings,
 		functions:           functions,
@@ -199,6 +206,9 @@ func (audit *scriptAudit) Enter(node js.INode) js.IVisitor {
 		return nil
 	case *js.DotExpr:
 		if name, ok := memberName(value.Y); ok {
+			if audit.deck && name == "postMessage" && audit.walkDeckPostMessage(value) {
+				return nil
+			}
 			audit.checkMember(value.X, name)
 		}
 		js.Walk(audit, value.X)
@@ -449,6 +459,30 @@ func (audit *scriptAudit) checkCall(callee js.IExpr, args js.Args) {
 			audit.report("prototype_script_active_element", "creating <"+tag+"> from script is not allowed")
 		}
 	}
+}
+
+// walkDeckPostMessage handles the single host channel a deck may use:
+// window.parent.postMessage. The parent operand is consumed here instead of
+// being audited as a standalone navigation member, so only this exact shape is
+// exempt. window.parent.location, window.parent.open, window.parent.document,
+// top, frames, opener and a bare parent are still rejected, and the base
+// expression is still walked so an aliased receiver cannot hide one of them.
+// It reports whether the member access matched.
+func (audit *scriptAudit) walkDeckPostMessage(node *js.DotExpr) bool {
+	parent, ok := node.X.(*js.DotExpr)
+	if !ok {
+		return false
+	}
+	property, ok := memberName(parent.Y)
+	if !ok || property != "parent" {
+		return false
+	}
+	receiver, ok := freeIdentifierName(parent.X)
+	if !ok || receiver != "window" {
+		return false
+	}
+	js.Walk(audit, parent.X)
+	return true
 }
 
 func (audit *scriptAudit) checkMember(object js.IExpr, property string) {
