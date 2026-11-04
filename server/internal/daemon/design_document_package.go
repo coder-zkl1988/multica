@@ -584,24 +584,16 @@ func buildDesignDocumentPreviewCSP() string {
 	}, "; ")
 }
 
-// buildDesignDocumentTargetURLs maps the package's Preview targets onto the
-// loopback URLs the verifier will open. The manifest order is preserved rather
-// than re-sorted: DiscoverPreviewTargets puts the prototype entry first on
-// purpose so the gate opens the document root before its sub pages.
-//
-// This form keeps the pre-deck call sites working: no target declares a deck
-// slide count, so the verifier performs no deck protocol sweep.
-func buildDesignDocumentTargetURLs(targets []designdocument.PreviewTarget, baseURL, prefix string) ([]designpreview.TargetURL, error) {
-	return buildDesignDocumentTargetURLsWithDeckSlides(targets, 0, baseURL, prefix)
-}
-
 // designDocumentPreviewTargetEntryKind mirrors the kind
 // designdocument.DiscoverPreviewTargets assigns to prototype/index.html. A deck
 // is a single-file prototype, so only that target carries the deck sweep.
 const designDocumentPreviewTargetEntryKind = "prototype_entry"
 
-// buildDesignDocumentTargetURLsWithDeckSlides is the deck-aware form of
-// buildDesignDocumentTargetURLs. deckSlides is the manifest slide projection;
+// buildDesignDocumentTargetURLsWithDeckSlides maps the package's Preview
+// targets onto the loopback URLs the verifier will open. The manifest order is
+// preserved rather than re-sorted: DiscoverPreviewTargets puts the prototype
+// entry first on purpose so the gate opens the document root before its sub
+// pages. deckSlides is the manifest slide projection;
 // it is attached to the prototype entry target alone and stays zero for a
 // non-deck package or a manifest written before deck support (nil Slides).
 func buildDesignDocumentTargetURLsWithDeckSlides(targets []designdocument.PreviewTarget, deckSlides int, baseURL, prefix string) ([]designpreview.TargetURL, error) {

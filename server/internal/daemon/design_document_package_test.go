@@ -1051,7 +1051,7 @@ func TestDesignDocumentPreviewReferencesResolveFromEveryTarget(t *testing.T) {
 	baseURL, prefix, cleanup := startDesignDocumentPreviewServerForTest(t, collected)
 	defer cleanup()
 
-	targets, err := buildDesignDocumentTargetURLs(collected.Manifest.PreviewTargets, baseURL, prefix)
+	targets, err := buildDesignDocumentTargetURLsWithDeckSlides(collected.Manifest.PreviewTargets, 0, baseURL, prefix)
 	if err != nil {
 		t.Fatalf("build target URLs: %v", err)
 	}
@@ -1264,7 +1264,7 @@ func TestDesignDocumentPreviewTargetsMapOntoTheReceiptVocabulary(t *testing.T) {
 		{ID: "index", Kind: "prototype_entry", Path: "prototype/index.html"},
 		{ID: "orders.list", Kind: "prototype_page", Path: "prototype/orders/list.html"},
 	}
-	built, err := buildDesignDocumentTargetURLs(targets, "http://127.0.0.1:1234", "prefix")
+	built, err := buildDesignDocumentTargetURLsWithDeckSlides(targets, 0, "http://127.0.0.1:1234", "prefix")
 	if err != nil {
 		t.Fatalf("build target URLs: %v", err)
 	}
@@ -1279,12 +1279,12 @@ func TestDesignDocumentPreviewTargetsMapOntoTheReceiptVocabulary(t *testing.T) {
 			t.Fatalf("target %+v is not a valid Design Preview target: %v", target.Target, err)
 		}
 	}
-	if _, err := buildDesignDocumentTargetURLs([]designdocument.PreviewTarget{
+	if _, err := buildDesignDocumentTargetURLsWithDeckSlides([]designdocument.PreviewTarget{
 		{ID: "x", Kind: "ui_kit", Path: "prototype/index.html"},
-	}, "http://127.0.0.1:1234", "prefix"); err == nil {
+	}, 0, "http://127.0.0.1:1234", "prefix"); err == nil {
 		t.Fatal("a design system target kind was accepted by the design document gate")
 	}
-	if _, err := buildDesignDocumentTargetURLs(nil, "http://127.0.0.1:1234", "prefix"); err == nil {
+	if _, err := buildDesignDocumentTargetURLsWithDeckSlides(nil, 0, "http://127.0.0.1:1234", "prefix"); err == nil {
 		t.Fatal("an empty target set was accepted")
 	}
 }
@@ -1314,7 +1314,7 @@ func TestDesignDocumentPreviewTargetsCarryDeckSlides(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build non-deck target URLs: %v", err)
 	}
-	legacy, err := buildDesignDocumentTargetURLs(targets, "http://127.0.0.1:1234", "prefix")
+	legacy, err := buildDesignDocumentTargetURLsWithDeckSlides(targets, 0, "http://127.0.0.1:1234", "prefix")
 	if err != nil {
 		t.Fatalf("build legacy target URLs: %v", err)
 	}

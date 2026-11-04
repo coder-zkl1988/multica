@@ -144,7 +144,12 @@ func PreflightDesignDocumentPackage(
 		_ = server.Shutdown(shutdownCtx)
 	}()
 
-	targets, targetErr := buildDesignDocumentTargetURLs(collected.Manifest.PreviewTargets, baseURL, prefix)
+	targets, targetErr := buildDesignDocumentTargetURLsWithDeckSlides(
+		collected.Manifest.PreviewTargets,
+		len(collected.Manifest.Slides),
+		baseURL,
+		prefix,
+	)
 	if targetErr != nil {
 		return failPreflight(report, "preview", finalizeFailureDesignDocumentPreviewFailed,
 			"design document preview failed: "+targetErr.Error())
