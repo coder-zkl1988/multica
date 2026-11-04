@@ -92,6 +92,8 @@ export function useUpdateRuntime(wsId: string) {
         apply_to_machine?: boolean;
         /** M4: designate the machine as a test host for device rounds. */
         test_host_enabled?: boolean;
+        // null removes the runtime-wide concurrency cap; omit to leave unchanged.
+        max_concurrent_tasks?: number | null;
       };
     }) => api.updateRuntime(runtimeId, patch),
     onSettled: () => {

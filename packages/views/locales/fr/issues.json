@@ -116,8 +116,11 @@
     "breadcrumb_title": "Tâches",
     "breadcrumb_workspace_fallback": "Espace de travail",
     "empty_title": "Aucune tâche pour l'instant",
-    "move_failed": "Échec du déplacement de la tâche",
-    "empty_hint": "Créez une tâche pour commencer."
+    "empty_description": "Une tâche est un travail concret confié à un membre ou à un agent. Assignée à un agent, elle démarre seule sur votre runtime.",
+    "empty_hint": "Créez une tâche pour commencer.",
+    "break_down_with_chat": "Découper avec le chat",
+    "break_down_prompt": "Voici ce que je veux accomplir. Posez-moi les questions nécessaires, puis découpez-le en tâches dans cet espace de travail :\n\n",
+    "move_failed": "Échec du déplacement de la tâche"
   },
   "status": {
     "backlog": "À planifier",
@@ -412,7 +415,7 @@
       }
     },
     "search_placeholder": "Rechercher des tâches...",
-    "search_empty": "Aucune tâche ne correspond à votre recherche."
+    "search_empty": "Aucune tâche ne correspond à votre recherche"
   },
   "list": {
     "empty_status": "Aucune tâche",
@@ -445,6 +448,7 @@
     "metadata_description": "Données clé-valeur enregistrées par les agents et les intégrations pour poursuivre le workflow.",
     "section_load_failed_retry": "Échec du chargement. Réessayer",
     "not_found": "Cette tâche n'existe pas ou a été supprimée dans cet espace de travail.",
+    "not_found_title": "Tâche introuvable",
     "breadcrumb_project_unknown": "Projet inconnu",
     "back": "Retour",
     "title_placeholder": "Titre de la tâche",
@@ -526,7 +530,6 @@
     "agents_group": "Agents",
     "mark_done_tooltip": "Marquer comme terminé",
     "archive_tooltip": "Archiver",
-    "restore_to_inbox_tooltip": "Restaurer dans la boîte de réception",
     "pin_tooltip": "Épingler à la barre latérale",
     "unpin_tooltip": "Détacher de la barre latérale",
     "quick_jump_label": "Navigation rapide",
@@ -955,7 +958,18 @@
     "note_unmapped": "Aucun tarif connu pour {{models}} ; leurs tokens sont comptés, mais pas leur coût.",
     "note_estimate": "Le coût est estimé d'après les tarifs publiés des modèles, sauf lorsque le fournisseur a communiqué son propre chiffre.",
     "amount_unknown": "Inconnu",
-    "amount_partial": "{{amount}} (partiel)"
+    "amount_partial": "{{amount}} (partiel)",
+    "tokens_count": "{{tokens}} tokens",
+    "credits_count": "{{credits}} crédits {{provider}}",
+    "details_toggle": "Détails de l'exécution",
+    "detail_breakdown": "Détail du coût",
+    "detail_total": "Total",
+    "detail_status": "Statut",
+    "detail_model": "Modèle",
+    "detail_cache": "Taux de cache",
+    "cache_hit_value": "{{percent}} · {{amount}} économisés",
+    "detail_time": "Heure",
+    "detail_branch": "Branche"
   },
   "terminate_dialog": {
     "title": "Arrêter cette exécution ?",
@@ -1009,6 +1023,7 @@
     "open_in_new_tab": "Ouvrir dans un nouvel onglet",
     "pin_to_sidebar": "Épingler à la barre latérale",
     "unpin_from_sidebar": "Détacher de la barre latérale",
+    "restore_to_inbox": "Restaurer dans la boîte de réception",
     "mark_read": "Marquer comme lu",
     "mark_unread": "Marquer comme non lu",
     "copy_link": "Copier le lien",
@@ -1297,7 +1312,8 @@
     "detail_cache": "Taux de cache",
     "cache_hit_value": "{{percent}} · {{amount}} économisés",
     "detail_time": "Heure",
-    "detail_branch": "Branche"
+    "detail_branch": "Branche",
+    "credits_count": "{{credits}} crédits {{provider}}"
   },
   "wakeups": {
     "title": "Réveils",
@@ -2026,6 +2042,9 @@
     "save_as_new": "Enregistrer comme nouvelle vue",
     "save_as_new_hint": "« {{name}} » reste inchangée",
     "save_as_view": "Enregistrer comme vue",
+    "save_view": "Enregistrer la vue",
+    "add_filter": "Ajouter un filtre",
+    "setup_hint": "Aucune condition pour l'instant : cette vue affiche toutes les tâches",
     "set_by_view": "Défini par cette vue",
     "new_issue": "Nouvelle tâche",
     "unavailable": "Cette vue n'est plus disponible",
@@ -2049,7 +2068,8 @@
       "star": "Ajouter {{name}} à la barre latérale",
       "unstar": "Retirer {{name}} de la barre latérale",
       "row_actions": "Actions pour {{name}}",
-      "no_matches": "Aucune vue ne correspond"
+      "empty_title": "Aucune vue enregistrée pour l'instant",
+      "empty_description": "Réglez les filtres et l'affichage d'une liste de tâches, puis enregistrez-les comme vue."
     }
   }
 }

@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -33,7 +32,7 @@ const forkMigrationPrefixStart = 800
 // numbering gap would pass this check; the uniqueness test still catches it
 // once upstream owns that number. The realistic violation (anything between
 // lastUpstreamMigrationPrefix and 800) is rejected below.
-const lastUpstreamMigrationPrefix = 599
+const lastUpstreamMigrationPrefix = 611
 
 // existingForkMigrationPrefixes are fork-local migrations that were applied to
 // production before the 800+ rule; they keep their numbers forever because the
@@ -658,11 +657,13 @@ func migrationFilesForLint(t *testing.T, pattern string) []string {
 func realMigrationsDir(t *testing.T) string {
 	t.Helper()
 
-	_, self, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("resolve migration lint test path")
+	// Relative to the package directory go test runs in; runtime.Caller
+	// would return a module path under -trimpath.
+	dir, err := filepath.Abs(filepath.Join("..", "..", "migrations"))
+	if err != nil {
+		t.Fatalf("resolve migrations dir: %v", err)
 	}
-	return filepath.Clean(filepath.Join(filepath.Dir(self), "..", "..", "migrations"))
+	return dir
 }
 
 func splitMigrationFilename(name string) (stem, direction string, ok bool) {

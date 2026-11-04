@@ -2162,6 +2162,12 @@ func (d *Daemon) run(ctx context.Context, healthLn net.Listener) error {
 		logFields = append(logFields, "profile", d.cfg.Profile)
 	}
 	d.logger.Info("starting daemon", logFields...)
+	// Sweep orphaned ZCode provider credential snapshots left by a prior
+	// crash/SIGKILL (prepareZcodeRuntimeEnv writes 0600 files under
+	// $TMPDIR/multica-zcode-providers-*; normal exits remove them in defer).
+	if n := agent.CleanupStaleZcodeProviderSnapshots(); n > 0 {
+		d.logger.Info("removed stale ZCode provider credential snapshots", "count", n)
+	}
 	d.logger.Debug("daemon config resolved",
 		"daemon_id", d.cfg.DaemonID,
 		"device_name", d.cfg.DeviceName,
@@ -6905,6 +6911,7 @@ var runtimeDisplayNameOverrides = map[string]string{
 	"qwenpaw":    "QwenPaw",
 	"mcode":      "MiniMax Code",
 	"muse":       "Muse Code",
+	"zcode":      "ZCode",
 	"zeroclaw":   "ZeroClaw",
 }
 
@@ -9356,6 +9363,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 
 	_ = d.client.ReportProgress(ctx, task.ID, fmt.Sprintf("Launching %s", provider), 1, 2)
 
+	taskCtx = execenv.ApplyPreparedSkillNames(taskCtx, env.PreparedSkillNames)
 	// usesCustomProfileCommand is the same provenance the backend receives as
 	// agent.Config.BuiltinRuntime: it separates the provider's own discovered
 	// binary from an arbitrary command speaking its protocol. Reused here so
@@ -9438,6 +9446,11 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// the daemon cannot record either (#9404).
 	if env.LocalWorktree != nil {
 		promptOptions = append(promptOptions, WithWorktreeBranch(env.LocalWorktree.Branch, env.LocalWorktree.BaseCommit))
+		// The branch block's rule for uncommitted files has one exception,
+		// decided by the same predicate Finalize uses (#9788 review).
+		if env.LocalWorktree.CommitsAllLeftovers() {
+			promptOptions = append(promptOptions, WithWorktreeCommitsAllLeftovers())
+		}
 	}
 	prompt := buildTaskPrompt(task, provider, d.cfg.DirectAgentMode, promptOptions...)
 	prompt = primaryRepositoryPrompt(runtimeBrief, prompt, primaryRepository)

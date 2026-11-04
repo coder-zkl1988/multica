@@ -90,6 +90,22 @@ legacy total is unavailable or no larger than the page, it reads through an
 empty page. Failed requests, malformed pages or duplicate issues stop it before
 any position write. Paging does not promise a snapshot across concurrent edits.
 
+### Saved views
+
+Read a named saved view ("the Bugs view", a view link) with `view issues`, not
+`issue list` flags: the server applies every saved condition ("is not", the
+advanced condition tree, relative due dates, project status), which `issue list`
+cannot express.
+
+```bash
+multica view list --output json
+multica view issues "Bugs" --output json --fields identifier,title,status
+```
+
+`<view>` is an ID, ID prefix, or exact name. Pages hold at most 100 issues; pass
+`next_cursor` to `--cursor` while `has_more`. "me" conditions resolve against
+the runtime owner; a member's private view needs that member's runtime.
+
 ## Custom properties: typed workflow state
 
 Custom properties hold durable typed state, validated against definitions and
@@ -159,14 +175,12 @@ lifecycle semantics — unstarted, started, done (successful terminal), closed
 Blocked failure or In Progress recovery. Use the built-in key when its behavior
 is needed; built-in definitions cannot be edited or archived.
 
-Archive a custom status only after moving every issue off it, including
-completed/canceled ones. An occupied status returns HTTP 409 `issue_status_in_use`
-with `issue_count` and stays active; use Settings > View issues to inspect and
-move its issues, then retry. Replace a terminal status with the same lifecycle
-meaning (`done` to `done`, `closed` to `closed`); never reopen or cancel
-completed work just to retire a status. Archival moves no issues; historical
-issues on previously archived statuses remain readable via an explicit status
-filter.
+Archive a custom status only after moving every issue off it. An occupied one
+returns HTTP 409 `issue_status_in_use` with `issue_count`; use Settings > View
+issues to move its issues, then retry. Replace a terminal status with the same
+lifecycle meaning (`done` to `done`, `closed` to `closed`); never reopen or
+cancel completed work to retire it. Archival moves no issues; historical issues
+stay readable via an explicit status filter.
 
 - **`backlog`** parks an agent-assigned issue without a task. Moving to `todo`
   or any non-done/non-cancelled status enqueues the assigned agent then.
@@ -188,15 +202,14 @@ filter.
 - **`cancelled`** is a terminal, user-driven close. Like `done` it enqueues no
   new agent work, but it does **not** stop tasks already in flight — to stop a
   running task, cancel the task itself.
-  When cancelling because the work already exists elsewhere, mark it with
+  When cancelling because the work exists elsewhere, mark it with
   `multica issue status <id> cancelled --duplicate-of <original>`: only the
-  mark links the two, a comment does not. The original must not itself be a
-  duplicate, and an issue others are marked as duplicates of cannot be marked;
-  the command reports both refusals. `GET /api/issues/<id>/duplicates` shows
-  both sides; issue responses carry the original as `duplicate_of` while the
-  mark counts. Moving to any status other than `cancelled` removes the mark.
-  Marking logs `duplicate_marked` / `duplicate_added`; removing logs
-  `duplicate_unmarked` / `duplicate_removed` (`multica issue timeline --action`).
+  mark links the two. The original must not itself be a duplicate, and an issue
+  others are duplicates of cannot be marked; the command reports both refusals.
+  `GET /api/issues/<id>/duplicates` shows both sides; issue responses carry the
+  original as `duplicate_of`. Any other status removes the mark. Logs:
+  `duplicate_marked` / `duplicate_added`, removal `duplicate_unmarked` /
+  `duplicate_removed` (`multica issue timeline --action`).
 - **Failed issue-triggered tasks** may roll `in_progress` back to `todo` when
   no active task / retry remains: the main server-owned status write on this path.
 - **Project workflows** can limit which statuses an issue takes and turn a
@@ -281,9 +294,9 @@ has per-stage done counts including custom terminal statuses. Issue JSON `status
 is the exact key; `status_category` retains seven values for installed clients:
 `backlog`/`todo` are unstarted, `in_progress`/`in_review`/`blocked` started,
 `done` successful terminal, `cancelled` cancelled terminal (internal closed).
-Use `status_category` or stage counts, not built-in status keys alone.
+Use `status_category` or stage counts, not status keys alone.
 Read each child's dependencies before promoting; if they conflict with the
-parent breakdown, leave it parked and comment to confirm.
+parent breakdown, leave it parked and comment first.
 
 ## Charts and files in a comment
 
@@ -298,13 +311,12 @@ parent breakdown, leave it parked and comment to confirm.
 
 For HTML that follows light / dark mode, style it with `var(--background)`,
 `--foreground`, `--muted`, `--muted-foreground`, `--border`, `--primary`,
-`--chart-1` through `--chart-5`, and `--font-sans`. Any of them opts the block
-into the app's color scheme, so set the page background
+`--chart-1` through `--chart-5`, `--font-sans`. Any of them opts the block into
+the app's color scheme, so set the page background
 (`body { background: var(--background); color: var(--foreground) }`). Never put
 token text on a fixed light fill (near-white in dark mode). HTML with no tokens
-keeps its own look. Size to the content: `100vh` has no fixed viewport to fill.
-Read a token in the sandbox with
-`getComputedStyle(document.documentElement).getPropertyValue("--chart-1")`.
+keeps its own look; size to content (`100vh` has no viewport to fill). Read a
+token with `getComputedStyle(document.documentElement).getPropertyValue("--chart-1")`.
 
 ## Issue wakeups
 
@@ -346,14 +358,12 @@ multica issue wakeup create <issue> --until-issue <other-issue-id> --until-issue
 - `--until-status KEY`: this issue reaches that built-in/custom key.
 - `--until-pr checks`: a linked PR's checks finish, pass or fail, on its current
   head. `--until-pr merged`: a linked PR merges. `--until-pr conflicts`: an open
-  linked GitHub PR has merge conflicts on its current head; with
-  `--mode continuous` it fires again each time a resolved conflict comes back
-  or a new head is still conflicting. With
-  several linked PRs, any one satisfies each condition. Only PRs linked directly
-  to this issue count; a parent's are not inherited. `checks` and `conflicts`
-  need the server's GitHub snapshot, and conflicts are not detected on Forgejo,
-  Gitea or GitLab PRs: a missing link or snapshot lands in the rule's
-  `last_error` and retries, it does not reject the rule.
+  linked GitHub PR has merge conflicts on its head; with `--mode continuous` it
+  re-fires when a resolved conflict returns or a new head conflicts. Any one of
+  several directly linked PRs satisfies a condition; parents' are not inherited.
+  `checks`/`conflicts` need the server's GitHub snapshot and are not detected on
+  Forgejo, Gitea or GitLab PRs; a missing link or snapshot lands in `last_error`
+  and retries, it does not reject the rule.
 - `--until-children-done`: all children, staged or not, are done/cancelled.
   `--stage N` limits to staged children up to N, with at least one in N.
   No children never fires. Do not duplicate the parent's built-in stage wake.
@@ -362,7 +372,7 @@ multica issue wakeup create <issue> --until-issue <other-issue-id> --until-issue
   or `blocked`.
 - Other conditions: `--until-assignee member|agent|squad:ID`,
   `--until-label LABEL_ID`, `--until-property PROPERTY_ID=VALUE` (JSON accepted).
-  `wakeup create --help` lists the forms.
+  `wakeup create --help` lists them.
 
 ### Timers, check-ins and rule management
 

@@ -255,6 +255,20 @@ func (b *claudeBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 		streamMetadata := newClaudeStreamMetadataCollector()
 		controlErrors := make(chan error, 1)
 		var controlWrites sync.WaitGroup
+		var controlMu sync.Mutex
+		pendingControls := 0
+		closeRequested := false
+		closeAfterControls := func() {
+			if supplements != nil {
+				supplements.end()
+			}
+			controlMu.Lock()
+			defer controlMu.Unlock()
+			closeRequested = true
+			if pendingControls == 0 {
+				closeStdin()
+			}
+		}
 		var stopAfterErrorResultOnce sync.Once
 		// stopAfterErrorResult terminates a claude that outlives its error
 		// result past the grace period, the same way cancellation does.
@@ -372,7 +386,10 @@ func (b *claudeBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 						usage = resultUsage
 					}
 				}
-				closeStdin()
+				// Keep draining stdout while accepted control replies finish writing.
+				// Once those replies drain, stdin closes; requests arriving after that
+				// cannot be answered.
+				closeAfterControls()
 				if resultIsError || terminalReasonError != "" {
 					stopAfterErrorResultOnce.Do(func() { go stopAfterErrorResult() })
 				}
@@ -392,9 +409,20 @@ func (b *claudeBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 				if supplements != nil {
 					reply, _ = supplements.prepareHook(msg)
 				}
+				controlMu.Lock()
+				pendingControls++
+				controlMu.Unlock()
 				controlWrites.Add(1)
 				go func(msg claudeSDKMessage, reply func(io.Writer) error) {
 					defer controlWrites.Done()
+					defer func() {
+						controlMu.Lock()
+						defer controlMu.Unlock()
+						pendingControls--
+						if closeRequested && pendingControls == 0 {
+							closeStdin()
+						}
+					}()
 					if reply == nil {
 						b.handleControlRequest(msg, inputWriter)
 						return
@@ -2025,8 +2053,18 @@ func detectCLIVersion(ctx context.Context, runtimeCmd Command) (string, error) {
 	// present. See salvageProbeAnswer.
 	//
 	// Built through runtimeCmd.exec so a custom runtime's fixed_args prefix is
-	// still applied (MUL-6260).
-	cmd := runtimeCmd.exec(ctx, "--version")
+	// still applied (MUL-6260). Desktop ZCode ships as a Node .cjs/.mjs bundle;
+	// those must go through chooseZcodeInvocation (node + script) the same way
+	// Execute does, with a clear error when node is missing from PATH.
+	var cmd *exec.Cmd
+	if isNodeScriptPath(runtimeCmd.Path) {
+		if err := requireNodeForZcodeScript(runtimeCmd.Path); err != nil {
+			return "", err
+		}
+		cmd, _, _ = runtimeCmd.execVia(ctx, chooseZcodeInvocation, runtimeCmd.Path, []string{"--version"}, runtimeCmd.logger)
+	} else {
+		cmd = runtimeCmd.exec(ctx, "--version")
+	}
 	hideAgentWindow(cmd)
 	cmd.WaitDelay = probeWaitDelay
 	data, err := outputOwned(cmd, runtimeCmd.logger)

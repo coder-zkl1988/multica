@@ -193,6 +193,7 @@ var workspaceDeletionManifest = map[string]workspaceDeleteAction{
 	"vcs_pull_request":                   workspaceDelete,
 	"verification_code":                  workspaceDeleteKeep,
 	"webhook_delivery":                   workspaceDelete,
+	"wecom_install_session":              workspaceDelete,
 	"workspace":                          workspaceDelete,
 	"workspace_invitation":               workspaceDelete,
 	"workspace_mcp_server":               workspaceDelete,

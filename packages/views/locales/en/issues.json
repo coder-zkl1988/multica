@@ -116,8 +116,11 @@
     "breadcrumb_title": "Issues",
     "breadcrumb_workspace_fallback": "Workspace",
     "empty_title": "No issues yet",
-    "move_failed": "Failed to move issue",
-    "empty_hint": "Create an issue to get started."
+    "empty_description": "An issue is one concrete piece of work for a member or an agent. Assign it to an agent and it starts on your runtime.",
+    "empty_hint": "Create an issue to get started.",
+    "break_down_with_chat": "Break down with chat",
+    "break_down_prompt": "I want to get the following done. Ask me what you need to know, then break it into issues in this workspace:\n\n",
+    "move_failed": "Failed to move issue"
   },
   "status": {
     "backlog": "Backlog",
@@ -412,7 +415,7 @@
       }
     },
     "search_placeholder": "Search issues...",
-    "search_empty": "No issues match your search."
+    "search_empty": "No issues match your search"
   },
   "list": {
     "empty_status": "No issues",
@@ -445,6 +448,7 @@
     "metadata_description": "Key-value data recorded by agents and integrations for workflow coordination.",
     "section_load_failed_retry": "Could not load. Retry",
     "not_found": "This issue does not exist or has been deleted in this workspace.",
+    "not_found_title": "Issue not found",
     "breadcrumb_project_unknown": "Unknown project",
     "back": "Back",
     "title_placeholder": "Issue title",
@@ -526,7 +530,6 @@
     "agents_group": "Agents",
     "mark_done_tooltip": "Mark as done",
     "archive_tooltip": "Archive",
-    "restore_to_inbox_tooltip": "Restore to inbox",
     "pin_tooltip": "Pin to sidebar",
     "unpin_tooltip": "Unpin from sidebar",
     "quick_jump_label": "Quick navigation",
@@ -955,7 +958,18 @@
     "note_unmapped": "No price on file for {{models}}; their tokens are counted but their cost is not.",
     "note_estimate": "Cost uses provider-reported amounts or published model rates. It is not a final bill.",
     "amount_unknown": "Unknown",
-    "amount_partial": "{{amount}} (partial)"
+    "amount_partial": "{{amount}} (partial)",
+    "tokens_count": "{{tokens}} tokens",
+    "credits_count": "{{credits}} {{provider}} credits",
+    "details_toggle": "Run details",
+    "detail_breakdown": "Cost breakdown",
+    "detail_total": "Total",
+    "detail_status": "Status",
+    "detail_model": "Model",
+    "detail_cache": "Cache hit",
+    "cache_hit_value": "{{percent}} · saved {{amount}}",
+    "detail_time": "Time",
+    "detail_branch": "Branch"
   },
   "terminate_dialog": {
     "title": "Stop this run?",
@@ -1009,6 +1023,7 @@
     "open_in_new_tab": "Open in new tab",
     "pin_to_sidebar": "Pin to sidebar",
     "unpin_from_sidebar": "Unpin from sidebar",
+    "restore_to_inbox": "Restore to inbox",
     "mark_read": "Mark as read",
     "mark_unread": "Mark as unread",
     "copy_link": "Copy link",
@@ -1297,7 +1312,8 @@
     "detail_cache": "Cache hit",
     "cache_hit_value": "{{percent}} · saved {{amount}}",
     "detail_time": "Time",
-    "detail_branch": "Branch"
+    "detail_branch": "Branch",
+    "credits_count": "{{credits}} {{provider}} credits"
   },
   "wakeups": {
     "title": "Wakeups",
@@ -2026,6 +2042,9 @@
     "save_as_new": "Save as new view",
     "save_as_new_hint": "Keeps “{{name}}” unchanged",
     "save_as_view": "Save as view",
+    "save_view": "Save view",
+    "add_filter": "Add filter",
+    "setup_hint": "No conditions yet, so this view shows every issue",
     "set_by_view": "Set by this view",
     "new_issue": "New issue",
     "unavailable": "This view is no longer available",
@@ -2049,7 +2068,8 @@
       "star": "Add {{name}} to sidebar",
       "unstar": "Remove {{name}} from sidebar",
       "row_actions": "Actions for {{name}}",
-      "no_matches": "No views match"
+      "empty_title": "No saved views yet",
+      "empty_description": "Set up filters and display options in an issue list, then save them as a view."
     }
   }
 }

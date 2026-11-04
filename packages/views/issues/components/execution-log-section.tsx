@@ -43,7 +43,7 @@ import { compareActiveIssueTasks } from "./active-task-order";
 import { formatDuration as formatAgentTime } from "../../dashboard/utils";
 import {
   formatTokens,
-  formatUsd,
+  hasTokenFigure,
   summarizeTaskUsage,
   summarizeTaskUsageAcross,
 } from "../../runtimes/utils";
@@ -56,7 +56,7 @@ import {
   type RunTimeline,
 } from "./issue-run-timeline";
 import { TaskStatusIcon } from "./task-status-icon";
-import { useStatusLabel, useTriggerText } from "./task-run-labels";
+import { useFormatSpend, useStatusLabel, useTriggerText } from "./task-run-labels";
 import { WakeupRunLabel } from "./wakeup-source-chip";
 import { useUsageAmountFormatter } from "./use-usage-amount-formatter";
 import { TaskRunEvidenceDetails } from "./task-run-evidence-details";
@@ -233,10 +233,19 @@ export function ExecutionLogSection({ workspaceId, issueId, identifier, issueTit
 // run reported, never 0.
 function RunTotals({ timeline }: { timeline: RunTimeline }) {
   const { t } = useT("issues");
+  const formatSpend = useFormatSpend();
   const priced = timeline.pricedCount > 0;
   const stats = [
-    [t(($) => $.runs_timeline.stat_spent), priced ? formatUsd(timeline.totalCost) : "—"],
-    [t(($) => $.runs_timeline.stat_tokens), priced ? formatTokens(timeline.tokens.total) : "—"],
+    [
+      t(($) => $.runs_timeline.stat_spent),
+      priced ? formatSpend({ cost: timeline.totalCost, credits: timeline.totalCredits }) : "—",
+    ],
+    [
+      t(($) => $.runs_timeline.stat_tokens),
+      priced && hasTokenFigure({ tokens: timeline.tokens.total, credits: timeline.totalCredits })
+        ? formatTokens(timeline.tokens.total)
+        : "—",
+    ],
     [t(($) => $.runs_timeline.stat_agent_time), formatAgentTime(timeline.agentMs / 1000, "0s")],
   ] as const;
   return (
@@ -244,7 +253,7 @@ function RunTotals({ timeline }: { timeline: RunTimeline }) {
       {stats.map(([label, value]) => (
         <div key={label} className="flex min-w-0 flex-col-reverse">
           <dt className="truncate text-micro text-muted-foreground">{label}</dt>
-          <dd className="truncate text-label font-medium tabular-nums">{value}</dd>
+          <dd className="break-words text-label font-medium tabular-nums">{value}</dd>
         </div>
       ))}
     </dl>
@@ -341,6 +350,7 @@ function RunCostBars({ timeline, onOpen }: { timeline: RunTimeline; onOpen: () =
 
 function RunBarSummary({ run }: { run: TimelineRun }) {
   const { t } = useT("issues");
+  const formatSpend = useFormatSpend();
   const trigger = useTriggerText(run.task);
   const status = useStatusLabel(run.task.status);
   return (
@@ -351,8 +361,12 @@ function RunBarSummary({ run }: { run: TimelineRun }) {
       <span className="text-micro text-muted-foreground">
         {[
           // A run still going has not reported usage yet — that is not "none".
-          run.usage ? formatUsd(run.usage.cost) : run.active ? null : t(($) => $.execution_log.strip_no_usage),
           run.usage
+            ? formatSpend(run.usage)
+            : run.active
+              ? null
+              : t(($) => $.execution_log.strip_no_usage),
+          run.usage && hasTokenFigure(run.usage)
             ? t(($) => $.runs_timeline.tokens_count, { tokens: formatTokens(run.usage.tokens) })
             : null,
           run.durationMs != null ? formatAgentTime(run.durationMs / 1000, "0s") : null,
@@ -393,6 +407,7 @@ export function IssueRunsTotal({
 }) {
   const { t } = useT("issues");
   const formatAmount = useUsageAmountFormatter();
+  const formatSpend = useFormatSpend();
   // Custom rates are read imperatively inside `estimateCost`, so a saved rate
   // change does not re-render this on its own — subscribe and make the memo
   // depend on the snapshot, or the header total keeps quoting the old price
@@ -424,7 +439,7 @@ export function IssueRunsTotal({
     <Tooltip>
       <TooltipTrigger
         render={<button type="button" onClick={onOpen} />}
-        className={`flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-caption tabular-nums transition-colors hover:bg-accent/70 ${
+        className={`flex min-w-0 max-w-full items-center gap-1 rounded-md px-1.5 py-0.5 text-caption tabular-nums transition-colors hover:bg-accent/70 ${
           alone ? "ml-auto" : ""
         }`}
       >
@@ -434,7 +449,11 @@ export function IssueRunsTotal({
         {total && (
           <>
             <span className={`text-faint-foreground ${narrowTier}`}>·</span>
-            <span className="font-medium">{formatAmount(total.cost, total.costComplete)}</span>
+            <span className="min-w-0 break-words text-right font-medium">
+              {total.credits.size > 0
+                ? formatSpend(total)
+                : formatAmount(total.cost, total.costComplete)}
+            </span>
           </>
         )}
       </TooltipTrigger>
@@ -762,6 +781,7 @@ function PastRow({
   issueId: string;
 }) {
   const { t } = useT("issues");
+  const formatSpend = useFormatSpend();
   const { t: tAgents } = useT("agents");
   const { getActorName } = useActorName();
   const timeAgo = useTimeAgo();
@@ -806,7 +826,9 @@ function PastRow({
     agentName,
     reason ? null : duration,
     time,
-    usage ? t(($) => $.runs_timeline.tokens_count, { tokens: formatTokens(usage.tokens) }) : null,
+    usage && hasTokenFigure(usage)
+      ? t(($) => $.runs_timeline.tokens_count, { tokens: formatTokens(usage.tokens) })
+      : null,
     usage?.models.join(", "),
   ].filter(Boolean).join(" · ");
 
@@ -854,18 +876,22 @@ function PastRow({
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2">
             {task.wakeup_id ? (
-              <WakeupRunLabel task={task} fallback={trigger} render={(value) => <TriggerText text={value} emphasis />} />
+              <WakeupRunLabel task={task} fallback={trigger} render={(label) => <TriggerText text={label} emphasis />} />
             ) : (
               <TriggerText text={trigger} emphasis />
             )}
             <TaskCommentCoverage task={task} />
-            <RowStatus title={statusTitle}>
+            <RowStatus title={statusTitle} wrap={!!usage?.credits.size}>
               <TaskStatusIcon status={task.status} />
               <span className="sr-only">
                 {[label, time].filter(Boolean).join(" · ")}
               </span>
               {usage ? (
-                <span className="tabular-nums">{formatAmount(usage.cost, usage.costComplete)}</span>
+                <span className="tabular-nums">
+                  {usage.credits.size > 0
+                    ? formatSpend(usage)
+                    : formatAmount(usage.cost, usage.costComplete)}
+                </span>
               ) : (
                 <span className="text-faint-foreground">—</span>
               )}
@@ -1039,14 +1065,19 @@ export function TaskCommentCoverage({ task }: { task: AgentTask }) {
 function RowStatus({
   children,
   title,
+  wrap = false,
 }: {
   children: React.ReactNode;
   title?: string;
+  wrap?: boolean;
 }) {
   return (
     <div
       title={title}
-      className="flex h-6 shrink-0 items-center justify-end gap-1 overflow-hidden whitespace-nowrap text-caption [@media(hover:hover)]:group-hover/execution-log-row:hidden"
+      className={cn(
+        "flex shrink-0 items-center justify-end gap-1 text-caption [@media(hover:hover)]:group-hover/execution-log-row:hidden",
+        wrap ? "min-h-6 max-w-[60%] break-words text-right" : "flex h-6 overflow-hidden whitespace-nowrap",
+      )}
     >
       {children}
     </div>

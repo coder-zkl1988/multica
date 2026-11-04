@@ -51,7 +51,7 @@ func (q *Queries) CreateServiceAccountToken(ctx context.Context, arg CreateServi
 const createServiceAccountUser = `-- name: CreateServiceAccountUser :one
 INSERT INTO "user" (name, email, account_kind)
 VALUES ('ai_work', $1, 'service')
-RETURNING id, name, email, avatar_url, created_at, updated_at, onboarded_at, onboarding_questionnaire, cloud_waitlist_email, cloud_waitlist_reason, starter_content_state, language, profile_description, timezone, account_kind
+RETURNING id, name, email, avatar_url, created_at, updated_at, onboarded_at, onboarding_questionnaire, cloud_waitlist_email, cloud_waitlist_reason, starter_content_state, language, profile_description, timezone, account_kind, whats_new_seen_version
 `
 
 func (q *Queries) CreateServiceAccountUser(ctx context.Context, email string) (User, error) {
@@ -73,6 +73,7 @@ func (q *Queries) CreateServiceAccountUser(ctx context.Context, email string) (U
 		&i.ProfileDescription,
 		&i.Timezone,
 		&i.AccountKind,
+		&i.WhatsNewSeenVersion,
 	)
 	return i, err
 }
@@ -130,7 +131,7 @@ func (q *Queries) GetServiceAccountTokenByHash(ctx context.Context, tokenHash st
 }
 
 const getServiceAccountUserByWorkspace = `-- name: GetServiceAccountUserByWorkspace :one
-SELECT u.id, u.name, u.email, u.avatar_url, u.created_at, u.updated_at, u.onboarded_at, u.onboarding_questionnaire, u.cloud_waitlist_email, u.cloud_waitlist_reason, u.starter_content_state, u.language, u.profile_description, u.timezone, u.account_kind
+SELECT u.id, u.name, u.email, u.avatar_url, u.created_at, u.updated_at, u.onboarded_at, u.onboarding_questionnaire, u.cloud_waitlist_email, u.cloud_waitlist_reason, u.starter_content_state, u.language, u.profile_description, u.timezone, u.account_kind, u.whats_new_seen_version
 FROM "user" u
 JOIN member m ON m.user_id = u.id
 WHERE m.workspace_id = $1
@@ -158,6 +159,7 @@ func (q *Queries) GetServiceAccountUserByWorkspace(ctx context.Context, workspac
 		&i.ProfileDescription,
 		&i.Timezone,
 		&i.AccountKind,
+		&i.WhatsNewSeenVersion,
 	)
 	return i, err
 }
