@@ -17,6 +17,11 @@ COPY packages/views/package.json packages/views/
 COPY packages/tsconfig/package.json packages/tsconfig/
 COPY packages/eslint-config/package.json packages/eslint-config/
 
+# corepack ignores .npmrc and always fetches from the npm default registry,
+# whose bulk traffic times out from CN networks; the mirror is directly
+# reachable, so point corepack at it for the pnpm bootstrap too.
+ENV COREPACK_NPM_REGISTRY=https://registry.npmmirror.com
+
 RUN corepack enable && \
     PNPM_VERSION="$(node -p 'require("./package.json").packageManager')" && \
     corepack prepare "$PNPM_VERSION" --activate
@@ -28,6 +33,11 @@ FROM node:22-alpine AS builder
 WORKDIR /app
 
 COPY package.json ./
+# corepack ignores .npmrc and always fetches from the npm default registry,
+# whose bulk traffic times out from CN networks; the mirror is directly
+# reachable, so point corepack at it for the pnpm bootstrap too.
+ENV COREPACK_NPM_REGISTRY=https://registry.npmmirror.com
+
 RUN corepack enable && \
     PNPM_VERSION="$(node -p 'require("./package.json").packageManager')" && \
     corepack prepare "$PNPM_VERSION" --activate
